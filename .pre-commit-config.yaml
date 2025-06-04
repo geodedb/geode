@@ -1,0 +1,33 @@
+exclude: '^$'
+fail_fast: true 
+repos:
+  - repo: https://github.com/mrtazz/checkmake.git
+    rev: 0.2.2
+    hooks:
+    -   id: checkmake
+  -   repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v5.0.0
+      hooks:
+      -   id: check-json
+      -   id: check-merge-conflict
+      -   id: check-yaml
+      -   id: end-of-file-fixer
+      -   id: check-symlinks
+  - repo: https://github.com/markdownlint/markdownlint
+    rev: v0.12.0
+    hooks:
+    -   id: markdownlint
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.31.0
+    hooks:
+      - id: commitizen
+      - id: commitizen-branch
+        stages: [push]
+  - repo: local
+    hooks:
+      - id: run-zig-lint-commands
+        name: Run Zig Lint Commands
+        entry: zig
+        args: ["fmt", "--check", "src/"]
+        language: system
+        pass_filenames: false
