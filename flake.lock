@@ -9,11 +9,11 @@
         "zon2nix": "zon2nix"
       },
       "locked": {
-        "lastModified": 1748998286,
-        "narHash": "sha256-12DiNMJcYvpqfZbUn99W/Gbh3p4OY5oKUkPctDHWXCo=",
+        "lastModified": 1748998573,
+        "narHash": "sha256-SdNccvx2CH1MYwyVXQggVXUJyZqnIZtE8p/B2owKo9E=",
         "ref": "refs/heads/main",
-        "rev": "5ce97b1f35796808b3d7a0feca8811b19ac4656f",
-        "revCount": 28,
+        "rev": "fbb09a4c6d98876fbc6e0aa559a303b3797879ac",
+        "revCount": 29,
         "type": "git",
         "url": "https://vcs.devnw.com/devnw/flakes"
       },
@@ -116,11 +116,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1748889542,
-        "narHash": "sha256-Hb4iMhIbjX45GcrgOp3b8xnyli+ysRPqAgZ/LZgyT5k=",
+        "lastModified": 1749237914,
+        "narHash": "sha256-N5waoqWt8aMr/MykZjSErOokYH6rOsMMXu3UOVH5kiw=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "10d7f8d34e5eb9c0f9a0485186c1ca691d2c5922",
+        "rev": "70c74b02eac46f4e4aa071e45a6189ce0f6d9265",
         "type": "github"
       },
       "original": {
