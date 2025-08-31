@@ -191,6 +191,7 @@ pub const Parser = struct {
 
         // GROUP BY (optional)
         var group_by: ?ast.GroupBy = null;
+        var having_expr: ?ast.Expr = null;
         if (self.cur.kind == .GROUP) {
             self.advance();
             _ = try self.expect(.BY);
@@ -202,6 +203,11 @@ pub const Parser = struct {
                 self.advance();
             }
             group_by = .{ .keys = try keys_list.toOwnedSlice() };
+            // Optional HAVING predicate directly after GROUP BY
+            if (self.cur.kind == .HAVING) {
+                self.advance();
+                having_expr = try self.parseOrExpr();
+            }
         }
 
         // RETURN item (, item)*
@@ -232,7 +238,18 @@ pub const Parser = struct {
                 desc1 = true;
                 self.advance();
             }
-            try keys.append(.{ .expr = expr1, .desc = desc1 });
+            var nulls1: ast.OrderBy.NullsPolicy = .default;
+            if (self.cur.kind == .NULLS) {
+                self.advance();
+                if (self.cur.kind == .FIRST) {
+                    nulls1 = .first;
+                    self.advance();
+                } else if (self.cur.kind == .LAST) {
+                    nulls1 = .last;
+                    self.advance();
+                } else return self.unexpected("expected FIRST/LAST after NULLS");
+            }
+            try keys.append(.{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
             while (self.cur.kind == .comma) {
                 self.advance();
                 const exprk = try self.parseOrExpr();
@@ -248,7 +265,18 @@ pub const Parser = struct {
                     d = true;
                     self.advance();
                 }
-                try keys.append(.{ .expr = exprk, .desc = d });
+                var np: ast.OrderBy.NullsPolicy = .default;
+                if (self.cur.kind == .NULLS) {
+                    self.advance();
+                    if (self.cur.kind == .FIRST) {
+                        np = .first;
+                        self.advance();
+                    } else if (self.cur.kind == .LAST) {
+                        np = .last;
+                        self.advance();
+                    } else return self.unexpected("expected FIRST/LAST after NULLS");
+                }
+                try keys.append(.{ .expr = exprk, .desc = d, .nulls = np });
             }
             ord = .{ .keys = try keys.toOwnedSlice() };
         }
@@ -272,6 +300,7 @@ pub const Parser = struct {
             .where_clause = where_expr,
             .with_clause = with_clause,
             .group_by = group_by,
+            .having = having_expr,
             .ret = .{ .items = try items.toOwnedSlice(), .distinct = distinct },
             .order_by = ord,
             .limit = limit,

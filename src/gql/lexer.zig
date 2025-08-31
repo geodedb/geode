@@ -283,6 +283,10 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "DESC")) return .DESC;
         if (std.ascii.eqlIgnoreCase(word, "LIMIT")) return .LIMIT;
         if (std.ascii.eqlIgnoreCase(word, "OFFSET")) return .OFFSET;
+        if (std.ascii.eqlIgnoreCase(word, "HAVING")) return .HAVING;
+        if (std.ascii.eqlIgnoreCase(word, "NULLS")) return .NULLS;
+        if (std.ascii.eqlIgnoreCase(word, "FIRST")) return .FIRST;
+        if (std.ascii.eqlIgnoreCase(word, "LAST")) return .LAST;
         if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
         if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
         if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;

@@ -23,6 +23,7 @@ pub const Query = struct {
     where_clause: ?Expr,
     with_clause: ?WithClause,
     group_by: ?GroupBy = null,
+    having: ?Expr = null,
     ret: ReturnClause,
     order_by: ?OrderBy,
     limit: ?usize,
@@ -80,7 +81,8 @@ pub const WithClause = struct { items: []ReturnItem };
 pub const GroupBy = struct { keys: []Expr };
 
 pub const OrderBy = struct {
-    pub const OrderKey = struct { expr: Expr, desc: bool };
+    pub const NullsPolicy = enum { default, first, last };
+    pub const OrderKey = struct { expr: Expr, desc: bool, nulls: NullsPolicy = .default };
     keys: []OrderKey,
 };
 

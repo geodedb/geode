@@ -11,7 +11,7 @@ pub const Plan = struct {
     note: []const u8 = "",
 };
 
-pub const PlanError = error{OffsetPushdownRequiresOrder};
+pub const PlanError = error{ OffsetPushdownRequiresOrder, GroupByIllegal };
 
 pub fn planQuery(q: ast.Query, opts: PlannerOptions) PlanError!Plan {
     const ordered = q.order_by != null;
@@ -19,6 +19,8 @@ pub fn planQuery(q: ast.Query, opts: PlannerOptions) PlanError!Plan {
     if (opts.attempt_pushdown and q.offset != null and !ordered) {
         return PlanError.OffsetPushdownRequiresOrder;
     }
+    // Validate GROUP BY legality (phase 1)
+    try validateGroupBy(q);
     return .{ .ordered = ordered };
 }
 
@@ -85,6 +87,64 @@ pub fn compareTemporalForOrder(a: ast.Expr, b: ast.Expr, ctx: SessionContext) Co
     };
 }
 
+fn isAggregateCall(e: ast.Expr) bool {
+    return switch (e) {
+        .Call => |c| blk: {
+            const callee = c.callee.*;
+            const name = switch (callee) {
+                .Ident => |s| s,
+                else => break :blk false,
+            };
+            if (std.ascii.eqlIgnoreCase(name, "count")) break :blk true;
+            if (std.ascii.eqlIgnoreCase(name, "sum")) break :blk true;
+            if (std.ascii.eqlIgnoreCase(name, "avg")) break :blk true;
+            if (std.ascii.eqlIgnoreCase(name, "min")) break :blk true;
+            if (std.ascii.eqlIgnoreCase(name, "max")) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn validateGroupBy(q: ast.Query) PlanError!void {
+    if (q.group_by == null) return;
+    const gb = q.group_by.?;
+    // Collect allowed identifiers from group-by keys (ident-only for phase 1)
+    var allowed = std.AutoHashMap([]const u8, void).init(std.heap.page_allocator);
+    defer allowed.deinit();
+    for (gb.keys) |k| {
+        if (k == .Ident) {
+            _ = allowed.put(k.Ident, {}) catch {};
+        }
+    }
+    // Require at least one allowed key if group_by present (simplify phase 1)
+    if (allowed.count() == 0) return PlanError.GroupByIllegal;
+    // Return items must be either aggregate calls or identifiers from allowed set (phase 1)
+    for (q.ret.items) |it| {
+        const e = it.expr;
+        if (isAggregateCall(e)) continue;
+        if (e == .Ident) {
+            if (allowed.contains(e.Ident)) continue;
+        }
+        return PlanError.GroupByIllegal;
+    }
+    // HAVING, if present, must be an aggregate predicate or refer only to grouped identifiers (phase 1)
+    if (q.having) |hv| {
+        if (!exprAllowedInGroup(hv, &allowed)) return PlanError.GroupByIllegal;
+    }
+}
+
+fn exprAllowedInGroup(e: ast.Expr, allowed: *std.AutoHashMap([]const u8, void)) bool {
+    return switch (e) {
+        .Int, .Bool, .Null, .String => true,
+        .Ident => |s| allowed.contains(s),
+        .Call => isAggregateCall(e),
+        .Unary => |u| exprAllowedInGroup(u.expr.*, allowed),
+        .Binary => |b| exprAllowedInGroup(b.left.*, allowed) and exprAllowedInGroup(b.right.*, allowed),
+        else => false, // phase 1: be strict
+    };
+}
+
 test "planner: temporal compare across timezones and local attach" {
     const ctx = SessionContext{ .session_offset_minutes = 0 };
     const dt1 = .{ .DateTime = .{ .raw = "2024-08-12T10:15Z", .parsed = try temporal.parseDateTime("2024-08-12T10:15Z", true) } };
@@ -131,4 +191,58 @@ test "planner: offset allowed with explicit order" {
     q.offset = 5;
     const plan = try planQuery(q, .{ .attempt_pushdown = true });
     try std.testing.expect(plan.ordered);
+}
+
+test "planner: group by legality basic" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = null;
+    q.with_clause = null;
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    // GROUP BY n, RETURN n is legal
+    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    q.group_by = .{ .keys = keys[0..] };
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
+    q.ret = .{ .items = items[0..], .distinct = false };
+    _ = try planQuery(q, .{});
+    // Illegal: RETURN m (not grouped) without aggregate
+    items[0] = .{ .expr = .{ .Ident = "m" }, .alias = null };
+    q.ret = .{ .items = items[0..], .distinct = false };
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+    // Legal: RETURN count(m)
+    var callee = ast.Expr{ .Ident = "count" };
+    var arg = ast.Expr{ .Ident = "m" };
+    const call = ast.Expr{ .Call = .{ .callee = &callee, .args = &.{&arg} } };
+    items[0] = .{ .expr = call, .alias = null };
+    q.ret = .{ .items = items[0..], .distinct = false };
+    _ = try planQuery(q, .{});
+}
+
+test "planner: having legality" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = null;
+    q.with_clause = null;
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    q.group_by = .{ .keys = keys[0..] };
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
+    q.ret = .{ .items = items[0..], .distinct = false };
+    // HAVING count(m) > 1 allowed
+    var callee = ast.Expr{ .Ident = "count" };
+    var arg = ast.Expr{ .Ident = "m" };
+    var one = ast.Expr{ .Int = 1 };
+    const call = ast.Expr{ .Call = .{ .callee = &callee, .args = &.{&arg} } };
+    const pred = ast.Expr{ .Binary = .{ .op = .Gt, .left = &call, .right = &one } };
+    q.having = pred;
+    _ = try planQuery(q, .{});
+    // HAVING m (non-grouped identifier) illegal
+    q.having = .{ .Ident = "m" };
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
 }

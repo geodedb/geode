@@ -209,6 +209,24 @@ pub fn parseDateTime(raw: []const u8, allow_zone: bool) TemporalError!DateTime {
     return .{ .raw = raw, .date = d, .time = tm };
 }
 
+// Parse timezone offset strings like "Z", "+HH", "+HH:MM", "-HH:MM" into minutes.
+// Returns minutes east of UTC (e.g., +05:30 => +330). Accepts upper/lowercase 'Z'.
+pub fn parseOffsetMinutes(s: []const u8) TemporalError!i16 {
+    if (s.len == 1 and (s[0] == 'Z' or s[0] == 'z')) return 0;
+    if (s.len < 3) return TemporalError.Invalid;
+    if (!(s[0] == '+' or s[0] == '-')) return TemporalError.Invalid;
+    const sign: i16 = if (s[0] == '+') 1 else -1;
+    // +HH or +HH:MM
+    if (!(s.len >= 3 and s[1] >= '0' and s[1] <= '9' and s[2] >= '0' and s[2] <= '9'))
+        return TemporalError.Invalid;
+    const oh: i16 = @intCast((s[1] - '0') * 10 + (s[2] - '0'));
+    if (s.len == 3) return sign * (oh * 60);
+    if (!(s.len == 6 and s[3] == ':' and s[4] >= '0' and s[4] <= '9' and s[5] >= '0' and s[5] <= '9'))
+        return TemporalError.Invalid;
+    const om: i16 = @intCast((s[4] - '0') * 10 + (s[5] - '0'));
+    return sign * (oh * 60 + om);
+}
+
 // Formatting / normalization
 pub const NormalizeOptions = struct { clamp_frac_digits: ?u8 = null };
 
@@ -400,4 +418,10 @@ test "formatDateTime preserves -HH:MM" {
     try formatDateTime(buf.writer(), dt, .{});
     std.debug.print("format -05:30 -> {s}\n", .{buf.items});
     try std.testing.expect(std.mem.indexOf(u8, buf.items, "-05:30") != null);
+}
+
+test "parseOffsetMinutes handles Z, +HH, and -HH:MM" {
+    try std.testing.expect((try parseOffsetMinutes("Z")) == 0);
+    try std.testing.expect((try parseOffsetMinutes("+05")) == 300);
+    try std.testing.expect((try parseOffsetMinutes("-05:30")) == -330);
 }

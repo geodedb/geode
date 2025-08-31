@@ -88,6 +88,10 @@ pub const TokenKind = enum {
     DESC,
     LIMIT,
     OFFSET,
+    HAVING,
+    NULLS,
+    FIRST,
+    LAST,
 
     // pattern and string operators (extras)
     regex_match, // =~

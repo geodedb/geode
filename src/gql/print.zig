@@ -31,7 +31,7 @@ pub fn printProgramHumanWith(w: anytype, prog: ast.Program, opts: PrintOptions) 
     }
 }
 
-pub const PrintJsonOptions = struct { verbose_temporals: bool = false };
+pub const PrintJsonOptions = struct { verbose_temporals: bool = false, session_offset_minutes: ?i16 = null };
 
 pub fn printProgramJson(w: anytype, prog: ast.Program) !void {
     return printProgramJsonWith(w, prog, .{});
@@ -41,6 +41,10 @@ pub fn printProgramJsonWith(w: anytype, prog: ast.Program, jopts: PrintJsonOptio
     var jw = std.json.writeStream(w, .{});
     defer jw.deinit();
     try jw.beginObject();
+    if (jopts.session_offset_minutes) |som| {
+        try jw.objectField("session_offset_minutes");
+        try jw.write(som);
+    }
     try jw.objectField("statements");
     try jw.beginArray();
     for (prog.statements) |st| {
@@ -221,6 +225,7 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
             if (q.where_clause) |e| try walkExpr(dst, e);
             if (q.with_clause) |wth| for (wth.items) |it| try walkExpr(dst, it.expr);
             if (q.group_by) |gb| for (gb.keys) |k| try walkExpr(dst, k);
+            if (q.having) |hv| try walkExpr(dst, hv);
             for (q.ret.items) |it| try walkExpr(dst, it.expr);
             if (q.order_by) |ob| for (ob.keys) |k| try walkExpr(dst, k.expr);
         }
@@ -295,6 +300,12 @@ pub fn printQueryWith(w: anytype, q: ast.Query, pad: usize, opts: PrintOptions) 
         }
         try w.writeByte('\n');
     }
+    if (q.having) |hv| {
+        try indent(w, pad);
+        try w.print("Having: ", .{});
+        try printExprWith(w, hv, 0, opts);
+        try w.writeByte('\n');
+    }
     try indent(w, pad);
     try w.print("Return{any}: ", .{q.ret.distinct});
     for (q.ret.items, 0..) |it, i| {
@@ -310,6 +321,13 @@ pub fn printQueryWith(w: anytype, q: ast.Query, pad: usize, opts: PrintOptions) 
             if (i > 0) try w.print(", ", .{});
             try printExprWith(w, k.expr, 0, opts);
             try w.print(" {s}", .{if (k.desc) "DESC" else "ASC"});
+            if (k.nulls != .default) {
+                try w.print(" NULLS {s}", .{switch (k.nulls) {
+                    .first => "FIRST",
+                    .last => "LAST",
+                    .default => "",
+                }});
+            }
         }
         try w.writeByte('\n');
     }

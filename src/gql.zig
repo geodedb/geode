@@ -441,6 +441,30 @@ test "GROUP BY syntax" {
     }
 }
 
+test "GROUP BY with HAVING and ORDER BY NULLS policy" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.age > 20 GROUP BY n.name HAVING COUNT(n) > 1 RETURN n ORDER BY n.name ASC NULLS LAST, n.age DESC NULLS FIRST";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    try std.testing.expect(program.statements.len == 1);
+    const st = program.statements[0];
+    switch (st) {
+        .Query => |q| {
+            try std.testing.expect(q.group_by != null);
+            try std.testing.expect(q.having != null);
+            try std.testing.expect(q.order_by != null);
+            const ob = q.order_by.?;
+            try std.testing.expect(ob.keys.len == 2);
+            try std.testing.expect(ob.keys[0].nulls == .last);
+            try std.testing.expect(ob.keys[1].nulls == .first);
+        },
+        else => return error.Unexpected,
+    }
+}
+
 test "path variable alias and RETURN" {
     const ally = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(ally);
