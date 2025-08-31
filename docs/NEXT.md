@@ -2,54 +2,19 @@
 
 Swimlanes with concrete acceptance tests. ISO clause anchors are references (no quoting).
 
+Note: Completed items have moved to docs/IMPLEMENTED.md. This plan lists only upcoming work.
+
 ## Now (P0)
 
-1. Pagination legality + US001 guardrails
+1. Diagnostics mapping (initial)
 
-- Why: Prevent incorrect OFFSET/LIMIT pushdowns on unordered tables (ISO 16.18–16.19, US001; 14.10).
-- What: Keep explicit order tracking; reject unsafe pushdowns; document behavior in `query_engine.md`.
+- Why: Standardize error surfaces (ISO 23.2).
+- What: Map errors to codes; precedence; doc.
 - Acceptance:
-  - Tests: planner.zig “offset pushdown rejected/allowed”.
-  - Docs: US001 note present in § ORDER & page.
-- Scope: S • DRI: core
-
-1. Temporal session offset end‑to‑end
-
-- Why: Local datetimes compare correctly with a session offset (ISO 18.x; 14.10; sessions §7).
-- What: Thread CLI flag into comparator; demo path; tests.
-- Acceptance:
-  - Exec test for local vs zoned equality under offset.
-  - CLI: `--session-offset` affects sort demo output.
-- Scope: S • DRI: core • Dep: REQ‑GQL‑009
-
-1. GROUP BY legality (phase‑1) and HAVING legality
-
-- Why: Enforce scoping of non‑aggregates (ISO 14.10).
-- What: Planner legality checks; tests; diagnostics placeholders.
-- Acceptance:
-  - Tests: planner “group by legality basic”, “having legality”.
-- Scope: M • DRI: core
-
-1. Conformance flagger (skeleton)
-
-- Why: Track supported features and impl‑defined choices (ISO 24.\*; 23.2 shape).
-- What: Emit JSON feature profile; CLI flag; tests.
-- Acceptance:
-  - Test asserts presence of 14.4, 14.10, 16.18, 16.19, 14.12, 18.x.
-  - Output includes US001/UA005/UA006 notes.
+  - Tests for US001, GroupByIllegal, IllegalOrderKey codes.
 - Scope: S • DRI: core
 
 ## Next (P1)
-
-1. Set ops semantics (DISTINCT/ALL)
-
-- Status: Done.
-- Evidence: src/exec.zig set-ops over binding rows; tests “set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL” and “binding table set ops: multi-column with NULLs”.
-- Ordering policy: DISTINCT → deterministically sorted; ALL → stable-left.
-- Follow-ups:
-  - Document ordering policy summary in query_engine.md and README (short note).
-  - Performance plan: threshold for hash vs sort+unique; microbench on synthetic mixes; add docs bullet in GAP.
-  - Optional CLI demo flag to showcase set-ops on sample inputs.
 
 1. Expression eval: CASE + string predicates
 
