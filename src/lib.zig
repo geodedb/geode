@@ -22,6 +22,12 @@ pub const ParseOptions = struct {
 
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
+// Re-export conformance profile helpers for CLI/tools
+pub const conformance = @import("conformance.zig");
+// Re-export selected runtime helpers so binaries can import via the geode package
+pub const exec = @import("exec.zig");
+pub const planner = @import("planner.zig");
+pub const temporal = @import("temporal.zig");
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
     return parseGqlOptions(src, allocator, .{});

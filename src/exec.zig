@@ -43,9 +43,8 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
                 if (sc.desc) return !a_is_null; // DESC: nulls first
                 return !b_is_null; // ASC: nulls last
             }
-            const cmp = planner.compareTemporalForOrder(ra.key, rb.key, sc.ctx) catch |e| {
+            const cmp = planner.compareTemporalForOrder(ra.key, rb.key, sc.ctx) catch {
                 // Fallback to lexicographic stringify on error.Invalid
-                _ = e;
                 const tmp_ally = std.heap.page_allocator;
                 const sa = printer.stringifyExprAlloc(tmp_ally, ra.key, .{}) catch return a < b;
                 defer tmp_ally.free(sa);
@@ -67,7 +66,7 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
     var tmp = try ally.alloc(Row, rows.len);
     defer ally.free(tmp);
     for (idxs, 0..) |i, j| tmp[j] = rows[i];
-    std.mem.copy(Row, rows, tmp);
+    std.mem.copyForwards(Row, rows, tmp);
 }
 
 test "stable ORDER BY with cross-timezone equivalence and local attach" {
@@ -195,4 +194,276 @@ test "set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL" {
     defer std.testing.allocator.free(ea);
     // A \ B = {1,2}
     try std.testing.expect(ea.len == 2);
+}
+
+// ===========================
+// Binding-table set operations
+// ===========================
+
+pub const BindingValue = union(enum) {
+    Null,
+    Int: i64,
+    Str: []const u8,
+    Bool: bool,
+};
+
+pub const BindingRow = struct {
+    cols: []const BindingValue,
+};
+
+pub const OrderPolicy = enum { Sorted, StableLeft };
+
+fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
+    // Null < Bool < Int < Str; within types, natural order. NULLs compare equal for set ops equality.
+    const rank = struct {
+        fn of(v: BindingValue) u8 {
+            return switch (v) {
+                .Null => 0,
+                .Bool => 1,
+                .Int => 2,
+                .Str => 3,
+            };
+        }
+    };
+    const ra = rank.of(a);
+    const rb = rank.of(b);
+    if (ra < rb) return .lt;
+    if (ra > rb) return .gt;
+    // Same type, compare within
+    return switch (a) {
+        .Null => .eq,
+        .Bool => |av| blk: {
+            const bv = b.Bool;
+            if (av == bv) break :blk .eq;
+            break :blk if (av) .gt else .lt;
+        },
+        .Int => |av| blk2: {
+            const bv = b.Int;
+            if (av == bv) break :blk2 .eq;
+            break :blk2 if (av < bv) .lt else .gt;
+        },
+        .Str => |as| std.mem.order(u8, as, b.Str),
+    };
+}
+
+fn rowLess(a: []const BindingValue, b: []const BindingValue) bool {
+    var i: usize = 0;
+    const n = @min(a.len, b.len);
+    while (i < n) : (i += 1) {
+        const ord = valueOrder(a[i], b[i]);
+        if (ord == .lt) return true;
+        if (ord == .gt) return false;
+    }
+    return a.len < b.len;
+}
+
+fn valueEq(a: BindingValue, b: BindingValue) bool {
+    switch (a) {
+        .Null => return b == .Null,
+        .Int => |ai| return b == .Int and ai == b.Int,
+        .Str => |as| return b == .Str and std.mem.eql(u8, as, b.Str),
+        .Bool => |ab| return b == .Bool and ab == b.Bool,
+    }
+}
+
+fn rowEq(a: []const BindingValue, b: []const BindingValue) bool {
+    if (a.len != b.len) return false;
+    var i: usize = 0;
+    while (i < a.len) : (i += 1) if (!valueEq(a[i], b[i])) return false;
+    return true;
+}
+
+fn encodeValueKey(buf: *std.ArrayList(u8), v: BindingValue) !void {
+    // Simple, deterministic encoding: type tag + length + payload; NULL is just tag.
+    switch (v) {
+        .Null => try buf.append('N'),
+        .Bool => |b| {
+            try buf.append('B');
+            try buf.append(if (b) '1' else '0');
+        },
+        .Int => |n| {
+            try buf.append('I');
+            try buf.writer().print("{d};", .{n});
+        },
+        .Str => |s| {
+            try buf.append('S');
+            try buf.writer().print("{d}:", .{s.len});
+            try buf.appendSlice(s);
+        },
+    }
+}
+
+fn rowKeyAlloc(ally: std.mem.Allocator, row: []const BindingValue) ![]u8 {
+    var buf = std.ArrayList(u8).init(ally);
+    errdefer buf.deinit();
+    for (row, 0..) |v, i| {
+        if (i > 0) try buf.append('|');
+        try encodeValueKey(&buf, v);
+    }
+    return buf.toOwnedSlice();
+}
+
+fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []BindingValue) ![]const []BindingValue {
+    // Make a copy of slice-of-slices and sort lexicographically; then unique adjacent equals.
+    const tmp = try ally.alloc([]const BindingValue, rows.len);
+    errdefer ally.free(tmp);
+    std.mem.copy([]const BindingValue, tmp, rows);
+    std.sort.block([]const BindingValue, tmp, {}, struct {
+        fn less(_: void, a: []const BindingValue, b: []const BindingValue) bool {
+            return rowLess(a, b);
+        }
+    }.less);
+    if (tmp.len == 0) return tmp;
+    var out = std.ArrayList([]const BindingValue).init(ally);
+    defer out.deinit();
+    var i: usize = 0;
+    while (i < tmp.len) : (i += 1) {
+        if (out.items.len == 0 or !rowEq(out.items[out.items.len - 1], tmp[i])) {
+            try out.append(tmp[i]);
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+pub fn unionDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+    var all = std.ArrayList([]const BindingValue).init(ally);
+    defer all.deinit();
+    try all.appendSlice(a);
+    try all.appendSlice(b);
+    return try sortUniqueRows(ally, all.items);
+}
+
+pub fn unionAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+    var out = std.ArrayList([]const BindingValue).init(ally);
+    defer out.deinit();
+    try out.appendSlice(a);
+    try out.appendSlice(b);
+    return out.toOwnedSlice();
+}
+
+pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+    // Stable-left: walk A, but limit multiplicity by counts in B
+    var counts = std.StringHashMap(usize).init(ally);
+    defer counts.deinit();
+    for (b) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        const cur = counts.get(key) orelse 0;
+        try counts.put(key, cur + 1);
+    }
+    var out = std.ArrayList([]const BindingValue).init(ally);
+    defer out.deinit();
+    for (a) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        if (counts.get(key)) |cnt| {
+            if (cnt > 0) {
+                try out.append(row);
+                try counts.put(key, cnt - 1);
+            }
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+    var setA = std.StringHashMap(void).init(ally);
+    defer setA.deinit();
+    for (a) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        _ = try setA.put(key, {});
+    }
+    var uniq = std.ArrayList([]const BindingValue).init(ally);
+    defer uniq.deinit();
+    var seen = std.StringHashMap(void).init(ally);
+    defer seen.deinit();
+    for (b) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        if (setA.contains(key) and !seen.contains(key)) {
+            _ = try seen.put(key, {});
+            try uniq.append(row);
+        }
+    }
+    // Sort for deterministic order
+    return try sortUniqueRows(ally, uniq.items);
+}
+
+pub fn exceptAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+    // Stable-left: emit rows from A after subtracting multiplicities found in B
+    var counts = std.StringHashMap(usize).init(ally);
+    defer counts.deinit();
+    for (b) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        const cur = counts.get(key) orelse 0;
+        try counts.put(key, cur + 1);
+    }
+    var out = std.ArrayList([]const BindingValue).init(ally);
+    defer out.deinit();
+    for (a) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        if (counts.get(key)) |cnt| {
+            if (cnt == 0) {
+                try out.append(row);
+            } else {
+                try counts.put(key, cnt - 1);
+            }
+        } else {
+            try out.append(row);
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+pub fn exceptDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+    var setB = std.StringHashMap(void).init(ally);
+    defer setB.deinit();
+    for (b) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        _ = try setB.put(key, {});
+    }
+    var uniq = std.ArrayList([]const BindingValue).init(ally);
+    defer uniq.deinit();
+    var seen = std.StringHashMap(void).init(ally);
+    defer seen.deinit();
+    for (a) |row| {
+        const key = try rowKeyAlloc(ally, row);
+        defer ally.free(key);
+        if (!setB.contains(key) and !seen.contains(key)) {
+            _ = try seen.put(key, {});
+            try uniq.append(row);
+        }
+    }
+    return try sortUniqueRows(ally, uniq.items);
+}
+
+test "binding table set ops: multi-column with NULLs" {
+    const A0 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
+    const A1 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
+    const A2 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
+    const B0 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
+    const B1 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
+    const B2 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
+    const A: []const []BindingValue = &.{ A0[0..], A1[0..], A2[0..] };
+    const B: []const []BindingValue = &.{ B0[0..], B1[0..], B2[0..] };
+    const ally = std.testing.allocator;
+    const uD = try unionDistinctRows(ally, A, B);
+    defer ally.free(uD);
+    try std.testing.expect(uD.len == 2);
+    const iA = try intersectAllRows(ally, A, B);
+    defer ally.free(iA);
+    // Counts: A has (1,"a"):2, (null,"x"):1; B has (1,"a"):1, (null,"x"):2 → min multiplicities ⇒ 1 copy of each
+    try std.testing.expect(iA.len == 2);
+    const eD = try exceptDistinctRows(ally, A, B);
+    defer ally.free(eD);
+    // Distinct A minus B => none (all A rows appear in B)
+    try std.testing.expect(eD.len == 0);
+    const eA = try exceptAllRows(ally, A, B);
+    defer ally.free(eA);
+    // All: (1,"a"): 2-1 = 1 left; (null,"x"): 1-2 = 0 left ⇒ total 1
+    try std.testing.expect(eA.len == 1);
 }

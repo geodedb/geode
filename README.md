@@ -16,6 +16,8 @@ Highlights
 - Parser/AST/printers for MATCH/OPTIONAL, ORDER BY, LIMIT/OFFSET, GROUP BY (parse-only),
   UNION/INTERSECT/EXCEPT (parse), pattern comprehensions, string predicates, CASE, and
   structured temporal literals (DATE/TIME/DATETIME/LOCAL DATETIME) with normalization.
+- Runtime set-ops semantics (UNION/INTERSECT/EXCEPT) over binding tables with deterministic ordering:
+  DISTINCT variants return sorted results; ALL variants preserve stable-left order.
 - Planner policies: disallow OFFSET pushdown without explicit ORDER (US001), temporal-aware
   comparator for ORDER BY with session-local attachment.
 - CLI: normalization/clamping for temporals; AST JSON with verbose temporals.

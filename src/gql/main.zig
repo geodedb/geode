@@ -1,8 +1,8 @@
 const std = @import("std");
 const gql = @import("geode");
-const exec = @import("../exec.zig");
-const planner = @import("../planner.zig");
-const temporal = @import("../temporal.zig");
+const exec = gql.exec;
+const planner = gql.planner;
+const temporal = gql.temporal;
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
@@ -102,7 +102,7 @@ pub fn main() !void {
     };
     defer res.deinit();
     if (conformance_json) {
-        const conf = @import("../conformance.zig");
+        const conf = gql.conformance;
         const prof: conf.Profile = .{ .features = .{} };
         try conf.writeConformanceJson(std.io.getStdOut().writer(), prof);
     } else if (print_ast or print_ast_json) {
@@ -150,7 +150,7 @@ pub fn main() !void {
                         .{ .id = 1, .key = .{ .DateTime = .{ .raw = "2024-01-01T11:00+01:00", .parsed = try temporal.parseDateTime("2024-01-01T11:00+01:00", true) } } },
                         .{ .id = 2, .key = .{ .DateTime = .{ .raw = "2024-01-01T09:00Z", .parsed = try temporal.parseDateTime("2024-01-01T09:00Z", true) } } },
                         .{ .id = 3, .key = .{ .LocalDateTime = .{ .raw = "2024-01-01T10:00", .parsed = try temporal.parseDateTime("2024-01-01T10:00", false) } } },
-                        .{ .id = 4, .key = .{.Null} },
+                        .{ .id = 4, .key = .{ .Null = {} } },
                     };
                     try exec.stableOrderByTemporal(&rows, k0.desc, k0.nulls, ctx, ally);
                     // Print results
