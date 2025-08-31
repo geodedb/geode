@@ -1,130 +1,52 @@
-# GQL implementation gap analysis (current state)
+# GQL implementation gap analysis (authoritative ledger)
 
-This file records what the front end implements today, how it maps to ISO/IEC 39075:2024 (GQL) clauses, and what’s next. It also embeds a conformance profile at the end.
+This file tracks requirements against ISO/IEC 39075:2024 (GQL). It is evidence-driven and idempotent.
+Citations use clause IDs (e.g., 14.4 MATCH; 14.10 ORDER BY & page; 16.18–16.19 LIMIT/OFFSET; 18.x types; 23.2 diagnostics; 24 conformance).
 
-References to clauses are pointers only, not reproductions of the spec. See `docs/query_engine.md` for planner-focused background and citations.
+Note: We paraphrase the ISO standard and cite subclauses; no reproductions are included.
 
-## Snapshot: implemented highlights
+## Requirements Ledger
 
-- MATCH/OPTIONAL patterns, RETURN, ORDER BY, LIMIT, OFFSET parsing with AST and CLI controls.
-- Path patterns: multi-hop, relationship type alternation (a:τ1|τ2), and variable-length quantifiers (\*, k, k..m, ..m, k..).
-- UNION with per-part ALL/DISTINCT modifiers.
-- Pattern comprehension `[ pattern (WHERE expr)? | expr ]` and prefixed alias form `p = [ ... ]`.
-- ORDER BY policy flags: strict key shape, identifiers-only, forbid calls, and forbid path-alias keys (precise set).
-- Pretty-printer (human/JSON) traverses queries, graph patterns, keys, and quantifiers.
+Legend for Status: Implemented | Partial | Missing | Blocked
 
-Evidence (code anchors):
+| Requirement ID | Requirement                                                                                                                            | Source (docs §, ISO)                                   | Current Status | Evidence (file:line or test)                                                                                                            | Gap/Risk                                              | Deadline   | Owner | Notes                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ---------- | ----- | ------------------------------------------------- |
+| REQ-GQL-001    | Primitive result with ORDER BY & page: RETURN; ORDER BY ASC/DESC; LIMIT then OFFSET; obey US001 when unordered.                        | query_engine.md §2, §3; ISO 14.10; 16.18–16.19         | Partial        | src/gql.zig:18 “parse WHERE and ORDER BY”; 258 “ORDER BY with ASC and DESC per key”; src/planner.zig:105/119 OFFSET legality            | Runtime semantics not fully wired beyond policy tests | 2025-09-15 | core  | Parser/AST/printing done; planner policy enforced |
+| REQ-GQL-002    | ORDER BY key legality policy (idents-only, forbid calls, forbid path aliases).                                                         | query_engine.md §3.2; ISO 14.10                        | Implemented    | src/gql.zig:322 “ident_order_only rejects member keys”; 493 “ORDER BY path alias is rejected (policy)”                                  | None                                                  | —          | core  | CLI flags in src/gql/main.zig                     |
+| REQ-GQL-003    | MATCH and OPTIONAL MATCH: nodes, relationships, quantifiers, type alternation.                                                         | query_engine.md §3.1; ISO 14.4                         | Implemented    | src/gql.zig:380 “multi-hop...” ; 401 “relationship length quantifiers”; 463 “alternation in relationship types”; 40 “OPTIONAL MATCH...” | None                                                  | —          | core  | Printer covers all                                |
+| REQ-GQL-004    | Pattern comprehension with alias: [pattern (WHERE)? &#124; expr] and p = [ ... ].                                                      | query_engine.md §3.1; ISO list/pattern comp.           | Implemented    | src/gql.zig:482 “pattern comprehension basic”                                                                                           | None                                                  | —          | core  | AST Expr.PatternComp with alias                   |
+| REQ-GQL-005    | Set ops: UNION/INTERSECT/EXCEPT with ALL/DISTINCT (parse).                                                                             | query_engine.md §3.1; ISO 14.12 (+ Annex set ops)      | Implemented    | src/gql.zig:280 “UNION ALL basic”; 332 “UNION chain”; 353 “INTERSECT and EXCEPT parse”                                                  | Semantics not executed (dedup)                        | 2025-10-01 | core  | Engine semantics later                            |
+| REQ-GQL-006    | GROUP BY keys (parse).                                                                                                                 | query_engine.md §3.1; ISO 14.10                        | Partial        | src/gql.zig:425 “GROUP BY syntax”                                                                                                       | No scoping/HAVING enforcement                         | 2025-10-15 | core  | Add legality checks                               |
+| REQ-GQL-007    | Expressions: arithmetic, boolean, NULL tests, IN list, calls, maps.                                                                    | query_engine.md §3.2; ISO 16.x                         | Implemented    | src/gql.zig:51 “arithmetic and IN list predicate”; 369 “function call and map literal”                                                  | Builtin typing minimal                                | —          | core  | Extend validator incrementally                    |
+| REQ-GQL-008    | String predicates: STARTS/ENDS/CONTAINS; regex =~.                                                                                     | query_engine.md §3.2; ISO 16.x                         | Implemented    | src/gql.zig:62 “string predicates and regex operator parse”                                                                             | Eval semantics TBD                                    | 2025-09-30 | core  | Parser/AST stable                                 |
+| REQ-GQL-009    | Temporal literals/types: DATE, TIME, DATETIME, LOCAL DATETIME; validation; normalized formatting; comparisons (session offset attach). | query_engine.md §3; ISO 18.x; 14.10 ordering           | Implemented    | src/gql.zig:73/84/114/138/162/210/229; src/temporal.zig:360/370/387/396; src/planner.zig:88/98; src/exec.zig:55                         | Session offset CLI not fully threaded                 | 2025-09-20 | core  | JSON verbose temporals present                    |
+| REQ-GQL-010    | JSON AST verbose temporals (kind/raw/parsed) behind flag.                                                                              | query_engine.md §3; ISO n/a                            | Implemented    | src/gql.zig:186 “JSON verbose temporals includes kind/raw/parsed”                                                                       | None                                                  | —          | core  | CLI flag --ast-json-verbose                       |
+| REQ-GQL-011    | CLI flags: normalize temporals; clamp frac; ORDER BY policies; AST printers.                                                           | README.md; query_engine.md; ISO n/a                    | Implemented    | src/gql/main.zig (flags); tests invoking printers                                                                                       | None                                                  | —          | core  | Documented in USAGE.md                            |
+| REQ-GQL-012    | Pagination legality: reject OFFSET pushdown without explicit ORDER; allow when safe.                                                   | query_engine.md §3.2; ISO 16.18–16.19 (US001)          | Implemented    | src/planner.zig:105 “offset pushdown rejected without order”; 119 “allowed with explicit order”                                         | None                                                  | —          | core  | Policy codified                                   |
+| REQ-GQL-013    | Stable ORDER BY comparator for temporals with timezone equivalence and local attach.                                                   | query_engine.md §3.1; ISO 14.10                        | Implemented    | src/exec.zig:55 “stable ORDER BY...”                                                                                                    | None                                                  | —          | core  | Fallback tie-breaker stable                       |
+| REQ-GQL-014    | Diagnostics mapping and conformance flagger.                                                                                           | query_engine.md §8; ISO 23.2; 24.\*                    | Missing        | —                                                                                                                                       | Missing developer tooling; risk of drift              | 2025-10-31 | core  | Add flagger + status precedence                   |
+| REQ-GQL-015    | Parameters ($param) and ORDER BY NULLS FIRST/LAST.                                                                                     | query_engine.md §3.2; ISO 16.x (params), 14.10 (nulls) | Missing        | —                                                                                                                                       | Common in real queries                                | 2025-10-15 | core  | Parser + eval + printer                           |
+| REQ-GQL-016    | Aggregation semantics: GROUP BY scoping; HAVING; aggregate catalog.                                                                    | query_engine.md §3.2; ISO 14.10                        | Partial        | src/gql.zig:425 (parse); no tests for scoping                                                                                           | Must block unsafe rewrites                            | 2025-11-15 | core  | Add legality + tests                              |
+| REQ-GQL-017    | Sessions/timezone CLI to runtime comparators.                                                                                          | query_engine.md §3; ISO 7 (sessions)                   | Partial        | planner SessionContext tests exist; CLI threading TBD                                                                                   | End-to-end mismatch risk                              | 2025-09-25 | core  | Thread flag to exec harness                       |
 
-- Parser options and checks: `src/gql/parser.zig` (fields `strict_order_keys`, `ident_order_only`, `forbid_orderby_calls`, `forbid_orderby_paths` and checks in `parseQuery`).
-- Precise path-alias set and enforcement: `parser.zig:isPathAlias`, alias collection in `parseGraphPattern` guarded by `collect_chain_aliases`, enabled around MATCH in `parseQuery`.
-- Pattern comprehension + alias: `parser.zig:parsePrimaryExpr` handling for `ident '=' '[' ... ']'` and `'[' pattern '|' expr ']'` into `ast.Expr.PatternComp`.
-- AST shape: `src/gql/ast.zig` defines `RelPattern{min_len,max_len}`, union `Expr.PatternComp{pattern,where,map,alias?}`.
-- CLI flags exposed: `src/gql/main.zig` (`--strict-order-keys`, `--ident-order-only`, `--forbid-orderby-calls`, `--forbid-orderby-paths`, `--ast`, `--ast-json`).
-- Printer: `src/gql/print.zig` prints Match/Where/With/Group/Return/Order/Limit/Offset, graph pattern chains/hops, labels/types, quantifiers, and pattern comprehensions.
+## GQL Conformance Profile (Initial)
 
-## Requirements ledger (by clause/area)
+Scope: front-end (parser/AST/printers) plus selected planner policies; not a runtime/engine conformance claim.
 
-Legend for Status: Done = implemented and tested at parse/AST level; Parse-only = parsed/printed but semantics not enforced; Planned = on NEXT.md; Policy = implementation-defined policy documented.
-
-### 1. Linear/primitive result statements and ORDER BY & page
-
-- ISO clauses: 14.10 (primitive result + ORDER BY & page), 16.18–16.19 (LIMIT/OFFSET)
-- Requirement: RETURN with optional DISTINCT; ORDER BY keys and ASC/DESC; LIMIT then OFFSET semantics. Respect implementation-defined ordering when paginating unordered tables (US001).
-- Status: Done (parse/AST, printer); Policy for US001 documented in `docs/query_engine.md`.
-- Evidence: `parser.zig:parseQuery` builds `ret`, `order_by`, `limit`, `offset`; `print.zig:printQuery` shows all components; `main.zig` supports printing AST.
-
-### 2. ORDER BY key legality and safety
-
-- ISO clauses: 14.10; feature interactions with expressions (16.16–16.17)
-- Requirement: Validate sort-key shapes (identifier or member chain when configured), forbid function calls if configured; reject path-alias variables when policy forbids them.
-- Status: Done (configurable via CLI and Parser fields).
-- Evidence: `parser.zig` checks in ORDER BY loop; flags in `main.zig`; precise alias set via `isPathAlias` backed by aliases collected in `parseGraphPattern`.
-
-### 3. MATCH and OPTIONAL MATCH patterns
-
-- ISO clauses: 14.4
-- Requirement: Node/relationship patterns, alternation on relationship types, variable-length quantifiers.
-- Status: Done (parse/AST, print).
-- Evidence: `ast.zig:RelPattern{types,min_len,max_len}`, `parser.zig:parseRelPattern` (colon types with `|`, `*` quantifier forms), `print.zig:printRel` formats quantifiers.
-
-### 4. Pattern comprehensions and aliasing
-
-- ISO clauses: list/pattern comprehensions (clause numbering varies; see also 20.x subqueries for related constructs)
-- Requirement: `[ pattern (WHERE expr)? | expr ]` yielding a list; optional alias binding `p = [ ... ]`.
-- Status: Done (parse/AST, print). Alias recorded on `Expr.PatternComp.alias`.
-- Evidence: `ast.zig:Expr.PatternComp{alias:?[]const u8}`, `parser.zig:parsePrimaryExpr` comprehension branches; `print.zig:printExpr` shows alias and body.
-
-### 5. UNION with ALL/DISTINCT
-
-- ISO clauses: 14.12 (SELECT desugaring and set ops family); Annex for set operators
-- Requirement: Support `UNION` chaining with per-part ALL or DISTINCT.
-- Status: Done (parse/AST); semantics (duplicate elimination) are engine-level and not executed here.
-- Evidence: `parser.zig:parseStatement` builds `Statement.Union{first,tails[]}` and records `all`/`distinct` per tail.
-
-### 6. GROUP BY and aggregates
-
-- ISO clauses: 14.10 (grouping), 16.14 (YIELD scope), 16.13 (WHERE scope)
-- Requirement: Parse GROUP BY keys; later enforce scoping of non-aggregates and HAVING.
-- Status: Parse-only; no scoping/aggregate legality yet.
-- Evidence: `parser.zig:parseQuery` captures `group_by: ?GroupBy` and prints keys in `print.zig`.
-
-### 7. Expressions and predicates
-
-- ISO clauses: 16.x (expressions), 20.x (subqueries)
-- Requirement: Arithmetic, boolean, NULL tests, IN list, function calls with basic validation.
-- Status: Done (core); Planned: CASE, string predicates (STARTS WITH, ENDS WITH, CONTAINS, =~), temporal literals.
-- Evidence: `parser.zig:parse*Expr` family; built-in call validator `validateBuiltinCall`.
-
-### 8. ORDER BY path-alias policy (precise)
-
-- ISO clauses: interacts with 14.10 key legality; also paths in 22.4
-- Requirement: Forbid sorting by path variables when policy set; identify only actual path aliases from the current MATCH.
-- Status: Done (configurable); default off unless `--forbid-orderby-paths`.
-- Evidence: `parser.zig:isPathAlias`, `parseQuery` enables `collect_chain_aliases` for MATCH, `parseGraphPattern` records `chain_name` when `ident '=' ...` appears.
-
-### 9. Pretty-printer and JSON AST
-
-- ISO linkage: developer tooling, not normative
-- Requirement: Human and JSON rendering for debugging and tests.
-- Status: Done.
-- Evidence: `src/gql/print.zig` (`printProgramHuman`, `printProgramJson`).
-
-### 10. CLI and Library surface
-
-- ISO linkage: none
-- Requirement: Expose parser policy flags and AST printers.
-- Status: Done.
-- Evidence: `src/gql/main.zig` flag parsing; `src/lib.zig` re-exports printer and options (not shown here; see code).
-
-## Known gaps and priorities
-
-- Aggregation semantics: GROUP BY scoping, HAVING, aggregate catalog and typing. Status: Planned.
-- String predicates and CASE expression. Status: Planned.
-- Temporal literals and basic temporal types. Status: Planned.
-- Parameters (`$param`) and ORDER BY NULLS FIRST/LAST. Status: Planned.
-- Set operations beyond UNION (INTERSECT/EXCEPT with ALL/DISTINCT). Status: Planned.
-- Diagnostics mapping and conformance flagger. Status: Planned.
-- Path selection tie-breaking policy for selective searches (UA005/UA006). Status: Planned (document and implement in planner/runtime stage).
-
-See `docs/NEXT.md` for an execution-ready plan.
-
-## Conformance profile (front-end scope)
-
-Feature tags are summarized for the front end (parser/AST/printer). This is not a runtime/engine conformance statement.
-
-- GQ12 OFFSET, GQ13 LIMIT: Parse-level support — Done. Evidence: `parser.zig:parseQuery`.
-- ORDER BY keys and expressions: Parse-level support with policy flags — Done. Evidence: `parser.zig` checks.
-- MATCH/OPTIONAL: Parse-level support — Done.
-- Path patterns with quantifiers/alternation: Parse-level support — Done.
-- Pattern comprehensions with alias: Parse-level support — Done.
-- UNION (ALL/DISTINCT per part): Parse-level support — Done.
-- GROUP BY: Parse-only (no scoping validation) — Parse-only.
-- INTERSECT/EXCEPT: Not yet — Planned.
-- CASE, string predicates, temporal literals: Not yet — Planned.
-- Implementation-defined ordering (US001) with pagination: Documented in `query_engine.md`; enforcement is planner/runtime — Policy.
+| Clause/Feature (ID) | Name                                    | Supported?                            | Rationale                   | Engine implications (parser/planner/storage/protocol) | Test hook                               |
+| ------------------- | --------------------------------------- | ------------------------------------- | --------------------------- | ----------------------------------------------------- | --------------------------------------- |
+| 14.4                | MATCH / OPTIONAL MATCH                  | Yes (parse)                           | Core language               | Parser/AST/Printer; future planner legality           | src/gql.zig:40/380/401                  |
+| 14.10               | Primitive result; ORDER BY & GROUP BY   | Yes (parse); Partial (group legality) | Needed for result shaping   | Parser/AST; planner ORDER policy                      | src/gql.zig:18/258/425                  |
+| 16.18               | OFFSET                                  | Yes                                   | Pagination control          | Planner policy (US001)                                | src/planner.zig:105/119                 |
+| 16.19               | LIMIT                                   | Yes                                   | Pagination control          | Exec top-k harness                                    | src/gql.zig:18; src/exec.zig:55         |
+| 14.12               | SELECT desugaring; UNION                | Yes (parse)                           | Set composition             | Parser/AST; dedup TBD                                 | src/gql.zig:280/332                     |
+| Set ops (Annex)     | INTERSECT / EXCEPT                      | Yes (parse)                           | Completeness                | Parser/AST; semantics later                           | src/gql.zig:353                         |
+| 16.x                | Expressions incl. CASE and string preds | Yes (parse)                           | Usability                   | Parser/AST                                            | src/gql.zig:62/239                      |
+| 18.x                | Temporal types (DATE/TIME/DATETIME)     | Yes                                   | Interop, ORDER BY stability | Parser; temporal module; planner                      | src/temporal.zig tests; src/exec.zig:55 |
+| 23.2                | Diagnostics                             | No (planned)                          | Protocol integration        | Diagnostics layer                                     | —                                       |
+| 24.\*               | Conformance                             | Doc-only                              | Documentation               | GAP + Profile                                         | This file                               |
 
 Notes
 
-- Clause anchors used here follow those cited in `docs/query_engine.md` (e.g., 14.4, 14.10, 14.12, 16.18–16.19, 22.4). This file does not quote the standard.
-
-See also: `docs/CONFORMANCE_MATRIX.md` for a compact, quick-scan table.
+- US001 (implementation-dependent ordering when paginating unordered tables) is documented and enforced in planner policy checks (ISO 16.18–16.19).
+- UA005/UA006 (path tie-breaking) will be documented with chosen deterministic policy when path search is added.
