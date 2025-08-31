@@ -252,6 +252,28 @@ test "CASE expression parse (simple and searched)" {
     try std.testing.expect(pr2.statements.len == 1);
 }
 
+test "eval acceptance: CASE WHEN a>0 THEN 'p' ELSE 'n' END" {
+    const ally = std.testing.allocator;
+    const geode = @import("lib.zig");
+    const env = geode.eval.Env{ .names = &.{"a"}, .values = &.{geode.eval.Value{ .Int = 5 }} };
+    var a_expr = geode.ast.Expr{ .Ident = "a" };
+    var zero = geode.ast.Expr{ .Int = 0 };
+    var pred = geode.ast.Expr{ .Binary = .{ .op = .Gt, .left = &a_expr, .right = &zero } };
+    var p = geode.ast.Expr{ .String = "p" };
+    var n = geode.ast.Expr{ .String = "n" };
+    var whs: [1]geode.ast.CaseWhen = .{.{ .when = &pred, .then_expr = &p }};
+    const cse = geode.ast.Expr{ .Case = .{ .operand = null, .whens = whs[0..], .else_expr = &n } };
+    const out = try geode.eval.evalExpr(ally, cse, env);
+    try std.testing.expect(out == .Str and std.mem.eql(u8, out.Str, "p"));
+}
+
+test "diagnostics acceptance: codes presence" {
+    const d = @import("lib.zig").diagnostics;
+    try std.testing.expectEqualStrings("US001", d.codeName(.US001));
+    try std.testing.expectEqualStrings("GroupByIllegal", d.codeName(.GroupByIllegal));
+    try std.testing.expectEqualStrings("IllegalOrderKey", d.codeName(.IllegalOrderKey));
+}
+
 // TODO: Pagination orderedness legality is a planner/runtime check.
 // Add integration tests when planner properties and ORDER propagation exist.
 

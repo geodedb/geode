@@ -28,6 +28,9 @@ pub const conformance = @import("conformance.zig");
 pub const exec = @import("exec.zig");
 pub const planner = @import("planner.zig");
 pub const temporal = @import("temporal.zig");
+// Re-export evaluator for expression tests and demos
+pub const eval = @import("eval.zig");
+pub const diagnostics = @import("diagnostics.zig");
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
     return parseGqlOptions(src, allocator, .{});
