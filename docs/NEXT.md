@@ -43,12 +43,13 @@ Swimlanes with concrete acceptance tests. ISO clause anchors are references (no 
 
 1. Set ops semantics (DISTINCT/ALL)
 
-- Why: Make UNION/INTERSECT/EXCEPT observable (ISO 14.12 + Annex).
-- What: Exec semantics for bag/set; stable ordering policy.
-- Acceptance:
-  - `UNION DISTINCT` removes duplicates; `INTERSECT ALL` keeps multiplicities.
-  - Tests assert counts.
-- Scope: M • DRI: core
+- Status: Done.
+- Evidence: src/exec.zig set-ops over binding rows; tests “set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL” and “binding table set ops: multi-column with NULLs”.
+- Ordering policy: DISTINCT → deterministically sorted; ALL → stable-left.
+- Follow-ups:
+  - Document ordering policy summary in query_engine.md and README (short note).
+  - Performance plan: threshold for hash vs sort+unique; microbench on synthetic mixes; add docs bullet in GAP.
+  - Optional CLI demo flag to showcase set-ops on sample inputs.
 
 1. Expression eval: CASE + string predicates
 

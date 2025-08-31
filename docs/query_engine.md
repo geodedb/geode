@@ -68,6 +68,12 @@ We formalize a **Graph Binding Algebra (GBA)** over **binding tables** (sets/bag
 
 **Ordering guarantees & stability.** GQL allows **implementation‑dependent order** when an unordered binding table is paginated (US001), so any **LIMIT/OFFSET pushdown** must **not** change observable results when an explicit ORDER BY is absent or when ORDER BY keys change.&#x20;
 
+**Set operations (UNION/INTERSECT/EXCEPT).**
+
+- Equality semantics: rows compare by column‑wise value equality with NULL = NULL for set‑ops; type precedence for deterministic sorting is Null < Bool < Int < Str; rows compare lexicographically.
+- Variants implemented: DISTINCT (deduplicates, deterministically sorted) and ALL (preserves multiplicities, stable‑left order i.e., rows appear in the order of the left input).
+- These choices are implementation‑defined and documented for reproducibility and test stability (ISO 14.12 + Annex).
+
 ### 3.2 Rule‑Based Rewrites (with legality conditions)
 
 **Canonicalization & simplification**
