@@ -1,0 +1,100 @@
+const std = @import("std");
+
+// Minimal ISO/IEC 39075:2024 GQL token set (subset; expandable).
+pub const TokenKind = enum {
+    // delimiters/operators
+    l_paren,
+    r_paren,
+    l_bracket,
+    r_bracket,
+    l_brace,
+    r_brace,
+    comma,
+    colon,
+    semicolon,
+    dot,
+    dotdot,
+    plus,
+    minus,
+    star,
+    slash,
+    percent,
+    lt,
+    gt,
+    le,
+    ge,
+    eq,
+    ne,
+    concat, // ||
+    bar, // |
+    arrow_r, // ->
+    arrow_l, // <-
+
+    // literals & identifiers
+    identifier,
+    integer_lit,
+    float_lit,
+    string_lit,
+
+    // keywords (subset; case-insensitive in lexer)
+    MATCH,
+    OPTIONAL,
+    WHERE,
+    RETURN,
+    WITH,
+    AND,
+    OR,
+    NOT,
+    IN,
+    IS,
+    CALL,
+    YIELD,
+    TRUE,
+    FALSE,
+    NULL,
+    AS,
+    DISTINCT,
+    UNION,
+    ALL,
+    SESSION,
+    SET,
+    RESET,
+    CLOSE,
+    START,
+    TRANSACTION,
+    COMMIT,
+    ROLLBACK,
+    CREATE,
+    GRAPH,
+    DROP,
+    ORDER,
+    BY,
+    GROUP,
+    ASC,
+    DESC,
+    LIMIT,
+    OFFSET,
+
+    eof,
+    invalid,
+};
+
+pub const Location = struct { line: u32, column: u32 };
+
+pub const Token = struct {
+    kind: TokenKind,
+    lexeme: []const u8, // slice into source buffer
+    loc: Location,
+};
+
+pub fn isIdentifierStart(c: u8) bool {
+    return std.ascii.isAlphabetic(c) or c == '_';
+}
+
+pub fn isIdentifierContinue(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+pub fn isDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}

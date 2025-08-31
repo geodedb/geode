@@ -2,32 +2,19 @@ const std = @import("std");
 
 pub fn precommit(b: *std.Build) void {
     const detect_secrets = b.addSystemCommand(&.{"detect_secrets"});
-    
+
     // check to see if the '.secrets.baseline' file exists
     const baseline = b.path(".secrets.baseline");
     if (baseline.exists()) {
-        detect_secrets.addArgs(&.{
-            "scan", 
-            "--exclude-files", 
-            "(_test.go$|/testdata/|gomod2nix.toml)",
-            "--baseline", 
-            ".secrets.baseline",
-            "."
-        });
+        detect_secrets.addArgs(&.{ "scan", "--exclude-files", "(_test.go$|/testdata/|gomod2nix.toml)", "--baseline", ".secrets.baseline", "." });
     } else {
-        detect_secrets.addArgs(&.{
-            "scan", 
-            "--exclude-files", 
-            "(_test.go$|/testdata/|gomod2nix.toml)",
-            "."
-        });
+        detect_secrets.addArgs(&.{ "scan", "--exclude-files", "(_test.go$|/testdata/|gomod2nix.toml)", "." });
     }
 
     const secrets_output = detect_secrets.run();
     if (secrets_output.exit_code != 0) {
         b.warn("detect-secrets found secrets in the codebase");
     }
-
 }
 
 // Although this function looks imperative, note that its job is to
@@ -45,13 +32,14 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "wire",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .linkage = .static,
     });
 
     // This declares intent for the library to be installed into the standard
@@ -61,15 +49,27 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "wire",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }),
     });
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     b.installArtifact(exe);
+
+    // GQL CLI executable
+    const gql_exe = b.addExecutable(.{
+        .name = "gql",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/gql/main.zig"), .target = target, .optimize = optimize }),
+    });
+    // Expose project root as a module so submodules can import by name
+    const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+    gql_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(gql_exe);
+    const gql_run = b.addRunArtifact(gql_exe);
+    gql_run.step.dependOn(b.getInstallStep());
+    const gql_step = b.step("gql", "Run GQL CLI");
+    gql_step.dependOn(&gql_run.step);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
@@ -96,26 +96,14 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
 
     // add the types unit tests to the executable test
-    const gql_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/gql.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_gql_unit_tests = b.addRunArtifact(gql_unit_tests);
