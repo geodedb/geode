@@ -24,6 +24,8 @@ pub fn main() !void {
     var session_offset: ?i16 = null;
     var conformance_json = false;
     var demo_sort = false;
+    var demo_setops = false;
+    var bench_setops = false;
     var idx: usize = 1;
     while (idx < args.len - 1) {
         if (std.mem.eql(u8, args[idx], "--strict-order-keys")) {
@@ -79,6 +81,12 @@ pub fn main() !void {
             idx += 1;
         } else if (std.mem.eql(u8, args[idx], "--demo-sort")) {
             demo_sort = true;
+            idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--demo-setops")) {
+            demo_setops = true;
+            idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--bench-setops")) {
+            bench_setops = true;
             idx += 1;
         } else break;
     }
@@ -182,6 +190,61 @@ pub fn main() !void {
                     return;
                 },
             }
+        } else if (demo_setops) {
+            // Demonstrate UNION/INTERSECT/EXCEPT semantics on sample binding rows
+            const ally = std.heap.page_allocator;
+            const A0 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
+            const A1 = [_]exec.BindingValue{ .{.Null}, .{ .Str = "x" } };
+            const A2 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
+            const B0 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
+            const B1 = [_]exec.BindingValue{ .{.Null}, .{ .Str = "x" } };
+            const B2 = [_]exec.BindingValue{ .{.Null}, .{ .Str = "x" } };
+            const A: []const []exec.BindingValue = &.{ A0[0..], A1[0..], A2[0..] };
+            const B: []const []exec.BindingValue = &.{ B0[0..], B1[0..], B2[0..] };
+            const ud = try exec.unionDistinctRows(ally, A, B);
+            defer ally.free(ud);
+            const ua = try exec.unionAllRows(ally, A, B);
+            defer ally.free(ua);
+            const ia = try exec.intersectAllRows(ally, A, B);
+            defer ally.free(ia);
+            const id = try exec.intersectDistinctRows(ally, A, B);
+            defer ally.free(id);
+            const ea = try exec.exceptAllRows(ally, A, B);
+            defer ally.free(ea);
+            const ed = try exec.exceptDistinctRows(ally, A, B);
+            defer ally.free(ed);
+            var w = std.io.getStdOut().writer();
+            try w.print("demo-setops:\n  A = 3 rows, B = 3 rows\n", .{});
+            try w.print("  UNION ALL: {d} rows (stable-left)\n", .{ua.len});
+            try w.print("  UNION DISTINCT: {d} rows (sorted)\n", .{ud.len});
+            try w.print("  INTERSECT ALL: {d} rows (stable-left)\n", .{ia.len});
+            try w.print("  INTERSECT DISTINCT: {d} rows (sorted)\n", .{id.len});
+            try w.print("  EXCEPT ALL: {d} rows (stable-left)\n", .{ea.len});
+            try w.print("  EXCEPT DISTINCT: {d} rows (sorted)\n", .{ed.len});
+        } else if (bench_setops) {
+            // Tiny microbenchmark: UNION DISTINCT on synthetic data and optimized path
+            const ally = std.heap.page_allocator;
+            const N: usize = 10_000;
+            var a_rows = try ally.alloc([]const exec.BindingValue, N);
+            defer ally.free(a_rows);
+            var b_rows = try ally.alloc([]const exec.BindingValue, N);
+            defer ally.free(b_rows);
+            var i: usize = 0;
+            while (i < N) : (i += 1) {
+                // Mix of ints and strings to stress sorting/hashing
+                const bv: exec.BindingValue = if ((i % 4) == 0) .{ .Int = @intCast(i) } else .{ .Str = "s" };
+                a_rows[i] = &.{bv};
+                b_rows[i] = &.{if ((i % 5) == 0) .{ .Int = @intCast(i) } else .{ .Str = "t" }};
+            }
+            const t0 = std.time.nanoTimestamp();
+            const ud1 = try exec.unionDistinctRows(ally, a_rows, b_rows);
+            defer ally.free(ud1);
+            const t1 = std.time.nanoTimestamp();
+            const ud2 = try exec.unionDistinctRowsOptimized(ally, a_rows, b_rows, exec.SetOpsTuning.union_distinct_hash_threshold);
+            defer ally.free(ud2);
+            const t2 = std.time.nanoTimestamp();
+            var w = std.io.getStdOut().writer();
+            try w.print("bench-setops: N={d}\n  unionDistinctRows    => {d} ns\n  unionDistinct(opt)   => {d} ns\n  same cardinality?     {s}\n", .{ N, t1 - t0, t2 - t1, if (ud1.len == ud2.len) "yes" else "no" });
         } else {
             std.debug.print("{any}\n", .{res.program});
         }

@@ -3,6 +3,11 @@ const ast = @import("gql/ast.zig");
 const planner = @import("planner.zig");
 const printer = @import("gql/print.zig");
 const stdx = std;
+/// Tuning knobs for set-ops implementations.
+pub const SetOpsTuning = struct {
+    /// For UNION DISTINCT: if total input rows >= this, prefer hash-based dedup then sort; else sort+unique directly.
+    pub const union_distinct_hash_threshold: usize = 2048;
+};
 
 pub const Row = struct {
     // For this minimal harness, a single key expression (temporal literal) to sort by.
@@ -333,6 +338,37 @@ pub fn unionDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: 
     return try sortUniqueRows(ally, all.items);
 }
 
+/// Optimized UNION DISTINCT with a simple threshold to pick between sort-unique and hash-then-sort.
+pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue, threshold: usize) ![]const []BindingValue {
+    const total = a.len + b.len;
+    if (total < threshold) return try unionDistinctRows(ally, a, b);
+    var set = std.StringHashMap(void).init(ally);
+    defer set.deinit();
+    var uniq = std.ArrayList([]const BindingValue).init(ally);
+    defer uniq.deinit();
+    // Insert all rows from a, then b
+    var i: usize = 0;
+    while (i < a.len) : (i += 1) {
+        const key = try rowKeyAlloc(ally, a[i]);
+        defer ally.free(key);
+        if (!set.contains(key)) {
+            _ = try set.put(key, {});
+            try uniq.append(a[i]);
+        }
+    }
+    i = 0;
+    while (i < b.len) : (i += 1) {
+        const key = try rowKeyAlloc(ally, b[i]);
+        defer ally.free(key);
+        if (!set.contains(key)) {
+            _ = try set.put(key, {});
+            try uniq.append(b[i]);
+        }
+    }
+    // Ensure deterministic order for DISTINCT: sort lexicographically
+    return try sortUniqueRows(ally, uniq.items);
+}
+
 pub fn unionAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
     var out = std.ArrayList([]const BindingValue).init(ally);
     defer out.deinit();
@@ -466,4 +502,31 @@ test "binding table set ops: multi-column with NULLs" {
     defer ally.free(eA);
     // All: (1,"a"): 2-1 = 1 left; (null,"x"): 1-2 = 0 left ⇒ total 1
     try std.testing.expect(eA.len == 1);
+}
+
+test "binding table set ops: DISTINCT sorted order with mixed types and NULLs" {
+    // Build inputs with duplicates and mixed types across both sides
+    const R0 = [_]BindingValue{ .{.Null}, .{ .Str = "n" } };
+    const R1 = [_]BindingValue{ .{ .Bool = false }, .{ .Str = "b" } };
+    const R2 = [_]BindingValue{ .{ .Int = 42 }, .{ .Str = "i" } };
+    const R3 = [_]BindingValue{ .{ .Str = "aaa" }, .{ .Str = "s" } };
+    const R4 = [_]BindingValue{ .{.Null}, .{ .Str = "n" } }; // duplicate of R0
+    const A: []const []BindingValue = &.{ R2[0..], R3[0..], R4[0..] };
+    const B: []const []BindingValue = &.{ R0[0..], R1[0..], R2[0..] };
+    const ally = std.testing.allocator;
+    const ud = try unionDistinctRows(ally, A, B);
+    defer ally.free(ud);
+    // Expect sorted by row lexicographic with type precedence: Null < Bool < Int < Str
+    // So order should be: R0/R4 (Null, "n") then R1 (Bool false, "b"), then R2 (Int 42, "i"), then R3 (Str "aaa", "s").
+    try std.testing.expect(ud.len == 4);
+    try std.testing.expect(rowEq(ud[0], R0[0..]));
+    try std.testing.expect(rowEq(ud[1], R1[0..]));
+    try std.testing.expect(rowEq(ud[2], R2[0..]));
+    try std.testing.expect(rowEq(ud[3], R3[0..]));
+    // Optimized path should yield the same
+    const ud2 = try unionDistinctRowsOptimized(ally, A, B, 1);
+    defer ally.free(ud2);
+    try std.testing.expectEqual(ud.len, ud2.len);
+    var i: usize = 0;
+    while (i < ud.len) : (i += 1) try std.testing.expect(rowEq(ud[i], ud2[i]));
 }
