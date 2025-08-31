@@ -2,6 +2,7 @@ const std = @import("std");
 const Lexer = @import("gql/lexer.zig").Lexer;
 const Parser = @import("gql/parser.zig").Parser;
 const ast = @import("gql/ast.zig");
+const printer = @import("gql/print.zig");
 
 test "parse simple MATCH ... RETURN" {
     const ally = std.testing.allocator;
@@ -57,6 +58,202 @@ test "arithmetic and IN list predicate" {
     const program = try p.parseProgram();
     try std.testing.expect(program.statements.len == 1);
 }
+
+test "string predicates and regex operator parse" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.name STARTS WITH \"Al\" AND n.tag ENDS WITH \"Z\" AND n.bio CONTAINS \"graph\" AND n.name =~ \"^A.*\" RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    try std.testing.expect(program.statements.len == 1);
+}
+
+test "temporal literals DATE and DATETIME parse" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.dob = DATE\"2024-08-12\" AND n.ts = DATETIME\"2024-08-12T10:15:30Z\" RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    try std.testing.expect(program.statements.len == 1);
+}
+
+test "DATETIME variants: offsets and fractional seconds" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const cases = [_][]const u8{
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12T10:15:30.123Z\" RETURN n",
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12t10:15:30z\" RETURN n",
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12T10:15+02:00\" RETURN n",
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12T10:15-05:30\" RETURN n",
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12T10:15:30.999+00:00\" RETURN n",
+    };
+    inline for (cases) |src| {
+        var lx = Lexer{ .src = src };
+        var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+        const program = try p.parseProgram();
+        try std.testing.expect(program.statements.len == 1);
+    }
+    // Bad forms: missing T, bad offset, bad fractional
+    const bads = [_][]const u8{
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12 10:15\" RETURN n",
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12T10:15+2:00\" RETURN n",
+        "MATCH (n) WHERE n.ts = DATETIME\"2024-08-12T10:15:30.\" RETURN n",
+    };
+    inline for (bads) |src| {
+        var lx = Lexer{ .src = src };
+        var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+        try std.testing.expectError(error.UnexpectedToken, p.parseProgram());
+    }
+}
+
+test "printer normalization for temporal literals" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.t = TIME\"10:05:03.123z\" AND n.ts = DATETIME\"2024-08-12t10:05:03.123+00:00\" RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    // Print normalized query
+    var out = std.ArrayList(u8).init(ally);
+    defer out.deinit();
+    const q = blk: {
+        const st = program.statements[0];
+        switch (st) {
+            .Query => |qq| break :blk qq,
+            else => return error.Unexpected,
+        }
+    };
+    try printer.printQueryWith(out.writer(), q, 0, .{ .normalize_temporals = true, .clamp_frac_digits = 3 });
+    const s = out.items;
+    try std.testing.expect(std.mem.indexOf(u8, s, "TIME\"10:05:03.123Z\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "DATETIME\"2024-08-12T10:05:03.123Z\"") != null);
+}
+
+test "printer normalization: offset and fraction clamping" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.ts1 = DATETIME\"2024-01-02t03:04+05\" AND n.ts2 = DATETIME\"2024-01-02T03:04-05:30\" AND n.t = TIME\"03:04:05.123456789Z\" RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    var out = std.ArrayList(u8).init(ally);
+    defer out.deinit();
+    const q = blk: {
+        const st = program.statements[0];
+        switch (st) {
+            .Query => |qq| break :blk qq,
+            else => return error.Unexpected,
+        }
+    };
+    try printer.printQueryWith(out.writer(), q, 0, .{ .normalize_temporals = true, .clamp_frac_digits = 6 });
+    const s = out.items;
+    // offset formatting is normalized, fraction clamped below
+    // Fraction clamped to 6
+    try std.testing.expect(std.mem.indexOf(u8, s, "TIME\"03:04:05.123456Z\"") != null);
+}
+
+test "DATE/TIME two-digit component formatting in normalization" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    // Note: Non-two-digit inputs would be rejected; assert normalized printing keeps two digits with valid inputs.
+    const src2 = "MATCH (n) WHERE n.d = DATE\"2024-01-02\" AND n.t = TIME\"03:04\" RETURN n";
+    var lx2 = Lexer{ .src = src2 };
+    var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
+    const pr = try p2.parseProgram();
+    var out = std.ArrayList(u8).init(ally);
+    defer out.deinit();
+    const q = blk: {
+        const st = pr.statements[0];
+        switch (st) {
+            .Query => |qq| break :blk qq,
+            else => return error.Unexpected,
+        }
+    };
+    try printer.printQueryWith(out.writer(), q, 0, .{ .normalize_temporals = true });
+    const s = out.items;
+    try std.testing.expect(std.mem.indexOf(u8, s, "DATE\"2024-01-02\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "TIME\"03:04\"") != null);
+}
+
+test "JSON verbose temporals includes kind/raw/parsed" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.d = DATE\"2024-01-02\" AND n.t = TIME\"03:04:05.123Z\" AND n.ts = DATETIME\"2024-01-02T03:04Z\" AND n.l = LOCAL DATETIME\"2024-01-02T03:04\" RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    var out = std.ArrayList(u8).init(ally);
+    defer out.deinit();
+    try printer.printProgramJsonWith(out.writer(), program, .{ .verbose_temporals = true });
+    const s = out.items;
+    // Top-level temporals array exists
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"temporals\"") != null);
+    // Contains each kind at least once
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"Date\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"Time\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"DateTime\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"LocalDateTime\"") != null);
+    // Has raw and parsed fields
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"raw\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"parsed\"") != null);
+}
+
+test "temporal TIME and LOCAL DATETIME parse and validate" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src_ok = "MATCH (n) WHERE n.t = TIME\"10:15:30.123Z\" AND n.l = LOCAL DATETIME\"2024-08-12T10:15\" RETURN n";
+    var lx1 = Lexer{ .src = src_ok };
+    var p1 = Parser{ .lx = &lx1, .arena = &arena, .cur = lx1.next() };
+    const pr1 = try p1.parseProgram();
+    try std.testing.expect(pr1.statements.len == 1);
+    const src_bad_time = "MATCH (n) WHERE n.t = TIME\"25:00\" RETURN n"; // invalid hour
+    var lx2 = Lexer{ .src = src_bad_time };
+    var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
+    try std.testing.expectError(error.UnexpectedToken, p2.parseProgram());
+    const src_bad_local_dt = "MATCH (n) WHERE n.l = LOCAL DATETIME\"2024-08-12T10:15Z\" RETURN n"; // zone not allowed
+    var lx3 = Lexer{ .src = src_bad_local_dt };
+    var p3 = Parser{ .lx = &lx3, .arena = &arena, .cur = lx3.next() };
+    try std.testing.expectError(error.UnexpectedToken, p3.parseProgram());
+}
+
+test "DATE literal format validation (rejects bad format)" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.dob = DATE\"2024/08/12\" RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    try std.testing.expectError(error.UnexpectedToken, p.parseProgram());
+}
+
+test "CASE expression parse (simple and searched)" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src1 = "MATCH (n) RETURN CASE n.age WHEN 18 THEN \"minor\" WHEN 21 THEN \"twenty-one\" ELSE \"adult\" END";
+    var lx1 = Lexer{ .src = src1 };
+    var p1 = Parser{ .lx = &lx1, .arena = &arena, .cur = lx1.next() };
+    const pr1 = try p1.parseProgram();
+    try std.testing.expect(pr1.statements.len == 1);
+    const src2 = "MATCH (n) RETURN CASE WHEN n.age < 18 THEN \"minor\" ELSE \"adult\" END";
+    var lx2 = Lexer{ .src = src2 };
+    var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
+    const pr2 = try p2.parseProgram();
+    try std.testing.expect(pr2.statements.len == 1);
+}
+
+// TODO: Pagination orderedness legality is a planner/runtime check.
+// Add integration tests when planner properties and ORDER propagation exist.
 
 test "ORDER BY with ASC and DESC per key" {
     const ally = std.testing.allocator;
@@ -151,6 +348,22 @@ test "UNION chain" {
         },
         else => return error.Unexpected,
     }
+}
+
+test "INTERSECT and EXCEPT parse" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const s1 = "MATCH (a) RETURN a INTERSECT MATCH (b) RETURN b";
+    var lx1 = Lexer{ .src = s1 };
+    var p1 = Parser{ .lx = &lx1, .arena = &arena, .cur = lx1.next() };
+    const pr1 = try p1.parseProgram();
+    try std.testing.expect(pr1.statements.len == 1);
+    const s2 = "MATCH (a) RETURN a EXCEPT ALL MATCH (b) RETURN b";
+    var lx2 = Lexer{ .src = s2 };
+    var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
+    const pr2 = try p2.parseProgram();
+    try std.testing.expect(pr2.statements.len == 1);
 }
 
 test "function call and map literal" {

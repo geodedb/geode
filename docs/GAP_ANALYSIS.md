@@ -1,256 +1,130 @@
-# GQL Implementation GAP Analysis
+# GQL implementation gap analysis (current state)
 
-This document compares the current implementation to the ISO/IEC 39075:2024 GQL specification and identifies what is implemented vs. what remains. It also highlights adjacent non-grammar work (CLI, APIs, tests) relevant to developer UX.
+This file records what the front end implements today, how it maps to ISO/IEC 39075:2024 (GQL) clauses, and what’s next. It also embeds a conformance profile at the end.
 
-Note: This is intentionally focused on the front-end (lexing/parsing/AST/options/errors) now in this repository. Storage/engine topics are tracked separately.
+References to clauses are pointers only, not reproductions of the spec. See `docs/query_engine.md` for planner-focused background and citations.
 
-## Scope and Artifacts in this repo
+## Snapshot: implemented highlights
 
-- Language front-end
-  - `src/gql/token.zig` — tokens and keywords
-  - `src/gql/lexer.zig` — case-insensitive lexer with multi-char operators
-  - `src/gql/ast.zig` — AST types for queries, patterns, expressions
-  - `src/gql/parser.zig` — recursive-descent parser with options and validation
-  - `src/gql/main.zig` — CLI for parsing and error reporting
-  - `src/lib.zig` — library API (ParseOptions, ParseResult, ParseOutcome)
-  - `src/gql.zig` — tests covering the implemented grammar
-- Build: Zig 0.14 with module wiring in `build.zig`
-- Docs: this GAP, prompt docs, and research notes
+- MATCH/OPTIONAL patterns, RETURN, ORDER BY, LIMIT, OFFSET parsing with AST and CLI controls.
+- Path patterns: multi-hop, relationship type alternation (a:τ1|τ2), and variable-length quantifiers (\*, k, k..m, ..m, k..).
+- UNION with per-part ALL/DISTINCT modifiers.
+- Pattern comprehension `[ pattern (WHERE expr)? | expr ]` and prefixed alias form `p = [ ... ]`.
+- ORDER BY policy flags: strict key shape, identifiers-only, forbid calls, and forbid path-alias keys (precise set).
+- Pretty-printer (human/JSON) traverses queries, graph patterns, keys, and quantifiers.
 
-## Summary: What’s implemented (today)
+Evidence (code anchors):
 
-- Entry points
-  - Program with one-or-more statements; semicolon optional
-  - Statements: Query, UNION chains; session/transaction ops: START TRANSACTION, COMMIT, ROLLBACK, SESSION SET/RESET/CLOSE
-- Query structure (single-part)
-  - OPTIONAL MATCH | MATCH graph-pattern
-  - optional WHERE predicate (also post-WITH filtering merged via AND)
-  - optional WITH projection (forwarding bindings)
-  - RETURN [DISTINCT] projection list with aliases
-  - ORDER BY expression keys, per-key ASC/DESC
-  - LIMIT and OFFSET (integers)
-- UNION
-  - UNION with per-tail modifiers: ALL or DISTINCT (mutually exclusive per segment)
-  - Chaining supported: first + tails array
-- Patterns (Annex B subset, expanded)
-  - NodePattern: optional name, multiple labels (:Label), optional property map {k: expr, ...}
-  - RelPattern: optional name, multiple types (:TYPE | TYPE2), optional property map, direction <-, ->, or undirected
-  - GraphPattern: supports multi-hop chains and comma-separated multiple chains
-  - Relationship length quantifiers: \*, \*k, \*k..m, \*..m, \*k..
-  - Path aliasing: allow chain alias via `p = (a)-[r]->(b)` and use alias in RETURN
-  - Pattern comprehensions: `[ pattern (WHERE expr)? | expr ]` with optional alias form `p = [ ... ]`
-- Expressions
-  - Literals: integer, string, TRUE/FALSE/NULL, map literals, list literals (in IN set)
-  - Variables and member access: a, a.b, a.b.c
-  - Calls: ident(args...), with basic built-in validation (exists, length, id, labels, type, coalesce, toInteger, toString, abs)
-  - Unary: NOT, numeric negation
-  - Binary arithmetic: +, -, \*, /
-  - Comparisons: =, <>, !=, <, <=, >, >=
-  - Logical: AND, OR
-  - Predicates: IN [list], IS [NOT] NULL
-  - Grouping with parentheses
-- Parser options (semantics/guardrails)
-  - strict_order_keys: ORDER BY keys must be identifier or member-chain
-  - ident_order_only: ORDER BY keys must be bare identifiers
-  - forbid_orderby_calls: disallow function calls in ORDER BY expressions
-  - forbid_orderby_paths: disallow ORDER BY referring to known path aliases (precise, not all idents)
-- Error reporting
-  - `Parser.last_error` populated by `expect()` / `unexpected()` for contextual messages
-  - Library `parseGqlOutcome`: returns Ok(ParseResult) or Err{msg,line,column,token} without throwing
-  - CLI prints contextual parse errors and uses exit codes (2: IO, 3: parse)
-- Tests
-  - Sanity queries, labels/props/member access, IN/IS NULL, arithmetic
-  - RETURN DISTINCT and aliasing; WITH projection; OPTIONAL MATCH
-  - ORDER BY expressions and per-key ASC/DESC; option toggles (ident-only, simple, forbid-orderby-paths)
-  - UNION ALL/DISTINCT chaining with tail assertions
-  - Patterns: multi-hop chains; multiple comma-separated patterns
-  - Relationship quantifiers: \*, \*k, \*k..m, \*..m with validation (min<=max)
-  - Alternation in relationship types via `:T1|T2`
-  - Pattern comprehensions parse; alias binding `p = [ ... ]`
-  - GROUP BY keys (parse-only acceptance)
+- Parser options and checks: `src/gql/parser.zig` (fields `strict_order_keys`, `ident_order_only`, `forbid_orderby_calls`, `forbid_orderby_paths` and checks in `parseQuery`).
+- Precise path-alias set and enforcement: `parser.zig:isPathAlias`, alias collection in `parseGraphPattern` guarded by `collect_chain_aliases`, enabled around MATCH in `parseQuery`.
+- Pattern comprehension + alias: `parser.zig:parsePrimaryExpr` handling for `ident '=' '[' ... ']'` and `'[' pattern '|' expr ']'` into `ast.Expr.PatternComp`.
+- AST shape: `src/gql/ast.zig` defines `RelPattern{min_len,max_len}`, union `Expr.PatternComp{pattern,where,map,alias?}`.
+- CLI flags exposed: `src/gql/main.zig` (`--strict-order-keys`, `--ident-order-only`, `--forbid-orderby-calls`, `--forbid-orderby-paths`, `--ast`, `--ast-json`).
+- Printer: `src/gql/print.zig` prints Match/Where/With/Group/Return/Order/Limit/Offset, graph pattern chains/hops, labels/types, quantifiers, and pattern comprehensions.
 
-## Coverage matrix (high level)
+## Requirements ledger (by clause/area)
 
-- Statements
-  - [x] MATCH / OPTIONAL MATCH
-  - [x] WITH (projection + optional WHERE filter after WITH)
-  - [x] RETURN (DISTINCT supported)
-  - [x] ORDER BY (per-key ASC/DESC) | LIMIT | OFFSET
-  - [x] UNION with chaining (ALL or DISTINCT per segment)
-  - [~] Session/transaction control (parsed as statements, minimal)
-  - [ ] Other schema/graph DDL (CREATE GRAPH, DROP, etc.)
-  - [ ] Data updates (CREATE/MERGE/DELETE/SET/REMOVE)
-- Patterns
-  - [x] Node/Relationship with labels/types and property maps
-  - [x] Multi-hop chains (n)-[r1]-(m)-[r2]-(p)
-  - [x] Variable-length paths (quantifiers: \*, \*k, \*k..m, \*..m, \*k..)
-  - [x] Alternation in relationship types (e.g., :T1|T2)
-  - [~] Path variables/aliases and path-return (aliases parsed and can be RETURNed; semantics TBD)
-  - [x] Pattern comprehension `[ pattern (WHERE expr)? | expr ]` and alias form `p = [ ... ]`
-- Expressions and predicates
-  - [x] Literals (int, string, bool, null), map, list
-  - [x] Arithmetic, comparisons, AND/OR/NOT
-  - [x] IN [], IS [NOT] NULL
-  - [x] Function calls (basic, with small builtin table)
-  - [ ] CASE/WHEN, NULLIF (COALESCE available as call; semantics still minimal)
-  - [ ] String predicates: STARTS WITH, ENDS WITH, CONTAINS, LIKE/GLOB, regex =~
-  - [ ] BETWEEN, RANGE, any/all/none list predicates
-  - [ ] Parameter markers ($param) / typed parameters
-  - [ ] Date/time/duration literals and operators
-- Projection and grouping
-  - [x] RETURN items with aliasing, DISTINCT
-  - [ ] Aggregation functions: COUNT, SUM, AVG, MIN, MAX, COLLECT, etc.
-  - [~] GROUP BY (syntax parsed; semantics and scoping rules not enforced yet)
-  - [ ] HAVING
-  - [ ] WITH DISTINCT, WITH aggregation semantics
-- Set operations (beyond UNION)
-  - [x] UNION ALL
-  - [x] UNION DISTINCT
-  - [ ] INTERSECT [ALL|DISTINCT]
-  - [ ] EXCEPT/MINUS [ALL|DISTINCT]
-- Ordering and pagination
-  - [x] ORDER BY expression keys, per-key direction
-  - [~] ORDER BY restrictions via options (ident-only, simple, forbid calls, forbid path aliases)
-  - [ ] Stable collation, NULLS FIRST/LAST modifiers
-  - [x] LIMIT, OFFSET (integers)
-- Functions and built-ins
-  - [~] Minimal registry/validation for a handful of built-ins
-  - [ ] Comprehensive function catalog with arity/type checks
-  - [ ] Aggregates and window functions (if applicable)
-- Errors and diagnostics
-  - [x] Context message via `last_error`
-  - [x] Outcome API for non-throwing parse results
-  - [ ] Richer diagnostics (expected-set, caret ranges, source snippets)
-  - [ ] Error recovery for multiple diagnostics per parse
-- Tooling
-  - [x] CLI flags: --strict-order-keys, --ident-order-only, --forbid-orderby-calls, --forbid-orderby-paths
-  - [x] CLI: AST pretty-printer and JSON output
-  - [ ] Token stream dump option
-  - [ ] Fuzzing hooks beyond existing script stub
+Legend for Status: Done = implemented and tested at parse/AST level; Parse-only = parsed/printed but semantics not enforced; Planned = on NEXT.md; Policy = implementation-defined policy documented.
 
-Legend: [x] implemented, [~] partial/minimal, [ ] not yet.
+### 1. Linear/primitive result statements and ORDER BY & page
 
-## Known gaps (prioritized)
+- ISO clauses: 14.10 (primitive result + ORDER BY & page), 16.18–16.19 (LIMIT/OFFSET)
+- Requirement: RETURN with optional DISTINCT; ORDER BY keys and ASC/DESC; LIMIT then OFFSET semantics. Respect implementation-defined ordering when paginating unordered tables (US001).
+- Status: Done (parse/AST, printer); Policy for US001 documented in `docs/query_engine.md`.
+- Evidence: `parser.zig:parseQuery` builds `ret`, `order_by`, `limit`, `offset`; `print.zig:printQuery` shows all components; `main.zig` supports printing AST.
 
-Priority P0 (next up)
+### 2. ORDER BY key legality and safety
 
-1. Aggregation semantics and grouping
+- ISO clauses: 14.10; feature interactions with expressions (16.16–16.17)
+- Requirement: Validate sort-key shapes (identifier or member chain when configured), forbid function calls if configured; reject path-alias variables when policy forbids them.
+- Status: Done (configurable via CLI and Parser fields).
+- Evidence: `parser.zig` checks in ORDER BY loop; flags in `main.zig`; precise alias set via `isPathAlias` backed by aliases collected in `parseGraphPattern`.
 
-- Aggregates: COUNT, SUM, AVG, MIN, MAX (parse present as calls; add catalog + basic validation)
-- GROUP BY scoping rules and validation (non-aggregates must appear in GROUP BY)
-- HAVING clause parsing
-- WITH DISTINCT and aggregation forwarding semantics (parse ok; enforce later)
+### 3. MATCH and OPTIONAL MATCH patterns
 
-1. String predicates and CASE
+- ISO clauses: 14.4
+- Requirement: Node/relationship patterns, alternation on relationship types, variable-length quantifiers.
+- Status: Done (parse/AST, print).
+- Evidence: `ast.zig:RelPattern{types,min_len,max_len}`, `parser.zig:parseRelPattern` (colon types with `|`, `*` quantifier forms), `print.zig:printRel` formats quantifiers.
 
-- CASE [WHEN] ... ELSE ... END (simple and searched forms)
-- STARTS WITH, ENDS WITH, CONTAINS, LIKE/GLOB, and regex =~ (syntax + minimal handling)
+### 4. Pattern comprehensions and aliasing
 
-1. Parameters and literals
+- ISO clauses: list/pattern comprehensions (clause numbering varies; see also 20.x subqueries for related constructs)
+- Requirement: `[ pattern (WHERE expr)? | expr ]` yielding a list; optional alias binding `p = [ ... ]`.
+- Status: Done (parse/AST, print). Alias recorded on `Expr.PatternComp.alias`.
+- Evidence: `ast.zig:Expr.PatternComp{alias:?[]const u8}`, `parser.zig:parsePrimaryExpr` comprehension branches; `print.zig:printExpr` shows alias and body.
 
-- $param markers; optional type hints; AST threading
-- Date/time/duration literal tokens and basic parse forms
+### 5. UNION with ALL/DISTINCT
 
-1. ORDER BY polish
+- ISO clauses: 14.12 (SELECT desugaring and set ops family); Annex for set operators
+- Requirement: Support `UNION` chaining with per-part ALL or DISTINCT.
+- Status: Done (parse/AST); semantics (duplicate elimination) are engine-level and not executed here.
+- Evidence: `parser.zig:parseStatement` builds `Statement.Union{first,tails[]}` and records `all`/`distinct` per tail.
 
-- NULLS FIRST/LAST parsing; wire into OrderKey
-- Collation and stability policy notes (doc + options stub)
+### 6. GROUP BY and aggregates
 
-Priority P1
+- ISO clauses: 14.10 (grouping), 16.14 (YIELD scope), 16.13 (WHERE scope)
+- Requirement: Parse GROUP BY keys; later enforce scoping of non-aggregates and HAVING.
+- Status: Parse-only; no scoping/aggregate legality yet.
+- Evidence: `parser.zig:parseQuery` captures `group_by: ?GroupBy` and prints keys in `print.zig`.
 
-5. Functions registry
+### 7. Expressions and predicates
 
-- Expand builtins with min/max arity and argument category/type checks
-- Aggregates catalog and validations
+- ISO clauses: 16.x (expressions), 20.x (subqueries)
+- Requirement: Arithmetic, boolean, NULL tests, IN list, function calls with basic validation.
+- Status: Done (core); Planned: CASE, string predicates (STARTS WITH, ENDS WITH, CONTAINS, =~), temporal literals.
+- Evidence: `parser.zig:parse*Expr` family; built-in call validator `validateBuiltinCall`.
 
-6. CLI and diagnostics
+### 8. ORDER BY path-alias policy (precise)
 
-- Token stream dump for debugging
-- Richer error messages: expected vs. found set; underline ranges; caret source snippets
+- ISO clauses: interacts with 14.10 key legality; also paths in 22.4
+- Requirement: Forbid sorting by path variables when policy set; identify only actual path aliases from the current MATCH.
+- Status: Done (configurable); default off unless `--forbid-orderby-paths`.
+- Evidence: `parser.zig:isPathAlias`, `parseQuery` enables `collect_chain_aliases` for MATCH, `parseGraphPattern` records `chain_name` when `ident '=' ...` appears.
 
-Priority P2
+### 9. Pretty-printer and JSON AST
 
-9. Other statements
+- ISO linkage: developer tooling, not normative
+- Requirement: Human and JSON rendering for debugging and tests.
+- Status: Done.
+- Evidence: `src/gql/print.zig` (`printProgramHuman`, `printProgramJson`).
 
-   - Schema/graph DDL: CREATE GRAPH, DROP, etc.
-   - Data updates (CREATE/MERGE/DELETE/SET/REMOVE) — parse surface only
+### 10. CLI and Library surface
 
-10. Advanced expressions
+- ISO linkage: none
+- Requirement: Expose parser policy flags and AST printers.
+- Status: Done.
+- Evidence: `src/gql/main.zig` flag parsing; `src/lib.zig` re-exports printer and options (not shown here; see code).
 
-- ANY/ALL/NONE list predicates
-- List/map comprehensions and slicing
+## Known gaps and priorities
 
-## Implementation notes (current)
+- Aggregation semantics: GROUP BY scoping, HAVING, aggregate catalog and typing. Status: Planned.
+- String predicates and CASE expression. Status: Planned.
+- Temporal literals and basic temporal types. Status: Planned.
+- Parameters (`$param`) and ORDER BY NULLS FIRST/LAST. Status: Planned.
+- Set operations beyond UNION (INTERSECT/EXCEPT with ALL/DISTINCT). Status: Planned.
+- Diagnostics mapping and conformance flagger. Status: Planned.
+- Path selection tie-breaking policy for selective searches (UA005/UA006). Status: Planned (document and implement in planner/runtime stage).
 
-- Parser architecture: recursive descent with explicit precedence levels
-- Memory: arena allocator threaded through, AST owns allocations
-- UNION representation: non-recursive union of `first` + `tails` to avoid self-referential types
-- ORDER BY controls: optional constraints to match deployment policies
-- Error policy: capture last expected/what; return Err outcome for clean API
+See `docs/NEXT.md` for an execution-ready plan.
 
-## Test coverage snapshot
+## Conformance profile (front-end scope)
 
-- Happy paths for: MATCH/OPTIONAL MATCH, WHERE, WITH projection, RETURN w/ DISTINCT and aliases, ORDER BY expressions and directions, LIMIT/OFFSET
-- UNION: ALL/DISTINCT and chaining structure tested
-- Patterns: multi-hop and multiple chains; quantifiers; alternation; path aliasing; pattern comprehensions
-- GROUP BY: parse-only keys list
-- ORDER BY policies: ident-only/simple/call-ban/path-ban
-- Expressions: arithmetic, comparisons, IN, IS [NOT] NULL, function calls, map/list literals
+Feature tags are summarized for the front end (parser/AST/printer). This is not a runtime/engine conformance statement.
 
-## Risks and unknowns
+- GQ12 OFFSET, GQ13 LIMIT: Parse-level support — Done. Evidence: `parser.zig:parseQuery`.
+- ORDER BY keys and expressions: Parse-level support with policy flags — Done. Evidence: `parser.zig` checks.
+- MATCH/OPTIONAL: Parse-level support — Done.
+- Path patterns with quantifiers/alternation: Parse-level support — Done.
+- Pattern comprehensions with alias: Parse-level support — Done.
+- UNION (ALL/DISTINCT per part): Parse-level support — Done.
+- GROUP BY: Parse-only (no scoping validation) — Parse-only.
+- INTERSECT/EXCEPT: Not yet — Planned.
+- CASE, string predicates, temporal literals: Not yet — Planned.
+- Implementation-defined ordering (US001) with pagination: Documented in `query_engine.md`; enforcement is planner/runtime — Policy.
 
-- Exact ISO grammar points (e.g., full CASE semantics, string predicate operators, set operations) need tight reading to settle edge cases and precedence
-- Scoping rules across WITH/aggregation and name resolution need dedicated design + tests
-- Path pattern semantics (quantifiers, binds, alternations) have many corner cases
+Notes
 
----
+- Clause anchors used here follow those cited in `docs/query_engine.md` (e.g., 14.4, 14.10, 14.12, 16.18–16.19, 22.4). This file does not quote the standard.
 
-Last updated: 2025-08-30
-
-## NEXT plan (prioritized and testable)
-
-P0 — Aggregation, grouping, and predicates
-
-1. Aggregation semantics and grouping
-
-- Aggregates: COUNT, SUM, AVG, MIN, MAX (catalog + validation)
-- GROUP BY scoping rules and validation
-- HAVING clause parsing
-- WITH DISTINCT and aggregation forwarding (semantics later)
-
-2. String predicates and CASE
-
-- Operators: STARTS WITH, ENDS WITH, CONTAINS, LIKE/GLOB, =~ (regex)
-- CASE expression (simple and searched)
-
-3. Parameters and literals
-
-- $param markers and optional typing
-- Date/time/duration literal tokens and basic parse
-
-4. ORDER BY polish
-
-- NULLS FIRST/LAST in OrderKey
-- Collation/stability policy notes (options stub)
-
-P1 — Functions and diagnostics
-
-1. Functions registry expansion
-
-- Broader builtin catalog with arity/type checks
-- Aggregates catalog validations
-
-1. CLI and diagnostics improvements
-
-- Token dump flag
-- Richer diagnostics: expected-set, caret snippets
-
-P2 — Set ops and advanced expressions
-
-1. Set operations
-
-- INTERSECT and EXCEPT/MINUS with ALL/DISTINCT
-
-1. Advanced expressions
-
-- ANY/ALL/NONE list predicates; list/map comprehensions and slicing
+See also: `docs/CONFORMANCE_MATRIX.md` for a compact, quick-scan table.

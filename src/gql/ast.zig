@@ -1,4 +1,5 @@
 const std = @import("std");
+const temporal = @import("../temporal.zig");
 
 // A very small AST subset sufficient for an initial pipeline.
 pub const Program = struct { statements: []Statement };
@@ -6,6 +7,8 @@ pub const Program = struct { statements: []Statement };
 pub const Statement = union(enum) {
     Query: Query,
     Union: UnionQuery,
+    Intersect: BinarySet,
+    Except: BinarySet,
     SessionSet,
     SessionReset,
     SessionClose,
@@ -31,6 +34,8 @@ pub const UnionQuery = struct {
     first: Query,
     tails: []Part,
 };
+
+pub const BinarySet = struct { left: Query, right: Query, all: bool = false, distinct: bool = false };
 
 pub const Property = struct { key: []const u8, value: *Expr };
 
@@ -85,6 +90,10 @@ pub const Expr = union(enum) {
     Int: i64,
     Bool: bool,
     Null,
+    Date: struct { raw: []const u8, parsed: temporal.Date },
+    DateTime: struct { raw: []const u8, parsed: temporal.DateTime },
+    Time: struct { raw: []const u8, parsed: temporal.Time },
+    LocalDateTime: struct { raw: []const u8, parsed: temporal.DateTime },
     List: []*Expr,
     Member: struct { target: *Expr, field: []const u8 },
     Call: struct { callee: *Expr, args: []*Expr },
@@ -92,9 +101,18 @@ pub const Expr = union(enum) {
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
     In: struct { value: *Expr, set: []*Expr },
     IsNull: struct { target: *Expr, negated: bool },
+    // String predicates
+    StartsWith: struct { value: *Expr, prefix: *Expr },
+    EndsWith: struct { value: *Expr, suffix: *Expr },
+    Contains: struct { value: *Expr, needle: *Expr },
+    RegexMatch: struct { value: *Expr, pattern: *Expr },
+    // CASE expression
+    Case: struct { operand: ?*Expr, whens: []CaseWhen, else_expr: ?*Expr },
     Map: []Property,
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
 };
 
 pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div };
 pub const UnaryOp = enum { Not, Neg };
+
+pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };

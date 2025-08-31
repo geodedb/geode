@@ -35,6 +35,10 @@ pub const TokenKind = enum {
     integer_lit,
     float_lit,
     string_lit,
+    date_lit,
+    datetime_lit,
+    time_lit,
+    local_datetime_lit,
 
     // keywords (subset; case-insensitive in lexer)
     MATCH,
@@ -42,11 +46,19 @@ pub const TokenKind = enum {
     WHERE,
     RETURN,
     WITH,
+    CASE,
+    WHEN,
+    THEN,
+    ELSE,
+    END,
     AND,
     OR,
     NOT,
     IN,
     IS,
+    STARTS,
+    ENDS,
+    CONTAINS,
     CALL,
     YIELD,
     TRUE,
@@ -55,6 +67,8 @@ pub const TokenKind = enum {
     AS,
     DISTINCT,
     UNION,
+    INTERSECT,
+    EXCEPT,
     ALL,
     SESSION,
     SET,
@@ -74,6 +88,9 @@ pub const TokenKind = enum {
     DESC,
     LIMIT,
     OFFSET,
+
+    // pattern and string operators (extras)
+    regex_match, // =~
 
     eof,
     invalid,

@@ -6,7 +6,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     if (args.len < 2) {
-        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--ast|--ast-json] <file>\n", .{});
+        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--ast|--ast-json|--ast-json-verbose] <file>\n", .{});
         return;
     }
     var strict = false;
@@ -15,6 +15,9 @@ pub fn main() !void {
     var forbid_paths = false;
     var print_ast = false;
     var print_ast_json = false;
+    var ast_json_verbose = false;
+    var normalize_temporals = false;
+    var clamp_frac_digits: ?u8 = null;
     var idx: usize = 1;
     while (idx < args.len - 1) {
         if (std.mem.eql(u8, args[idx], "--strict-order-keys")) {
@@ -29,16 +32,35 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, args[idx], "--forbid-orderby-paths")) {
             forbid_paths = true;
             idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--normalize-temporals")) {
+            normalize_temporals = true;
+            idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--clamp-frac")) {
+            if (idx + 1 >= args.len) {
+                std.debug.print("error: --clamp-frac requires a value 0-9\n", .{});
+                std.process.exit(2);
+            }
+            const val_str = args[idx + 1];
+            const parsed = std.fmt.parseInt(u8, val_str, 10) catch {
+                std.debug.print("error: --clamp-frac expects integer 0-9, got '{s}'\n", .{val_str});
+                std.process.exit(2);
+            };
+            clamp_frac_digits = parsed;
+            idx += 2;
         } else if (std.mem.eql(u8, args[idx], "--ast")) {
             print_ast = true;
             idx += 1;
         } else if (std.mem.eql(u8, args[idx], "--ast-json")) {
             print_ast_json = true;
             idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--ast-json-verbose")) {
+            print_ast_json = true;
+            ast_json_verbose = true;
+            idx += 1;
         } else break;
     }
     if (idx >= args.len) {
-        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--ast|--ast-json] <file>\n", .{});
+        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--ast|--ast-json|--ast-json-verbose] <file>\n", .{});
         return;
     }
     const path = args[idx];
@@ -58,7 +80,16 @@ pub fn main() !void {
     defer res.deinit();
     if (print_ast or print_ast_json) {
         const printer = gql.printer;
-        if (print_ast_json) try printer.printProgramJson(std.io.getStdOut().writer(), res.program) else try printer.printProgramHuman(std.io.getStdOut().writer(), res.program);
+        if (print_ast_json) {
+            if (ast_json_verbose) {
+                try printer.printProgramJsonWith(std.io.getStdOut().writer(), res.program, .{ .verbose_temporals = true });
+            } else {
+                try printer.printProgramJson(std.io.getStdOut().writer(), res.program);
+            }
+        } else {
+            const popts = printer.PrintOptions{ .normalize_temporals = normalize_temporals, .clamp_frac_digits = clamp_frac_digits };
+            try printer.printProgramHumanWith(std.io.getStdOut().writer(), res.program, popts);
+        }
     } else {
         std.debug.print("{any}\n", .{res.program});
     }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const tok = @import("token.zig");
 const ast = @import("ast.zig");
+const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;
 
 pub const Parser = struct {
@@ -87,6 +88,26 @@ pub const Parser = struct {
                         try parts.append(.{ .all = all, .distinct = distinct, .query = q });
                     }
                     break :blk_query .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice() } };
+                }
+                if (self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+                    const kind = self.cur.kind;
+                    self.advance();
+                    var all = false;
+                    var distinct = false;
+                    if (self.cur.kind == .ALL) {
+                        all = true;
+                        self.advance();
+                    } else if (self.cur.kind == .DISTINCT) {
+                        distinct = true;
+                        self.advance();
+                    }
+                    if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+                    const rhs = try self.parseQuery();
+                    if (kind == .INTERSECT) {
+                        break :blk_query .{ .Intersect = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
+                    } else {
+                        break :blk_query .{ .Except = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
+                    }
                 }
                 break :blk_query .{ .Query = first };
             },
@@ -458,6 +479,49 @@ pub const Parser = struct {
 
     fn parseCmpExpr(self: *Parser) ParserError!ast.Expr {
         const left = try self.parseAddExpr();
+        // string predicates and regex have higher precedence than boolean but sit with comparisons
+        if (self.cur.kind == .STARTS) {
+            self.advance();
+            _ = try self.expect(.WITH);
+            const rhs = try self.parseAddExpr();
+            const a = self.arena.allocator();
+            const lp = try a.create(ast.Expr);
+            const rp = try a.create(ast.Expr);
+            lp.* = left;
+            rp.* = rhs;
+            return .{ .StartsWith = .{ .value = lp, .prefix = rp } };
+        }
+        if (self.cur.kind == .ENDS) {
+            self.advance();
+            _ = try self.expect(.WITH);
+            const rhs = try self.parseAddExpr();
+            const a = self.arena.allocator();
+            const lp = try a.create(ast.Expr);
+            const rp = try a.create(ast.Expr);
+            lp.* = left;
+            rp.* = rhs;
+            return .{ .EndsWith = .{ .value = lp, .suffix = rp } };
+        }
+        if (self.cur.kind == .CONTAINS) {
+            self.advance();
+            const rhs = try self.parseAddExpr();
+            const a = self.arena.allocator();
+            const lp = try a.create(ast.Expr);
+            const rp = try a.create(ast.Expr);
+            lp.* = left;
+            rp.* = rhs;
+            return .{ .Contains = .{ .value = lp, .needle = rp } };
+        }
+        if (self.cur.kind == .regex_match) {
+            self.advance();
+            const rhs = try self.parseAddExpr();
+            const a = self.arena.allocator();
+            const lp = try a.create(ast.Expr);
+            const rp = try a.create(ast.Expr);
+            lp.* = left;
+            rp.* = rhs;
+            return .{ .RegexMatch = .{ .value = lp, .pattern = rp } };
+        }
         const op_kind = switch (self.cur.kind) {
             .eq => ast.BinOp.Eq,
             .ne => ast.BinOp.Ne,
@@ -598,6 +662,65 @@ pub const Parser = struct {
 
     fn parsePrimaryExpr(self: *Parser) ParserError!ast.Expr {
         return switch (self.cur.kind) {
+            .date_lit => blk_dt: {
+                const tkn = self.cur;
+                self.advance();
+                const parsed = temporal.parseDate(tkn.lexeme) catch return self.unexpected("invalid DATE literal");
+                break :blk_dt .{ .Date = .{ .raw = tkn.lexeme, .parsed = parsed } };
+            },
+            .datetime_lit => blk_dtt: {
+                const tkn = self.cur;
+                self.advance();
+                const parsed = temporal.parseDateTime(tkn.lexeme, true) catch return self.unexpected("invalid DATETIME literal");
+                break :blk_dtt .{ .DateTime = .{ .raw = tkn.lexeme, .parsed = parsed } };
+            },
+            .time_lit => blk_t: {
+                const tkn = self.cur;
+                self.advance();
+                const parsed = temporal.parseTime(tkn.lexeme, true) catch return self.unexpected("invalid TIME literal");
+                break :blk_t .{ .Time = .{ .raw = tkn.lexeme, .parsed = parsed } };
+            },
+            .local_datetime_lit => blk_ldt: {
+                const tkn = self.cur;
+                self.advance();
+                const parsed = temporal.parseDateTime(tkn.lexeme, false) catch return self.unexpected("invalid LOCAL DATETIME literal");
+                break :blk_ldt .{ .LocalDateTime = .{ .raw = tkn.lexeme, .parsed = parsed } };
+            },
+            .CASE => blk_case: {
+                self.advance();
+                var operand_opt: ?*ast.Expr = null;
+                // Optional simple CASE operand
+                if (self.cur.kind != .WHEN) {
+                    const opnd = try self.parseOrExpr();
+                    const pp = try self.arena.allocator().create(ast.Expr);
+                    pp.* = opnd;
+                    operand_opt = pp;
+                }
+                var whens = std.ArrayList(ast.CaseWhen).init(self.arena.allocator());
+                while (self.cur.kind == .WHEN) {
+                    self.advance();
+                    const when_expr = try self.parseOrExpr();
+                    _ = try self.expect(.THEN);
+                    const then_expr = try self.parseOrExpr();
+                    const a = self.arena.allocator();
+                    const wp = try a.create(ast.Expr);
+                    const tp = try a.create(ast.Expr);
+                    wp.* = when_expr;
+                    tp.* = then_expr;
+                    try whens.append(.{ .when = wp, .then_expr = tp });
+                }
+                var else_p: ?*ast.Expr = null;
+                if (self.cur.kind == .ELSE) {
+                    self.advance();
+                    const e = try self.parseOrExpr();
+                    const ep = try self.arena.allocator().create(ast.Expr);
+                    ep.* = e;
+                    else_p = ep;
+                }
+                _ = try self.expect(.END);
+                const wh_slice = try whens.toOwnedSlice();
+                break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
+            },
             .identifier => blk: {
                 const tkn = self.cur;
                 // Check for comprehension alias pattern: ident '=' '[' ... ']'

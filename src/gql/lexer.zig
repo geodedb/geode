@@ -1,5 +1,6 @@
 const std = @import("std");
 const t = @import("token.zig");
+const temporal = @import("../temporal.zig");
 
 pub const Lexer = struct {
     src: []const u8,
@@ -96,7 +97,7 @@ pub const Lexer = struct {
             self.col += 2;
             return tokv;
         }
-        // <=, >=, <>, !=
+        // <=, >=, <>, !=, =~, ..
         if (remain.len >= 2) switch (remain[0]) {
             '<' => switch (remain[1]) {
                 '=' => {
@@ -121,6 +122,12 @@ pub const Lexer = struct {
             },
             '!' => if (remain[1] == '=') {
                 const tokv: t.Token = .{ .kind = .ne, .lexeme = remain[0..2], .loc = loc };
+                self.idx += 2;
+                self.col += 2;
+                return tokv;
+            },
+            '=' => if (remain[1] == '~') {
+                const tokv: t.Token = .{ .kind = .regex_match, .lexeme = remain[0..2], .loc = loc };
                 self.idx += 2;
                 self.col += 2;
                 return tokv;
@@ -178,6 +185,52 @@ pub const Lexer = struct {
         const slice = self.src[start..self.idx];
         // case-insensitive keyword mapping
         const kind = keywordKind(slice);
+        // Special handling for typed temporal literals: DATE"..." / DATETIME"..." / TIME"..." / LOCAL DATETIME"..."
+        if (kind == .date_lit or kind == .datetime_lit or kind == .time_lit) {
+            const save_idx = self.idx;
+            const save_line = self.line;
+            const save_col = self.col;
+            self.skipSeparators();
+            if (self.idx < self.src.len and self.src[self.idx] == '"') {
+                const str = self.scanString();
+                if (kind == .date_lit and !temporal.isDateStrict(str.lexeme)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                if (kind == .datetime_lit and !temporal.isDateTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                if (kind == .time_lit and !temporal.isTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                return .{ .kind = kind, .lexeme = str.lexeme, .loc = str.loc };
+            }
+            // No following string: not a typed literal; restore and treat as identifier
+            self.idx = save_idx;
+            self.line = save_line;
+            self.col = save_col;
+            return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
+        }
+        if (kind == .local_datetime_lit) {
+            // Expect LOCAL DATETIME"..."
+            const save_idx = self.idx;
+            const save_line = self.line;
+            const save_col = self.col;
+            self.skipSeparators();
+            if (self.idx < self.src.len and t.isIdentifierStart(self.src[self.idx])) {
+                const ident_start = self.idx;
+                self.idx += 1;
+                self.col += 1;
+                while (self.idx < self.src.len and t.isIdentifierContinue(self.src[self.idx])) : (self.col += 1) self.idx += 1;
+                const w = self.src[ident_start..self.idx];
+                if (std.ascii.eqlIgnoreCase(w, "DATETIME")) {
+                    self.skipSeparators();
+                    if (self.idx < self.src.len and self.src[self.idx] == '"') {
+                        const str = self.scanString();
+                        if (!temporal.isDateTimeIso(str.lexeme, false)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                        return .{ .kind = .local_datetime_lit, .lexeme = str.lexeme, .loc = str.loc };
+                    }
+                }
+            }
+            // Fallback: not a typed literal
+            self.idx = save_idx;
+            self.line = save_line;
+            self.col = save_col;
+            return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
+        }
         return .{ .kind = kind, .lexeme = slice, .loc = loc };
     }
 
@@ -188,11 +241,19 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "WHERE")) return .WHERE;
         if (std.ascii.eqlIgnoreCase(word, "RETURN")) return .RETURN;
         if (std.ascii.eqlIgnoreCase(word, "WITH")) return .WITH;
+        if (std.ascii.eqlIgnoreCase(word, "CASE")) return .CASE;
+        if (std.ascii.eqlIgnoreCase(word, "WHEN")) return .WHEN;
+        if (std.ascii.eqlIgnoreCase(word, "THEN")) return .THEN;
+        if (std.ascii.eqlIgnoreCase(word, "ELSE")) return .ELSE;
+        if (std.ascii.eqlIgnoreCase(word, "END")) return .END;
         if (std.ascii.eqlIgnoreCase(word, "AND")) return .AND;
         if (std.ascii.eqlIgnoreCase(word, "OR")) return .OR;
         if (std.ascii.eqlIgnoreCase(word, "NOT")) return .NOT;
         if (std.ascii.eqlIgnoreCase(word, "IN")) return .IN;
         if (std.ascii.eqlIgnoreCase(word, "IS")) return .IS;
+        if (std.ascii.eqlIgnoreCase(word, "STARTS")) return .STARTS;
+        if (std.ascii.eqlIgnoreCase(word, "ENDS")) return .ENDS;
+        if (std.ascii.eqlIgnoreCase(word, "CONTAINS")) return .CONTAINS;
         if (std.ascii.eqlIgnoreCase(word, "CALL")) return .CALL;
         if (std.ascii.eqlIgnoreCase(word, "YIELD")) return .YIELD;
         if (std.ascii.eqlIgnoreCase(word, "TRUE")) return .TRUE;
@@ -201,6 +262,8 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "AS")) return .AS;
         if (std.ascii.eqlIgnoreCase(word, "DISTINCT")) return .DISTINCT;
         if (std.ascii.eqlIgnoreCase(word, "UNION")) return .UNION;
+        if (std.ascii.eqlIgnoreCase(word, "INTERSECT")) return .INTERSECT;
+        if (std.ascii.eqlIgnoreCase(word, "EXCEPT")) return .EXCEPT;
         if (std.ascii.eqlIgnoreCase(word, "ALL")) return .ALL;
         if (std.ascii.eqlIgnoreCase(word, "SESSION")) return .SESSION;
         if (std.ascii.eqlIgnoreCase(word, "SET")) return .SET;
@@ -220,6 +283,10 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "DESC")) return .DESC;
         if (std.ascii.eqlIgnoreCase(word, "LIMIT")) return .LIMIT;
         if (std.ascii.eqlIgnoreCase(word, "OFFSET")) return .OFFSET;
+        if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
+        if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
+        if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
+        if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit; // expecting LOCAL DATETIME"..."
         return .identifier;
     }
 
@@ -270,5 +337,20 @@ pub const Lexer = struct {
             }
         }
         return .{ .kind = .string_lit, .lexeme = self.src[start + 1 .. self.idx - 1], .loc = loc };
+    }
+
+    pub fn nextAfterKeyword(self: *Lexer, kind: t.TokenKind) t.Token {
+        // Support DATE"..." / DATETIME"..." immediately after keyword
+        self.skipSeparators();
+        if (self.idx < self.src.len and self.src[self.idx] == '"') {
+            const str = self.scanString();
+            if (kind == .date_lit) {
+                if (!temporal.isDateStrict(str.lexeme)) {
+                    return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                }
+            }
+            return .{ .kind = kind, .lexeme = str.lexeme, .loc = str.loc };
+        }
+        return .{ .kind = .invalid, .lexeme = self.src[self.idx..self.idx], .loc = .{ .line = self.line, .column = self.col } };
     }
 };

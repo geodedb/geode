@@ -1,60 +1,68 @@
-# NEXT plan
+# NEXT plan — ISO‑GQL alignment (execution‑ready)
 
-This document lists the next implementation steps for the GQL front-end in priority order with brief acceptance criteria.
+Below is a Now/Next/Later plan with crisp acceptance checks. Clauses cited are anchors for developer reference only.
 
-## P0 — Expand patterns and minimal aggregation
+## Now (P0) — Spec‑correct core
 
-1. Multi-hop graph patterns
+### 1. Pagination + orderedness legality
 
-- Add parsing of chained patterns: (a)-[r1]->(b)-[r2]->(c)
-- Support comma-separated multiple patterns in MATCH
-- Acceptance: tests parse multi-hop and multiple patterns; AST captures arrays of hops; existing single-hop tests still pass
+- Work: carry ordered/unordered through parse/type info; in planner, forbid OFFSET pushdown without explicit ORDER; document US001.
+- Acceptance: unit test fails when OFFSET is pushed without ORDER; passes when ORDER exists; doc note in `query_engine.md`.
 
-1. Variable-length relationships (quantifiers)
+### 2. YIELD and WHERE semantics
 
-- Parse [r*], [r*3], [r*1..5] forms on relationship patterns
-- Extend `RelPattern` with `min_len:?u32`, `max_len:?u32`
-- Acceptance: tests for \*, \*k, \*k..m; error case when min>max
+- Work: enforce YIELD aliasing/typing rules (16.14) and WHERE behavior (16.13); error on duplicate aliases.
+- Acceptance: golden tests for YIELD renames and column types; duplicate‑alias yields a diagnostic.
 
-1. Minimal aggregation surface
+### 3. Set operations completeness
 
-- Parse COUNT(expr), SUM(expr), AVG(expr), MIN(expr), MAX(expr) as calls
-- Introduce GROUP BY with a list of expressions
-- Acceptance: RETURN COUNT(n) GROUP BY n parses; non-grouped non-aggregates with aggregates accepted by parser for now (semantics TBD)
+- Work: implement INTERSECT/EXCEPT with ALL/DISTINCT; feature‑gate tags (GQ03–GQ07); parser + legality + planner IR.
+- Acceptance: chaining case `q1 UNION ALL q2 EXCEPT q3` has correct duplicate semantics (tests).
 
-## P1 — String predicates and CASE
+### 4. CASE + string predicates
 
-1. String predicates
+- Work: add CASE (simple/searched) and predicates STARTS WITH, ENDS WITH, CONTAINS, and `=~`.
+- Acceptance: parse + eval tests; operator precedence consistent with comparisons.
 
-- Add operators: STARTS WITH, ENDS WITH, CONTAINS, =~ (regex)
-- Acceptance: parsing tests for each operator; precedence consistent with comparisons
+### 5. Temporal literals & types
 
-1. CASE expression
+- Work: lexer for ISO‑8601 forms; type checks for instant/duration; minimal casts.
+- Acceptance: literals round‑trip; ordering/comparison rules validated in tests.
 
-- Parse simple and searched CASE forms with ELSE
-- Acceptance: parse trees for CASE WHEN cond THEN x ELSE y END; nested cases
+## Next (P1) — DML/Procedures + Diagnostics/Conformance
 
-## P1 — Functions and ORDER BY polish
+### 6. INSERT + linear DML (parse + guards)
 
-1. Built-in registry expansion
+- Work: parse `<insert statement>`; reject in READ ONLY; feature gates wired.
+- Acceptance: parse tests + RO rejection tests.
 
-- Add catalog with min/max arity and validators for: upper, lower, substring, replace, trim, size, keys, properties, exists, toBoolean, toFloat, round, floor, ceil
-- Acceptance: unit tests assert valid/invalid arities and basic argument categories
+### 7. Procedure/NEXT skeleton
 
-1. ORDER BY NULLS FIRST/LAST
+- Work: parse `<procedure body>`/`NEXT`; IR wired; round‑trip in printer.
+- Acceptance: parse/print tests succeed.
 
-- Extend OrderKey with `nulls_first:?bool`
-- Acceptance: ORDER BY a NULLS FIRST / NULLS LAST parses and decorates keys
+### 8. Diagnostics & protocol mapping
 
-## P2 — Set ops and diagnostics
+- Work: status precedence mapping; list additional statuses; choose/document UA002 policy.
+- Acceptance: protocol tests reflect precedence and multi‑status behavior.
 
-1. INTERSECT/EXCEPT
+### 9. Conformance Profile + Flagger (MVP)
 
-- Extend Statement parsing to accept INTERSECT and EXCEPT/MINUS with ALL/DISTINCT
-- Acceptance: chaining tests like q1 UNION ALL q2 EXCEPT q3
+- Work: fill profile (front‑end scope); ship a flagger marking extensions/options/impl‑defined behaviors.
+- Acceptance: flagger unit tests; profile emitted in build artifacts.
 
-1. Diagnostics and CLI quality
+## Later (P2) — Aggregation polish & params
 
-- Add parser expected-set reporting in `last_error`
-- Add CLI flags: `--dump-tokens`, `--ast=json`; pretty-printer for AST
-- Acceptance: golden tests comparing printed AST for stable formatting
+### 10. Aggregation semantics
+
+- Work: GROUP BY scoping; HAVING; aggregates catalog with arity/type checks.
+- Acceptance: negative tests for non‑grouped non‑aggregates; HAVING evaluated correctly.
+
+### 11. Params & ORDER BY polish
+
+- Work: `$param` markers; NULLS FIRST/LAST on sort keys.
+- Acceptance: parser + eval tests; keys carry nulls policy through to printer and planner properties.
+
+### Continuous
+
+- Maintain planner crosswalk compliance (OPTIONAL→LOJ; Order/Top‑k; PathExpand legality/tie‑break) per `docs/query_engine.md`.
