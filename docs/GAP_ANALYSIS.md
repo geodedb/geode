@@ -1,4 +1,4 @@
-## GAP_ANALYSIS — ISO‑GQL requirements ledger (authoritative)
+# GAP_ANALYSIS — ISO‑GQL requirements ledger (authoritative)
 
 This file is the single source of truth for ISO/IEC 39075:2024 (GQL) alignment. It is evidence‑driven and idempotent.
 We paraphrase ISO clauses and always cite subclause IDs (e.g., 14.4 MATCH; 14.10 primitive result & ORDER BY; 16.18–16.19
