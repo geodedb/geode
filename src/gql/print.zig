@@ -250,6 +250,10 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
                     try walkExpr(dst, inn.value.*);
                     for (inn.set) |it| try walkExpr(dst, it.*);
                 },
+                .NotIn => |nin| {
+                    try walkExpr(dst, nin.value.*);
+                    for (nin.set) |it| try walkExpr(dst, it.*);
+                },
                 .IsNull => |nz| try walkExpr(dst, nz.target.*),
                 .Case => |c| {
                     if (c.operand) |op| try walkExpr(dst, op.*);
@@ -531,6 +535,16 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try w.print(" IN ", .{});
             try w.writeByte('[');
             for (inn.set, 0..) |it, i| {
+                if (i > 0) try w.print(", ", .{});
+                try printExprWith(w, it.*, 0, opts);
+            }
+            try w.writeByte(']');
+        },
+        .NotIn => |nin| {
+            try printExprWith(w, nin.value.*, 0, opts);
+            try w.print(" NOT IN ", .{});
+            try w.writeByte('[');
+            for (nin.set, 0..) |it, i| {
                 if (i > 0) try w.print(", ", .{});
                 try printExprWith(w, it.*, 0, opts);
             }

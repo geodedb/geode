@@ -3,13 +3,15 @@ const gql = @import("geode");
 const exec = gql.exec;
 const planner = gql.planner;
 const temporal = gql.temporal;
+const eval = gql.eval;
+const diagnostics = gql.diagnostics;
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     if (args.len < 2) {
-        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort] <file>\n", .{});
+        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics] <file>\n", .{});
         return;
     }
     var strict = false;
@@ -26,6 +28,9 @@ pub fn main() !void {
     var demo_sort = false;
     var demo_setops = false;
     var bench_setops = false;
+    var bench_eval = false;
+    var demo_eval = false;
+    var demo_diagnostics = false;
     var idx: usize = 1;
     while (idx < args.len - 1) {
         if (std.mem.eql(u8, args[idx], "--strict-order-keys")) {
@@ -88,10 +93,19 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, args[idx], "--bench-setops")) {
             bench_setops = true;
             idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--bench-eval")) {
+            bench_eval = true;
+            idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--demo-eval")) {
+            demo_eval = true;
+            idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--demo-diagnostics")) {
+            demo_diagnostics = true;
+            idx += 1;
         } else break;
     }
     if (idx >= args.len) {
-        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort] <file>\n", .{});
+        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics] <file>\n", .{});
         return;
     }
     const path = args[idx];
@@ -104,7 +118,11 @@ pub fn main() !void {
     var res: gql.ParseResult = switch (outcome) {
         .Ok => |ok| ok,
         .Err => |pe| {
-            std.debug.print("parse error: {s} at line {d}, col {d}; token={s}\n", .{ pe.msg, pe.line, pe.column, @tagName(pe.token) });
+            if (diagnostics.mapParserMessage(pe.msg)) |code| {
+                std.debug.print("diagnostic: {s} (parse): {s} at line {d}, col {d}; token={s}\n", .{ diagnostics.codeName(code), pe.msg, pe.line, pe.column, @tagName(pe.token) });
+            } else {
+                std.debug.print("parse error: {s} at line {d}, col {d}; token={s}\n", .{ pe.msg, pe.line, pe.column, @tagName(pe.token) });
+            }
             std.process.exit(3);
         },
     };
@@ -245,6 +263,141 @@ pub fn main() !void {
             const t2 = std.time.nanoTimestamp();
             var w = std.io.getStdOut().writer();
             try w.print("bench-setops: N={d}\n  unionDistinctRows    => {d} ns\n  unionDistinct(opt)   => {d} ns\n  same cardinality?     {s}\n", .{ N, t1 - t0, t2 - t1, if (ud1.len == ud2.len) "yes" else "no" });
+        } else if (bench_eval) {
+            // Micro-bench: regex =~ and IN/NOT IN evaluation
+            const ally = std.heap.page_allocator;
+            var w = std.io.getStdOut().writer();
+            // Regex benchmark
+            const samples = [_][]const u8{ "Alice.", "Bob", "Carol123", "Z", "Alic", "Alice." };
+            const pats = [_][]const u8{ "^A.*$", "A[il]ice\\.", "^[^B].*$", "Z?$", "Al?ice\\." };
+            const R: usize = 50_000;
+            var cnt: usize = 0;
+            const t0 = std.time.nanoTimestamp();
+            var i: usize = 0;
+            while (i < R) : (i += 1) {
+                const s = samples[i % samples.len];
+                const p = pats[i % pats.len];
+                if (eval.matchSimplePattern(s, p)) cnt += 1;
+            }
+            const t1 = std.time.nanoTimestamp();
+            try w.print("bench-eval: regex =~ R={d} -> {d} matches in {d} ns\n", .{ R, cnt, t1 - t0 });
+            // IN/NOT IN benchmark using evaluator
+            const names = &.{ "a", "s" };
+            const env = eval.Env{ .names = names, .values = &.{ .{ .Int = 42 }, .{ .Str = "42" } } };
+            var a_ident = @import("gql/ast.zig").Expr{ .Ident = "a" };
+            var lit41 = @import("gql/ast.zig").Expr{ .String = "41" };
+            var lit42 = @import("gql/ast.zig").Expr{ .String = "42" };
+            var lit43 = @import("gql/ast.zig").Expr{ .Int = 43 };
+            var arr: [3]*@import("gql/ast.zig").Expr = .{ &lit41, &lit42, &lit43 };
+            const inx = @import("gql/ast.zig").Expr{ .In = .{ .value = &a_ident, .set = arr[0..] } };
+            const ninx = @import("gql/ast.zig").Expr{ .NotIn = .{ .value = &a_ident, .set = arr[0..] } };
+            const R2: usize = 100_000;
+            var t_in: usize = 0;
+            var t_nin: usize = 0;
+            var j: usize = 0;
+            // IN loop
+            const ta0 = std.time.nanoTimestamp();
+            while (j < R2) : (j += 1) {
+                const v = eval.evalExpr(ally, inx, env) catch .{ .Null = {} };
+                if (v == .Bool and v.Bool) t_in += 1;
+            }
+            const ta1 = std.time.nanoTimestamp();
+            // NOT IN loop
+            j = 0;
+            const tb0 = std.time.nanoTimestamp();
+            while (j < R2) : (j += 1) {
+                const v = eval.evalExpr(ally, ninx, env) catch .{ .Null = {} };
+                if (v == .Bool and v.Bool) t_nin += 1;
+            }
+            const tb1 = std.time.nanoTimestamp();
+            try w.print("bench-eval: IN R={d} -> {d} trues in {d} ns; NOT IN -> {d} trues in {d} ns\n", .{ R2, t_in, ta1 - ta0, t_nin, tb1 - tb0 });
+        } else if (demo_eval) {
+            // Demo: evaluate WHERE and RETURN using the evaluator over a small synthetic rowset {a:int, s:str}
+            const ally = std.heap.page_allocator;
+            if (res.program.statements.len == 0) {
+                std.debug.print("demo-eval: no statements in file\n", .{});
+                return;
+            }
+            const st = res.program.statements[0];
+            switch (st) {
+                .Query => |q| {
+                    // Synthetic rows for identifiers 'a' (Int) and 's' (Str)
+                    const Avals = [_]eval.Value{ .{ .Int = -1 }, .{ .Int = 0 }, .{ .Int = 1 }, .{ .Null = {} }, .{ .Int = 2 } };
+                    const Svals = [_]eval.Value{ .{ .Str = "Alice" }, .{ .Str = "Bob" }, .{ .Str = "" }, .{ .Str = "Carol" }, .{ .Null = {} } };
+                    const names = &.{ "a", "s" };
+                    // Header: print RETURN expressions
+                    const pr = gql.printer;
+                    var w = std.io.getStdOut().writer();
+                    try w.print("demo-eval: rows where WHERE predicate (if present) holds; columns are RETURN items.\n", .{});
+                    // Print header
+                    try w.print("row\t", .{});
+                    for (q.ret.items, 0..) |it, i| {
+                        const label = blk: {
+                            if (it.alias) |al| break :blk al;
+                            const s = pr.stringifyExprAlloc(ally, it.expr, .{}) catch "";
+                            defer if (s.len > 0) ally.free(s);
+                            break :blk if (s.len > 0) s else "expr";
+                        };
+                        if (i > 0) try w.print("\t", .{});
+                        try w.print("{s}", .{label});
+                    }
+                    try w.print("\n", .{});
+                    // Evaluate rows
+                    var i: usize = 0;
+                    while (i < Avals.len and i < Svals.len) : (i += 1) {
+                        const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] } };
+                        var pass = true;
+                        if (q.where_clause) |wc| {
+                            const pv = eval.evalExpr(ally, wc, env) catch |e| {
+                                try w.print("error evaluating WHERE on row {d}: {s}\n", .{ i, @errorName(e) });
+                                continue;
+                            };
+                            pass = (pv == .Bool and pv.Bool);
+                        }
+                        if (!pass) continue;
+                        try w.print("{d}\t", .{i});
+                        for (q.ret.items, 0..) |it, j| {
+                            const v = eval.evalExpr(ally, it.expr, env) catch |e| {
+                                try w.print("<err:{s}>", .{@errorName(e)});
+                                continue;
+                            };
+                            if (j > 0) try w.print("\t", .{});
+                            switch (v) {
+                                .Null => try w.print("NULL", .{}),
+                                .Int => |n| try w.print("{d}", .{n}),
+                                .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
+                                .Str => |sval| try w.print("\"{s}\"", .{sval}),
+                            }
+                        }
+                        try w.print("\n", .{});
+                    }
+                },
+                else => {
+                    std.debug.print("demo-eval: first statement is not a Query\n", .{});
+                },
+            }
+        } else if (demo_diagnostics) {
+            // Demo: run planner and print diagnostic codes on errors
+            if (res.program.statements.len == 0) {
+                std.debug.print("demo-diagnostics: no statements in file\n", .{});
+                return;
+            }
+            const st = res.program.statements[0];
+            switch (st) {
+                .Query => |q| {
+                    const plan = planner.planQuery(q, .{ .attempt_pushdown = true }) catch |e| {
+                        if (diagnostics.mapPlannerError(e)) |code| {
+                            std.debug.print("diagnostic: {s} ({s})\n", .{ diagnostics.codeName(code), @errorName(e) });
+                        } else {
+                            std.debug.print("planner error: {s}\n", .{@errorName(e)});
+                        }
+                        return;
+                    };
+                    _ = plan;
+                    std.debug.print("no diagnostics (planning succeeded)\n", .{});
+                },
+                else => std.debug.print("demo-diagnostics: first statement is not a Query\n", .{}),
+            }
         } else {
             std.debug.print("{any}\n", .{res.program});
         }

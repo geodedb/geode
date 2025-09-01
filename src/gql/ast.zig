@@ -108,6 +108,7 @@ pub const Expr = union(enum) {
     EndsWith: struct { value: *Expr, suffix: *Expr },
     Contains: struct { value: *Expr, needle: *Expr },
     RegexMatch: struct { value: *Expr, pattern: *Expr },
+    NotIn: struct { value: *Expr, set: []*Expr },
     // CASE expression
     Case: struct { operand: ?*Expr, whens: []CaseWhen, else_expr: ?*Expr },
     Map: []Property,

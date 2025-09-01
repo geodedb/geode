@@ -399,6 +399,33 @@ test "function call and map literal" {
     try std.testing.expect(program.statements.len == 1);
 }
 
+test "eval acceptance: WHERE and RETURN via unit harness" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    // Query uses identifiers 'a' (Int) and 's' (Str) which the harness supplies via Env
+    const src = "MATCH (n) WHERE s STARTS WITH \"A\" AND a = \"42\" RETURN CASE WHEN a IN [\"41\", \"42\"] THEN s ELSE \"x\" END";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    const st = program.statements[0];
+    const geode = @import("lib.zig");
+    const env = geode.eval.Env{ .names = &.{ "a", "s" }, .values = &.{ geode.eval.Value{ .Int = 42 }, geode.eval.Value{ .Str = "Alice" } } };
+    switch (st) {
+        .Query => |q| {
+            if (q.where_clause) |wc| {
+                const v = try geode.eval.evalExpr(ally, wc, env);
+                try std.testing.expect(v == .Bool and v.Bool == true);
+            } else return error.Unexpected;
+            try std.testing.expect(q.ret.items.len == 1);
+            const r0 = q.ret.items[0].expr;
+            const out = try geode.eval.evalExpr(ally, r0, env);
+            try std.testing.expect(out == .Str and std.mem.eql(u8, out.Str, "Alice"));
+        },
+        else => return error.Unexpected,
+    }
+}
+
 test "multi-hop and multiple MATCH patterns" {
     const ally = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(ally);
@@ -534,6 +561,62 @@ test "pattern comprehension basic" {
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const program = try p.parseProgram();
     try std.testing.expect(program.statements.len == 1);
+}
+
+test "alias lookahead: ident '=' '[' vs equality ident '=' expr" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    // Should parse as equality, not alias
+    const src1 = "MATCH (n) WHERE a = 1 RETURN n";
+    var lx1 = Lexer{ .src = src1 };
+    var p1 = Parser{ .lx = &lx1, .arena = &arena, .cur = lx1.next() };
+    const pr1 = try p1.parseProgram();
+    try std.testing.expect(pr1.statements.len == 1);
+    // Should parse as equality (list comprehension), not path alias, when '[' follows '=' in RETURN
+    const src2 = "MATCH (n) RETURN p = [ (n)-[r]->(m) | m ]";
+    var lx2 = Lexer{ .src = src2 };
+    var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
+    const pr2 = try p2.parseProgram();
+    try std.testing.expect(pr2.statements.len == 1);
+}
+
+test "NOT IN parse" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.age NOT IN [1,2,null] RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    try std.testing.expect(program.statements.len == 1);
+}
+
+test "parser: chained NOT with IN and IS NULL precedence" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const s1 = "MATCH (n) WHERE NOT a IN [1,2] RETURN n"; // unary NOT over (a IN ...)
+    var lx1 = Lexer{ .src = s1 };
+    var p1 = Parser{ .lx = &lx1, .arena = &arena, .cur = lx1.next() };
+    const pr1 = try p1.parseProgram();
+    try std.testing.expect(pr1.statements.len == 1);
+    const s2 = "MATCH (n) WHERE a IS NOT NULL RETURN n"; // IS NOT NULL
+    var lx2 = Lexer{ .src = s2 };
+    var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
+    const pr2 = try p2.parseProgram();
+    try std.testing.expect(pr2.statements.len == 1);
+}
+
+test "parser: nested list comprehension in expressions" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const s = "MATCH (n) RETURN size([ (n)-[r]->(m) | [ (m)-[t]->(k) | k ] ])";
+    var lx = Lexer{ .src = s };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const pr = try p.parseProgram();
+    try std.testing.expect(pr.statements.len == 1);
 }
 
 test "ORDER BY path alias is rejected (policy)" {

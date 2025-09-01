@@ -26,7 +26,7 @@ We ground the design in **ISO/IEC 39075:2024 (GQL)** clause‑accurate reference
 
 **ORDER BY & Pagination.**
 
-- ORDER BY semantics (sort specs) are explicit; LIMIT/OFFSET are blocking operators. If OFFSET is applied to an **unordered** table, the implementation may sort by an **implementation‑dependent order (US001)** before discarding rows.&#x20;
+- ORDER BY semantics (sort specs) are explicit; LIMIT/OFFSET are blocking operators. If OFFSET is applied to an **unordered** table, the implementation may sort by an **implementation‑dependent order (US001)** before discarding rows. Diagnostics precedence prefers lower‑numbered codes when multiple apply.&#x20;
 - LIMIT applies to the ordered working table; if none exists, an ordering may be produced before retention of the first _V_ rows.&#x20;
 
 **Path-pattern selection & tie‑breaking.** GQL’s **selective path search** permits **implementation‑defined** tie‑breaking (UA005/UA006) and flags for counting/shortest‑group semantics; planners must document choices.&#x20;
@@ -60,127 +60,137 @@ We formalize a **Graph Binding Algebra (GBA)** over **binding tables** (sets/bag
 | **Offset(V)**                                      | ordered/ unordered      | drop first V rows                           | ordered                          | ≤ input                                   | if unordered, an impl‑dependent order may be introduced (**US001**) before discarding. |
 | **PathExpand(A, R, B, \[kmin,kmax], constraints)** | bindings with A,B       | bindings enriched with legal paths          | per‑input order if BFS layerwise | multiplicity=#paths or distinct endpoints | legality must follow GQL’s path rules & UA005/UA006 tie‑breaks.                        |
 
-**Mapping to GQL constructs.**
+#### Mapping to GQL constructs
 
 - `<match statement>` → compositions of **NodeScan/Expand/Join/Filter** over the binding table.&#x20;
 - `<primitive result statement>` → **RETURN → Project/Group**, then **ORDER BY & page → OrderBy/Limit/Offset**; legality of ORDER BY keys follows the constraints in 14.10.&#x20;
 - `<select statement>` desugars to RETURN/GROUP/ORDER/LIMIT/OFFSET sequence per 14.12; we treat this as the same algebraic pipeline.&#x20;
 
-**Ordering guarantees & stability.** GQL allows **implementation‑dependent order** when an unordered binding table is paginated (US001), so any **LIMIT/OFFSET pushdown** must **not** change observable results when an explicit ORDER BY is absent or when ORDER BY keys change.&#x20;
+### Ordering guarantees & stability
 
-**Set operations (UNION/INTERSECT/EXCEPT).**
+GQL allows implementation‑dependent order when an unordered binding table is paginated (US001), so any LIMIT/OFFSET pushdown must not change observable results when an explicit ORDER BY is absent or when ORDER BY keys change.
+
+### Set operations (UNION/INTERSECT/EXCEPT)
 
 - Equality semantics: rows compare by column‑wise value equality with NULL = NULL for set‑ops; type precedence for deterministic sorting is Null < Bool < Int < Str; rows compare lexicographically.
 - Variants implemented: DISTINCT (deduplicates, deterministically sorted) and ALL (preserves multiplicities, stable‑left order i.e., rows appear in the order of the left input).
 - These choices are implementation‑defined and documented for reproducibility and test stability (ISO 14.12 + Annex).
 
+### Expression evaluation (subset)
+
+- CASE (simple, searched); string predicates STARTS WITH, ENDS WITH, CONTAINS; regex operator =~ implemented via a simple matcher supporting anchors (^) and ($) and wildcard ".\*".
+- Implicit casts policy (demo evaluator): string/int equality allowed by comparing decimal string forms; ordering comparisons across Int/Str are illegal and surface a TypeMismatch at evaluation time (see Diagnostics A1.1 for mapping policy).
+
 ### 3.2 Rule‑Based Rewrites (with legality conditions)
 
-**Canonicalization & simplification**
+#### Canonicalization & simplification
 
 - **Pattern normalization**: deduplicate isomorphic pattern fragments; merge commutative predicates; remove dead projections.
 - **Constant folding / predicate simplification**: safe for scalar expressions and label tests if not correlated with runtime visibility rules.
 
-**Pushdowns**
+#### Pushdowns
 
 - **Label/property pushdown** into Node/Edge scans and into **Expand**’s neighbor enumeration when supported by adjacency+property indexes. (Kùzu demonstrates index‑guided CSR adjacency and semijoin filters to restrict scans. ([CIDRDB][3]))
 - **Early projection** to shrink tuple width prior to expensive Expand/Join; must preserve ORDER BY key availability per 14.10 rules.&#x20;
 - **Filter to path expand**: path constraints (length, label, simple‑path) pushed to the traversal operator; must respect GQL path legality and UA005/UA006 tie‑breaking disclosures.&#x20;
 
-**OPTIONAL (outer‑like) rewrites**
+#### OPTIONAL (outer‑like) rewrites
 
 - OPTIONAL MATCH can be compiled as **left‑outer semantics** over pattern fragments that “supply bindings” to the OPTIONAL scope per 14.4; we allow predicate relocation only if null‑introduction behavior is unchanged.&#x20;
 
-**Pagination‑aware rewrites**
+#### Pagination‑aware rewrites
 
 - **LIMIT/OFFSET pushdown**: legal when an **explicit ORDER BY** exists and the pushed operator preserves/creates a compatible order; otherwise unsafe due to US001.&#x20;
 - **Top‑k early stop**: if a pipeline can **produce in desired order** (e.g., index‑order or merge‑preserving plans), we insert a **StopAfter(V)** fence before full materialization; see ranked enumeration literature for join‑aware top‑k. ([Northeastern Data Lab][4], [Khoury College of Computer Sciences][5])
 
-**Decorrelation**
+#### Decorrelation
 
 - Transform scalar **VALUE subqueries** and **EXISTS** into semi‑joins/aggregates when emitting statement is well‑formed (20.6 requires LIMIT 1 or aggregation).&#x20;
 
 ### 3.3 Join & Pattern‑Matching Strategies
 
-**Binary join vs WCOJ.**
+#### Binary join vs WCOJ
+
 _Binary joins_ (hash/sort‑merge) excel when selective predicates and **good indexes** drastically reduce intermediate sizes; **WCOJ** (Generic‑Join / Leapfrog‑Triejoin) dominates on **cyclic patterns** (triangles, cliques) and **dense** regions, achieving bounds near **AGM**; modern engines combine both. ([ACM Digital Library][1], [OpenProceedings][2], [Stanford Pervasive Parallelism Lab][6], [CIDRDB][3])
 
 - **Generic surveys & results.** Ngo et al. (Journal overview/tutorial) and Veldhuizen (Leapfrog‑Triejoin) provide the foundations for WCOJ. ([ACM Digital Library][1], [OpenProceedings][2])
 - **Systems evidence.** EmptyHeaded shows WCOJ with compressed bitset tries beating relational baselines on graph workloads. ([Stanford Pervasive Parallelism Lab][6])
 - **Hybrid join operators.** Kùzu’s **ASP‑Join** integrates **semijoin filtering** and factorization; their optimizer switches between **binary** and **multiway WCOJ** based on factorized tuple models. ([CIDRDB][3])
 
-**Graph expand vs neighbor‑set operators.**
+#### Graph expand vs neighbor‑set operators
 
 - **Expand** logical op maps to **index‑guided adjacency scans** (CSR) with predicate pushdown (labels/properties) and **sideways information passing** (SIP) to prune I/O. ([CIDRDB][3])
 - **Variable‑length paths.** Bounded k‑hop uses layered BFS; unbounded paths must respect GQL path legality (simple vs. walk) and may use **bidirectional BFS** for reachability/shortest. For shortest distances/top‑k paths, **pruned landmark labeling** provides competitive performance for exact distances on large graphs. ([ACM Digital Library][7])
 
-**Subgraph isomorphism accelerators.**
+#### Subgraph isomorphism accelerators
+
 For selective pattern fragments (small induced subgraphs), use **TurboIso**‑style pruning and modern exact solvers (**VF3**, **Glasgow**) as filter/enumerators before joins; this helps on query graph isomorphism fragments embedded in GQL patterns. ([homepages.inf.ed.ac.uk][8], [ACM Digital Library][9], [PMC][10])
 
-**Early‑stop for top‑k/limit.**
+#### Early‑stop for top‑k/limit
+
 Adopt **ranked enumeration** (Any‑k) to push ranking into joins—deliver top‑k without global materialization if the scoring function obeys monotonicity/semiring constraints. ([Northeastern Data Lab][4], [arXiv][11])
 
 ### 3.4 Cost & Cardinality Estimation
 
-**Statistics**
+#### Statistics
 
 - **Label selectivity & property histograms** (equi‑depth or logarithmic buckets), **degree distributions** (power‑law friendly), and **co‑occurrence stats** for labels/properties.
 - **Path‑length distributions** (source‑agnostic) via sampling or landmarks; exact distance oracles (PL/Hub labeling) provide upper bounds useful for **k‑hop pruning**. ([ACM Digital Library][7])
 
-**Sketches & sampling**
+#### Sketches & sampling
 
 - **HLL++** for distinct counts of bindings and neighbor sets; HLL++ reduces memory and improves accuracy. ([Google Research][12], [ACM Digital Library][13])
 - **WanderJoin‑style** sampling is effective for join and subgraph cardinalities; recent work extends it to **complex graph queries** beyond simple joins. ([CSE Department][14], [cs.ox.ac.uk][15])
 
-**Join/Cardinality models**
+#### Join/Cardinality models
 
 - **Binary joins:** classic Selinger‑style formulas corrected by multi‑attribute correlations where stats exist.
 - **WCOJ cost proxies:** **AGM bound** or fractional edge‑cover‑based objective estimate; attribute ordering evaluated by minimizing estimated extensions. ([ACM Digital Library][16], [UW Computer Sciences][17])
 - **Expand vs index probe:** cost incorporates **frontier size × average degree × predicate selectivity**; exploit SIP to bound build/probe scans (as in Kùzu). ([CIDRDB][3])
 
-**Hardware/GPU considerations**
+#### Hardware/GPU considerations
 
 - Expansions and irregular pipelines on GPUs suffer from control‑flow divergence; planning must detect divergence‑prone stages and avoid over‑fusion. ([VLDB][18])
 - For BFS‑like operators, **Gunrock** patterns demonstrate usable speedups when memory fits and frontier scheduling is efficient; expose GPU as an optional physical op with cost guardrails. ([ACM Digital Library][19])
 
-**Isolation sensitivity**
+#### Isolation sensitivity
 
 - Under **SSI/Serializable**, reordering that changes **conflict windows** can affect contention/abort rates; prefer **stable scan orders** and bounded spill for long transactions. (SSI experience in PostgreSQL shows serializable isolation with performance close to SI.) ([drkp.net][20])
 
 ### 3.5 Plan Enumeration & Adaptivity
 
-**Binary join enumeration.**
+#### Binary join enumeration
 
 - Use **DPccp** for optimal bushy plans under cross‑product avoidance; fall back to **DPconv** / **linearized DP** for large joins. ([15721.courses.cs.cmu.edu][21], [arXiv][22], [Database Systems TUM][23])
 
-**Multi‑way/WCOJ attribute ordering.**
+#### Multi‑way/WCOJ attribute ordering
 
 - Choose variable order via **fractional edge cover** heuristics and degree‑aware scoring; prune orders using upper bounds (AGM) and early **limit‑aware** branch‑and‑bound. ([ACM Digital Library][16])
 
-**Order‑aware planning.**
+#### Order‑aware planning
 
 - If a plan can **natively produce** requested order (e.g., merge‑joins on ORDER BY keys; index‑order expands), avoid global sort and enable **early LIMIT**. For ranked joins, use **Any‑k** frameworks. ([Northeastern Data Lab][4])
 
-**Adaptive & runtime re‑optimization.**
+#### Adaptive & runtime re‑optimization
 
 - Integrate **re‑opt checkpoints** after major expands/joins; if observed cardinality deviates >τ, re‑invoke enumerator with updated stats (recent robust/learned optimizers (Lero) show plan ranking works well without exact cost fidelity). ([VLDB][24])
 
 ### 3.6 Distributed, Partition‑Aware Planning
 
-**Partition models & placement**
+#### Partition models & placement
 
 - **Edge‑cut** (partition nodes) vs **vertex‑cut** (partition edges, replicated hubs). Hybrid approaches (e.g., **PowerLyra**) reduce high‑degree skew and messaging. ([ipads.se.sjtu.edu.cn][25])
 - Streaming partitioners (**Fennel**) balance cuts under single‑pass constraints. ([Math Department][26])
 
-**Physical exchange choices**
+#### Physical exchange choices
 
 - **Exchange(Shuffle key)** for equi‑joins; **Broadcast** for tiny sides; **Replicate** for small reference tables or **hub adjacency lists**. SPARQL/RDF distributed engines (e.g., **TriAD**) show **join‑ahead pruning** and partition‑aware routing reduce shuffles—applicable to property graphs. ([ACM Digital Library][27])
 
-**Query shipping vs data shipping**
+#### Query shipping vs data shipping
 
 - For locality, **query shipping** to shards for Expand/Filter phases; **data shipping** only for reduced frontiers or final joins; classic distributed DB trade‑offs apply, with compliance constraints in multi‑region settings. ([ACM Digital Library][28], [ITU][29])
 
-**Transactions & isolation in distributed plans**
+#### Transactions & isolation in distributed plans
 
 - Enforce snapshot visibility (MVCC) across shards; **global ordering** of conflicting writes or SSI‑style conflict tracking for serializability; planner avoids plans that would break snapshot visibility (e.g., mixing shard‑local snapshots with late cross‑shard merge without a consistent cut). (ISO leaves isolation **implementation‑defined**.)&#x20;
 
@@ -212,7 +222,9 @@ Adopt **ranked enumeration** (Any‑k) to push ranking into joins—deliver top�
 
 ## 7) References (selected, 2010–present)
 
-_(Accessed 2025‑08‑31; each key claim in the text is cited inline.)_
+### Access notes
+
+Accessed 2025‑08‑31; each key claim in the text is cited inline.
 
 - Ngo, H. Q. (2018). _Worst‑Case Optimal Join Algorithms_. CACM/Tutorial. ([ACM Digital Library][1])
 - Veldhuizen, T. L. (2014). _Leapfrog‑Triejoin_. ICDT. ([OpenProceedings][2])
@@ -240,19 +252,38 @@ _(Accessed 2025‑08‑31; each key claim in the text is cited inline.)_
 
 ### A1. Conformance Profile (Planner scope)
 
-**Mandatory for planner pipeline**
+#### Mandatory for planner pipeline
 
 - **GQ01 USE graph** (focused linear statements): used by planner to bind graph context in **focused** queries.
 - **GQ12 OFFSET**, **GQ13 LIMIT**: recognized to compile `OrderBy & page` into **Order/Offset/Limit** algebra.
 - **GQ14 Complex expressions in sort keys** (if supported) affects ORDER BY legality.&#x20;
 - **GQ15 GROUP BY**, **GQ21 OPTIONAL: Multiple MATCH statements** where applicable.&#x20;
 
-**Implementation‑dependent (planner must disclose)**
+#### Implementation‑dependent (planner must disclose)
 
 - **US001**: ordering of **unordered** binding tables when paginating (implicit order introduction). Planner avoids unsafe LIMIT/OFFSET pushdowns without explicit ORDER.&#x20;
 - **UA005/UA006**: tie‑breaking for selective path searches; planner selects deterministic tiebreak (e.g., (length, id)) and documents it.&#x20;
 
-**Isolation dependencies**
+### A1.1 Diagnostics (initial)
+
+| Code            | Meaning                                    | Emitted by            | Notes                                      |
+| --------------- | ------------------------------------------ | --------------------- | ------------------------------------------ |
+| US001           | Pagination of unordered table (impl order) | Planner               | Maps error.OffsetPushdownRequiresOrder     |
+| GroupByIllegal  | Illegal GROUP BY/RETURN/HAVING combination | Planner               | Phase‑1 legality checks                    |
+| IllegalOrderKey | ORDER BY key violates configured policy    | Parser (policy guard) | Ident‑only, simple‑key, forbid calls/paths |
+
+Precedence: when multiple diagnostics could apply, lower numeric code wins (US001 < GroupByIllegal < IllegalOrderKey).
+
+#### Diagnostics precedence example
+
+Consider: `RETURN a ORDER BY f(a) LIMIT 10` under a policy that forbids function calls in ORDER BY and without an explicit base order before LIMIT.
+
+- Offenses: (1) ORDER BY uses a function (IllegalOrderKey); (2) LIMIT without stable order may trigger US001 if a pushdown introduces implicit order.
+- Precedence: US001 has the lowest numeric code and would be reported preferentially if both are detected at the same optimization site; however, in parsing, IllegalOrderKey may be raised earlier and short‑circuit planning. Our toolchain prioritizes parse‑time policy violations first; if parsing succeeds, planner diagnostics apply and US001 wins among planner‑stage codes.
+
+Note on cross‑type ordering: attempts to compare Int vs Str with <, <=, >, >= are illegal in the evaluator and yield a TypeMismatch; equality across Int/Str uses decimal‑string normalization.
+
+#### Isolation dependencies
 
 - Isolation level is **implementation‑defined**; planner documents any rules whose soundness depends on snapshot semantics (e.g., reordering that changes visit/lock order).&#x20;
 

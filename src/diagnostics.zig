@@ -46,3 +46,17 @@ test "diagnostics: map planner errors" {
     try std.testing.expect(mapPlannerError(error.OffsetPushdownRequiresOrder).? == .US001);
     try std.testing.expect(mapPlannerError(error.GroupByIllegal).? == .GroupByIllegal);
 }
+
+pub fn mapParserMessage(msg: []const u8) ?Code {
+    // Recognize parser policy messages related to ORDER BY key legality.
+    if (std.mem.indexOf(u8, msg, "ORDER BY key must be identifier") != null) return .IllegalOrderKey;
+    if (std.mem.indexOf(u8, msg, "ORDER BY key must be identifier or member") != null) return .IllegalOrderKey;
+    if (std.mem.indexOf(u8, msg, "function calls in ORDER BY are disabled") != null) return .IllegalOrderKey;
+    if (std.mem.indexOf(u8, msg, "ORDER BY cannot reference path alias") != null) return .IllegalOrderKey;
+    return null;
+}
+
+test "diagnostics: map parser messages to IllegalOrderKey" {
+    try std.testing.expect(mapParserMessage("ORDER BY key must be identifier").? == .IllegalOrderKey);
+    try std.testing.expect(mapParserMessage("function calls in ORDER BY are disabled").? == .IllegalOrderKey);
+}

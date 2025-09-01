@@ -33,6 +33,13 @@ pub const Parser = struct {
         return tkn.kind;
     }
 
+    fn peek2Kind(self: *Parser) tok.TokenKind {
+        var tmp = self.lx.*;
+        _ = tmp.next();
+        const t2 = tmp.next();
+        return t2.kind;
+    }
+
     fn expect(self: *Parser, kind: tok.TokenKind) !tok.Token {
         if (self.cur.kind != kind) {
             self.last_error = @tagName(kind);
@@ -579,6 +586,28 @@ pub const Parser = struct {
                     vp.* = left;
                     return .{ .In = .{ .value = vp, .set = try elems.toOwnedSlice() } };
                 }
+                if (self.cur.kind == .NOT) {
+                    // NOT IN
+                    self.advance();
+                    _ = try self.expect(.IN);
+                    _ = try self.expect(.l_bracket);
+                    var elems = std.ArrayList(*ast.Expr).init(self.arena.allocator());
+                    if (self.cur.kind != .r_bracket) {
+                        while (true) {
+                            const it = try self.parseOrExpr();
+                            const ap = try self.arena.allocator().create(ast.Expr);
+                            ap.* = it;
+                            try elems.append(ap);
+                            if (self.cur.kind != .comma) break;
+                            self.advance();
+                        }
+                    }
+                    _ = try self.expect(.r_bracket);
+                    const a = self.arena.allocator();
+                    const vp = try a.create(ast.Expr);
+                    vp.* = left;
+                    return .{ .NotIn = .{ .value = vp, .set = try elems.toOwnedSlice() } };
+                }
                 if (self.cur.kind == .IS) {
                     self.advance();
                     var neg = false;
@@ -752,45 +781,8 @@ pub const Parser = struct {
             },
             .identifier => blk: {
                 const tkn = self.cur;
-                // Check for comprehension alias pattern: ident '=' '[' ... ']'
-                if (self.peekKind() == .eq) {
-                    self.advance(); // ident
-                    _ = try self.expect(.eq);
-                    if (self.cur.kind == .l_bracket) {
-                        // parse comprehension and attach alias
-                        // delegate to comprehension branch by temporarily parsing here
-                        self.advance();
-                        var starts_pattern = false;
-                        if (self.cur.kind == .l_paren or self.cur.kind == .arrow_l or self.cur.kind == .minus or (self.cur.kind == .identifier and self.peekKind() == .eq)) {
-                            starts_pattern = true;
-                        }
-                        if (!starts_pattern) return error.UnexpectedToken;
-                        const pat_val = try self.parseGraphPattern();
-                        var where_expr: ?*ast.Expr = null;
-                        if (self.cur.kind == .WHERE) {
-                            self.advance();
-                            const w = try self.parseOrExpr();
-                            const wp = try self.arena.allocator().create(ast.Expr);
-                            wp.* = w;
-                            where_expr = wp;
-                        }
-                        _ = try self.expect(.bar);
-                        const map_expr_v = try self.parseOrExpr();
-                        const mp = try self.arena.allocator().create(ast.Expr);
-                        mp.* = map_expr_v;
-                        _ = try self.expect(.r_bracket);
-                        const a = self.arena.allocator();
-                        const pat_ptr = try a.create(ast.GraphPattern);
-                        pat_ptr.* = pat_val;
-                        break :blk .{ .PatternComp = .{ .pattern = pat_ptr, .where = where_expr, .map = mp, .alias = tkn.lexeme } };
-                    } else {
-                        // not a comprehension, back to ident as expression? We've already consumed '=', so this is invalid here
-                        return error.UnexpectedToken;
-                    }
-                } else {
-                    self.advance();
-                    break :blk .{ .Ident = tkn.lexeme };
-                }
+                self.advance();
+                break :blk .{ .Ident = tkn.lexeme };
             },
             .string_lit => blk: {
                 const tkn = self.cur;
