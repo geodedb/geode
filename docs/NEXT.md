@@ -84,5 +84,8 @@ Note: Completed items move to docs/IMPLEMENTED.md.
 
 ## Cutline
 
-- Distributed execution, storage/WAL, GPU operators are out‑of‑scope for Milestone‑1; tracked separately.
-- Procedures/transactions: design‑documented, not implemented in this milestone.
+- Server & Protocol: geoded/geodec processes and binary protocol (HELLO/BEGIN/COMMIT/ROLLBACK/RUN_GQL/PULL) are tracked post‑M1.
+- Storage & Durability: slotted pages, adjacency CSR, property heap, WAL (ARIES), recovery — tracked post‑M1.
+- Transactions: MVCC (SI) with locks for DML, protocol demarcation — tracked post‑M1.
+- Distributed scaffold: leader‑only Raft stubs, 2PC coordinator interfaces, shard map placeholders — tracked post‑M1.
+- GPU operators and advanced features remain out‑of‑scope for Milestone‑1.
