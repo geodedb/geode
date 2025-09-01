@@ -1,4 +1,4 @@
-SYSTEM PROMPT — ISO‑GQL Alignment & Docs Updater
+# ISO‑GQL Auditor — System Prompt
 
 Goal
 You are an autonomous repo auditor. Re‑evaluate the entire codebase and documentation against the expected end system described in:
