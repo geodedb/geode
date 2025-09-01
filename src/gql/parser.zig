@@ -720,6 +720,12 @@ pub const Parser = struct {
 
     fn parsePrimaryExpr(self: *Parser) ParserError!ast.Expr {
         return switch (self.cur.kind) {
+            .dollar => blk_param: {
+                // Parameter: $identifier
+                self.advance();
+                const name = try self.expect(.identifier);
+                break :blk_param .{ .Param = name.lexeme };
+            },
             .date_lit => blk_dt: {
                 const tkn = self.cur;
                 self.advance();
@@ -793,6 +799,25 @@ pub const Parser = struct {
                 const tkn = self.cur;
                 self.advance();
                 break :blk .{ .Int = try std.fmt.parseInt(i64, tkn.lexeme, 10) };
+            },
+            .float_lit => blk_f: {
+                const tkn = self.cur;
+                self.advance();
+                // Convert digits '.' digits into coeff and scale
+                const lex = tkn.lexeme;
+                var dot_idx: usize = 0;
+                while (dot_idx < lex.len and lex[dot_idx] != '.') : (dot_idx += 1) {}
+                if (dot_idx >= lex.len) return error.UnexpectedToken;
+                const int_part = lex[0..dot_idx];
+                const frac_part = lex[dot_idx + 1 .. lex.len];
+                const scale: u8 = @intCast(frac_part.len);
+                // coeff = parse int_part ++ frac_part as i128
+                var buf = std.ArrayList(u8).init(self.arena.allocator());
+                defer buf.deinit();
+                try buf.appendSlice(int_part);
+                try buf.appendSlice(frac_part);
+                const coeff = try std.fmt.parseInt(i128, buf.items, 10);
+                break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = scale } };
             },
             .TRUE => {
                 self.advance();
@@ -909,6 +934,7 @@ pub const Parser = struct {
     fn argIsNumericLike(e: ast.Expr) bool {
         return switch (e) {
             .Int => true,
+            .Decimal => true,
             .Binary => true, // allow arithmetic expressions
             .Unary => true,
             .Ident => true,

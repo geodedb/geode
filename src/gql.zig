@@ -272,6 +272,7 @@ test "diagnostics acceptance: codes presence" {
     try std.testing.expectEqualStrings("US001", d.codeName(.US001));
     try std.testing.expectEqualStrings("GroupByIllegal", d.codeName(.GroupByIllegal));
     try std.testing.expectEqualStrings("IllegalOrderKey", d.codeName(.IllegalOrderKey));
+    try std.testing.expectEqualStrings("TypeMismatch", d.codeName(.TypeMismatch));
 }
 
 // TODO: Pagination orderedness legality is a planner/runtime check.
@@ -397,6 +398,39 @@ test "function call and map literal" {
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const program = try p.parseProgram();
     try std.testing.expect(program.statements.len == 1);
+}
+
+test "parameters: parse $name in expressions" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.age = $age AND n.name STARTS WITH $prefix RETURN n";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    try std.testing.expect(program.statements.len == 1);
+}
+
+test "parameters in GROUP BY, ORDER BY, and RETURN print" {
+    const ally = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const src = "MATCH (n) WHERE n.age > $min GROUP BY n.name RETURN n.name, COUNT(n) ORDER BY $ord";
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    try std.testing.expect(program.statements.len == 1);
+    var out = std.ArrayList(u8).init(ally);
+    defer out.deinit();
+    const st = program.statements[0];
+    switch (st) {
+        .Query => |q| try printer.printQueryWith(out.writer(), q, 0, .{}),
+        else => return error.Unexpected,
+    }
+    const s = out.items;
+    // Ensure $min and $ord are preserved in the printed text
+    try std.testing.expect(std.mem.indexOf(u8, s, "$min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "$ord") != null);
 }
 
 test "eval acceptance: WHERE and RETURN via unit harness" {

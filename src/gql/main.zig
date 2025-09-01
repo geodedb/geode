@@ -11,7 +11,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     if (args.len < 2) {
-        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics] <file>\n", .{});
+        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics|--demo-agg] <file>\n", .{});
         return;
     }
     var strict = false;
@@ -31,6 +31,12 @@ pub fn main() !void {
     var bench_eval = false;
     var demo_eval = false;
     var demo_diagnostics = false;
+    var demo_agg = false;
+    // Collect parameters from --param name=value occurrences
+    var param_names = std.ArrayList([]const u8).init(gpa);
+    defer param_names.deinit();
+    var param_values = std.ArrayList(eval.Value).init(gpa);
+    defer param_values.deinit();
     var idx: usize = 1;
     while (idx < args.len - 1) {
         if (std.mem.eql(u8, args[idx], "--strict-order-keys")) {
@@ -102,10 +108,49 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, args[idx], "--demo-diagnostics")) {
             demo_diagnostics = true;
             idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--demo-agg")) {
+            demo_agg = true;
+            idx += 1;
+        } else if (std.mem.eql(u8, args[idx], "--param")) {
+            if (idx + 1 >= args.len) {
+                std.debug.print("error: --param requires name=value\n", .{});
+                std.process.exit(2);
+            }
+            const nv = args[idx + 1];
+            if (std.mem.indexOfScalar(u8, nv, '=') == null) {
+                std.debug.print("error: --param expects name=value, got '{s}'\n", .{nv});
+                std.process.exit(2);
+            }
+            const pos = std.mem.indexOfScalar(u8, nv, '=').?;
+            const name = nv[0..pos];
+            const val = nv[pos + 1 ..];
+            // Simple heuristic: if digits only -> Int, else strip optional quotes -> Str
+            var is_num = val.len > 0;
+            var k: usize = 0;
+            while (k < val.len) : (k += 1) {
+                if (val[k] < '0' or val[k] > '9') {
+                    is_num = false;
+                    break;
+                }
+            }
+            try param_names.append(name);
+            if (is_num) {
+                const n = std.fmt.parseInt(i64, val, 10) catch 0;
+                try param_values.append(.{ .Int = n });
+            } else if (std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "false")) {
+                try param_values.append(.{ .Bool = std.mem.eql(u8, val, "true") });
+            } else if (val.len >= 2 and val[0] == '"' and val[val.len - 1] == '"') {
+                try param_values.append(.{ .Str = val[1 .. val.len - 1] });
+            } else if (std.mem.eql(u8, val, "null")) {
+                try param_values.append(.{ .Null = {} });
+            } else {
+                try param_values.append(.{ .Str = val });
+            }
+            idx += 2;
         } else break;
     }
     if (idx >= args.len) {
-        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics] <file>\n", .{});
+        std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics|--demo-agg] <file>\n", .{});
         return;
     }
     const path = args[idx];
@@ -321,55 +366,106 @@ pub fn main() !void {
             const st = res.program.statements[0];
             switch (st) {
                 .Query => |q| {
-                    // Synthetic rows for identifiers 'a' (Int) and 's' (Str)
-                    const Avals = [_]eval.Value{ .{ .Int = -1 }, .{ .Int = 0 }, .{ .Int = 1 }, .{ .Null = {} }, .{ .Int = 2 } };
-                    const Svals = [_]eval.Value{ .{ .Str = "Alice" }, .{ .Str = "Bob" }, .{ .Str = "" }, .{ .Str = "Carol" }, .{ .Null = {} } };
                     const names = &.{ "a", "s" };
-                    // Header: print RETURN expressions
-                    const pr = gql.printer;
                     var w = std.io.getStdOut().writer();
-                    try w.print("demo-eval: rows where WHERE predicate (if present) holds; columns are RETURN items.\n", .{});
-                    // Print header
-                    try w.print("row\t", .{});
-                    for (q.ret.items, 0..) |it, i| {
-                        const label = blk: {
-                            if (it.alias) |al| break :blk al;
-                            const s = pr.stringifyExprAlloc(ally, it.expr, .{}) catch "";
-                            defer if (s.len > 0) ally.free(s);
-                            break :blk if (s.len > 0) s else "expr";
+                    const pr = gql.printer;
+                    if (q.group_by != null) {
+                        // Validate GROUP BY semantics first; surface diagnostics
+                        _ = planner.planQuery(q, .{}) catch |e| {
+                            std.debug.print("demo-eval(grouped): planner error {s}\n", .{@errorName(e)});
+                            return;
                         };
-                        if (i > 0) try w.print("\t", .{});
-                        try w.print("{s}", .{label});
-                    }
-                    try w.print("\n", .{});
-                    // Evaluate rows
-                    var i: usize = 0;
-                    while (i < Avals.len and i < Svals.len) : (i += 1) {
-                        const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] } };
-                        var pass = true;
-                        if (q.where_clause) |wc| {
-                            const pv = eval.evalExpr(ally, wc, env) catch |e| {
-                                try w.print("error evaluating WHERE on row {d}: {s}\n", .{ i, @errorName(e) });
-                                continue;
+                        // Run grouped executor on a tiny table of (a:int, s:str)
+                        const rows: []const []eval.Value = &.{
+                            &.{ .{ .Int = -1 }, .{ .Str = "Alice" } },
+                            &.{ .{ .Int = 0 }, .{ .Str = "Bob" } },
+                            &.{ .{ .Int = 1 }, .{ .Str = "Alice" } },
+                            &.{ .{ .Null = {} }, .{ .Str = "Carol" } },
+                            &.{ .{ .Int = 2 }, .{ .Null = {} } },
+                        };
+                        const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items) catch |e| {
+                            std.debug.print("demo-eval(grouped): error {s}\n", .{@errorName(e)});
+                            return;
+                        };
+                        defer ally.free(out);
+                        // Header from RETURN
+                        try w.print("demo-eval(grouped): projected RETURN columns\n", .{});
+                        for (q.ret.items, 0..) |it, i| {
+                            const label = blk: {
+                                if (it.alias) |al| break :blk al;
+                                const s = pr.stringifyExprAlloc(ally, it.expr, .{}) catch "";
+                                defer if (s.len > 0) ally.free(s);
+                                break :blk if (s.len > 0) s else "expr";
                             };
-                            pass = (pv == .Bool and pv.Bool);
-                        }
-                        if (!pass) continue;
-                        try w.print("{d}\t", .{i});
-                        for (q.ret.items, 0..) |it, j| {
-                            const v = eval.evalExpr(ally, it.expr, env) catch |e| {
-                                try w.print("<err:{s}>", .{@errorName(e)});
-                                continue;
-                            };
-                            if (j > 0) try w.print("\t", .{});
-                            switch (v) {
-                                .Null => try w.print("NULL", .{}),
-                                .Int => |n| try w.print("{d}", .{n}),
-                                .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
-                                .Str => |sval| try w.print("\"{s}\"", .{sval}),
-                            }
+                            if (i > 0) try w.print("\t", .{});
+                            try w.print("{s}", .{label});
                         }
                         try w.print("\n", .{});
+                        for (out) |r| {
+                            for (r, 0..) |v, j| {
+                                if (j > 0) try w.print("\t", .{});
+                                switch (v) {
+                                    .Null => try w.print("NULL", .{}),
+                                    .Int => |n| try w.print("{d}", .{n}),
+                                    .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
+                                    .Str => |sval| try w.print("\"{s}\"", .{sval}),
+                                }
+                            }
+                            try w.print("\n", .{});
+                        }
+                    } else {
+                        // Original flat evaluator demo
+                        const Avals = [_]eval.Value{ .{ .Int = -1 }, .{ .Int = 0 }, .{ .Int = 1 }, .{ .Null = {} }, .{ .Int = 2 } };
+                        const Svals = [_]eval.Value{ .{ .Str = "Alice" }, .{ .Str = "Bob" }, .{ .Str = "" }, .{ .Str = "Carol" }, .{ .Null = {} } };
+                        try w.print("demo-eval: rows where WHERE predicate (if present) holds; columns are RETURN items.\n", .{});
+                        try w.print("row\t", .{});
+                        for (q.ret.items, 0..) |it, i| {
+                            const label = blk: {
+                                if (it.alias) |al| break :blk al;
+                                const s = pr.stringifyExprAlloc(ally, it.expr, .{}) catch "";
+                                defer if (s.len > 0) ally.free(s);
+                                break :blk if (s.len > 0) s else "expr";
+                            };
+                            if (i > 0) try w.print("\t", .{});
+                            try w.print("{s}", .{label});
+                        }
+                        try w.print("\n", .{});
+                        var i: usize = 0;
+                        while (i < Avals.len and i < Svals.len) : (i += 1) {
+                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items };
+                            var pass = true;
+                            if (q.where_clause) |wc| {
+                                const v = eval.evalExpr(ally, wc, env) catch |e| {
+                                    if (diagnostics.mapEvalError(e)) |code| {
+                                        try w.print("diagnostic: {s} (eval WHERE on row {d})\n", .{ diagnostics.codeName(code), i });
+                                    } else {
+                                        try w.print("error evaluating WHERE on row {d}: {s}\n", .{ i, @errorName(e) });
+                                    }
+                                    continue;
+                                };
+                                pass = (v == .Bool and v.Bool);
+                            }
+                            if (!pass) continue;
+                            try w.print("{d}\t", .{i});
+                            for (q.ret.items, 0..) |it, j| {
+                                const v = eval.evalExpr(ally, it.expr, env) catch |e| {
+                                    if (diagnostics.mapEvalError(e)) |code| {
+                                        try w.print("<diag:{s}>", .{diagnostics.codeName(code)});
+                                    } else {
+                                        try w.print("<err:{s}>", .{@errorName(e)});
+                                    }
+                                    continue;
+                                };
+                                if (j > 0) try w.print("\t", .{});
+                                switch (v) {
+                                    .Null => try w.print("NULL", .{}),
+                                    .Int => |n| try w.print("{d}", .{n}),
+                                    .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
+                                    .Str => |sval| try w.print("\"{s}\"", .{sval}),
+                                }
+                            }
+                            try w.print("\n", .{});
+                        }
                     }
                 },
                 else => {
@@ -397,6 +493,192 @@ pub fn main() !void {
                     std.debug.print("no diagnostics (planning succeeded)\n", .{});
                 },
                 else => std.debug.print("demo-diagnostics: first statement is not a Query\n", .{}),
+            }
+        } else if (demo_agg) {
+            // Demo: run GROUP BY aggregates over a tiny synthetic table (name:str, val:int|null)
+            if (res.program.statements.len == 0) {
+                std.debug.print("demo-agg: no statements in file\n", .{});
+                return;
+            }
+            const st = res.program.statements[0];
+            switch (st) {
+                .Query => |q| {
+                    if (q.group_by == null) {
+                        std.debug.print("demo-agg: query has no GROUP BY\n", .{});
+                        return;
+                    }
+                    // Build Agg list from RETURN items and HAVING (COUNT/COUNT(*), SUM/MIN/MAX/AVG); numeric args operate on column index 1 (val)
+                    var aggs = std.ArrayList(exec.Agg).init(gpa);
+                    defer aggs.deinit();
+                    var v_idxs = std.ArrayList(usize).init(gpa);
+                    defer v_idxs.deinit();
+                    // Header labels
+                    var labels = std.ArrayList([]const u8).init(gpa);
+                    defer labels.deinit();
+                    // Collect aggregates helper
+                    const addAggFromCall = struct {
+                        fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), c: @import("gql/ast.zig").CallExpr) void {
+                            switch (c.callee.*) {
+                                .Ident => |nm| {
+                                    if (std.ascii.eqlIgnoreCase(nm, "count")) {
+                                        if (c.args.len == 0) {
+                                            aggs_out.append(.CountStar) catch {};
+                                            v_idxs_out.append(0) catch {};
+                                            labels_out.append("COUNT(*)") catch {};
+                                        } else {
+                                            aggs_out.append(.Count) catch {};
+                                            v_idxs_out.append(1) catch {};
+                                            labels_out.append("COUNT") catch {};
+                                        }
+                                    } else if (std.ascii.eqlIgnoreCase(nm, "sum")) {
+                                        aggs_out.append(.Sum) catch {};
+                                        v_idxs_out.append(1) catch {};
+                                        labels_out.append("SUM") catch {};
+                                    } else if (std.ascii.eqlIgnoreCase(nm, "min")) {
+                                        aggs_out.append(.Min) catch {};
+                                        v_idxs_out.append(1) catch {};
+                                        labels_out.append("MIN") catch {};
+                                    } else if (std.ascii.eqlIgnoreCase(nm, "max")) {
+                                        aggs_out.append(.Max) catch {};
+                                        v_idxs_out.append(1) catch {};
+                                        labels_out.append("MAX") catch {};
+                                    } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {
+                                        aggs_out.append(.Avg) catch {};
+                                        v_idxs_out.append(1) catch {};
+                                        labels_out.append("AVG") catch {};
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                    }.go;
+                    for (q.ret.items) |it| switch (it.expr) {
+                        .Call => |c| addAggFromCall(&aggs, &v_idxs, &labels, c),
+                        else => {},
+                    };
+                    if (q.having) |hv| {
+                        // Walk HAVING and add any missing aggregates
+                        const walk = struct {
+                            fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), e: @import("gql/ast.zig").Expr) void {
+                                switch (e) {
+                                    .Call => |c| addAggFromCall(aggs_out, v_idxs_out, labels_out, c),
+                                    .Unary => |u| go(aggs_out, v_idxs_out, labels_out, u.expr.*),
+                                    .Binary => |b| {
+                                        go(aggs_out, v_idxs_out, labels_out, b.left.*);
+                                        go(aggs_out, v_idxs_out, labels_out, b.right.*);
+                                    },
+                                    else => {},
+                                }
+                            }
+                        }.go;
+                        walk(&aggs, &v_idxs, &labels, hv);
+                    }
+                    if (aggs.items.len == 0) {
+                        // Default to COUNT if none present
+                        try aggs.append(.CountStar);
+                        try v_idxs.append(0);
+                        try labels.append("COUNT(*)");
+                    }
+                    const spec = exec.GroupSpec{ .key_idxs = &.{0}, .aggs = aggs.items };
+                    // Sample rows: (name, val)
+                    const rows: []const []exec.BindingValue = &.{
+                        &.{ .{ .Str = "a" }, .{ .Int = 1 } },
+                        &.{ .{ .Str = "a" }, .{ .Int = 2 } },
+                        &.{ .{ .Str = "b" }, .{ .Null = {} } },
+                    };
+                    const out_rows = exec.groupAndAggregate(gpa, rows, spec, v_idxs.items) catch |e| {
+                        std.debug.print("demo-agg: runtime error: {s}\n", .{@errorName(e)});
+                        return;
+                    };
+                    defer gpa.free(out_rows);
+                    // Prepare HAVING evaluation: build maps (group key -> index, agg signature -> rel index)
+                    var key_map = std.StringHashMap(usize).init(gpa);
+                    defer key_map.deinit();
+                    // For demo, single key at index 0 corresponds to the actual GROUP BY key expr string
+                    // We stringify the first GROUP BY key for mapping
+                    const pr = gql.printer;
+                    const gb_key_s = pr.stringifyExprAlloc(gpa, q.group_by.?.keys[0], .{}) catch "";
+                    defer if (gb_key_s.len > 0) gpa.free(gb_key_s);
+                    if (gb_key_s.len > 0) {
+                        _ = key_map.put(gb_key_s, 0) catch {};
+                    }
+                    var agg_map = std.StringHashMap(usize).init(gpa);
+                    defer agg_map.deinit();
+                    // Build mapping for each aggregate in the spec
+                    var ai: usize = 0;
+                    while (ai < aggs.items.len) : (ai += 1) {
+                        const a = aggs.items[ai];
+                        var sig_buf = std.ArrayList(u8).init(gpa);
+                        defer sig_buf.deinit();
+                        switch (a) {
+                            .CountStar => {
+                                try sig_buf.appendSlice("count(*)");
+                            },
+                            .Count => {
+                                try sig_buf.appendSlice("count(");
+                                try sig_buf.appendSlice(gb_key_s);
+                                try sig_buf.append(')');
+                            },
+                            .Sum => {
+                                try sig_buf.appendSlice("sum(");
+                                try sig_buf.appendSlice(gb_key_s);
+                                try sig_buf.append(')');
+                            },
+                            .Min => {
+                                try sig_buf.appendSlice("min(");
+                                try sig_buf.appendSlice(gb_key_s);
+                                try sig_buf.append(')');
+                            },
+                            .Max => {
+                                try sig_buf.appendSlice("max(");
+                                try sig_buf.appendSlice(gb_key_s);
+                                try sig_buf.append(')');
+                            },
+                            .Avg => {
+                                try sig_buf.appendSlice("avg(");
+                                try sig_buf.appendSlice(gb_key_s);
+                                try sig_buf.append(')');
+                            },
+                        }
+                        _ = agg_map.put(sig_buf.items, ai) catch {};
+                    }
+                    // Print header
+                    var w = std.io.getStdOut().writer();
+                    try w.print("demo-agg: groups over (name, val)\n", .{});
+                    try w.print("group\t", .{});
+                    for (labels.items, 0..) |lab, i| {
+                        if (i > 0) try w.print("\t", .{});
+                        try w.print("{s}", .{lab});
+                    }
+                    try w.print("\n", .{});
+                    // Emit rows with HAVING evaluation by rewriting expression
+                    for (out_rows) |r| {
+                        if (q.having) |hv| {
+                            const rewritten = exec.rewriteExprWithAggregates(gpa, hv, &key_map, &agg_map, r, spec.key_idxs.len) catch .{ .Null = {} };
+                            const v = eval.evalExpr(gpa, rewritten, .{ .names = &.{}, .values = &.{} }) catch .{ .Null = {} };
+                            if (!(v == .Bool and v.Bool)) continue;
+                        }
+                        // key
+                        switch (r[0]) {
+                            .Str => |sname| try w.print("{s}", .{sname}),
+                            else => try w.print("(?)", .{}),
+                        }
+                        // aggs
+                        var a: usize = 0;
+                        while (a < aggs.items.len) : (a += 1) {
+                            const v = r[spec.key_idxs.len + a];
+                            try w.print("\t", .{});
+                            switch (v) {
+                                .Null => try w.print("NULL", .{}),
+                                .Int => |n| try w.print("{d}", .{n}),
+                                .Str => |sval| try w.print("\"{s}\"", .{sval}),
+                                .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
+                            }
+                        }
+                        try w.print("\n", .{});
+                    }
+                },
+                else => std.debug.print("demo-agg: first statement is not a Query\n", .{}),
             }
         } else {
             std.debug.print("{any}\n", .{res.program});

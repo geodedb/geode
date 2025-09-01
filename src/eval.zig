@@ -12,16 +12,26 @@ pub const Value = union(enum) {
     Int: i64,
     Bool: bool,
     Str: []const u8,
+    // Fixed-point decimal: coeff * 10^-scale
+    Decimal: struct { coeff: i128, scale: u8 },
 };
 
 pub const Env = struct {
     // Simple linear env for tests/demos
     names: []const []const u8,
     values: []const Value,
+    // Optional parameter bindings: parallel arrays
+    param_names: []const []const u8 = &.{},
+    param_values: []const Value = &.{},
 
     pub fn get(self: Env, name: []const u8) ?Value {
         var i: usize = 0;
         while (i < self.names.len) : (i += 1) if (std.mem.eql(u8, self.names[i], name)) return self.values[i];
+        return null;
+    }
+    pub fn getParam(self: Env, name: []const u8) ?Value {
+        var i: usize = 0;
+        while (i < self.param_names.len) : (i += 1) if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
         return null;
     }
 };
@@ -36,6 +46,27 @@ fn truthy(v: Value) bool {
         .Null => false,
         else => false,
     };
+}
+
+fn and3(a: Value, b: Value) Value {
+    // Three-valued logic for AND: true ∧ x = x; false ∧ x = false; null ∧ true = null; null ∧ false = false; null ∧ null = null
+    if (a == .Bool and !a.Bool) return .{ .Bool = false };
+    if (b == .Bool and !b.Bool) return .{ .Bool = false };
+    if (a == .Bool and a.Bool and b == .Bool) return .{ .Bool = b.Bool };
+    if (b == .Bool and b.Bool and a == .Bool) return .{ .Bool = a.Bool };
+    if (a == .Null or b == .Null) return Value{ .Null = {} };
+    // Non-bool values treated as false for now
+    return .{ .Bool = false };
+}
+
+fn or3(a: Value, b: Value) Value {
+    // Three-valued logic for OR: true ∨ x = true; false ∨ x = x; null ∨ true = true; null ∨ false = null; null ∨ null = null
+    if (a == .Bool and a.Bool) return .{ .Bool = true };
+    if (b == .Bool and b.Bool) return .{ .Bool = true };
+    if (a == .Bool and !a.Bool and b == .Bool) return .{ .Bool = b.Bool };
+    if (b == .Bool and !b.Bool and a == .Bool) return .{ .Bool = a.Bool };
+    if (a == .Null or b == .Null) return Value{ .Null = {} };
+    return .{ .Bool = false };
 }
 
 // --- Lightweight regex helpers ---
@@ -127,6 +158,7 @@ fn eqVals(a: Value, b: Value) bool {
         .Int => |ai| b == .Int and ai == b.Int,
         .Bool => |ab| b == .Bool and ab == b.Bool,
         .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
+        .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
     };
 }
 
@@ -144,8 +176,8 @@ fn cmpIntsOp(op: ast.BinOp, a: i64, b: i64) Value {
 
 fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
-        .And => .{ .Bool = truthy(l) and truthy(r) },
-        .Or => .{ .Bool = truthy(l) or truthy(r) },
+        .And => and3(l, r),
+        .Or => or3(l, r),
         .Add => blk: {
             if (l == .Int and r == .Int) break :blk .{ .Int = l.Int + r.Int };
             return EvalError.TypeMismatch;
@@ -164,6 +196,29 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
             if (l == .Int and r == .Int) break :blk5 cmpIntsOp(op, l.Int, r.Int);
+            // Decimal comparisons (no arithmetic yet)
+            if (l == .Decimal and r == .Int) {
+                const rhs = scaleTo(@as(i128, r.Int), 0, l.Decimal.scale) catch return EvalError.Unsupported;
+                const ord = cmpI128(l.Decimal.coeff, rhs);
+                break :blk5 .{ .Bool = cmpToBool(op, ord) };
+            }
+            if (l == .Int and r == .Decimal) {
+                const lhs = scaleTo(@as(i128, l.Int), 0, r.Decimal.scale) catch return EvalError.Unsupported;
+                const ord = cmpI128(lhs, r.Decimal.coeff);
+                break :blk5 .{ .Bool = cmpToBool(op, ord) };
+            }
+            if (l == .Decimal and r == .Decimal) {
+                // align scales
+                if (l.Decimal.scale == r.Decimal.scale) {
+                    const ord = cmpI128(l.Decimal.coeff, r.Decimal.coeff);
+                    break :blk5 .{ .Bool = cmpToBool(op, ord) };
+                }
+                const maxs = @max(l.Decimal.scale, r.Decimal.scale);
+                const lc = scaleTo(l.Decimal.coeff, l.Decimal.scale, maxs) catch return EvalError.Unsupported;
+                const rc = scaleTo(r.Decimal.coeff, r.Decimal.scale, maxs) catch return EvalError.Unsupported;
+                const ord = cmpI128(lc, rc);
+                break :blk5 .{ .Bool = cmpToBool(op, ord) };
+            }
             if (l == .Str and r == .Str) {
                 const ord = std.mem.order(u8, l.Str, r.Str);
                 return .{ .Bool = switch (op) {
@@ -194,6 +249,49 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
             return EvalError.TypeMismatch;
         },
     };
+}
+
+fn pow10(scale: u8) i128 {
+    var p: i128 = 1;
+    var i: u8 = 0;
+    while (i < scale) : (i += 1) p *= 10;
+    return p;
+}
+
+fn cmpI128(a: i128, b: i128) i2 {
+    return if (a < b) -1 else if (a > b) 1 else 0;
+}
+
+fn cmpToBool(op: ast.BinOp, ord: i2) bool {
+    return switch (op) {
+        .Eq => ord == 0,
+        .Ne => ord != 0,
+        .Lt => ord < 0,
+        .Le => ord <= 0,
+        .Gt => ord > 0,
+        .Ge => ord >= 0,
+        else => false,
+    };
+}
+
+fn scaleTo(coeff: i128, from: u8, to: u8) EvalError!i128 {
+    if (from == to) return coeff;
+    if (from > to) {
+        // downscale by truncation
+        var i: u8 = 0;
+        var v = coeff;
+        while (i < from - to) : (i += 1) v = @divTrunc(v, 10);
+        return v;
+    }
+    // upscale; check overflow
+    var i: u8 = 0;
+    var v = coeff;
+    while (i < to - from) : (i += 1) {
+        // overflow if v > max/10 or v < min/10
+        if (v > @as(i128, std.math.maxInt(i128)) / 10 or v < @as(i128, std.math.minInt(i128)) / 10) return EvalError.Unsupported;
+        v = v * 10;
+    }
+    return v;
 }
 
 fn expectString(v: Value) EvalError![]const u8 {
@@ -284,6 +382,38 @@ fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported;
             break :blk s;
         },
+        .Decimal => |d| blk2: {
+            // render with scale decimal point
+            const abs = if (d.coeff < 0) -d.coeff else d.coeff;
+            const scale_p = pow10(d.scale);
+            const whole = @divTrunc(abs, scale_p);
+            const frac = @mod(abs, scale_p);
+            var tmp: [64]u8 = undefined;
+            const w = std.fmt.bufPrint(&tmp, "{d}", .{whole}) catch return EvalError.Unsupported;
+            if (d.scale == 0) {
+                const s = if (d.coeff < 0) std.fmt.bufPrint(buf[0..], "-{s}", .{w}) catch return EvalError.Unsupported else std.fmt.bufPrint(buf[0..], "{s}", .{w}) catch return EvalError.Unsupported;
+                break :blk2 s;
+            }
+            // format fractional part with leading zeros to scale width
+            var frac_buf: [32]u8 = undefined;
+            const fb = std.fmt.bufPrint(&frac_buf, "{d}", .{frac}) catch return EvalError.Unsupported;
+            // pad leading zeros
+            if (fb.len < d.scale) {
+                const pad = d.scale - @as(u8, @intCast(fb.len));
+                var padbuf: [32]u8 = undefined;
+                @memset(padbuf[0..pad], '0');
+                const s = if (d.coeff < 0)
+                    std.fmt.bufPrint(buf[0..], "-{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported
+                else
+                    std.fmt.bufPrint(buf[0..], "{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported;
+                break :blk2 s;
+            }
+            const s = if (d.coeff < 0)
+                std.fmt.bufPrint(buf[0..], "-{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported
+            else
+                std.fmt.bufPrint(buf[0..], "{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported;
+            break :blk2 s;
+        },
         else => return EvalError.TypeMismatch,
     };
 }
@@ -295,6 +425,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .Bool => |b| .{ .Bool = b },
         .String => |s| .{ .Str = s },
         .Ident => |name| env.get(name) orelse Value{ .Null = {} },
+        .Param => |pname| env.getParam(pname) orelse Value{ .Null = {} },
         .Unary => |u| blk: {
             const v = try evalExpr(ally, u.expr.*, env);
             switch (u.op) {
@@ -345,24 +476,34 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             break :blk_isnull .{ .Bool = if (nz.negated) !is_null else is_null };
         },
         .Case => |c| {
-            // Simple CASE: operand present => compare equality to WHEN exprs
+            // ISO 3VL semantics
             if (c.operand) |op_ptr| {
                 const opv = try evalExpr(ally, op_ptr.*, env);
+                var saw_null_match = false;
                 for (c.whens) |w| {
                     const whenv = try evalExpr(ally, w.when.*, env);
-                    if (eqVals(opv, whenv)) {
-                        return evalExpr(ally, w.then_expr.*, env);
+                    if (isNull(opv) or isNull(whenv)) {
+                        // NULL = x yields NULL; track if any potential match is unknown
+                        if (isNull(opv) and isNull(whenv)) {
+                            // NULL = NULL treated as true in our eqVals; but in searched context, this is a match
+                            return evalExpr(ally, w.then_expr.*, env);
+                        }
+                        saw_null_match = true;
+                        continue;
                     }
+                    if (eqVals(opv, whenv)) return evalExpr(ally, w.then_expr.*, env);
                 }
+                if (c.else_expr) |ep| return evalExpr(ally, ep.*, env);
+                return if (saw_null_match) Value{ .Null = {} } else Value{ .Null = {} };
             } else {
-                // Searched CASE: evaluate WHEN as boolean
                 for (c.whens) |w| {
                     const cond = try evalExpr(ally, w.when.*, env);
-                    if (truthy(cond)) return evalExpr(ally, w.then_expr.*, env);
+                    // truthy() treats null as false; adjust for 3VL: only explicit true selects
+                    if (cond == .Bool and cond.Bool) return evalExpr(ally, w.then_expr.*, env);
                 }
+                if (c.else_expr) |ep| return evalExpr(ally, ep.*, env);
+                return Value{ .Null = {} };
             }
-            if (c.else_expr) |ep| return evalExpr(ally, ep.*, env);
-            return Value{ .Null = {} };
         },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
@@ -545,4 +686,110 @@ test "eval: implicit int<->string in predicates and IN list" {
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = arr[0..] } };
     const v3 = try evalExpr(ally, inx, env);
     try std.testing.expect(v3 == .Bool and v3.Bool == true);
+}
+
+test "eval: parameters substitution and STARTS WITH via $param" {
+    const ally = std.testing.allocator;
+    const env = Env{ .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }}, .param_names = &.{"prefix"}, .param_values = &.{Value{ .Str = "Al" }} };
+    var s_ident = ast.Expr{ .Ident = "s" };
+    var pref = ast.Expr{ .Param = "prefix" };
+    const sw = ast.Expr{ .StartsWith = .{ .value = &s_ident, .prefix = &pref } };
+    const v = try evalExpr(ally, sw, env);
+    try std.testing.expect(v == .Bool and v.Bool == true);
+}
+
+test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
+    const ally = std.testing.allocator;
+    // Env: a=7, s="007"; params: needle="Al", list=["6",7], pat="^A.*$"
+    const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } }, .param_names = &.{ "needle", "list0", "list1", "pat" }, .param_values = &.{ Value{ .Str = "Al" }, Value{ .Str = "6" }, Value{ .Int = 7 }, Value{ .Str = "^A.*$" } } };
+    // a IN [$list0, $list1] -> true
+    var a_ident = ast.Expr{ .Ident = "a" };
+    var p0 = ast.Expr{ .Param = "list0" };
+    var p1 = ast.Expr{ .Param = "list1" };
+    var items: [2]*ast.Expr = .{ &p0, &p1 };
+    const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = items[0..] } };
+    const v1 = try evalExpr(ally, inx, env);
+    try std.testing.expect(v1 == .Bool and v1.Bool);
+    // Equality mixed-type: a = s (7 vs "007") -> false; but a = "7" literal -> true
+    var s_ident = ast.Expr{ .Ident = "s" };
+    const eq1 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_ident } };
+    const v2 = try evalExpr(ally, eq1, env);
+    try std.testing.expect(v2 == .Bool and !v2.Bool);
+    var s7 = ast.Expr{ .String = "7" };
+    const eq2 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s7 } };
+    const v3 = try evalExpr(ally, eq2, env);
+    try std.testing.expect(v3 == .Bool and v3.Bool);
+    // Equality using int parameter vs string field: $list1 (7) = s ("007") -> false
+    var p_int = ast.Expr{ .Param = "list1" };
+    const eq3 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &p_int, .right = &s_ident } };
+    const v3b = try evalExpr(ally, eq3, env);
+    try std.testing.expect(v3b == .Bool and !v3b.Bool);
+    // Regex via parameter: "Alice" =~ $pat -> true
+    var val = ast.Expr{ .String = "Alice" };
+    var pat = ast.Expr{ .Param = "pat" };
+    const rx = ast.Expr{ .RegexMatch = .{ .value = &val, .pattern = &pat } };
+    const v4 = try evalExpr(ally, rx, env);
+    try std.testing.expect(v4 == .Bool and v4.Bool);
+}
+
+test "eval: CASE permutations with multiple WHENs and ELSE variants" {
+    const ally = std.testing.allocator;
+    const env = Env{ .names = &.{}, .values = &.{} };
+    // Searched CASE: first WHEN true selected; later WHENs skipped
+    var t = ast.Expr{ .Bool = true };
+    var f = ast.Expr{ .Bool = false };
+    var n = ast.Expr{ .Null = {} };
+    var A = ast.Expr{ .String = "A" };
+    var B = ast.Expr{ .String = "B" };
+    var C = ast.Expr{ .String = "C" };
+    var whs1: [3]ast.CaseWhen = .{ .{ .when = &t, .then_expr = &A }, .{ .when = &f, .then_expr = &B }, .{ .when = &t, .then_expr = &C } };
+    const cs1 = ast.Expr{ .Case = .{ .operand = null, .whens = whs1[0..], .else_expr = &C } };
+    const o1 = try evalExpr(ally, cs1, env);
+    try std.testing.expect(o1 == .Str and std.mem.eql(u8, o1.Str, "A"));
+    // Searched CASE: no WHEN true, ELSE present -> ELSE
+    var whs2: [2]ast.CaseWhen = .{ .{ .when = &f, .then_expr = &A }, .{ .when = &n, .then_expr = &B } };
+    const cs2 = ast.Expr{ .Case = .{ .operand = null, .whens = whs2[0..], .else_expr = &C } };
+    const o2 = try evalExpr(ally, cs2, env);
+    try std.testing.expect(o2 == .Str and std.mem.eql(u8, o2.Str, "C"));
+    // Simple CASE: operand type-varying WHENs; match on second WHEN; ELSE absent
+    var op = ast.Expr{ .String = "2" };
+    var w1 = ast.Expr{ .Int = 1 };
+    var w2 = ast.Expr{ .String = "2" };
+    var whs3: [2]ast.CaseWhen = .{ .{ .when = &w1, .then_expr = &A }, .{ .when = &w2, .then_expr = &B } };
+    const cs3 = ast.Expr{ .Case = .{ .operand = &op, .whens = whs3[0..], .else_expr = null } };
+    const o3 = try evalExpr(ally, cs3, env);
+    try std.testing.expect(o3 == .Str and std.mem.eql(u8, o3.Str, "B"));
+    // Simple CASE: operand Int 2, WHEN "2" (string) shouldn't match; ELSE applies
+    var op2 = ast.Expr{ .Int = 2 };
+    var wstr2 = ast.Expr{ .String = "2" };
+    var whs3b: [1]ast.CaseWhen = .{.{ .when = &wstr2, .then_expr = &A }};
+    const cs3b = ast.Expr{ .Case = .{ .operand = &op2, .whens = whs3b[0..], .else_expr = &C } };
+    const o3b = try evalExpr(ally, cs3b, env);
+    try std.testing.expect(o3b == .Str and std.mem.eql(u8, o3b.Str, "C"));
+    // Simple CASE: operand NULL, WHEN NULL then -> THEN; ELSE present should be ignored
+    var opn = ast.Expr{ .Null = {} };
+    var whs4: [2]ast.CaseWhen = .{ .{ .when = &n, .then_expr = &A }, .{ .when = &t, .then_expr = &B } };
+    const cs4 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs4[0..], .else_expr = &C } };
+    const o4 = try evalExpr(ally, cs4, env);
+    try std.testing.expect(o4 == .Str and std.mem.eql(u8, o4.Str, "A"));
+}
+
+test "eval: CASE 3VL searched and simple with NULLs" {
+    const ally = std.testing.allocator;
+    // Searched CASE: WHEN NULL THEN should not trigger; ELSE chosen
+    const env = Env{ .names = &.{}, .values = &.{} };
+    var n1 = ast.Expr{ .Null = {} };
+    var then1 = ast.Expr{ .String = "x" };
+    var whs1: [1]ast.CaseWhen = .{.{ .when = &n1, .then_expr = &then1 }};
+    const c1 = ast.Expr{ .Case = .{ .operand = null, .whens = whs1[0..], .else_expr = &then1 } };
+    const o1 = try evalExpr(ally, c1, env);
+    try std.testing.expect(o1 == .Str and std.mem.eql(u8, o1.Str, "x"));
+    // Simple CASE: operand NULL, WHEN NULL -> match returns THEN
+    var opn = ast.Expr{ .Null = {} };
+    var wnull = ast.Expr{ .Null = {} };
+    var t2 = ast.Expr{ .String = "n" };
+    var whs2: [1]ast.CaseWhen = .{.{ .when = &wnull, .then_expr = &t2 }};
+    const c2 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs2[0..], .else_expr = null } };
+    const o2 = try evalExpr(ally, c2, env);
+    try std.testing.expect(o2 == .Str and std.mem.eql(u8, o2.Str, "n"));
 }

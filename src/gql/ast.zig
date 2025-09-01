@@ -90,6 +90,8 @@ pub const Expr = union(enum) {
     Ident: []const u8,
     String: []const u8,
     Int: i64,
+    // Fixed-point decimal literal: coeff * 10^-scale
+    Decimal: struct { coeff: i128, scale: u8 },
     Bool: bool,
     Null,
     Date: struct { raw: []const u8, parsed: temporal.Date },
@@ -111,6 +113,8 @@ pub const Expr = union(enum) {
     NotIn: struct { value: *Expr, set: []*Expr },
     // CASE expression
     Case: struct { operand: ?*Expr, whens: []CaseWhen, else_expr: ?*Expr },
+    // Parameter reference: $name
+    Param: []const u8,
     Map: []Property,
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
 };

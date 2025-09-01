@@ -1,0 +1,1 @@
+MATCH (n) WHERE n.val >= 0 GROUP BY n.name RETURN COUNT(n), SUM(n.val), MIN(n.val), MAX(n.val)

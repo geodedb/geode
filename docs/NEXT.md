@@ -10,20 +10,23 @@ Note: Completed items move to docs/IMPLEMENTED.md.
 
 - Why: Standardize error surfaces (ISO 23.2) and enable conformance reporting (ISO 24.\*).
 - What: Map planner/parser/evaluator errors to codes; define precedence; wire to CLI print.
-- Acceptance:
-  - Tests assert codes for: US001 (unordered pagination), GroupByIllegal, IllegalOrderKey, TypeMismatch.
-  - README Troubleshooting lists codes and meanings.
+- Acceptance tests (names illustrative; include in src/diagnostics.zig and CLI harness):
+  - GQL: `RETURN 1 LIMIT 10 OFFSET 5` (no ORDER BY) → Error code: US001; details: unordered pagination. ISO: 16.18–16.19.
+  - GQL (ident-only policy): `RETURN a ORDER BY f(a)` → Error code: IllegalOrderKey. ISO: 14.10.
+  - GQL: `RETURN a, SUM(b) GROUP BY a, b` → Error code: GroupByIllegal. ISO: 14.10.
+  - GQL: `RETURN 1 < "2"` → Error code: TypeMismatch. ISO: 16.x.
+  - Binding table shape: n/a (diagnostics); CLI prints code, message, anchors.
 - ISO anchors: 23.2 diagnostics; 14.10 (ORDER BY legality); 16.18–16.19 (US001); 24.\* conformance.
+- Dependencies: none.
 - Scope: S • DRI: core
 
-1. String predicate evaluation
+1. README troubleshooting section
 
-- Why: Complete common scalar semantics (ISO 16.x).
-- What: Implement STARTS WITH, ENDS WITH, CONTAINS in evaluator with NULL/empty handling.
-- Acceptance:
-  - Truth tables for NULL x string and empty cases.
-  - Integration tests in src/gql.zig exercising WHERE with these predicates.
-- ISO anchors: 16.x expressions.
+- Why: Document codes for users and conformance reviewers.
+- What: Add a concise Codes table (US001, GroupByIllegal, IllegalOrderKey, TypeMismatch) with one-liners and ISO anchors.
+- Acceptance: README contains the table and anchors; links from GAP_ANALYSIS.md and NEXT.md.
+- ISO anchors: 23.2; 24.\*
+- Dependencies: (1)
 - Scope: S • DRI: core
 
 ## Next (P1)
@@ -31,36 +34,53 @@ Note: Completed items move to docs/IMPLEMENTED.md.
 1. CASE expression completeness
 
 - Why: Production‑ready CASE semantics across NULLs.
-- What: Extend evaluator for simple+searched CASE with 3VL; add exhaustive tests.
-- Acceptance: Searched/operand CASE matrices pass; nested CASE works.
+- What: Extend evaluator for simple+searched CASE with full three‑valued logic (3VL); add exhaustive tests.
+- Acceptance tests:
+  - GQL: `RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r`
+    - Input bindings: a: [NULL, true, false]
+    - Expected binding table columns: [r STRING]; rows: ['n'], ['t'], ['f'].
+  - GQL: `RETURN CASE a WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'x' END AS r`
+    - Input: a: [NULL, 1, 2, 3]
+    - Expected: r: [NULL, 'one', 'two', 'x'] (NULL propagates). ISO: 16.x.
 - ISO anchors: 16.x expressions.
+- Dependencies: none.
 - Scope: M • DRI: core
 
-1. Parameters support ($param)
+1. ORDER BY policy guard integration
 
-- Why: Real‑world query inputs and testability.
-- What: Parse `$name`; bind from CLI map; evaluator substitution with types.
-- Acceptance: Parser/evaluator tests; CLI `--param a=1 --param s=foo` works.
-- ISO anchors: 16.x.
-- Scope: M • DRI: core
+- Why: Ensure parser policy (ident‑only) is enforced and surfaced via diagnostics.
+- What: Wire ident‑only guard to diagnostics layer; add planner‑stage guard to reject OFFSET pushdown without order (already present) with code US001.
+- Acceptance tests:
+  - GQL (policy ident‑only): `RETURN a ORDER BY a.b` → IllegalOrderKey.
+  - GQL: `MATCH (n) RETURN n LIMIT 5 OFFSET 3` (no ORDER BY) → US001.
+- ISO anchors: 14.10; 16.18–16.19.
+- Dependencies: Diagnostics (P0‑1).
+- Scope: S • DRI: core
 
 ## Later (P2)
 
 1. Aggregation semantics (phase‑2)
 
 - Why: Enable typed aggregates + HAVING filters.
-- What: COUNT/SUM/MIN/MAX with GROUP BY legality; HAVING evaluation.
-- Acceptance: Positive/negative tests for grouping/HAVING; printer stability.
+- What: COUNT/SUM/MIN/MAX/AVG with GROUP BY legality; HAVING evaluation; ORDER BY over aggregated outputs (aliases/ordinals).
+- Acceptance tests:
+  - GQL: `MATCH () RETURN a, COUNT(*) AS c GROUP BY a HAVING c > 1 ORDER BY c DESC NULLS LAST LIMIT 10`
+    - Expected columns: [a ANY, c INT]; ordered desc by c; top 10.
+  - GQL: `RETURN AVG(x) AS a, SUM(x) AS s` over x: [1, 2, NULL, 3]
+    - Expected: a = 2 (INT), s = 6 (INT). ISO: 14.10; 16.x typing.
 - ISO anchors: 14.10; 16.x typing.
+- Dependencies: none.
 - Scope: L • DRI: core
 
-1. Path search tie‑break (UA005/UA006)
+1. Path semantics groundwork (policy only)
 
-- Why: Deterministic selective path selection.
-- What: Document and implement tie‑break (length, id) policy.
-- Acceptance: Stable results under ties; docs updated.
-- ISO anchors: UA005/UA006.
-- Scope: M • DRI: core
+- Why: Lock down UA005/UA006 tie‑breaking before implementing path operators.
+- What: Keep deterministic `(length, id‑sequence)` tiebreak helper and tests.
+- Acceptance test:
+  - Unit: pathLess(a, b) orders shorter paths first; if equal length, lexicographic node id list.
+- ISO anchors: 22.4; UA005/UA006.
+- Dependencies: none.
+- Scope: S • DRI: core
 
 ## Cutline
 

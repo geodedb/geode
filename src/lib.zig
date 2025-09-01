@@ -32,6 +32,20 @@ pub const temporal = @import("temporal.zig");
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
 
+// Lightweight helper to carry parameter bindings across subsystems
+pub const ParamBindings = struct {
+    names: []const []const u8,
+    values: []const eval.Value,
+};
+
+/// Construct an eval.Env from identifier bindings and optional ParamBindings
+pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, params: ?ParamBindings) eval.Env {
+    if (params) |p| {
+        return .{ .names = id_names, .values = id_values, .param_names = p.names, .param_values = p.values };
+    }
+    return .{ .names = id_names, .values = id_values };
+}
+
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
     return parseGqlOptions(src, allocator, .{});
 }

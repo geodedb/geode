@@ -409,6 +409,34 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .Ident => |s| try w.print("{s}", .{s}),
         .String => |s| try w.print("\"{s}\"", .{s}),
         .Int => |n| try w.print("{d}", .{n}),
+        .Decimal => |d| blk_dec: {
+            // Render as standard fixed-point decimal with scale digits after the dot
+            const neg = d.coeff < 0;
+            const abs: i128 = if (neg) -d.coeff else d.coeff;
+            var whole: i128 = abs;
+            var frac: i128 = 0;
+            if (d.scale > 0) {
+                var i: u8 = 0;
+                var p: i128 = 1;
+                while (i < d.scale) : (i += 1) p *= 10;
+                whole = @divTrunc(abs, p);
+                frac = @mod(abs, p);
+            }
+            // write whole
+            try w.print("{s}{d}", .{ if (neg) "-" else "", whole });
+            if (d.scale > 0) {
+                try w.writeByte('.');
+                // pad frac with leading zeros to exactly scale digits
+                var buf: [64]u8 = undefined;
+                const s = std.fmt.bufPrint(&buf, "{d}", .{frac}) catch unreachable;
+                if (s.len < d.scale) {
+                    var pad_i: u8 = 0;
+                    while (pad_i < d.scale - s.len) : (pad_i += 1) try w.writeByte('0');
+                }
+                try w.print("{s}", .{s});
+            }
+            break :blk_dec;
+        },
         .Bool => |b| try w.print("{any}", .{b}),
         .Null => try w.print("null", .{}),
         .Date => |d| if (!opts.normalize_temporals) {
@@ -462,6 +490,9 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printExprWith(w, rm.value.*, 0, opts);
             try w.print(" =~ ", .{});
             try printExprWith(w, rm.pattern.*, 0, opts);
+        },
+        .Param => |pname| {
+            try w.print("${s}", .{pname});
         },
         .Case => |c| {
             try w.print("CASE ", .{});

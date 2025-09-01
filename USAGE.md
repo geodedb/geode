@@ -12,6 +12,8 @@ Flags (subset):
   - --bench-eval: Micro-benchmarks for regex (=~) and IN/NOT IN evaluation.
   - --demo-eval: Evaluates WHERE and RETURN on a small synthetic rowset with identifiers a (Int) and s (Str).
   - --demo-diagnostics: Runs the planner and prints diagnostic codes for certain legality errors.
+  - --demo-agg: Runs a tiny grouping demo over (name:str, val:int|null) using GROUP BY and aggregates in the query.
+  - --param name=value: Bind a parameter for $name in the query (repeatable). Values: unquoted digits -> Int; "true"/"false" -> Bool; "null" -> NULL; otherwise String. Quotes around value are optional for strings.
 
 Examples
 
@@ -19,6 +21,8 @@ Examples
 - gql --session-offset +02 --demo-sort examples/order_by_temporal.gql
 - gql --demo-eval examples/eval_where_return.gql
 - gql --demo-diagnostics examples/offset_without_order.gql
+- gql --demo-eval --param prefix=Al --param limit=10 examples/params_example.gql
+- gql --demo-agg examples/group_by_demo.gql
 
 Demo: evaluator recipes
 
@@ -31,6 +35,18 @@ Demo: evaluator recipes
 - Mixed-type equality policy:
   - Eq/Ne across Int and Str compare decimal string forms (e.g., 7 = "7" is true; 7 = "007" is false). Ordering across Int/Str is not allowed.
 
+Parameters
+
+- Use $name inside expressions: WHERE n.name STARTS WITH $prefix AND n.age = $age
+- Bind with --param on CLI (demo-eval): --param prefix=Al --param age=21
+
+Embedding (ParamBindings)
+
+- In host code, you can pass parameters to the evaluator with ParamBindings and makeEnv:
+  - geode.lib.ParamBindings{ .names = &.{"age","prefix"}, .values = &.{ .{ .Int = 21 }, .{ .Str = "Al" } } }
+  - geode.lib.makeEnv(&.{"a","s"}, &.{ .{ .Int = 1 }, .{ .Str = "Alice" } }, params)
+  - Then call eval.evalExpr(allocator, expr, env)
+
 ## Policies
 
 - Equality casting
@@ -41,6 +57,12 @@ Demo: evaluator recipes
 - NULL behavior
   - IN: value NULL → NULL; list contains NULL and no match → NULL; match present → true
   - NOT IN: logical negation of IN when boolean; NULL stays NULL
+
+Aggregation and path tie-break
+
+- GROUP BY legality (phase 1/2): Non-aggregated SELECT items must belong to grouped keys (ident or member). HAVING must use aggregates or grouped keys.
+- Path search tie-break (UA005/UA006): Shorter paths first; then lexicographic by node-id sequence.
+- Demo: --demo-agg reads aggregates from RETURN (COUNT/SUM/MIN/MAX) and prints grouped results over a sample table.
 
 ## Troubleshooting
 

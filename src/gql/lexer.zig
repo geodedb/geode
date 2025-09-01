@@ -148,6 +148,7 @@ pub const Lexer = struct {
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const tokv: t.Token = switch (c) {
             '|' => .{ .kind = .bar, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
+            '$' => .{ .kind = .dollar, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
             '(' => .{ .kind = .l_paren, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
             ')' => .{ .kind = .r_paren, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
             '[' => .{ .kind = .l_bracket, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },

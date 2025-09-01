@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("gql/ast.zig");
 const temporal = @import("temporal.zig");
+const printer = @import("gql/print.zig");
 
 pub const PlannerOptions = struct {
     attempt_pushdown: bool = true,
@@ -109,35 +110,62 @@ fn isAggregateCall(e: ast.Expr) bool {
 fn validateGroupBy(q: ast.Query) PlanError!void {
     if (q.group_by == null) return;
     const gb = q.group_by.?;
-    // Collect allowed identifiers from group-by keys (ident-only for phase 1)
-    var allowed = std.AutoHashMap([]const u8, void).init(std.heap.page_allocator);
+    // Collect allowed group-by keys (identifier or simple member) using stable stringification for comparison.
+    var allowed = std.StringHashMap(void).init(std.heap.page_allocator);
     defer allowed.deinit();
+    // Track allocated key strings to free after
+    var allocd = std.ArrayList([]const u8).init(std.heap.page_allocator);
+    defer {
+        for (allocd.items) |s| std.heap.page_allocator.free(s);
+        allocd.deinit();
+    }
     for (gb.keys) |k| {
-        if (k == .Ident) {
-            _ = allowed.put(k.Ident, {}) catch {};
+        switch (k) {
+            .Ident => |s| {
+                _ = allowed.put(s, {}) catch {};
+            },
+            .Member => {
+                const ss = printer.stringifyExprAlloc(std.heap.page_allocator, k, .{}) catch continue;
+                _ = allowed.put(ss, {}) catch {};
+                allocd.append(ss) catch {};
+            },
+            else => {}, // keep strict for other kinds
         }
     }
-    // Require at least one allowed key if group_by present (simplify phase 1)
     if (allowed.count() == 0) return PlanError.GroupByIllegal;
-    // Return items must be either aggregate calls or identifiers from allowed set (phase 1)
+    // Return items must be either aggregate calls or belong to allowed set (by ident/member).
     for (q.ret.items) |it| {
         const e = it.expr;
         if (isAggregateCall(e)) continue;
-        if (e == .Ident) {
-            if (allowed.contains(e.Ident)) continue;
+        switch (e) {
+            .Ident => |s| if (allowed.contains(s)) continue else return PlanError.GroupByIllegal,
+            .Member => {
+                const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch return PlanError.GroupByIllegal;
+                defer std.heap.page_allocator.free(ss);
+                if (allowed.contains(ss)) {
+                    continue;
+                } else {
+                    return PlanError.GroupByIllegal;
+                }
+            },
+            else => return PlanError.GroupByIllegal,
         }
-        return PlanError.GroupByIllegal;
     }
-    // HAVING, if present, must be an aggregate predicate or refer only to grouped identifiers (phase 1)
+    // HAVING: must be aggregate predicate or refer only to grouped identifiers/members (strict)
     if (q.having) |hv| {
         if (!exprAllowedInGroup(hv, &allowed)) return PlanError.GroupByIllegal;
     }
 }
 
-fn exprAllowedInGroup(e: ast.Expr, allowed: *std.AutoHashMap([]const u8, void)) bool {
+fn exprAllowedInGroup(e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
     return switch (e) {
         .Int, .Bool, .Null, .String => true,
         .Ident => |s| allowed.contains(s),
+        .Member => blk: {
+            const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch break :blk false;
+            defer std.heap.page_allocator.free(ss);
+            break :blk allowed.contains(ss);
+        },
         .Call => isAggregateCall(e),
         .Unary => |u| exprAllowedInGroup(u.expr.*, allowed),
         .Binary => |b| exprAllowedInGroup(b.left.*, allowed) and exprAllowedInGroup(b.right.*, allowed),
@@ -244,5 +272,24 @@ test "planner: having legality" {
     _ = try planQuery(q, .{});
     // HAVING m (non-grouped identifier) illegal
     q.having = .{ .Ident = "m" };
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+}
+
+test "planner: group-by illegality with mixed identifiers in RETURN/HAVING" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = null;
+    q.with_clause = null;
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    q.group_by = .{ .keys = keys[0..] };
+    // RETURN n, m -> illegal (m not grouped and not aggregate)
+    const it0 = ast.Expr{ .Ident = "n" };
+    const it1 = ast.Expr{ .Ident = "m" };
+    var items: [2]ast.ReturnItem = .{ .{ .expr = it0, .alias = null }, .{ .expr = it1, .alias = null } };
+    q.ret = .{ .items = items[0..], .distinct = false };
     try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
 }

@@ -27,6 +27,7 @@ pub const TokenKind = enum {
     ne,
     concat, // ||
     bar, // |
+    dollar, // $
     arrow_r, // ->
     arrow_l, // <-
 

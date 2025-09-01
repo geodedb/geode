@@ -4,6 +4,7 @@ pub const Code = enum(u16) {
     US001 = 1, // Pagination unordered
     GroupByIllegal = 2,
     IllegalOrderKey = 3,
+    TypeMismatch = 4,
 };
 
 pub fn codeName(c: Code) []const u8 {
@@ -11,6 +12,7 @@ pub fn codeName(c: Code) []const u8 {
         .US001 => "US001",
         .GroupByIllegal => "GroupByIllegal",
         .IllegalOrderKey => "IllegalOrderKey",
+        .TypeMismatch => "TypeMismatch",
     };
 }
 
@@ -59,4 +61,14 @@ pub fn mapParserMessage(msg: []const u8) ?Code {
 test "diagnostics: map parser messages to IllegalOrderKey" {
     try std.testing.expect(mapParserMessage("ORDER BY key must be identifier").? == .IllegalOrderKey);
     try std.testing.expect(mapParserMessage("function calls in ORDER BY are disabled").? == .IllegalOrderKey);
+}
+
+pub fn mapEvalError(e: anytype) ?Code {
+    const name = @errorName(e);
+    if (std.mem.eql(u8, name, "TypeMismatch")) return .TypeMismatch;
+    return null;
+}
+
+test "diagnostics: map eval errors" {
+    try std.testing.expect(mapEvalError(error.TypeMismatch).? == .TypeMismatch);
 }
