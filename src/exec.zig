@@ -177,7 +177,7 @@ pub fn runGroupedQuery(
     input_rows: []const []eval.Value,
     param_names: []const []const u8,
     param_values: []const eval.Value,
-) ![]const []BindingValue {
+) ![]const []const BindingValue {
     // Validate GROUP BY legality using planner first
     _ = try planner.planQuery(q, .{});
     if (q.group_by == null) return error.Invalid; // requires GROUP BY
@@ -481,7 +481,7 @@ pub fn runGroupedQuery(
             const idxs = try ally.alloc(usize, out.items.len);
             defer ally.free(idxs);
             for (idxs, 0..) |*p, i| p.* = i;
-            const Ctx = struct { rows: []const []BindingValue, keys: []const []BindingValue, ob: ast.OrderBy };
+            const Ctx = struct { rows: []const []const BindingValue, keys: []const []const BindingValue, ob: ast.OrderBy };
             const ctx = Ctx{ .rows = out.items, .keys = keyvals, .ob = ob };
             std.sort.pdq(usize, idxs, ctx, struct {
                 fn less(s: Ctx, a: usize, b: usize) bool {
@@ -969,15 +969,28 @@ fn scaleToPow10(coeff: i128, from: u8, to: u8) error{Overflow}!i128 {
         while (i < from - to) : (i += 1) v = @divTrunc(v, 10);
         return v;
     }
-    // upscale with overflow checks
+    // upscale with overflow checks: v *= 10 using repeated additions to avoid missing mulOverflow in std on Zig 0.14
     var i: u8 = 0;
     var v = coeff;
     while (i < to - from) : (i += 1) {
-        var tmp: i128 = 0;
-        if (std.math.mulOverflow(i128, v, 10, &tmp)) return error.Overflow;
+        // multiply by 10 => v*10 = v + v*9
+        var tmp: i128 = v;
+        var j: u8 = 0;
+        while (j < 9) : (j += 1) {
+            var sum: i128 = 0;
+            if (addI128Overflow(tmp, v, &sum)) return error.Overflow;
+            tmp = sum;
+        }
         v = tmp;
     }
     return v;
+}
+
+inline fn addI128Overflow(a: i128, b: i128, out: *i128) bool {
+    // Zig 0.14: use builtin overflow add via @addWithOverflow
+    const pair = @addWithOverflow(a, b);
+    out.* = pair[0];
+    return pair[1] != 0;
 }
 
 // ===========================
@@ -1070,11 +1083,11 @@ fn rowKeyAlloc(ally: std.mem.Allocator, row: []const BindingValue) ![]u8 {
     return buf.toOwnedSlice();
 }
 
-fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []BindingValue) ![]const []BindingValue {
+fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []const BindingValue) ![]const []const BindingValue {
     // Make a copy of slice-of-slices and sort lexicographically; then unique adjacent equals.
     const tmp = try ally.alloc([]const BindingValue, rows.len);
     errdefer ally.free(tmp);
-    std.mem.copy([]const BindingValue, tmp, rows);
+    std.mem.copyForwards([]const BindingValue, tmp, rows);
     std.sort.block([]const BindingValue, tmp, {}, struct {
         fn less(_: void, a: []const BindingValue, b: []const BindingValue) bool {
             return rowLess(a, b);
@@ -1092,16 +1105,16 @@ fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []BindingValue) ![]cons
     return out.toOwnedSlice();
 }
 
-pub fn unionDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+pub fn unionDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     var all = std.ArrayList([]const BindingValue).init(ally);
     defer all.deinit();
     try all.appendSlice(a);
     try all.appendSlice(b);
-    return try sortUniqueRows(ally, all.items);
+    return try sortUniqueRows(ally, all.items[0..]);
 }
 
 /// Optimized UNION DISTINCT with a simple threshold to pick between sort-unique and hash-then-sort.
-pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue, threshold: usize) ![]const []BindingValue {
+pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue, threshold: usize) ![]const []const BindingValue {
     const total = a.len + b.len;
     if (total < threshold) return try unionDistinctRows(ally, a, b);
     var set = std.StringHashMap(void).init(ally);
@@ -1131,7 +1144,7 @@ pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []BindingV
     return try sortUniqueRows(ally, uniq.items);
 }
 
-pub fn unionAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+pub fn unionAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     var out = std.ArrayList([]const BindingValue).init(ally);
     defer out.deinit();
     try out.appendSlice(a);
@@ -1139,7 +1152,7 @@ pub fn unionAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []con
     return out.toOwnedSlice();
 }
 
-pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     // Stable-left: walk A, but limit multiplicity by counts in B
     var counts = std.StringHashMap(usize).init(ally);
     defer counts.deinit();
@@ -1164,7 +1177,7 @@ pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: [
     return out.toOwnedSlice();
 }
 
-pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     var setA = std.StringHashMap(void).init(ally);
     defer setA.deinit();
     for (a) |row| {
@@ -1188,7 +1201,7 @@ pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue,
     return try sortUniqueRows(ally, uniq.items);
 }
 
-pub fn exceptAllRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+pub fn exceptAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     // Stable-left: emit rows from A after subtracting multiplicities found in B
     var counts = std.StringHashMap(usize).init(ally);
     defer counts.deinit();
@@ -1238,7 +1251,7 @@ pub const GroupSpec = struct {
 };
 
 /// Group rows (binding rows) by key columns and compute aggregates over a single Int column per agg index.
-pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []BindingValue, spec: GroupSpec, value_idxs: []const usize) ![]const []BindingValue {
+pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingValue, spec: GroupSpec, value_idxs: []const usize) ![]const []const BindingValue {
     var map = std.StringHashMap(struct {
         key: []const BindingValue,
         // Per-aggregate counters:
@@ -1310,7 +1323,7 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []BindingValue, 
                         .Int => |iv| {
                             const add = @as(i128, iv);
                             var tmp: i128 = 0;
-                            if (std.math.addOverflow(i128, entry_ptr.sums[a], add, &tmp)) {
+                            if (addI128Overflow(entry_ptr.sums[a], add, &tmp)) {
                                 entry_ptr.ovf[a] = true;
                             } else {
                                 entry_ptr.sums[a] = tmp;
@@ -1336,7 +1349,7 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []BindingValue, 
                                 break :blk_sum_upd;
                             };
                             var tmp: i128 = 0;
-                            if (std.math.addOverflow(i128, lsc, rsc, &tmp)) {
+                            if (addI128Overflow(lsc, rsc, &tmp)) {
                                 entry_ptr.ovf[a] = true;
                             } else {
                                 entry_ptr.dec_sums[a] = tmp;
@@ -1353,7 +1366,7 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []BindingValue, 
                         .Int => |iv| {
                             const add = @as(i128, iv);
                             var tmp: i128 = 0;
-                            if (std.math.addOverflow(i128, entry_ptr.sums[a], add, &tmp)) {
+                            if (addI128Overflow(entry_ptr.sums[a], add, &tmp)) {
                                 entry_ptr.ovf[a] = true;
                             } else {
                                 entry_ptr.sums[a] = tmp;
@@ -1379,7 +1392,7 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []BindingValue, 
                                 break :blk_avg_upd;
                             };
                             var tmp: i128 = 0;
-                            if (std.math.addOverflow(i128, lsc, rsc, &tmp)) {
+                            if (addI128Overflow(lsc, rsc, &tmp)) {
                                 entry_ptr.ovf[a] = true;
                             } else {
                                 entry_ptr.dec_sums[a] = tmp;
@@ -1613,7 +1626,7 @@ fn bindingValueToExpr(v: BindingValue) !ast.Expr {
     };
 }
 
-pub fn exceptDistinctRows(ally: std.mem.Allocator, a: []const []BindingValue, b: []const []BindingValue) ![]const []BindingValue {
+pub fn exceptDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     var setB = std.StringHashMap(void).init(ally);
     defer setB.deinit();
     for (b) |row| {

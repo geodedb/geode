@@ -118,6 +118,10 @@ pub const Parser = struct {
                 }
                 break :blk_query .{ .Query = first };
             },
+            .RETURN => blk_r: {
+                const q = try self.parseQuery();
+                break :blk_r .{ .Query = q };
+            },
             .SESSION => blk: {
                 self.advance();
                 if (self.cur.kind == .SET) {
@@ -155,67 +159,76 @@ pub const Parser = struct {
     }
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
-        // MATCH or OPTIONAL MATCH pattern
+        // Optional MATCH/OPTIONAL MATCH pattern; allow RETURN-only queries too.
         var optional_match = false;
+        var have_match = false;
         if (self.cur.kind == .OPTIONAL) {
             self.advance();
             optional_match = true;
+            have_match = true;
         }
-        _ = try self.expect(.MATCH);
-        // For the top-level MATCH pattern, collect aliases freshly.
-        self.collect_chain_aliases = true;
-        self.path_aliases.clearRetainingCapacity();
-        const pat = try self.parseGraphPattern();
-        // Keep aliases for ORDER BY checks that follow.
-        self.collect_chain_aliases = false;
-        // After parsing pattern, path_aliases now contains the chain aliases for this MATCH.
-
-        // optional WHERE predicate
+        if (self.cur.kind == .MATCH) {
+            have_match = true;
+        }
+        // Prepare defaults
         var where_expr: ?ast.Expr = null;
-        if (self.cur.kind == .WHERE) {
-            self.advance();
-            where_expr = try self.parseOrExpr();
-        }
-
-        // Optional WITH projection forwarding
         var with_clause: ?ast.WithClause = null;
-        if (self.cur.kind == .WITH) {
-            self.advance();
-            var witems = std.ArrayList(ast.ReturnItem).init(self.arena.allocator());
-            try self.parseProjectionItems(&witems);
-            with_clause = .{ .items = try witems.toOwnedSlice() };
-            // Allow an additional WHERE after WITH to filter the projected bindings
-            if (self.cur.kind == .WHERE) {
-                self.advance();
-                const cond2 = try self.parseOrExpr();
-                if (where_expr) |cond1| {
-                    where_expr = try self.makeBinary(.And, cond1, cond2);
-                } else {
-                    where_expr = cond2;
-                }
-            }
-        }
-
-        // GROUP BY (optional)
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
-        if (self.cur.kind == .GROUP) {
-            self.advance();
-            _ = try self.expect(.BY);
-            var keys_list = std.ArrayList(ast.Expr).init(self.arena.allocator());
-            // one or more expressions separated by commas
-            while (true) {
-                try keys_list.append(try self.parseOrExpr());
-                if (self.cur.kind != .comma) break;
+        const pat: ast.GraphPattern = if (have_match) blk_pat: {
+            _ = try self.expect(.MATCH);
+            // For the top-level MATCH pattern, collect aliases freshly.
+            self.collect_chain_aliases = true;
+            self.path_aliases.clearRetainingCapacity();
+            const gp = try self.parseGraphPattern();
+            // Keep aliases for ORDER BY checks that follow.
+            self.collect_chain_aliases = false;
+            // optional WHERE predicate
+            if (self.cur.kind == .WHERE) {
                 self.advance();
+                where_expr = try self.parseOrExpr();
             }
-            group_by = .{ .keys = try keys_list.toOwnedSlice() };
-            // Optional HAVING predicate directly after GROUP BY
-            if (self.cur.kind == .HAVING) {
+            // Optional WITH projection forwarding
+            if (self.cur.kind == .WITH) {
                 self.advance();
-                having_expr = try self.parseOrExpr();
+                var witems = std.ArrayList(ast.ReturnItem).init(self.arena.allocator());
+                try self.parseProjectionItems(&witems);
+                with_clause = .{ .items = try witems.toOwnedSlice() };
+                // Allow an additional WHERE after WITH to filter the projected bindings
+                if (self.cur.kind == .WHERE) {
+                    self.advance();
+                    const cond2 = try self.parseOrExpr();
+                    if (where_expr) |cond1| {
+                        where_expr = try self.makeBinary(.And, cond1, cond2);
+                    } else {
+                        where_expr = cond2;
+                    }
+                }
             }
-        }
+            // GROUP BY (optional)
+            if (self.cur.kind == .GROUP) {
+                self.advance();
+                _ = try self.expect(.BY);
+                var keys_list = std.ArrayList(ast.Expr).init(self.arena.allocator());
+                // one or more expressions separated by commas
+                while (true) {
+                    try keys_list.append(try self.parseOrExpr());
+                    if (self.cur.kind != .comma) break;
+                    self.advance();
+                }
+                group_by = .{ .keys = try keys_list.toOwnedSlice() };
+                // Optional HAVING predicate directly after GROUP BY
+                if (self.cur.kind == .HAVING) {
+                    self.advance();
+                    having_expr = try self.parseOrExpr();
+                }
+            }
+            break :blk_pat gp;
+        } else blk_empty: {
+            // No MATCH: use empty pattern, and ensure no stale aliases
+            self.path_aliases.clearRetainingCapacity();
+            break :blk_empty .{ .chains = &.{} };
+        };
 
         // RETURN item (, item)*
         _ = try self.expect(.RETURN);
@@ -237,6 +250,10 @@ pub const Parser = struct {
             if (self.ident_order_only and !(expr1 == .Ident)) return self.unexpected("ORDER BY key must be identifier");
             if (!self.ident_order_only and self.strict_order_keys and !self.isSimpleOrderKey(expr1)) return self.unexpected("ORDER BY key must be identifier or member");
             if (self.forbid_orderby_paths and self.isPathAlias(expr1)) return self.unexpected("ORDER BY cannot reference path alias");
+            if (self.ident_order_only and expr1 == .Ident) {
+                if (!self.isProjectedIdent(expr1.Ident, items.items)) return self.unexpected("ORDER BY key must reference projected identifier");
+            }
+            // If ident_order_only policy is active by server, enforce identifier-only here
             var desc1 = false;
             if (self.cur.kind == .ASC) {
                 desc1 = false;
@@ -264,6 +281,9 @@ pub const Parser = struct {
                 if (self.ident_order_only and !(exprk == .Ident)) return self.unexpected("ORDER BY key must be identifier");
                 if (!self.ident_order_only and self.strict_order_keys and !self.isSimpleOrderKey(exprk)) return self.unexpected("ORDER BY key must be identifier or member");
                 if (self.forbid_orderby_paths and self.isPathAlias(exprk)) return self.unexpected("ORDER BY cannot reference path alias");
+                if (self.ident_order_only and exprk == .Ident) {
+                    if (!self.isProjectedIdent(exprk.Ident, items.items)) return self.unexpected("ORDER BY key must reference projected identifier");
+                }
                 var d = false;
                 if (self.cur.kind == .ASC) {
                     d = false;
@@ -320,6 +340,21 @@ pub const Parser = struct {
         const name = e.Ident;
         for (self.path_aliases.items) |ali| {
             if (std.mem.eql(u8, ali, name)) return true;
+        }
+        return false;
+    }
+
+    fn isProjectedIdent(self: *Parser, name: []const u8, items: []ast.ReturnItem) bool {
+        _ = self; // unused
+        // An ORDER BY identifier is legal if it's one of the RETURN aliases or simple identifiers
+        var i: usize = 0;
+        while (i < items.len) : (i += 1) {
+            const it = items[i];
+            if (it.alias) |al| {
+                if (std.mem.eql(u8, al, name)) return true;
+            } else if (it.expr == .Ident) {
+                if (std.mem.eql(u8, it.expr.Ident, name)) return true;
+            }
         }
         return false;
     }

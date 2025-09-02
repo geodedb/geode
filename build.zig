@@ -65,6 +65,11 @@ pub fn build(b: *std.Build) void {
     // Expose project root as a module so submodules can import by name
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
     gql_exe.root_module.addImport("geode", root_mod);
+    // Also mount the submodule path 'gql' for deep imports like @import("gql/ast.zig")
+    const gql_mod = b.createModule(.{ .root_source_file = b.path("src/gql/ast.zig"), .target = target, .optimize = optimize });
+    gql_exe.root_module.addImport("gql", gql_mod);
+    // Protocol helper module
+    const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
     b.installArtifact(gql_exe);
     const gql_run = b.addRunArtifact(gql_exe);
     gql_run.step.dependOn(b.getInstallStep());
@@ -104,6 +109,8 @@ pub fn build(b: *std.Build) void {
 
     // add the types unit tests to the executable test
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
+    // Allow tests to import gql submodule path too
+    gql_unit_tests.root_module.addImport("gql", gql_mod);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_gql_unit_tests = b.addRunArtifact(gql_unit_tests);
@@ -115,4 +122,23 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_gql_unit_tests.step);
+
+    // Add geoded (server) and geodec (client) executables for protocol tests
+    const geoded_exe = b.addExecutable(.{
+        .name = "geoded",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/server/main.zig"), .target = target, .optimize = optimize }),
+    });
+    geoded_exe.root_module.addImport("geode", root_mod);
+    geoded_exe.root_module.addImport("gql", gql_mod);
+    geoded_exe.root_module.addImport("protocol", protocol_mod);
+    b.installArtifact(geoded_exe);
+
+    const geodec_exe = b.addExecutable(.{
+        .name = "geodec",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/client/main.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(geodec_exe);
+
+    // Ensure binaries are installed before tests so e2e can run them
+    test_step.dependOn(b.getInstallStep());
 }

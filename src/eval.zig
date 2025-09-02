@@ -349,7 +349,7 @@ fn evalRegex(val: Value, pat: Value, ally: std.mem.Allocator) EvalError!Value {
     return .{ .Bool = matchSimplePattern(s, p) };
 }
 
-fn matchSimplePattern(s: []const u8, p_in: []const u8) bool {
+pub fn matchSimplePattern(s: []const u8, p_in: []const u8) bool {
     // Lightweight matcher: ^, $, ., .*, [..], escapes, '?' (no alternation)
     if (p_in.len == 0) return s.len == 0; // empty pattern matches empty string only
     var p = p_in;

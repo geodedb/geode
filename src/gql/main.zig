@@ -5,6 +5,7 @@ const planner = gql.planner;
 const temporal = gql.temporal;
 const eval = gql.eval;
 const diagnostics = gql.diagnostics;
+const ast = gql.ast;
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
@@ -257,13 +258,19 @@ pub fn main() !void {
             // Demonstrate UNION/INTERSECT/EXCEPT semantics on sample binding rows
             const ally = std.heap.page_allocator;
             const A0 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
-            const A1 = [_]exec.BindingValue{ .{.Null}, .{ .Str = "x" } };
+            const A1 = [_]exec.BindingValue{ .{ .Null = {} }, .{ .Str = "x" } };
             const A2 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
             const B0 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
-            const B1 = [_]exec.BindingValue{ .{.Null}, .{ .Str = "x" } };
-            const B2 = [_]exec.BindingValue{ .{.Null}, .{ .Str = "x" } };
-            const A: []const []exec.BindingValue = &.{ A0[0..], A1[0..], A2[0..] };
-            const B: []const []exec.BindingValue = &.{ B0[0..], B1[0..], B2[0..] };
+            const B1 = [_]exec.BindingValue{ .{ .Null = {} }, .{ .Str = "x" } };
+            const B2 = [_]exec.BindingValue{ .{ .Null = {} }, .{ .Str = "x" } };
+            var a0 = A0;
+            var a1 = A1;
+            var a2 = A2;
+            var b0 = B0;
+            var b1 = B1;
+            var b2 = B2;
+            const A: []const []exec.BindingValue = &.{ a0[0..], a1[0..], a2[0..] };
+            const B: []const []exec.BindingValue = &.{ b0[0..], b1[0..], b2[0..] };
             const ud = try exec.unionDistinctRows(ally, A, B);
             defer ally.free(ud);
             const ua = try exec.unionAllRows(ally, A, B);
@@ -329,13 +336,13 @@ pub fn main() !void {
             // IN/NOT IN benchmark using evaluator
             const names = &.{ "a", "s" };
             const env = eval.Env{ .names = names, .values = &.{ .{ .Int = 42 }, .{ .Str = "42" } } };
-            var a_ident = @import("gql/ast.zig").Expr{ .Ident = "a" };
-            var lit41 = @import("gql/ast.zig").Expr{ .String = "41" };
-            var lit42 = @import("gql/ast.zig").Expr{ .String = "42" };
-            var lit43 = @import("gql/ast.zig").Expr{ .Int = 43 };
-            var arr: [3]*@import("gql/ast.zig").Expr = .{ &lit41, &lit42, &lit43 };
-            const inx = @import("gql/ast.zig").Expr{ .In = .{ .value = &a_ident, .set = arr[0..] } };
-            const ninx = @import("gql/ast.zig").Expr{ .NotIn = .{ .value = &a_ident, .set = arr[0..] } };
+            var a_ident = ast.Expr{ .Ident = "a" };
+            var lit41 = ast.Expr{ .String = "41" };
+            var lit42 = ast.Expr{ .String = "42" };
+            var lit43 = ast.Expr{ .Int = 43 };
+            var arr: [3]*ast.Expr = .{ &lit41, &lit42, &lit43 };
+            const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = arr[0..] } };
+            const ninx = ast.Expr{ .NotIn = .{ .value = &a_ident, .set = arr[0..] } };
             const R2: usize = 100_000;
             var t_in: usize = 0;
             var t_nin: usize = 0;
@@ -343,7 +350,7 @@ pub fn main() !void {
             // IN loop
             const ta0 = std.time.nanoTimestamp();
             while (j < R2) : (j += 1) {
-                const v = eval.evalExpr(ally, inx, env) catch .{ .Null = {} };
+                const v: eval.Value = eval.evalExpr(ally, inx, env) catch eval.Value{ .Null = {} };
                 if (v == .Bool and v.Bool) t_in += 1;
             }
             const ta1 = std.time.nanoTimestamp();
@@ -351,7 +358,7 @@ pub fn main() !void {
             j = 0;
             const tb0 = std.time.nanoTimestamp();
             while (j < R2) : (j += 1) {
-                const v = eval.evalExpr(ally, ninx, env) catch .{ .Null = {} };
+                const v: eval.Value = eval.evalExpr(ally, ninx, env) catch eval.Value{ .Null = {} };
                 if (v == .Bool and v.Bool) t_nin += 1;
             }
             const tb1 = std.time.nanoTimestamp();
@@ -376,13 +383,12 @@ pub fn main() !void {
                             return;
                         };
                         // Run grouped executor on a tiny table of (a:int, s:str)
-                        const rows: []const []eval.Value = &.{
-                            &.{ .{ .Int = -1 }, .{ .Str = "Alice" } },
-                            &.{ .{ .Int = 0 }, .{ .Str = "Bob" } },
-                            &.{ .{ .Int = 1 }, .{ .Str = "Alice" } },
-                            &.{ .{ .Null = {} }, .{ .Str = "Carol" } },
-                            &.{ .{ .Int = 2 }, .{ .Null = {} } },
-                        };
+                        var r0 = [_]eval.Value{ .{ .Int = -1 }, .{ .Str = "Alice" } };
+                        var r1 = [_]eval.Value{ .{ .Int = 0 }, .{ .Str = "Bob" } };
+                        var r2 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "Alice" } };
+                        var r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "Carol" } };
+                        var r4 = [_]eval.Value{ .{ .Int = 2 }, .{ .Null = {} } };
+                        const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] };
                         const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items) catch |e| {
                             std.debug.print("demo-eval(grouped): error {s}\n", .{@errorName(e)});
                             return;
@@ -409,6 +415,7 @@ pub fn main() !void {
                                     .Int => |n| try w.print("{d}", .{n}),
                                     .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
+                                    .Decimal => |_| try w.print("<dec>", .{}),
                                 }
                             }
                             try w.print("\n", .{});
@@ -462,6 +469,7 @@ pub fn main() !void {
                                     .Int => |n| try w.print("{d}", .{n}),
                                     .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
+                                    .Decimal => |_| try w.print("<dec>", .{}),
                                 }
                             }
                             try w.print("\n", .{});
@@ -517,7 +525,9 @@ pub fn main() !void {
                     defer labels.deinit();
                     // Collect aggregates helper
                     const addAggFromCall = struct {
-                        fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), c: @import("gql/ast.zig").CallExpr) void {
+                        fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), call_expr: ast.Expr) void {
+                            if (call_expr != .Call) return;
+                            const c = call_expr.Call;
                             switch (c.callee.*) {
                                 .Ident => |nm| {
                                     if (std.ascii.eqlIgnoreCase(nm, "count")) {
@@ -553,15 +563,15 @@ pub fn main() !void {
                         }
                     }.go;
                     for (q.ret.items) |it| switch (it.expr) {
-                        .Call => |c| addAggFromCall(&aggs, &v_idxs, &labels, c),
+                        .Call => |_| addAggFromCall(&aggs, &v_idxs, &labels, it.expr),
                         else => {},
                     };
                     if (q.having) |hv| {
                         // Walk HAVING and add any missing aggregates
                         const walk = struct {
-                            fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), e: @import("gql/ast.zig").Expr) void {
+                            fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), e: ast.Expr) void {
                                 switch (e) {
-                                    .Call => |c| addAggFromCall(aggs_out, v_idxs_out, labels_out, c),
+                                    .Call => |_| addAggFromCall(aggs_out, v_idxs_out, labels_out, e),
                                     .Unary => |u| go(aggs_out, v_idxs_out, labels_out, u.expr.*),
                                     .Binary => |b| {
                                         go(aggs_out, v_idxs_out, labels_out, b.left.*);
@@ -581,11 +591,10 @@ pub fn main() !void {
                     }
                     const spec = exec.GroupSpec{ .key_idxs = &.{0}, .aggs = aggs.items };
                     // Sample rows: (name, val)
-                    const rows: []const []exec.BindingValue = &.{
-                        &.{ .{ .Str = "a" }, .{ .Int = 1 } },
-                        &.{ .{ .Str = "a" }, .{ .Int = 2 } },
-                        &.{ .{ .Str = "b" }, .{ .Null = {} } },
-                    };
+                    var r0 = [_]exec.BindingValue{ .{ .Str = "a" }, .{ .Int = 1 } };
+                    var r1 = [_]exec.BindingValue{ .{ .Str = "a" }, .{ .Int = 2 } };
+                    var r2 = [_]exec.BindingValue{ .{ .Str = "b" }, .{ .Null = {} } };
+                    const rows: []const []exec.BindingValue = &.{ r0[0..], r1[0..], r2[0..] };
                     const out_rows = exec.groupAndAggregate(gpa, rows, spec, v_idxs.items) catch |e| {
                         std.debug.print("demo-agg: runtime error: {s}\n", .{@errorName(e)});
                         return;
@@ -654,8 +663,12 @@ pub fn main() !void {
                     // Emit rows with HAVING evaluation by rewriting expression
                     for (out_rows) |r| {
                         if (q.having) |hv| {
-                            const rewritten = exec.rewriteExprWithAggregates(gpa, hv, &key_map, &agg_map, r, spec.key_idxs.len) catch .{ .Null = {} };
-                            const v = eval.evalExpr(gpa, rewritten, .{ .names = &.{}, .values = &.{} }) catch .{ .Null = {} };
+                            const rewritten = exec.rewriteExprWithAggregates(gpa, hv, &key_map, &agg_map, r, spec.key_idxs.len) catch ast.Expr{ .Null = {} };
+                            const v = eval.evalExpr(
+                                gpa,
+                                rewritten,
+                                eval.Env{ .names = &.{}, .values = &.{}, .param_names = &.{}, .param_values = &.{} },
+                            ) catch eval.Value{ .Null = {} };
                             if (!(v == .Bool and v.Bool)) continue;
                         }
                         // key
@@ -671,6 +684,38 @@ pub fn main() !void {
                             switch (v) {
                                 .Null => try w.print("NULL", .{}),
                                 .Int => |n| try w.print("{d}", .{n}),
+                                .Decimal => |d| {
+                                    const abs: i128 = if (d.coeff < 0) -d.coeff else d.coeff;
+                                    var scale_p: i128 = 1;
+                                    var i: u8 = 0;
+                                    while (i < d.scale) : (i += 1) scale_p *= 10;
+                                    const whole = @divTrunc(abs, scale_p);
+                                    const frac = @mod(abs, scale_p);
+                                    if (d.scale == 0) {
+                                        if (d.coeff < 0) try w.print("-{d}", .{whole}) else try w.print("{d}", .{whole});
+                                    } else {
+                                        var fb_buf: [64]u8 = undefined;
+                                        var fbi: usize = 0;
+                                        var tmp = frac;
+                                        // write fractional digits in reverse
+                                        var k: u8 = 0;
+                                        while (k < d.scale) : (k += 1) {
+                                            const digit: u8 = @intCast(@mod(tmp, 10));
+                                            fb_buf[fbi] = digit + '0';
+                                            fbi += 1;
+                                            tmp = @divTrunc(tmp, 10);
+                                        }
+                                        // reverse to correct order
+                                        var j: usize = 0;
+                                        var t: u8 = 0;
+                                        while (j < fbi / 2) : (j += 1) {
+                                            t = fb_buf[j];
+                                            fb_buf[j] = fb_buf[fbi - 1 - j];
+                                            fb_buf[fbi - 1 - j] = t;
+                                        }
+                                        if (d.coeff < 0) try w.print("-{d}.{s}", .{ whole, fb_buf[0..fbi] }) else try w.print("{d}.{s}", .{ whole, fb_buf[0..fbi] });
+                                    }
+                                },
                                 .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                 .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                             }

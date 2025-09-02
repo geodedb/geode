@@ -55,6 +55,7 @@ pub fn mapParserMessage(msg: []const u8) ?Code {
     if (std.mem.indexOf(u8, msg, "ORDER BY key must be identifier or member") != null) return .IllegalOrderKey;
     if (std.mem.indexOf(u8, msg, "function calls in ORDER BY are disabled") != null) return .IllegalOrderKey;
     if (std.mem.indexOf(u8, msg, "ORDER BY cannot reference path alias") != null) return .IllegalOrderKey;
+    if (std.mem.indexOf(u8, msg, "ORDER BY key must reference projected identifier") != null) return .IllegalOrderKey;
     return null;
 }
 
