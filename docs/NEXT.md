@@ -4,88 +4,79 @@ Swimlanes with concrete acceptance tests. ISO clause anchors are references (no 
 
 Note: Completed items move to docs/IMPLEMENTED.md.
 
+Build/test status snapshot
+- zig build --release=safe: OK (Zig 0.14.1 toolchain observed)
+- zig build test: OK; unit tests run; temporal formatting logs seen
+- Binaries present (geoded/geodec stubs), protocol not yet wired
+
 ## Now (P0)
 
-1. Diagnostics mapping (initial)
+1. Protocol skeleton and CLI round‑trip
+- Why: Unblocks end‑to‑end tests and conformance surfacing; foundation for sessions/transactions.
+- What: Implement minimal binary protocol (docs/BINARY_PROTOCOL.md): HELLO, RUN_GQL, PULL; JSON Lines payloads; status_class/subclass; SCHEMA then BINDINGS with ordered flag + order_keys. Provide geoded server loop (TCP, framed) and geodec CLI that prints exact JSON required by tests.
+- Acceptance (aligns with tests/e2e_protocol.zig):
+  - RETURN 1 AS x ORDER BY x LIMIT 1 → exact two JSON lines (SCHEMA then ordered BINDINGS)
+  - RETURN 1 LIMIT 10 OFFSET 5 → exit 2; stderr contains "US001" and anchor 16.18–16.19
+  - RETURN a ORDER BY f(a) → exit 2; stderr contains "IllegalOrderKey" and anchor 14.10
+  - RETURN 1 AS x UNION RETURN 1 AS x → BINDINGS with ordered=false and rows [{"x":1}]
+  - CASE 3VL sanity per acceptance list
+- ISO anchors: 14.10; 16.18–16.19; 23.2; 24.*
+- Dependencies: diagnostics surface in src/diagnostics.zig; evaluator and planner helpers exist
+- Scope: M • DRI: core
 
-- Why: Standardize error surfaces (ISO 23.2) and enable conformance reporting (ISO 24.\*).
-- What: Map planner/parser/evaluator errors to codes; define precedence; wire to CLI print.
-- Acceptance tests (names illustrative; include in src/diagnostics.zig and CLI harness):
-  - GQL: `RETURN 1 LIMIT 10 OFFSET 5` (no ORDER BY) → Error code: US001; details: unordered pagination. ISO: 16.18–16.19.
-  - GQL (ident-only policy): `RETURN a ORDER BY f(a)` → Error code: IllegalOrderKey. ISO: 14.10.
-  - GQL: `RETURN a, SUM(b) GROUP BY a, b` → Error code: GroupByIllegal. ISO: 14.10.
-  - GQL: `RETURN 1 < "2"` → Error code: TypeMismatch. ISO: 16.x.
-  - Binding table shape: n/a (diagnostics); CLI prints code, message, anchors.
-- ISO anchors: 23.2 diagnostics; 14.10 (ORDER BY legality); 16.18–16.19 (US001); 24.\* conformance.
-- Dependencies: none.
-- Scope: S • DRI: core
-
-1. README troubleshooting section
-
+2. README troubleshooting section
 - Why: Document codes for users and conformance reviewers.
-- What: Add a concise Codes table (US001, GroupByIllegal, IllegalOrderKey, TypeMismatch) with one-liners and ISO anchors.
-- Acceptance: README contains the table and anchors; links from GAP_ANALYSIS.md and NEXT.md.
-- ISO anchors: 23.2; 24.\*
-- Dependencies: (1)
+- What: Add concise Codes table (US001, GroupByIllegal, IllegalOrderKey, TypeMismatch) with anchors and examples.
+- Acceptance: README contains the table; linked from GAP_ANALYSIS.md.
+- ISO anchors: 23.2; 24.*
 - Scope: S • DRI: core
 
 ## Next (P1)
 
-1. CASE expression completeness
-
-- Why: Production‑ready CASE semantics across NULLs.
-- What: Extend evaluator for simple+searched CASE with full three‑valued logic (3VL); add exhaustive tests.
-- Acceptance tests:
-  - GQL: `RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r`
-    - Input bindings: a: [NULL, true, false]
-    - Expected binding table columns: [r STRING]; rows: ['n'], ['t'], ['f'].
-  - GQL: `RETURN CASE a WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'x' END AS r`
-    - Input: a: [NULL, 1, 2, 3]
-    - Expected: r: [NULL, 'one', 'two', 'x'] (NULL propagates). ISO: 16.x.
-- ISO anchors: 16.x expressions.
-- Dependencies: none.
+1. Planner/exec coverage hardening
+- Why: Ensure ordered semantics and pagination are correct across expressions, aliases/ordinals, set ops, and aggregates.
+- What: Multi-key ORDER metadata; ORDER BY over aliases/ordinals; set op then ORDER+LIMIT semantics; GROUP BY+HAVING+ORDER pipeline; US001 enforcement.
+- Acceptance: E2E tests in tests/e2e_protocol_planner.zig and tests/e2e_protocol_more.zig pass; ordered/order_keys metadata correct; errors surface with ISO anchors.
+- ISO anchors: 14.10; 14.12; 16.18–16.19
 - Scope: M • DRI: core
 
-1. ORDER BY policy guard integration
-
-- Why: Ensure parser policy (ident‑only) is enforced and surfaced via diagnostics.
-- What: Wire ident‑only guard to diagnostics layer; add planner‑stage guard to reject OFFSET pushdown without order (already present) with code US001.
-- Acceptance tests:
-  - GQL (policy ident‑only): `RETURN a ORDER BY a.b` → IllegalOrderKey.
-  - GQL: `MATCH (n) RETURN n LIMIT 5 OFFSET 3` (no ORDER BY) → US001.
-- ISO anchors: 14.10; 16.18–16.19.
-- Dependencies: Diagnostics (P0‑1).
-- Scope: S • DRI: core
+2. Transaction demarcation (server only)
+- Why: Align with ISO §8 and prepare for MVCC.
+- What: BEGIN/COMMIT/ROLLBACK frames (no MVCC yet); per‑session state machine; wire outcomes and status codes.
+- Acceptance: protocol tests for BEGIN/COMMIT/ROLLBACK happy path and rollback on error; session isolation at parser/eval level.
+- ISO anchors: 8; 23.2; 24.*
+- Scope: M • DRI: core
 
 ## Later (P2)
 
-1. Aggregation semantics (phase‑2)
+1. Storage engine baseline
+- Why: Persistence and scalability.
+- What: Slotted page layout, id allocators, CSR adjacency blocks, property heap; in‑process file; mmap or buffered IO.
+- Acceptance: unit tests for page alloc/free, slot read/write, adjacency encode/decode; smoke benchmark ≥50k expands/sec (release, single node).
+- ISO anchors: model §4; implementation policy in REQUIREMENTS.md §4
+- Scope: L • DRI: storage
 
-- Why: Enable typed aggregates + HAVING filters.
-- What: COUNT/SUM/MIN/MAX/AVG with GROUP BY legality; HAVING evaluation; ORDER BY over aggregated outputs (aliases/ordinals).
-- Acceptance tests:
-  - GQL: `MATCH () RETURN a, COUNT(*) AS c GROUP BY a HAVING c > 1 ORDER BY c DESC NULLS LAST LIMIT 10`
-    - Expected columns: [a ANY, c INT]; ordered desc by c; top 10.
-  - GQL: `RETURN AVG(x) AS a, SUM(x) AS s` over x: [1, 2, NULL, 3]
-    - Expected: a = 2 (INT), s = 6 (INT). ISO: 14.10; 16.x typing.
-- ISO anchors: 14.10; 16.x typing.
-- Dependencies: none.
+2. WAL/ARIES and recovery
+- Why: Durability and crash safety.
+- What: LSNs, log records (update/CLR/commit/abort), checkpoints, analysis→redo→undo; recovery driver.
+- Acceptance: fault‑injection tests that recover committed changes and roll back uncommitted; page‑LSN assertions.
+- ISO anchors: txn/durability cross‑refs; REQUIREMENTS.md §4
+- Scope: L • DRI: storage
+
+3. MVCC (SI) transactions
+- Why: Correct isolation; prepare for DML.
+- What: Version chains per record, snapshot reads, write locks for DML; protocol demarcation already present.
+- Acceptance: visibility tests across concurrent sessions; phantom avoidance at SI scope.
+- ISO anchors: §8
 - Scope: L • DRI: core
 
-1. Path semantics groundwork (policy only)
-
-- Why: Lock down UA005/UA006 tie‑breaking before implementing path operators.
-- What: Keep deterministic `(length, id‑sequence)` tiebreak helper and tests.
-- Acceptance test:
-  - Unit: pathLess(a, b) orders shorter paths first; if equal length, lexicographic node id list.
-- ISO anchors: 22.4; UA005/UA006.
-- Dependencies: none.
-- Scope: S • DRI: core
+4. Distributed scaffold (feature‑gated)
+- Why: Future‑proofing interfaces.
+- What: Leader‑only Raft stub, 2PC coordinator traits, shard map structures; no external net deps in tests.
+- Acceptance: interface tests and no‑op stubs behind flags.
+- Scope: L • DRI: dist
 
 ## Cutline
-
-- Server & Protocol: geoded/geodec processes and binary protocol (HELLO/BEGIN/COMMIT/ROLLBACK/RUN_GQL/PULL) are tracked post‑M1.
-- Storage & Durability: slotted pages, adjacency CSR, property heap, WAL (ARIES), recovery — tracked post‑M1.
-- Transactions: MVCC (SI) with locks for DML, protocol demarcation — tracked post‑M1.
-- Distributed scaffold: leader‑only Raft stubs, 2PC coordinator interfaces, shard map placeholders — tracked post‑M1.
-- GPU operators and advanced features remain out‑of‑scope for Milestone‑1.
+- Protocol/Server (HELLO/RUN_GQL/PULL) is the immediate gate for e2e.
+- Transactions, Storage, WAL are next critical path to claim ACID.
+- Distributed remains behind feature flags until single‑node ACID stabilizes.

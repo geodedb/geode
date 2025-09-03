@@ -33,6 +33,12 @@ This system is a distributed, ACID property‑graph DB that **speaks GQL** per I
 - **Offset pushdown requires explicit order** (testable rule). :contentReference[oaicite:25]{index=25}
 - Path planning honors **UA005/UA006** (deterministic tie‑break documented). (Anchors summarized in planner doc.) :contentReference[oaicite:26]{index=26}
 
+## 3a. Storage Modes (testable)
+
+- The system SHALL provide an in-memory storage option that mirrors the on-disk page/record interfaces for development and testing.
+- The preferred/default storage mode is disk-backed; both modes SHALL share invariants (page headers, slotted layout contracts, id alloc semantics).
+- Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, while performance and durability tests MUST use disk.
+
 ## 4. Distributed System Requirements
 
 - **Replication & Meta:** Raft‑backed partitions; meta service maps partition→replicas/leaders and routes queries. :contentReference[oaicite:27]{index=27}

@@ -3,13 +3,19 @@ const gql = @import("geode");
 const protocol = @import("protocol");
 const eval = gql.eval;
 const diagnostics = gql.diagnostics;
+const storage_mem = @import("storage_mem");
 
 const ServerState = struct {
     last_columns: []protocol.SchemaCol = &.{},
     last_rows_json: []const u8 = "[]",
     last_ordered: bool = false,
     last_order_keys: []const []const u8 = &.{},
+    in_txn: bool = false,
+    engine: Engine = .evaluator,
+    mem_store: ?storage_mem.InMemory = null,
 };
+
+const Engine = enum { evaluator, storage };
 
 fn typeNameOf(v: eval.Value) []const u8 {
     return switch (v) {
@@ -129,6 +135,34 @@ fn parseParamsRows(ally: std.mem.Allocator, params_json: ?[]const u8, names_out:
 pub fn main() !void {
     const ally = std.heap.page_allocator;
     var state = ServerState{};
+    // Engine selection via env var
+    if (std.process.getEnvVarOwned(ally, "GEODE_ENGINE")) |val| {
+        defer ally.free(val);
+        if (std.mem.eql(u8, val, "storage")) state.engine = .storage;
+    } else |_| {}
+    if (state.engine == .storage) {
+        var ms = storage_mem.InMemory.init(ally);
+        if (std.process.getEnvVarOwned(ally, "GEODE_TEST_GRAPH")) |tg| {
+            defer ally.free(tg);
+            if (std.mem.eql(u8, tg, "tiny")) {
+                // 0 -> 1, 0 -> 2
+                ms.addEdge(0, 1) catch {};
+                ms.addEdge(0, 2) catch {};
+            } else if (std.mem.eql(u8, tg, "tiny_plus")) {
+                // 0->1,0->2,1->3
+                ms.addEdge(0, 1) catch {};
+                ms.addEdge(0, 2) catch {};
+                ms.addEdge(1, 3) catch {};
+            } else if (std.mem.eql(u8, tg, "tiny_labels")) {
+                // 0->1,0->2, label 1 as A, 2 as B
+                ms.addEdge(0, 1) catch {};
+                ms.addEdge(0, 2) catch {};
+                ms.addNodeLabel(1, "A") catch {};
+                ms.addNodeLabel(2, "B") catch {};
+            }
+        } else |_| {}
+        state.mem_store = ms;
+    }
     var stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     var buf = std.ArrayList(u8).init(ally);
@@ -153,6 +187,145 @@ pub fn main() !void {
                 // We do nothing.
             },
             .RUN_GQL => |rq| {
+                // Storage engine smoke: EXPAND_FROM(seed)
+                if (state.engine == .storage and state.mem_store != null) {
+                    // EXPAND_FROM(seed)
+                    const ends_plain = std.mem.endsWith(u8, rq.text, ") AS n");
+                    const ends_order = std.mem.endsWith(u8, rq.text, ") AS n ORDER BY n");
+                    const is_expand_from = std.mem.startsWith(u8, rq.text, "RETURN EXPAND_FROM(") and (ends_plain or ends_order);
+                    if (is_expand_from) {
+                        const open = std.mem.indexOf(u8, rq.text, "(") orelse 0;
+                        const close = std.mem.indexOf(u8, rq.text, ")") orelse 0;
+                        const seed_str = rq.text[open + 1 .. close];
+                        const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
+                        var it = state.mem_store.?.neighbors(seed);
+                        var rows_buf = std.ArrayList(u8).init(ally);
+                        defer rows_buf.deinit();
+                        try rows_buf.append('[');
+                        var first = true;
+                        while (it.next()) |nid| {
+                            if (!first) try rows_buf.append(',');
+                            first = false;
+                            try rows_buf.writer().writeAll("{\"n\":");
+                            try rows_buf.writer().print("{d}", .{nid});
+                            try rows_buf.writer().writeAll("}");
+                        }
+                        try rows_buf.append(']');
+                        state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
+                        state.last_columns[0] = .{ .name = "n", .type = "INT" };
+                        state.last_rows_json = rows_buf.toOwnedSlice() catch "[]";
+                        const ordered = std.mem.endsWith(u8, rq.text, "ORDER BY n");
+                        state.last_ordered = ordered;
+                        state.last_order_keys = if (ordered) &.{"n"} else &.{};
+                        protocol.writeSchemaLine(stdout, state.last_columns) catch {};
+                        continue;
+                    }
+                    // EXPAND_FROM_N(seed, hops)
+                    const ends_plain_n = std.mem.endsWith(u8, rq.text, ") AS m");
+                    const ends_order_n = std.mem.endsWith(u8, rq.text, ") AS m ORDER BY m");
+                    const is_expand_from_n = std.mem.startsWith(u8, rq.text, "RETURN EXPAND_FROM_N(") and (ends_plain_n or ends_order_n);
+                    if (is_expand_from_n) {
+                        const open = std.mem.indexOf(u8, rq.text, "(") orelse 0;
+                        const close = std.mem.indexOf(u8, rq.text, ")") orelse 0;
+                        const inside = rq.text[open + 1 .. close];
+                        const comma = std.mem.indexOf(u8, inside, ",") orelse 0;
+                        const seed_str = std.mem.trim(u8, inside[0..comma], " ");
+                        const hops_str = std.mem.trim(u8, inside[comma + 1 ..], " ");
+                        const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
+                        const hops = std.fmt.parseInt(u32, hops_str, 10) catch 1;
+                        const itn = state.mem_store.?.expandNHop(seed, hops);
+                        var rows_buf2 = std.ArrayList(u8).init(ally);
+                        defer rows_buf2.deinit();
+                        try rows_buf2.append('[');
+                        var first2 = true;
+                        var idx: usize = 0;
+                        while (idx < itn.items.len) : (idx += 1) {
+                            const nid = itn.items[idx];
+                            if (!first2) try rows_buf2.append(',');
+                            first2 = false;
+                            try rows_buf2.writer().writeAll("{\"m\":");
+                            try rows_buf2.writer().print("{d}", .{nid});
+                            try rows_buf2.writer().writeAll("}");
+                        }
+                        try rows_buf2.append(']');
+                        state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
+                        state.last_columns[0] = .{ .name = "m", .type = "INT" };
+                        state.last_rows_json = rows_buf2.toOwnedSlice() catch "[]";
+                        const ordered2 = std.mem.endsWith(u8, rq.text, "ORDER BY m");
+                        state.last_ordered = ordered2;
+                        state.last_order_keys = if (ordered2) &.{"m"} else &.{};
+                        protocol.writeSchemaLine(stdout, state.last_columns) catch {};
+                        continue;
+                    }
+                    // MATCH_1HOP(seed)
+                    const ends_plain_m = std.mem.endsWith(u8, rq.text, ") AS n");
+                    const ends_order_m = std.mem.endsWith(u8, rq.text, ") AS n ORDER BY n");
+                    const is_match_1hop = std.mem.startsWith(u8, rq.text, "RETURN MATCH_1HOP(") and (ends_plain_m or ends_order_m);
+                    if (is_match_1hop) {
+                        const open = std.mem.indexOf(u8, rq.text, "(") orelse 0;
+                        const close = std.mem.indexOf(u8, rq.text, ")") orelse 0;
+                        const seed_str = rq.text[open + 1 .. close];
+                        const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
+                        var it = state.mem_store.?.neighbors(seed);
+                        var rows_bufm = std.ArrayList(u8).init(ally);
+                        defer rows_bufm.deinit();
+                        try rows_bufm.append('[');
+                        var firstm = true;
+                        while (it.next()) |nid| {
+                            if (!firstm) try rows_bufm.append(',');
+                            firstm = false;
+                            try rows_bufm.writer().writeAll("{\"n\":");
+                            try rows_bufm.writer().print("{d}", .{nid});
+                            try rows_bufm.writer().writeAll("}");
+                        }
+                        try rows_bufm.append(']');
+                        state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
+                        state.last_columns[0] = .{ .name = "n", .type = "INT" };
+                        state.last_rows_json = rows_bufm.toOwnedSlice() catch "[]";
+                        const orderedm = std.mem.endsWith(u8, rq.text, "ORDER BY n");
+                        state.last_ordered = orderedm;
+                        state.last_order_keys = if (orderedm) &.{"n"} else &.{};
+                        protocol.writeSchemaLine(stdout, state.last_columns) catch {};
+                        continue;
+                    }
+
+                    // EXPAND_FROM_LABELED(seed, "Label")
+                    const ends_plain_l = std.mem.endsWith(u8, rq.text, ") AS m");
+                    const ends_order_l = std.mem.endsWith(u8, rq.text, ") AS m ORDER BY m");
+                    const is_expand_labeled = std.mem.startsWith(u8, rq.text, "RETURN EXPAND_FROM_LABELED(") and (ends_plain_l or ends_order_l);
+                    if (is_expand_labeled) {
+                        const open = std.mem.indexOf(u8, rq.text, "(") orelse 0;
+                        const close = std.mem.indexOf(u8, rq.text, ")") orelse 0;
+                        const inside = rq.text[open + 1 .. close];
+                        const comma = std.mem.indexOf(u8, inside, ",") orelse 0;
+                        const seed_str = std.mem.trim(u8, inside[0..comma], " ");
+                        const label_str = std.mem.trim(u8, inside[comma + 1 ..], " \" ");
+                        const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
+                        const itl = state.mem_store.?.expandLabeled(seed, label_str);
+                        var rows_buf3 = std.ArrayList(u8).init(ally);
+                        defer rows_buf3.deinit();
+                        try rows_buf3.append('[');
+                        var first3 = true;
+                        var idx3: usize = 0;
+                        while (idx3 < itl.items.len) : (idx3 += 1) {
+                            const nid = itl.items[idx3];
+                            if (!first3) try rows_buf3.append(',');
+                            first3 = false;
+                            try rows_buf3.writer().writeAll("{\"m\":");
+                            try rows_buf3.writer().print("{d}", .{nid});
+                            try rows_buf3.writer().writeAll("}");
+                        }
+                        try rows_buf3.append(']');
+                        state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
+                        state.last_columns[0] = .{ .name = "m", .type = "INT" };
+                        state.last_rows_json = rows_buf3.toOwnedSlice() catch "[]";
+                        const ordered3 = std.mem.endsWith(u8, rq.text, "ORDER BY m");
+                        state.last_ordered = ordered3;
+                        state.last_order_keys = if (ordered3) &.{"m"} else &.{};
+                        protocol.writeSchemaLine(stdout, state.last_columns) catch {};
+                        continue;
+                    }
+                }
                 // Parse GQL and prepare SCHEMA + rows
                 if (rq.text.len == 0) {
                     protocol.writeErrorLine(stdout, "ParseError", "empty text", "") catch {};
@@ -283,6 +456,30 @@ pub fn main() !void {
                 protocol.writeBindingsLine(stdout, state.last_ordered, state.last_order_keys, state.last_rows_json) catch |we| {
                     std.debug.print("writeBindingsLine failed: {s}\n", .{@errorName(we)});
                 };
+            },
+            .BEGIN => |_| {
+                if (state.in_txn) {
+                    protocol.writeErrorLine(stdout, "TxnState", "already in transaction", "8") catch {};
+                } else {
+                    state.in_txn = true;
+                    protocol.writeBindingsLine(stdout, false, &.{}, "[]") catch {};
+                }
+            },
+            .COMMIT => |_| {
+                if (!state.in_txn) {
+                    protocol.writeErrorLine(stdout, "TxnState", "no active transaction", "8") catch {};
+                } else {
+                    state.in_txn = false;
+                    protocol.writeBindingsLine(stdout, false, &.{}, "[]") catch {};
+                }
+            },
+            .ROLLBACK => |_| {
+                if (!state.in_txn) {
+                    protocol.writeErrorLine(stdout, "TxnState", "no active transaction", "8") catch {};
+                } else {
+                    state.in_txn = false;
+                    protocol.writeBindingsLine(stdout, false, &.{}, "[]") catch {};
+                }
             },
         }
     }

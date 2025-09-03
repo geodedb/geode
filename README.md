@@ -23,3 +23,14 @@ Highlights
 - CLI: normalization/clamping for temporals; AST JSON with verbose temporals.
 
 See USAGE.md for commands and flags.
+
+## Diagnostics (policy and ISO anchors)
+
+| Code            | Meaning                                                     | ISO anchor  | Example                                |
+|-----------------|-------------------------------------------------------------|-------------|----------------------------------------|
+| US001           | LIMIT/OFFSET on unordered table (requires stable ORDER BY)  | 16.18–16.19 | RETURN 1 LIMIT 10 OFFSET 5             |
+| IllegalOrderKey | ORDER BY key must be identifier (policy: ident-only)        | 14.10       | RETURN a ORDER BY f(a)                 |
+| GroupByIllegal  | Invalid GROUP BY legality (e.g., non-aggregated columns)    | 14.10       | RETURN a, SUM(b) GROUP BY a, b         |
+| TypeMismatch    | Illegal cross-type comparison/ordering                      | 16.x        | RETURN 1 < "2"                         |
+
+The CLI and server surface diagnostics with status_class/subclass. Tests assert codes/anchors via stderr.

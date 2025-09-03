@@ -131,6 +131,9 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("geode", root_mod);
     geoded_exe.root_module.addImport("gql", gql_mod);
     geoded_exe.root_module.addImport("protocol", protocol_mod);
+    // storage: only add inmemory module; it imports interface relatively
+    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("storage_mem", storage_mem_mod);
     b.installArtifact(geoded_exe);
 
     const geodec_exe = b.addExecutable(.{

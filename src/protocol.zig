@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const MessageType = enum { HELLO, RUN_GQL, PULL };
+pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK };
 
 pub const Hello = struct {
     client_name: []const u8,
@@ -22,6 +22,9 @@ pub const ClientMessage = union(MessageType) {
     HELLO: Hello,
     RUN_GQL: RunGql,
     PULL: Pull,
+    BEGIN: void,
+    COMMIT: void,
+    ROLLBACK: void,
 };
 
 pub const ResultType = enum { SCHEMA, BINDINGS, ERROR };
@@ -120,6 +123,12 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         const rid: u64 = @intCast(ridv.integer);
         const ps: usize = @intCast(psv.integer);
         return .{ .PULL = .{ .request_id = rid, .page_size = ps } };
+    } else if (std.mem.eql(u8, typ, "BEGIN")) {
+        return .{ .BEGIN = {} };
+    } else if (std.mem.eql(u8, typ, "COMMIT")) {
+        return .{ .COMMIT = {} };
+    } else if (std.mem.eql(u8, typ, "ROLLBACK")) {
+        return .{ .ROLLBACK = {} };
     }
     return error.Invalid;
 }
