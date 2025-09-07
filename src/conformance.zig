@@ -16,40 +16,24 @@ pub const Features = struct {
 };
 
 pub fn writeConformanceJson(w: anytype, prof: Profile) !void {
-    var buf: [8192]u8 = undefined;
-    var adapter = w.adaptToNewApi(&buf);
-    var jw = std.json.Stringify{
-        .writer = &adapter.new_interface,
-        .options = .{},
-    };
-    try jw.beginObject();
-    try jw.objectField("version");
-    try jw.write(prof.version);
-    try jw.objectField("features");
-    try jw.beginObject();
-    try jw.objectField("order_by");
-    try jw.write(prof.features.order_by);
-    try jw.objectField("order_by_nulls_policy");
-    try jw.write(prof.features.order_by_nulls_policy);
-    try jw.objectField("group_by_phase1");
-    try jw.write(prof.features.group_by_phase1);
-    try jw.objectField("having_parsed");
-    try jw.write(prof.features.having_parsed);
-    try jw.objectField("set_ops_skeleton");
-    try jw.write(prof.features.set_ops_skeleton);
-    try jw.objectField("temporals_structured");
-    try jw.write(prof.features.temporals_structured);
-    try jw.objectField("session_offset_flag");
-    try jw.write(prof.features.session_offset_flag);
-    try jw.endObject();
-    try jw.endObject();
+    try w.writeByte('{');
+    try w.print("\"version\":\"{s}\",", .{prof.version});
+    try w.writeAll("\"features\":{");
+    try w.print("\"order_by\":{},", .{prof.features.order_by});
+    try w.print("\"order_by_nulls_policy\":{},", .{prof.features.order_by_nulls_policy});
+    try w.print("\"group_by_phase1\":{},", .{prof.features.group_by_phase1});
+    try w.print("\"having_parsed\":{},", .{prof.features.having_parsed});
+    try w.print("\"set_ops_skeleton\":{},", .{prof.features.set_ops_skeleton});
+    try w.print("\"temporals_structured\":{},", .{prof.features.temporals_structured});
+    try w.print("\"session_offset_flag\":{}", .{prof.features.session_offset_flag});
+    try w.writeAll("}}");
 }
 
 test "conformance json outputs expected keys" {
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
+    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
+    defer buf.deinit(std.testing.allocator);
     const prof = Profile{ .features = .{} };
-    try writeConformanceJson(buf.writer(), prof);
+    try writeConformanceJson(buf.writer(std.testing.allocator), prof);
     const s = buf.items;
     try std.testing.expect(std.mem.indexOf(u8, s, "\"version\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "\"features\"") != null);

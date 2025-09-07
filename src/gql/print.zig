@@ -38,149 +38,105 @@ pub fn printProgramJson(w: anytype, prog: ast.Program) !void {
 }
 
 pub fn printProgramJsonWith(w: anytype, prog: ast.Program, jopts: PrintJsonOptions) !void {
-    var buf: [8192]u8 = undefined;
-    var adapter = w.adaptToNewApi(&buf);
-    var jw = std.json.Stringify{
-        .writer = &adapter.new_interface,
-        .options = .{},
-    };
-    try jw.beginObject();
+    try w.writeByte('{');
+
+    var first = true;
     if (jopts.session_offset_minutes) |som| {
-        try jw.objectField("session_offset_minutes");
-        try jw.write(som);
+        try w.print("\"session_offset_minutes\":{d}", .{som});
+        first = false;
     }
-    try jw.objectField("statements");
-    try jw.beginArray();
-    for (prog.statements) |st| {
-        try jw.beginObject();
-        try jw.objectField("kind");
-        try jw.write(@tagName(st));
-        try jw.endObject();
+
+    if (!first) try w.writeByte(',');
+    try w.writeAll("\"statements\":[");
+    for (prog.statements, 0..) |st, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.print("{{\"kind\":\"{s}\"}}", .{tagName(st)});
     }
-    try jw.endArray();
+    try w.writeByte(']');
+
     if (jopts.verbose_temporals) {
-        try jw.objectField("temporals");
-        try jw.beginArray();
+        try w.writeAll(",\"temporals\":[");
         var list = try collectTemporalsList(std.heap.page_allocator, prog);
         defer list.deinit(std.heap.page_allocator);
-        for (list.items) |ent| {
-            try jw.beginObject();
-            try jw.objectField("kind");
+
+        for (list.items, 0..) |ent, i| {
+            if (i > 0) try w.writeByte(',');
+            try w.writeByte('{');
+
+            // Write kind
+            try w.writeAll("\"kind\":\"");
             switch (ent) {
-                .Date => try jw.write("Date"),
-                .Time => try jw.write("Time"),
-                .DateTime => try jw.write("DateTime"),
-                .LocalDateTime => try jw.write("LocalDateTime"),
+                .Date => try w.writeAll("Date"),
+                .Time => try w.writeAll("Time"),
+                .DateTime => try w.writeAll("DateTime"),
+                .LocalDateTime => try w.writeAll("LocalDateTime"),
             }
-            try jw.objectField("raw");
+            try w.writeAll("\",");
+
+            // Write raw
+            try w.writeAll("\"raw\":\"");
             switch (ent) {
-                .Date => |d| try jw.write(d.raw),
-                .Time => |t| try jw.write(t.raw),
-                .DateTime => |dt| try jw.write(dt.raw),
-                .LocalDateTime => |ldt| try jw.write(ldt.raw),
+                .Date => |d| try w.writeAll(d.raw),
+                .Time => |t| try w.writeAll(t.raw),
+                .DateTime => |dt| try w.writeAll(dt.raw),
+                .LocalDateTime => |ldt| try w.writeAll(ldt.raw),
             }
-            try jw.objectField("parsed");
+            try w.writeAll("\",");
+
+            // Write parsed
+            try w.writeAll("\"parsed\":{");
             switch (ent) {
                 .Date => |d| {
-                    try jw.beginObject();
-                    try jw.objectField("y");
-                    try jw.write(d.y);
-                    try jw.objectField("m");
-                    try jw.write(d.m);
-                    try jw.objectField("d");
-                    try jw.write(d.d);
-                    try jw.endObject();
+                    try w.print("\"y\":{d},\"m\":{d},\"d\":{d}", .{ d.y, d.m, d.d });
                 },
                 .Time => |t| {
-                    try jw.beginObject();
-                    try jw.objectField("h");
-                    try jw.write(t.h);
-                    try jw.objectField("min");
-                    try jw.write(t.min);
-                    try jw.objectField("s");
-                    try jw.write(t.s);
-                    try jw.objectField("has_seconds");
-                    try jw.write(t.has_seconds);
-                    try jw.objectField("has_fraction");
-                    try jw.write(t.has_fraction);
-                    try jw.objectField("frac_nanos");
-                    try jw.write(t.frac_nanos);
-                    try jw.objectField("frac_digits");
-                    try jw.write(t.frac_digits);
-                    try jw.objectField("offset_minutes");
-                    if (t.offset_minutes) |om| try jw.write(om) else try jw.write(null);
-                    try jw.endObject();
+                    try w.print("\"h\":{d},\"min\":{d},\"s\":{d},", .{ t.h, t.min, t.s });
+                    try w.print("\"has_seconds\":{},\"has_fraction\":{},", .{ t.has_seconds, t.has_fraction });
+                    try w.print("\"frac_nanos\":{d},\"frac_digits\":{d},", .{ t.frac_nanos, t.frac_digits });
+                    try w.writeAll("\"offset_minutes\":");
+                    if (t.offset_minutes) |om| {
+                        try w.print("{d}", .{om});
+                    } else {
+                        try w.writeAll("null");
+                    }
                 },
                 .DateTime => |dt| {
-                    try jw.beginObject();
-                    try jw.objectField("date");
-                    try jw.beginObject();
-                    try jw.objectField("y");
-                    try jw.write(dt.date.y);
-                    try jw.objectField("m");
-                    try jw.write(dt.date.m);
-                    try jw.objectField("d");
-                    try jw.write(dt.date.d);
-                    try jw.endObject();
-                    try jw.objectField("time");
-                    try jw.beginObject();
-                    try jw.objectField("h");
-                    try jw.write(dt.time.h);
-                    try jw.objectField("min");
-                    try jw.write(dt.time.min);
-                    try jw.objectField("s");
-                    try jw.write(dt.time.s);
-                    try jw.objectField("has_seconds");
-                    try jw.write(dt.time.has_seconds);
-                    try jw.objectField("has_fraction");
-                    try jw.write(dt.time.has_fraction);
-                    try jw.objectField("frac_nanos");
-                    try jw.write(dt.time.frac_nanos);
-                    try jw.objectField("frac_digits");
-                    try jw.write(dt.time.frac_digits);
-                    try jw.objectField("offset_minutes");
-                    if (dt.time.offset_minutes) |om| try jw.write(om) else try jw.write(null);
-                    try jw.endObject();
-                    try jw.endObject();
+                    try w.writeAll("\"date\":{");
+                    try w.print("\"y\":{d},\"m\":{d},\"d\":{d}", .{ dt.date.y, dt.date.m, dt.date.d });
+                    try w.writeAll("},\"time\":{");
+                    try w.print("\"h\":{d},\"min\":{d},\"s\":{d},", .{ dt.time.h, dt.time.min, dt.time.s });
+                    try w.print("\"has_seconds\":{},\"has_fraction\":{},", .{ dt.time.has_seconds, dt.time.has_fraction });
+                    try w.print("\"frac_nanos\":{d},\"frac_digits\":{d},", .{ dt.time.frac_nanos, dt.time.frac_digits });
+                    try w.writeAll("\"offset_minutes\":");
+                    if (dt.time.offset_minutes) |om| {
+                        try w.print("{d}", .{om});
+                    } else {
+                        try w.writeAll("null");
+                    }
+                    try w.writeByte('}');
                 },
                 .LocalDateTime => |ldt| {
-                    try jw.beginObject();
-                    try jw.objectField("date");
-                    try jw.beginObject();
-                    try jw.objectField("y");
-                    try jw.write(ldt.date.y);
-                    try jw.objectField("m");
-                    try jw.write(ldt.date.m);
-                    try jw.objectField("d");
-                    try jw.write(ldt.date.d);
-                    try jw.endObject();
-                    try jw.objectField("time");
-                    try jw.beginObject();
-                    try jw.objectField("h");
-                    try jw.write(ldt.time.h);
-                    try jw.objectField("min");
-                    try jw.write(ldt.time.min);
-                    try jw.objectField("s");
-                    try jw.write(ldt.time.s);
-                    try jw.objectField("has_seconds");
-                    try jw.write(ldt.time.has_seconds);
-                    try jw.objectField("has_fraction");
-                    try jw.write(ldt.time.has_fraction);
-                    try jw.objectField("frac_nanos");
-                    try jw.write(ldt.time.frac_nanos);
-                    try jw.objectField("frac_digits");
-                    try jw.write(ldt.time.frac_digits);
-                    try jw.objectField("offset_minutes");
-                    if (ldt.time.offset_minutes) |om| try jw.write(om) else try jw.write(null);
-                    try jw.endObject();
-                    try jw.endObject();
+                    try w.writeAll("\"date\":{");
+                    try w.print("\"y\":{d},\"m\":{d},\"d\":{d}", .{ ldt.date.y, ldt.date.m, ldt.date.d });
+                    try w.writeAll("},\"time\":{");
+                    try w.print("\"h\":{d},\"min\":{d},\"s\":{d},", .{ ldt.time.h, ldt.time.min, ldt.time.s });
+                    try w.print("\"has_seconds\":{},\"has_fraction\":{},", .{ ldt.time.has_seconds, ldt.time.has_fraction });
+                    try w.print("\"frac_nanos\":{d},\"frac_digits\":{d},", .{ ldt.time.frac_nanos, ldt.time.frac_digits });
+                    try w.writeAll("\"offset_minutes\":");
+                    if (ldt.time.offset_minutes) |om| {
+                        try w.print("{d}", .{om});
+                    } else {
+                        try w.writeAll("null");
+                    }
+                    try w.writeByte('}');
                 },
             }
-            try jw.endObject();
+            try w.writeAll("}}");
         }
-        try jw.endArray();
+        try w.writeByte(']');
     }
-    try jw.endObject();
+
+    try w.writeByte('}');
 }
 
 fn tagName(st: ast.Statement) []const u8 {
