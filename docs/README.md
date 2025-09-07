@@ -1,18 +1,10 @@
 # Geode Design Documentation
 
-## File Structures
-
-### Indexes
-
-### Graph
-
-## Binary Protocol
-
 ## Status & Conformance Summary
 
-- Requirements Ledger and evidence: see GAP_ANALYSIS.md
-- GQL Conformance Profile (initial): see GAP_ANALYSIS.md (bottom)
-- Execution-ready backlog: see NEXT.md
+- Requirements Ledger and evidence: docs/GAP_ANALYSIS.md
+- GQL Conformance Profile (initial): docs/GAP_ANALYSIS.md (GQL Conformance Profile section)
+- Execution-ready backlog: docs/NEXT.md
 
 ## Troubleshooting (diagnostics quick reference)
 

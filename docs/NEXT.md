@@ -2,26 +2,23 @@
 
 Swimlanes with concrete acceptance tests. ISO clause anchors are references (no quoting). Idempotent across runs.
 
-Note: Completed items move to docs/IMPLEMENTED.md.
-
-Build/test status snapshot
-- zig build --release=safe: OK (Zig 0.14.1 toolchain observed)
-- zig build test: OK; unit tests run; temporal formatting logs seen
-- Binaries present (geoded/geodec stubs), protocol not yet wired
+Build/test snapshot
+- zig build -Drelease-safe: OK (per CRUSH.md)
+- zig build test: OK baseline
 
 ## Now (P0)
 
 1. Protocol skeleton and CLI round‑trip
 - Why: Unblocks end‑to‑end tests and conformance surfacing; foundation for sessions/transactions.
 - What: Implement minimal binary protocol (docs/BINARY_PROTOCOL.md): HELLO, RUN_GQL, PULL; JSON Lines payloads; status_class/subclass; SCHEMA then BINDINGS with ordered flag + order_keys. Provide geoded server loop (TCP, framed) and geodec CLI that prints exact JSON required by tests.
-- Acceptance (aligns with tests/e2e_protocol.zig):
-  - RETURN 1 AS x ORDER BY x LIMIT 1 → exact two JSON lines (SCHEMA then ordered BINDINGS)
+- Acceptance (tests/e2e_protocol.zig):
+  - RETURN 1 AS x ORDER BY x LIMIT 1 → two JSON lines (SCHEMA then ordered BINDINGS)
   - RETURN 1 LIMIT 10 OFFSET 5 → exit 2; stderr contains "US001" and anchor 16.18–16.19
   - RETURN a ORDER BY f(a) → exit 2; stderr contains "IllegalOrderKey" and anchor 14.10
   - RETURN 1 AS x UNION RETURN 1 AS x → BINDINGS with ordered=false and rows [{"x":1}]
   - CASE 3VL sanity per acceptance list
 - ISO anchors: 14.10; 16.18–16.19; 23.2; 24.*
-- Dependencies: diagnostics surface in src/diagnostics.zig; evaluator and planner helpers exist
+- Dependencies: diagnostics in src/diagnostics.zig; evaluator/planner helpers exist
 - Scope: M • DRI: core
 
 2. README troubleshooting section
@@ -36,7 +33,7 @@ Build/test status snapshot
 1. Planner/exec coverage hardening
 - Why: Ensure ordered semantics and pagination are correct across expressions, aliases/ordinals, set ops, and aggregates.
 - What: Multi-key ORDER metadata; ORDER BY over aliases/ordinals; set op then ORDER+LIMIT semantics; GROUP BY+HAVING+ORDER pipeline; US001 enforcement.
-- Acceptance: E2E tests in tests/e2e_protocol_planner.zig and tests/e2e_protocol_more.zig pass; ordered/order_keys metadata correct; errors surface with ISO anchors.
+- Acceptance: e2e_protocol_planner.zig and e2e_protocol_more.zig pass; ordered/order_keys metadata correct; errors surface with ISO anchors.
 - ISO anchors: 14.10; 14.12; 16.18–16.19
 - Scope: M • DRI: core
 
