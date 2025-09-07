@@ -23,9 +23,11 @@ pub const InMemory = struct {
 
     pub fn addEdge(self: *InMemory, src: u64, dst: u64) !void {
         var gop = try self.adj.getOrPut(src);
-        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(u64).init(self.allocator);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
+        }
         // ensure uniqueness and sorted order on finalize; for now just append
-        try gop.value_ptr.append(dst);
+        try gop.value_ptr.append(self.allocator, dst);
     }
 
     pub fn neighbors(self: *InMemory, src: u64) iface.NeighborIter {
@@ -57,25 +59,25 @@ pub const InMemory = struct {
 
     pub fn expandLabeled(self: *InMemory, src: u64, label: []const u8) iface.NeighborIter {
         if (self.adj.get(src)) |lst| {
-            var tmp = std.ArrayList(u64).init(self.allocator);
+            var tmp = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return .{ .items = &.{} };
             for (lst.items) |nid| {
-                if (self.hasLabel(nid, label)) tmp.append(nid) catch {};
+                if (self.hasLabel(nid, label)) tmp.append(self.allocator, nid) catch {};
             }
             std.mem.sort(u64, tmp.items, {}, std.sort.asc(u64));
-            return .{ .items = tmp.toOwnedSlice() catch &.{} };
+            return .{ .items = tmp.toOwnedSlice(self.allocator) catch &.{} };
         }
         return .{ .items = &.{} };
     }
 
     pub fn expandNHop(self: *InMemory, seed: u64, hops: u32) iface.NeighborIter {
         if (hops == 0) return .{ .items = &.{} };
-        var frontier = std.ArrayList(u64).init(self.allocator);
-        var next = std.ArrayList(u64).init(self.allocator);
+        var frontier = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return .{ .items = &.{} };
+        var next = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return .{ .items = &.{} };
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer frontier.deinit();
-        defer next.deinit();
+        defer frontier.deinit(self.allocator);
+        defer next.deinit(self.allocator);
         defer visited.deinit();
-        frontier.append(seed) catch {};
+        frontier.append(self.allocator, seed) catch {};
         var h: u32 = 0;
         while (h < hops) : (h += 1) {
             next.clearRetainingCapacity();
@@ -88,13 +90,13 @@ pub const InMemory = struct {
                     const nid = it.items[j];
                     if (visited.get(nid) == null) {
                         visited.put(nid, {}) catch {};
-                        next.append(nid) catch {};
+                        next.append(self.allocator, nid) catch {};
                     }
                 }
             }
             frontier.items = next.items;
         }
         std.mem.sort(u64, frontier.items, {}, std.sort.asc(u64));
-        return .{ .items = frontier.toOwnedSlice() catch &.{} };
+        return .{ .items = frontier.toOwnedSlice(self.allocator) catch &.{} };
     }
 };

@@ -114,10 +114,10 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
     var allowed = std.StringHashMap(void).init(std.heap.page_allocator);
     defer allowed.deinit();
     // Track allocated key strings to free after
-    var allocd = std.ArrayList([]const u8).init(std.heap.page_allocator);
+    var allocd = std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
     defer {
         for (allocd.items) |s| std.heap.page_allocator.free(s);
-        allocd.deinit();
+        allocd.deinit(std.heap.page_allocator);
     }
     for (gb.keys) |k| {
         switch (k) {
@@ -127,7 +127,7 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
             .Member => {
                 const ss = printer.stringifyExprAlloc(std.heap.page_allocator, k, .{}) catch continue;
                 _ = allowed.put(ss, {}) catch {};
-                allocd.append(ss) catch {};
+                allocd.append(std.heap.page_allocator, ss) catch {};
             },
             else => {}, // keep strict for other kinds
         }

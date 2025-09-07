@@ -396,26 +396,26 @@ test "temporal parse + compare + normalize" {
     const dt2 = try parseDateTime("2024-08-12T11:15+01:00", true);
     try std.testing.expect((try compareDateTimeParsed(dt1, dt2)) == 0);
     // Normalization output
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    try formatDateTime(buf.writer(), dt1, .{});
+    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
+    defer buf.deinit(std.testing.allocator);
+    try formatDateTime(buf.writer(std.testing.allocator), dt1, .{});
     try std.testing.expect(std.mem.eql(u8, buf.items, "2024-08-12T10:15Z"));
 }
 
 test "formatDateTime normalizes +HH to +HH:00" {
     const dt = try parseDateTime("2024-01-02T03:04+05", true);
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    try formatDateTime(buf.writer(), dt, .{});
+    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
+    defer buf.deinit(std.testing.allocator);
+    try formatDateTime(buf.writer(std.testing.allocator), dt, .{});
     std.debug.print("format +05 -> {s}\n", .{buf.items});
     try std.testing.expect(std.mem.indexOf(u8, buf.items, "+05:00") != null);
 }
 
 test "formatDateTime preserves -HH:MM" {
     const dt = try parseDateTime("2024-01-02T03:04-05:30", true);
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    try formatDateTime(buf.writer(), dt, .{});
+    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
+    defer buf.deinit(std.testing.allocator);
+    try formatDateTime(buf.writer(std.testing.allocator), dt, .{});
     std.debug.print("format -05:30 -> {s}\n", .{buf.items});
     try std.testing.expect(std.mem.indexOf(u8, buf.items, "-05:30") != null);
 }

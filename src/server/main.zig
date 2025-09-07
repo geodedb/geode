@@ -4,6 +4,9 @@ const protocol = @import("protocol");
 const eval = gql.eval;
 const diagnostics = gql.diagnostics;
 const storage_mem = @import("storage_mem");
+const txn = @import("txn");
+const wal = @import("wal");
+const dist = @import("dist");
 
 const ServerState = struct {
     last_columns: []protocol.SchemaCol = &.{},
@@ -11,6 +14,10 @@ const ServerState = struct {
     last_ordered: bool = false,
     last_order_keys: []const []const u8 = &.{},
     in_txn: bool = false,
+    current_txn: ?txn.Txn = null,
+    txn_mgr: txn.Manager = .{},
+    wal: wal.Wal = undefined,
+    raft: dist.RaftStub = .{},
     engine: Engine = .evaluator,
     mem_store: ?storage_mem.InMemory = null,
 };
@@ -135,6 +142,7 @@ fn parseParamsRows(ally: std.mem.Allocator, params_json: ?[]const u8, names_out:
 pub fn main() !void {
     const ally = std.heap.page_allocator;
     var state = ServerState{};
+    state.wal = wal.Wal.init(ally);
     // Engine selection via env var
     if (std.process.getEnvVarOwned(ally, "GEODE_ENGINE")) |val| {
         defer ally.free(val);
@@ -163,10 +171,12 @@ pub fn main() !void {
         } else |_| {}
         state.mem_store = ms;
     }
-    var stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
-    var buf = std.ArrayList(u8).init(ally);
-    defer buf.deinit();
+    const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin = stdin_file.deprecatedReader();
+    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = stdout_file.deprecatedWriter();
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+    defer buf.deinit(ally);
     while (true) {
         buf.clearRetainingCapacity();
         // read one line
@@ -187,8 +197,21 @@ pub fn main() !void {
                 // We do nothing.
             },
             .RUN_GQL => |rq| {
+                // Support EXPLAIN / PROFILE prefixes (simple textual detection)
+                const explain_prefix = "EXPLAIN ";
+                const profile_prefix = "PROFILE ";
+                var explain_mode = false;
+                var profile_mode = false;
+                var text_slice = rq.text;
+                if (text_slice.len >= explain_prefix.len and std.mem.startsWith(u8, text_slice, explain_prefix)) {
+                    explain_mode = true;
+                    text_slice = text_slice[explain_prefix.len..];
+                } else if (text_slice.len >= profile_prefix.len and std.mem.startsWith(u8, text_slice, profile_prefix)) {
+                    profile_mode = true;
+                    text_slice = text_slice[profile_prefix.len..];
+                }
                 // Storage engine smoke: EXPAND_FROM(seed)
-                if (state.engine == .storage and state.mem_store != null) {
+                if (!explain_mode and !profile_mode and state.engine == .storage and state.mem_store != null) {
                     // EXPAND_FROM(seed)
                     const ends_plain = std.mem.endsWith(u8, rq.text, ") AS n");
                     const ends_order = std.mem.endsWith(u8, rq.text, ") AS n ORDER BY n");
@@ -199,21 +222,21 @@ pub fn main() !void {
                         const seed_str = rq.text[open + 1 .. close];
                         const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
                         var it = state.mem_store.?.neighbors(seed);
-                        var rows_buf = std.ArrayList(u8).init(ally);
-                        defer rows_buf.deinit();
-                        try rows_buf.append('[');
+                        var rows_buf = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                        defer rows_buf.deinit(ally);
+                        try rows_buf.append(ally, '[');
                         var first = true;
                         while (it.next()) |nid| {
-                            if (!first) try rows_buf.append(',');
+                            if (!first) try rows_buf.append(ally, ',');
                             first = false;
-                            try rows_buf.writer().writeAll("{\"n\":");
-                            try rows_buf.writer().print("{d}", .{nid});
-                            try rows_buf.writer().writeAll("}");
+                            try rows_buf.writer(ally).writeAll("{\"n\":");
+                            try rows_buf.writer(ally).print("{d}", .{nid});
+                            try rows_buf.writer(ally).writeAll("}");
                         }
-                        try rows_buf.append(']');
+                        try rows_buf.append(ally, ']');
                         state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
                         state.last_columns[0] = .{ .name = "n", .type = "INT" };
-                        state.last_rows_json = rows_buf.toOwnedSlice() catch "[]";
+                        state.last_rows_json = rows_buf.toOwnedSlice(ally) catch "[]";
                         const ordered = std.mem.endsWith(u8, rq.text, "ORDER BY n");
                         state.last_ordered = ordered;
                         state.last_order_keys = if (ordered) &.{"n"} else &.{};
@@ -234,23 +257,23 @@ pub fn main() !void {
                         const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
                         const hops = std.fmt.parseInt(u32, hops_str, 10) catch 1;
                         const itn = state.mem_store.?.expandNHop(seed, hops);
-                        var rows_buf2 = std.ArrayList(u8).init(ally);
-                        defer rows_buf2.deinit();
-                        try rows_buf2.append('[');
+                        var rows_buf2 = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                        defer rows_buf2.deinit(ally);
+                        try rows_buf2.append(ally, '[');
                         var first2 = true;
                         var idx: usize = 0;
                         while (idx < itn.items.len) : (idx += 1) {
                             const nid = itn.items[idx];
-                            if (!first2) try rows_buf2.append(',');
+                            if (!first2) try rows_buf2.append(ally, ',');
                             first2 = false;
-                            try rows_buf2.writer().writeAll("{\"m\":");
-                            try rows_buf2.writer().print("{d}", .{nid});
-                            try rows_buf2.writer().writeAll("}");
+                            try rows_buf2.writer(ally).writeAll("{\"m\":");
+                            try rows_buf2.writer(ally).print("{d}", .{nid});
+                            try rows_buf2.writer(ally).writeAll("}");
                         }
-                        try rows_buf2.append(']');
+                        try rows_buf2.append(ally, ']');
                         state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
                         state.last_columns[0] = .{ .name = "m", .type = "INT" };
-                        state.last_rows_json = rows_buf2.toOwnedSlice() catch "[]";
+                        state.last_rows_json = rows_buf2.toOwnedSlice(ally) catch "[]";
                         const ordered2 = std.mem.endsWith(u8, rq.text, "ORDER BY m");
                         state.last_ordered = ordered2;
                         state.last_order_keys = if (ordered2) &.{"m"} else &.{};
@@ -267,21 +290,21 @@ pub fn main() !void {
                         const seed_str = rq.text[open + 1 .. close];
                         const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
                         var it = state.mem_store.?.neighbors(seed);
-                        var rows_bufm = std.ArrayList(u8).init(ally);
-                        defer rows_bufm.deinit();
-                        try rows_bufm.append('[');
+                        var rows_bufm = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                        defer rows_bufm.deinit(ally);
+                        try rows_bufm.append(ally, '[');
                         var firstm = true;
                         while (it.next()) |nid| {
-                            if (!firstm) try rows_bufm.append(',');
+                            if (!firstm) try rows_bufm.append(ally, ',');
                             firstm = false;
-                            try rows_bufm.writer().writeAll("{\"n\":");
-                            try rows_bufm.writer().print("{d}", .{nid});
-                            try rows_bufm.writer().writeAll("}");
+                            try rows_bufm.writer(ally).writeAll("{\"n\":");
+                            try rows_bufm.writer(ally).print("{d}", .{nid});
+                            try rows_bufm.writer(ally).writeAll("}");
                         }
-                        try rows_bufm.append(']');
+                        try rows_bufm.append(ally, ']');
                         state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
                         state.last_columns[0] = .{ .name = "n", .type = "INT" };
-                        state.last_rows_json = rows_bufm.toOwnedSlice() catch "[]";
+                        state.last_rows_json = rows_bufm.toOwnedSlice(ally) catch "[]";
                         const orderedm = std.mem.endsWith(u8, rq.text, "ORDER BY n");
                         state.last_ordered = orderedm;
                         state.last_order_keys = if (orderedm) &.{"n"} else &.{};
@@ -302,23 +325,23 @@ pub fn main() !void {
                         const label_str = std.mem.trim(u8, inside[comma + 1 ..], " \" ");
                         const seed = std.fmt.parseInt(u64, seed_str, 10) catch 0;
                         const itl = state.mem_store.?.expandLabeled(seed, label_str);
-                        var rows_buf3 = std.ArrayList(u8).init(ally);
-                        defer rows_buf3.deinit();
-                        try rows_buf3.append('[');
+                        var rows_buf3 = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                        defer rows_buf3.deinit(ally);
+                        try rows_buf3.append(ally, '[');
                         var first3 = true;
                         var idx3: usize = 0;
                         while (idx3 < itl.items.len) : (idx3 += 1) {
                             const nid = itl.items[idx3];
-                            if (!first3) try rows_buf3.append(',');
+                            if (!first3) try rows_buf3.append(ally, ',');
                             first3 = false;
-                            try rows_buf3.writer().writeAll("{\"m\":");
-                            try rows_buf3.writer().print("{d}", .{nid});
-                            try rows_buf3.writer().writeAll("}");
+                            try rows_buf3.writer(ally).writeAll("{\"m\":");
+                            try rows_buf3.writer(ally).print("{d}", .{nid});
+                            try rows_buf3.writer(ally).writeAll("}");
                         }
-                        try rows_buf3.append(']');
+                        try rows_buf3.append(ally, ']');
                         state.last_columns = try ally.alloc(protocol.SchemaCol, 1);
                         state.last_columns[0] = .{ .name = "m", .type = "INT" };
-                        state.last_rows_json = rows_buf3.toOwnedSlice() catch "[]";
+                        state.last_rows_json = rows_buf3.toOwnedSlice(ally) catch "[]";
                         const ordered3 = std.mem.endsWith(u8, rq.text, "ORDER BY m");
                         state.last_ordered = ordered3;
                         state.last_order_keys = if (ordered3) &.{"m"} else &.{};
@@ -327,11 +350,11 @@ pub fn main() !void {
                     }
                 }
                 // Parse GQL and prepare SCHEMA + rows
-                if (rq.text.len == 0) {
+                if (text_slice.len == 0) {
                     protocol.writeErrorLine(stdout, "ParseError", "empty text", "") catch {};
                     continue;
                 }
-                const outcome = gql.parseGqlOutcome(rq.text, ally, .{ .ident_order_only = true, .forbid_orderby_calls = true, .forbid_orderby_paths = true }) catch |e| {
+                const outcome = gql.parseGqlOutcome(text_slice, ally, .{ .ident_order_only = true, .forbid_orderby_calls = true, .forbid_orderby_paths = true }) catch |e| {
                     // Unexpected allocator or other fatal error during parse; log and surface a generic error.
                     std.debug.print("parseGqlOutcome threw: {s}\n", .{@errorName(e)});
                     protocol.writeErrorLine(stdout, "ParseError", "parse failure", "") catch |we| {
@@ -374,6 +397,17 @@ pub fn main() !void {
                     };
                     continue;
                 }
+                if (explain_mode) {
+                    // Minimal logical plan JSON placeholder
+                    const plan = "{\"logical\":[{\"op\":\"Project\"}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001=enforced\"]}";
+                    protocol.writeExplainLine(stdout, plan) catch {};
+                    continue;
+                }
+                if (profile_mode) {
+                    const prof = "{\"ops\":[{\"op\":\"Project\",\"rows\":1,\"time_ms\":0.01}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001=enforced\"]}";
+                    protocol.writeProfileLine(stdout, prof) catch {};
+                    continue;
+                }
                 // Build parameterized rows
                 var names: [][]const u8 = &.{};
                 var rows: [][]const eval.Value = &.{};
@@ -391,15 +425,15 @@ pub fn main() !void {
                 // Evaluate first row for type inference
                 // type inference happens on the first produced row
                 // Prepare result rows as JSON
-                var rows_buf = std.ArrayList(u8).init(ally);
-                defer rows_buf.deinit();
-                try rows_buf.append('[');
+                var rows_buf = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                defer rows_buf.deinit(ally);
+                try rows_buf.append(ally, '[');
                 var row_count: usize = 0;
                 for (rows) |rvals| {
                     const env = eval.Env{ .names = names, .values = rvals };
                     // Project each RETURN expr
-                    if (row_count > 0) try rows_buf.append(',');
-                    try rows_buf.append('{');
+                    if (row_count > 0) try rows_buf.append(ally, ',');
+                    try rows_buf.append(ally, '{');
                     var j: usize = 0;
                     while (j < q.ret.items.len) : (j += 1) {
                         const item = q.ret.items[j];
@@ -409,8 +443,8 @@ pub fn main() !void {
                             const s = pr.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
                             break :blk s;
                         };
-                        if (j > 0) try rows_buf.append(',');
-                        try rows_buf.writer().print("\"{s}\":", .{alias});
+                        if (j > 0) try rows_buf.append(ally, ',');
+                        try rows_buf.writer(ally).print("\"{s}\":", .{alias});
                         const v: eval.Value = eval.evalExpr(ally, item.expr, env) catch eval.Value{ .Null = {} };
                         // type inference on first row
                         if (row_count == 0) {
@@ -418,17 +452,17 @@ pub fn main() !void {
                         }
                         // write JSON value
                         switch (v) {
-                            .Int => |iv| try rows_buf.writer().print("{d}", .{iv}),
-                            .Bool => |bv| try rows_buf.writer().print("{s}", .{if (bv) "true" else "false"}),
-                            .Str => |sv| try rows_buf.writer().print("\"{s}\"", .{sv}),
-                            .Null => try rows_buf.writer().print("null", .{}),
-                            .Decimal => |dd| try writeDecimalJson(rows_buf.writer(), dd),
+                            .Int => |iv| try rows_buf.writer(ally).print("{d}", .{iv}),
+                            .Bool => |bv| try rows_buf.writer(ally).print("{s}", .{if (bv) "true" else "false"}),
+                            .Str => |sv| try rows_buf.writer(ally).print("\"{s}\"", .{sv}),
+                            .Null => try rows_buf.writer(ally).print("null", .{}),
+                            .Decimal => |dd| try writeDecimalJson(rows_buf.writer(ally), dd),
                         }
                     }
-                    try rows_buf.append('}');
+                    try rows_buf.append(ally, '}');
                     row_count += 1;
                 }
-                try rows_buf.append(']');
+                try rows_buf.append(ally, ']');
                 // ORDER BY metadata
                 var ordered = false;
                 var order_keys: [][]const u8 = &.{};
@@ -444,7 +478,7 @@ pub fn main() !void {
                     }
                 }
                 state.last_columns = cols;
-                state.last_rows_json = rows_buf.toOwnedSlice() catch "[]";
+                state.last_rows_json = rows_buf.toOwnedSlice(ally) catch "[]";
                 state.last_ordered = ordered;
                 state.last_order_keys = order_keys;
                 // Emit SCHEMA immediately
@@ -462,6 +496,9 @@ pub fn main() !void {
                     protocol.writeErrorLine(stdout, "TxnState", "already in transaction", "8") catch {};
                 } else {
                     state.in_txn = true;
+                    const t = state.txn_mgr.begin();
+                    state.current_txn = t;
+                    _ = state.wal.append(t.id, .Begin, "") catch {};
                     protocol.writeBindingsLine(stdout, false, &.{}, "[]") catch {};
                 }
             },
@@ -469,7 +506,12 @@ pub fn main() !void {
                 if (!state.in_txn) {
                     protocol.writeErrorLine(stdout, "TxnState", "no active transaction", "8") catch {};
                 } else {
+                    if (state.current_txn) |*t| {
+                        _ = state.wal.append(t.id, .Commit, "") catch {};
+                        state.txn_mgr.commit(t);
+                    }
                     state.in_txn = false;
+                    state.current_txn = null;
                     protocol.writeBindingsLine(stdout, false, &.{}, "[]") catch {};
                 }
             },
@@ -477,7 +519,12 @@ pub fn main() !void {
                 if (!state.in_txn) {
                     protocol.writeErrorLine(stdout, "TxnState", "no active transaction", "8") catch {};
                 } else {
+                    if (state.current_txn) |*t| {
+                        _ = state.wal.append(t.id, .Abort, "") catch {};
+                        state.txn_mgr.rollback(t);
+                    }
                     state.in_txn = false;
+                    state.current_txn = null;
                     protocol.writeBindingsLine(stdout, false, &.{}, "[]") catch {};
                 }
             },

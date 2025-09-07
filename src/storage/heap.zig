@@ -50,7 +50,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
         },
         0x03 => {
             if (bytes.len < 1 + 4) return error.Underflow;
-            const n = std.mem.readInt(u32, bytes[1 .. 5], .little);
+            const n = std.mem.readInt(u32, bytes[1..5], .little);
             const nn: usize = @intCast(n);
             if (bytes.len < 5 + nn) return error.Underflow;
             const s = try ally.dupe(u8, bytes[5 .. 5 + nn]);

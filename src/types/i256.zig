@@ -52,7 +52,7 @@ test "i256 addition overflow" {
 }
 
 // This code defines a simple i256 type with basic arithmetic operations.
-// It includes tests to verify the correctness of addition, including 
+// It includes tests to verify the correctness of addition, including
 // cases with carry and overflow.
 test "i256 addition with multiple carries" {
     const a = i256.init(0xFFFFFFFFFFFFFFFF);

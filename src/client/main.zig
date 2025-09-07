@@ -42,19 +42,20 @@ pub fn main() !void {
     // Inherit stderr so large error outputs don't block the child process
     child.stderr_behavior = .Inherit;
     try child.spawn();
-    const child_stdin = child.stdin.?.writer();
-    var child_stdout = child.stdout.?.reader();
+    const child_stdin = child.stdin.?.deprecatedWriter();
+    const child_stdout = child.stdout.?.deprecatedReader();
 
     // Send HELLO
     try child_stdin.writeAll("{\"type\":\"HELLO\",\"client_name\":\"geodec\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
     if (do_begin) {
         try child_stdin.writeAll("{\"type\":\"BEGIN\"}\n");
-        // Read and discard ACK line (bindings-empty)
         const ack = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
         defer gpa.free(ack);
         if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
-            _ = try std.io.getStdErr().write(ack);
-            try std.io.getStdErr().writeAll("\n");
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_writer = stderr_file.deprecatedWriter();
+            try stderr_writer.writeAll(ack);
+            try stderr_writer.writeAll("\n");
             child.stdin.?.close();
             _ = try child.wait();
             std.process.exit(2);
@@ -80,30 +81,43 @@ pub fn main() !void {
     const line1 = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
     defer gpa.free(line1);
     if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
-        // Print to stderr and exit 2
-        _ = try std.io.getStdErr().write(line1);
-        try std.io.getStdErr().writeAll("\n");
+        const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        const stderr_writer = stderr_file.deprecatedWriter();
+        try stderr_writer.writeAll(line1);
+        try stderr_writer.writeAll("\n");
         child.stdin.?.close();
         _ = try child.wait();
         std.process.exit(2);
     }
 
     // Print SCHEMA line and request PULL
-    _ = try std.io.getStdOut().write(line1);
-    try std.io.getStdOut().writeAll("\n");
+    {
+        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const outw = out_file.deprecatedWriter();
+        try outw.writeAll(line1);
+        try outw.writeAll("\n");
+    }
     try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}\n");
     const line2 = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
     defer gpa.free(line2);
-    _ = try std.io.getStdOut().write(line2);
-    try std.io.getStdOut().writeAll("\n");
+    {
+        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const outw = out_file.deprecatedWriter();
+        try outw.writeAll(line2);
+        try outw.writeAll("\n");
+    }
 
+    // Flush buffered writes before waiting on further responses
+    // no buffered writer now
     if (do_commit) {
         try child_stdin.writeAll("{\"type\":\"COMMIT\"}\n");
         const ackc = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
         defer gpa.free(ackc);
         if (std.mem.indexOf(u8, ackc, "\"type\":\"ERROR\"") != null) {
-            _ = try std.io.getStdErr().write(ackc);
-            try std.io.getStdErr().writeAll("\n");
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_writer = stderr_file.deprecatedWriter();
+            try stderr_writer.writeAll(ackc);
+            try stderr_writer.writeAll("\n");
             child.stdin.?.close();
             _ = try child.wait();
             std.process.exit(2);
@@ -113,8 +127,10 @@ pub fn main() !void {
         const ackr = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
         defer gpa.free(ackr);
         if (std.mem.indexOf(u8, ackr, "\"type\":\"ERROR\"") != null) {
-            _ = try std.io.getStdErr().write(ackr);
-            try std.io.getStdErr().writeAll("\n");
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_writer = stderr_file.deprecatedWriter();
+            try stderr_writer.writeAll(ackr);
+            try stderr_writer.writeAll("\n");
             child.stdin.?.close();
             _ = try child.wait();
             std.process.exit(2);
@@ -122,6 +138,7 @@ pub fn main() !void {
     }
 
     // Done; shutdown server
+    // no buffered writer now
     if (child.stdin) |s| {
         s.close();
         child.stdin = null;

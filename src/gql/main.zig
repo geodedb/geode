@@ -34,10 +34,10 @@ pub fn main() !void {
     var demo_diagnostics = false;
     var demo_agg = false;
     // Collect parameters from --param name=value occurrences
-    var param_names = std.ArrayList([]const u8).init(gpa);
-    defer param_names.deinit();
-    var param_values = std.ArrayList(eval.Value).init(gpa);
-    defer param_values.deinit();
+    var param_names = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
+    defer param_names.deinit(gpa);
+    var param_values = std.ArrayList(eval.Value).initCapacity(gpa, 0) catch @panic("OOM");
+    defer param_values.deinit(gpa);
     var idx: usize = 1;
     while (idx < args.len - 1) {
         if (std.mem.eql(u8, args[idx], "--strict-order-keys")) {
@@ -73,7 +73,7 @@ pub fn main() !void {
                 std.process.exit(2);
             }
             const val = args[idx + 1];
-            session_offset = (@import("../temporal.zig").parseOffsetMinutes(val) catch {
+            session_offset = (gql.temporal.parseOffsetMinutes(val) catch {
                 std.debug.print("error: invalid --session-offset '{s}'\n", .{val});
                 std.process.exit(2);
             });
@@ -134,18 +134,18 @@ pub fn main() !void {
                     break;
                 }
             }
-            try param_names.append(name);
+            try param_names.append(gpa, name);
             if (is_num) {
                 const n = std.fmt.parseInt(i64, val, 10) catch 0;
-                try param_values.append(.{ .Int = n });
+                try param_values.append(gpa, .{ .Int = n });
             } else if (std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "false")) {
-                try param_values.append(.{ .Bool = std.mem.eql(u8, val, "true") });
+                try param_values.append(gpa, .{ .Bool = std.mem.eql(u8, val, "true") });
             } else if (val.len >= 2 and val[0] == '"' and val[val.len - 1] == '"') {
-                try param_values.append(.{ .Str = val[1 .. val.len - 1] });
+                try param_values.append(gpa, .{ .Str = val[1 .. val.len - 1] });
             } else if (std.mem.eql(u8, val, "null")) {
-                try param_values.append(.{ .Null = {} });
+                try param_values.append(gpa, .{ .Null = {} });
             } else {
-                try param_values.append(.{ .Str = val });
+                try param_values.append(gpa, .{ .Str = val });
             }
             idx += 2;
         } else break;
@@ -176,18 +176,34 @@ pub fn main() !void {
     if (conformance_json) {
         const conf = gql.conformance;
         const prof: conf.Profile = .{ .features = .{} };
-        try conf.writeConformanceJson(std.io.getStdOut().writer(), prof);
+        {
+            const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const w = out_file.deprecatedWriter();
+            try conf.writeConformanceJson(w, prof);
+        }
     } else if (print_ast or print_ast_json) {
         const printer = gql.printer;
         if (print_ast_json) {
             if (ast_json_verbose) {
-                try printer.printProgramJsonWith(std.io.getStdOut().writer(), res.program, .{ .verbose_temporals = true, .session_offset_minutes = session_offset });
+                {
+                    const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    const w = out_file.deprecatedWriter();
+                    try printer.printProgramJsonWith(w, res.program, .{ .verbose_temporals = true, .session_offset_minutes = session_offset });
+                }
             } else {
-                try printer.printProgramJsonWith(std.io.getStdOut().writer(), res.program, .{ .session_offset_minutes = session_offset });
+                {
+                    const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    const w = out_file.deprecatedWriter();
+                    try printer.printProgramJsonWith(w, res.program, .{ .session_offset_minutes = session_offset });
+                }
             }
         } else {
             const popts = printer.PrintOptions{ .normalize_temporals = normalize_temporals, .clamp_frac_digits = clamp_frac_digits };
-            try printer.printProgramHumanWith(std.io.getStdOut().writer(), res.program, popts);
+            {
+                const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                const w = out_file.deprecatedWriter();
+                try printer.printProgramHumanWith(w, res.program, popts);
+            }
         }
     } else {
         if (demo_sort) {
@@ -227,27 +243,27 @@ pub fn main() !void {
                     try exec.stableOrderByTemporal(&rows, k0.desc, k0.nulls, ctx, ally);
                     // Print results
                     const pr = gql.printer;
-                    var out = std.ArrayList(u8).init(ally);
-                    defer out.deinit();
-                    try out.appendSlice("demo-sort: session_offset_minutes=");
-                    try out.writer().print("{d}", .{so});
-                    try out.appendSlice("; order= ");
-                    try out.writer().print("{s}", .{if (k0.desc) "DESC" else "ASC"});
-                    try out.appendSlice("; nulls=");
+                    var out = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                    defer out.deinit(ally);
+                    try out.appendSlice(ally, "demo-sort: session_offset_minutes=");
+                    try out.writer(ally).print("{d}", .{so});
+                    try out.appendSlice(ally, "; order= ");
+                    try out.writer(ally).print("{s}", .{if (k0.desc) "DESC" else "ASC"});
+                    try out.appendSlice(ally, "; nulls=");
                     const np = switch (k0.nulls) {
                         .default => "default",
                         .first => "first",
                         .last => "last",
                     };
-                    try out.writer().print("{s}\n", .{np});
-                    try out.appendSlice("sorted rows (id -> key):\n");
+                    try out.writer(ally).print("{s}\n", .{np});
+                    try out.appendSlice(ally, "sorted rows (id -> key):\n");
                     for (rows) |r| {
                         const s = try pr.stringifyExprAlloc(ally, r.key, .{});
                         defer ally.free(s);
-                        try out.writer().print("  {d} -> {s}\n", .{ r.id, s });
+                        try out.writer(ally).print("  {d} -> {s}\n", .{ r.id, s });
                     }
                     // Write once
-                    _ = try std.io.getStdOut().write(out.items);
+                    try (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter().writeAll(out.items);
                 },
                 else => {
                     std.debug.print("demo-sort: first statement is not a Query\n", .{});
@@ -283,7 +299,7 @@ pub fn main() !void {
             defer ally.free(ea);
             const ed = try exec.exceptDistinctRows(ally, A, B);
             defer ally.free(ed);
-            var w = std.io.getStdOut().writer();
+            const w = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             try w.print("demo-setops:\n  A = 3 rows, B = 3 rows\n", .{});
             try w.print("  UNION ALL: {d} rows (stable-left)\n", .{ua.len});
             try w.print("  UNION DISTINCT: {d} rows (sorted)\n", .{ud.len});
@@ -313,12 +329,12 @@ pub fn main() !void {
             const ud2 = try exec.unionDistinctRowsOptimized(ally, a_rows, b_rows, exec.SetOpsTuning.union_distinct_hash_threshold);
             defer ally.free(ud2);
             const t2 = std.time.nanoTimestamp();
-            var w = std.io.getStdOut().writer();
+            const w = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             try w.print("bench-setops: N={d}\n  unionDistinctRows    => {d} ns\n  unionDistinct(opt)   => {d} ns\n  same cardinality?     {s}\n", .{ N, t1 - t0, t2 - t1, if (ud1.len == ud2.len) "yes" else "no" });
         } else if (bench_eval) {
             // Micro-bench: regex =~ and IN/NOT IN evaluation
             const ally = std.heap.page_allocator;
-            var w = std.io.getStdOut().writer();
+            const w = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             // Regex benchmark
             const samples = [_][]const u8{ "Alice.", "Bob", "Carol123", "Z", "Alic", "Alice." };
             const pats = [_][]const u8{ "^A.*$", "A[il]ice\\.", "^[^B].*$", "Z?$", "Al?ice\\." };
@@ -374,7 +390,7 @@ pub fn main() !void {
             switch (st) {
                 .Query => |q| {
                     const names = &.{ "a", "s" };
-                    var w = std.io.getStdOut().writer();
+                    const w = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
                     const pr = gql.printer;
                     if (q.group_by != null) {
                         // Validate GROUP BY semantics first; surface diagnostics
@@ -516,46 +532,46 @@ pub fn main() !void {
                         return;
                     }
                     // Build Agg list from RETURN items and HAVING (COUNT/COUNT(*), SUM/MIN/MAX/AVG); numeric args operate on column index 1 (val)
-                    var aggs = std.ArrayList(exec.Agg).init(gpa);
-                    defer aggs.deinit();
-                    var v_idxs = std.ArrayList(usize).init(gpa);
-                    defer v_idxs.deinit();
+                    var aggs = std.ArrayList(exec.Agg).initCapacity(gpa, 0) catch unreachable;
+                    defer aggs.deinit(gpa);
+                    var v_idxs = std.ArrayList(usize).initCapacity(gpa, 0) catch unreachable;
+                    defer v_idxs.deinit(gpa);
                     // Header labels
-                    var labels = std.ArrayList([]const u8).init(gpa);
-                    defer labels.deinit();
+                    var labels = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
+                    defer labels.deinit(gpa);
                     // Collect aggregates helper
                     const addAggFromCall = struct {
-                        fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), call_expr: ast.Expr) void {
+                        fn go(ally_inner: std.mem.Allocator, aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), call_expr: ast.Expr) void {
                             if (call_expr != .Call) return;
                             const c = call_expr.Call;
                             switch (c.callee.*) {
                                 .Ident => |nm| {
                                     if (std.ascii.eqlIgnoreCase(nm, "count")) {
                                         if (c.args.len == 0) {
-                                            aggs_out.append(.CountStar) catch {};
-                                            v_idxs_out.append(0) catch {};
-                                            labels_out.append("COUNT(*)") catch {};
+                                            aggs_out.append(ally_inner, .CountStar) catch {};
+                                            v_idxs_out.append(ally_inner, 0) catch {};
+                                            labels_out.append(ally_inner, "COUNT(*)") catch {};
                                         } else {
-                                            aggs_out.append(.Count) catch {};
-                                            v_idxs_out.append(1) catch {};
-                                            labels_out.append("COUNT") catch {};
+                                            aggs_out.append(ally_inner, .Count) catch {};
+                                            v_idxs_out.append(ally_inner, 1) catch {};
+                                            labels_out.append(ally_inner, "COUNT") catch {};
                                         }
                                     } else if (std.ascii.eqlIgnoreCase(nm, "sum")) {
-                                        aggs_out.append(.Sum) catch {};
-                                        v_idxs_out.append(1) catch {};
-                                        labels_out.append("SUM") catch {};
+                                        aggs_out.append(ally_inner, .Sum) catch {};
+                                        v_idxs_out.append(ally_inner, 1) catch {};
+                                        labels_out.append(ally_inner, "SUM") catch {};
                                     } else if (std.ascii.eqlIgnoreCase(nm, "min")) {
-                                        aggs_out.append(.Min) catch {};
-                                        v_idxs_out.append(1) catch {};
-                                        labels_out.append("MIN") catch {};
+                                        aggs_out.append(ally_inner, .Min) catch {};
+                                        v_idxs_out.append(ally_inner, 1) catch {};
+                                        labels_out.append(ally_inner, "MIN") catch {};
                                     } else if (std.ascii.eqlIgnoreCase(nm, "max")) {
-                                        aggs_out.append(.Max) catch {};
-                                        v_idxs_out.append(1) catch {};
-                                        labels_out.append("MAX") catch {};
+                                        aggs_out.append(ally_inner, .Max) catch {};
+                                        v_idxs_out.append(ally_inner, 1) catch {};
+                                        labels_out.append(ally_inner, "MAX") catch {};
                                     } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {
-                                        aggs_out.append(.Avg) catch {};
-                                        v_idxs_out.append(1) catch {};
-                                        labels_out.append("AVG") catch {};
+                                        aggs_out.append(ally_inner, .Avg) catch {};
+                                        v_idxs_out.append(ally_inner, 1) catch {};
+                                        labels_out.append(ally_inner, "AVG") catch {};
                                     }
                                 },
                                 else => {},
@@ -563,31 +579,31 @@ pub fn main() !void {
                         }
                     }.go;
                     for (q.ret.items) |it| switch (it.expr) {
-                        .Call => |_| addAggFromCall(&aggs, &v_idxs, &labels, it.expr),
+                        .Call => |_| addAggFromCall(gpa, &aggs, &v_idxs, &labels, it.expr),
                         else => {},
                     };
                     if (q.having) |hv| {
                         // Walk HAVING and add any missing aggregates
                         const walk = struct {
-                            fn go(aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), e: ast.Expr) void {
+                            fn go(ally_inner: std.mem.Allocator, aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), e: ast.Expr) void {
                                 switch (e) {
-                                    .Call => |_| addAggFromCall(aggs_out, v_idxs_out, labels_out, e),
-                                    .Unary => |u| go(aggs_out, v_idxs_out, labels_out, u.expr.*),
+                                    .Call => |_| addAggFromCall(ally_inner, aggs_out, v_idxs_out, labels_out, e),
+                                    .Unary => |u| go(ally_inner, aggs_out, v_idxs_out, labels_out, u.expr.*),
                                     .Binary => |b| {
-                                        go(aggs_out, v_idxs_out, labels_out, b.left.*);
-                                        go(aggs_out, v_idxs_out, labels_out, b.right.*);
+                                        go(ally_inner, aggs_out, v_idxs_out, labels_out, b.left.*);
+                                        go(ally_inner, aggs_out, v_idxs_out, labels_out, b.right.*);
                                     },
                                     else => {},
                                 }
                             }
                         }.go;
-                        walk(&aggs, &v_idxs, &labels, hv);
+                        walk(gpa, &aggs, &v_idxs, &labels, hv);
                     }
                     if (aggs.items.len == 0) {
                         // Default to COUNT if none present
-                        try aggs.append(.CountStar);
-                        try v_idxs.append(0);
-                        try labels.append("COUNT(*)");
+                        try aggs.append(gpa, .CountStar);
+                        try v_idxs.append(gpa, 0);
+                        try labels.append(gpa, "COUNT(*)");
                     }
                     const spec = exec.GroupSpec{ .key_idxs = &.{0}, .aggs = aggs.items };
                     // Sample rows: (name, val)
@@ -617,42 +633,42 @@ pub fn main() !void {
                     var ai: usize = 0;
                     while (ai < aggs.items.len) : (ai += 1) {
                         const a = aggs.items[ai];
-                        var sig_buf = std.ArrayList(u8).init(gpa);
-                        defer sig_buf.deinit();
+                        var sig_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch unreachable;
+                        defer sig_buf.deinit(gpa);
                         switch (a) {
                             .CountStar => {
-                                try sig_buf.appendSlice("count(*)");
+                                try sig_buf.appendSlice(gpa, "count(*)");
                             },
                             .Count => {
-                                try sig_buf.appendSlice("count(");
-                                try sig_buf.appendSlice(gb_key_s);
-                                try sig_buf.append(')');
+                                try sig_buf.appendSlice(gpa, "count(");
+                                try sig_buf.appendSlice(gpa, gb_key_s);
+                                try sig_buf.append(gpa, ')');
                             },
                             .Sum => {
-                                try sig_buf.appendSlice("sum(");
-                                try sig_buf.appendSlice(gb_key_s);
-                                try sig_buf.append(')');
+                                try sig_buf.appendSlice(gpa, "sum(");
+                                try sig_buf.appendSlice(gpa, gb_key_s);
+                                try sig_buf.append(gpa, ')');
                             },
                             .Min => {
-                                try sig_buf.appendSlice("min(");
-                                try sig_buf.appendSlice(gb_key_s);
-                                try sig_buf.append(')');
+                                try sig_buf.appendSlice(gpa, "min(");
+                                try sig_buf.appendSlice(gpa, gb_key_s);
+                                try sig_buf.append(gpa, ')');
                             },
                             .Max => {
-                                try sig_buf.appendSlice("max(");
-                                try sig_buf.appendSlice(gb_key_s);
-                                try sig_buf.append(')');
+                                try sig_buf.appendSlice(gpa, "max(");
+                                try sig_buf.appendSlice(gpa, gb_key_s);
+                                try sig_buf.append(gpa, ')');
                             },
                             .Avg => {
-                                try sig_buf.appendSlice("avg(");
-                                try sig_buf.appendSlice(gb_key_s);
-                                try sig_buf.append(')');
+                                try sig_buf.appendSlice(gpa, "avg(");
+                                try sig_buf.appendSlice(gpa, gb_key_s);
+                                try sig_buf.append(gpa, ')');
                             },
                         }
                         _ = agg_map.put(sig_buf.items, ai) catch {};
                     }
                     // Print header
-                    var w = std.io.getStdOut().writer();
+                    const w = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
                     try w.print("demo-agg: groups over (name, val)\n", .{});
                     try w.print("group\t", .{});
                     for (labels.items, 0..) |lab, i| {

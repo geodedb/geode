@@ -16,8 +16,12 @@ pub const Features = struct {
 };
 
 pub fn writeConformanceJson(w: anytype, prof: Profile) !void {
-    var jw = std.json.writeStream(w, .{});
-    defer jw.deinit();
+    var buf: [8192]u8 = undefined;
+    var adapter = w.adaptToNewApi(&buf);
+    var jw = std.json.Stringify{
+        .writer = &adapter.new_interface,
+        .options = .{},
+    };
     try jw.beginObject();
     try jw.objectField("version");
     try jw.write(prof.version);

@@ -9,13 +9,37 @@ const Token = struct {
 };
 
 const TokenKind = enum {
-    Identifier, Number, String, Boolean,
-    Graph, Node, Edge, From, To, Labels,
-    Properties, Constraints, Unique, Exists,
-    Default, NotNull,
-    Colon, Comma, LBrace, RBrace, LBracket, RBracket, LParen, RParen,
-    Equal, Variant, Map, Array, Set,
-    PrimitiveType, Eof,
+    Identifier,
+    Number,
+    String,
+    Boolean,
+    Graph,
+    Node,
+    Edge,
+    From,
+    To,
+    Labels,
+    Properties,
+    Constraints,
+    Unique,
+    Exists,
+    Default,
+    NotNull,
+    Colon,
+    Comma,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    LParen,
+    RParen,
+    Equal,
+    Variant,
+    Map,
+    Array,
+    Set,
+    PrimitiveType,
+    Eof,
 };
 
 pub fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
@@ -25,27 +49,7 @@ pub fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
     var column: usize = 1;
 
     while (it.next()) |tok| {
-        const kind = if (std.mem.eql(u8, tok, "graph")) .Graph
-            else if (std.mem.eql(u8, tok, "node")) .Node
-            else if (std.mem.eql(u8, tok, "edge")) .Edge
-            else if (std.mem.eql(u8, tok, "from")) .From
-            else if (std.mem.eql(u8, tok, "to")) .To
-            else if (std.mem.eql(u8, tok, "labels")) .Labels
-            else if (std.mem.eql(u8, tok, "properties")) .Properties
-            else if (std.mem.eql(u8, tok, "constraints")) .Constraints
-            else if (std.mem.eql(u8, tok, "unique")) .Unique
-            else if (std.mem.eql(u8, tok, "exists")) .Exists
-            else if (std.mem.eql(u8, tok, "default")) .Default
-            else if (std.mem.eql(u8, tok, "notnull")) .NotNull
-            else if (std.mem.eql(u8, tok, "variant")) .Variant
-            else if (std.mem.eql(u8, tok, "map")) .Map
-            else if (std.mem.eql(u8, tok, "array")) .Array
-            else if (std.mem.eql(u8, tok, "set")) .Set
-            else if (isPrimitiveType(tok)) .PrimitiveType
-            else if (std.ascii.isDigit(tok[0])) .Number
-            else if (tok[0] == '"') .String
-            else if (std.mem.eql(u8, tok, "true") or std.mem.eql(u8, tok, "false")) .Boolean
-            else .Identifier;
+        const kind = if (std.mem.eql(u8, tok, "graph")) .Graph else if (std.mem.eql(u8, tok, "node")) .Node else if (std.mem.eql(u8, tok, "edge")) .Edge else if (std.mem.eql(u8, tok, "from")) .From else if (std.mem.eql(u8, tok, "to")) .To else if (std.mem.eql(u8, tok, "labels")) .Labels else if (std.mem.eql(u8, tok, "properties")) .Properties else if (std.mem.eql(u8, tok, "constraints")) .Constraints else if (std.mem.eql(u8, tok, "unique")) .Unique else if (std.mem.eql(u8, tok, "exists")) .Exists else if (std.mem.eql(u8, tok, "default")) .Default else if (std.mem.eql(u8, tok, "notnull")) .NotNull else if (std.mem.eql(u8, tok, "variant")) .Variant else if (std.mem.eql(u8, tok, "map")) .Map else if (std.mem.eql(u8, tok, "array")) .Array else if (std.mem.eql(u8, tok, "set")) .Set else if (isPrimitiveType(tok)) .PrimitiveType else if (std.ascii.isDigit(tok[0])) .Number else if (tok[0] == '"') .String else if (std.mem.eql(u8, tok, "true") or std.mem.eql(u8, tok, "false")) .Boolean else .Identifier;
 
         try tokens.append(.{
             .kind = kind,
@@ -61,15 +65,13 @@ pub fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
 }
 
 fn isPrimitiveType(tok: []const u8) bool {
-    return std.mem.indexOfScalar(u8,
-        "bool int8 int16 int32 int64 int128 int256 int512 " ++
+    return std.mem.indexOfScalar(u8, "bool int8 int16 int32 int64 int128 int256 int512 " ++
         "uint8 uint16 uint32 uint64 uint128 uint256 uint512 " ++
         "float32 float64 float128 float256 float512 " ++
         "real fuzzy_float timestamp duration timezone calendar char str byte " ++
         "json jsonb jsonl xml yaml delimited uuid hash weight direction " ++
         "lat lon altitude pressure geojson geometry geohash s2_cell_id " ++
-        "ip mac endian locale currency country pq_key pq_signature encrypted_blob compressed_block node_id edge_id graph_version",
-        tok) != null;
+        "ip mac endian locale currency country pq_key pq_signature encrypted_blob compressed_block node_id edge_id graph_version", tok) != null;
 }
 
 pub const Parser = struct {
@@ -96,8 +98,7 @@ pub const Parser = struct {
         const name = try self.expect(.Identifier);
         try self.expect(.LBrace);
         while (self.peek() == .Node or self.peek() == .Edge) {
-            if (self.peek() == .Node) try self.parseNode();
-            else try self.parseEdge();
+            if (self.peek() == .Node) try self.parseNode() else try self.parseEdge();
         }
         try self.expect(.RBrace);
     }

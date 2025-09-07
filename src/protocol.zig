@@ -27,7 +27,7 @@ pub const ClientMessage = union(MessageType) {
     ROLLBACK: void,
 };
 
-pub const ResultType = enum { SCHEMA, BINDINGS, ERROR };
+pub const ResultType = enum { SCHEMA, BINDINGS, ERROR, EXPLAIN, PROFILE };
 
 pub const SchemaCol = struct { name: []const u8, type: []const u8 };
 
@@ -74,6 +74,18 @@ pub fn writeBindingsLine(w: anytype, ordered: bool, order_keys: []const []const 
     try w.writeAll("}}\n");
 }
 
+pub fn writeExplainLine(w: anytype, json_payload: []const u8) !void {
+    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\",\"json\":");
+    try w.writeAll(json_payload);
+    try w.writeAll("}}\n");
+}
+
+pub fn writeProfileLine(w: anytype, json_payload: []const u8) !void {
+    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":");
+    try w.writeAll(json_payload);
+    try w.writeAll("}}\n");
+}
+
 pub fn writeErrorLine(w: anytype, code: []const u8, message: []const u8, anchor: []const u8) !void {
     // Minimal error line; client may print stderr separately
     try w.writeAll("{\"status_class\":\"02000\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
@@ -113,7 +125,7 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         var params_json: ?[]const u8 = null;
         if (params_val) |pv| {
             // Allocate JSON string for params that outlives the parser
-            params_json = std.json.stringifyAlloc(ally, pv, .{}) catch null;
+            params_json = std.json.Stringify.valueAlloc(ally, pv, .{}) catch null;
         }
         return .{ .RUN_GQL = .{ .text = txt, .params_json = params_json } };
     } else if (std.mem.eql(u8, typ, "PULL")) {

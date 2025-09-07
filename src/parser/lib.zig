@@ -9,13 +9,37 @@ const Token = struct {
 };
 
 const TokenKind = enum {
-    Identifier, Number, String, Boolean,
-    Graph, Node, Edge, From, To, Labels,
-    Properties, Constraints, Unique, Exists,
-    Default, NotNull,
-    Colon, Comma, LBrace, RBrace, LBracket, RBracket, LParen, RParen,
-    Equal, Variant, Map, Array, Set,
-    PrimitiveType, Eof,
+    Identifier,
+    Number,
+    String,
+    Boolean,
+    Graph,
+    Node,
+    Edge,
+    From,
+    To,
+    Labels,
+    Properties,
+    Constraints,
+    Unique,
+    Exists,
+    Default,
+    NotNull,
+    Colon,
+    Comma,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    LParen,
+    RParen,
+    Equal,
+    Variant,
+    Map,
+    Array,
+    Set,
+    PrimitiveType,
+    Eof,
 };
 
 pub const Parser = struct {
@@ -42,8 +66,7 @@ pub const Parser = struct {
         const name = try self.expect(.Identifier);
         try self.expect(.LBrace);
         while (self.peek() == .Node or self.peek() == .Edge) {
-            if (self.peek() == .Node) try self.parseNode();
-            else try self.parseEdge();
+            if (self.peek() == .Node) try self.parseNode() else try self.parseEdge();
         }
         try self.expect(.RBrace);
     }

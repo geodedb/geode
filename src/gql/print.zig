@@ -38,8 +38,12 @@ pub fn printProgramJson(w: anytype, prog: ast.Program) !void {
 }
 
 pub fn printProgramJsonWith(w: anytype, prog: ast.Program, jopts: PrintJsonOptions) !void {
-    var jw = std.json.writeStream(w, .{});
-    defer jw.deinit();
+    var buf: [8192]u8 = undefined;
+    var adapter = w.adaptToNewApi(&buf);
+    var jw = std.json.Stringify{
+        .writer = &adapter.new_interface,
+        .options = .{},
+    };
     try jw.beginObject();
     if (jopts.session_offset_minutes) |som| {
         try jw.objectField("session_offset_minutes");
@@ -58,7 +62,7 @@ pub fn printProgramJsonWith(w: anytype, prog: ast.Program, jopts: PrintJsonOptio
         try jw.objectField("temporals");
         try jw.beginArray();
         var list = try collectTemporalsList(std.heap.page_allocator, prog);
-        defer list.deinit();
+        defer list.deinit(std.heap.page_allocator);
         for (list.items) |ent| {
             try jw.beginObject();
             try jw.objectField("kind");
@@ -209,69 +213,69 @@ const TemporalEntry = union(enum) {
 };
 
 fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayList(TemporalEntry) {
-    var list = std.ArrayList(TemporalEntry).init(ally);
+    var list = std.ArrayList(TemporalEntry).initCapacity(ally, 0) catch return error.OutOfMemory;
     const self = struct {
-        fn walkStmt(dst: *std.ArrayList(TemporalEntry), st: ast.Statement) !void {
+        fn walkStmt(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), st: ast.Statement) !void {
             switch (st) {
-                .Query => |q| try walkQuery(dst, q),
+                .Query => |q| try walkQuery(ally_inner, dst, q),
                 .Union => |u| {
-                    try walkQuery(dst, u.first);
-                    for (u.tails) |p| try walkQuery(dst, p.query);
+                    try walkQuery(ally_inner, dst, u.first);
+                    for (u.tails) |p| try walkQuery(ally_inner, dst, p.query);
                 },
                 else => {},
             }
         }
-        fn walkQuery(dst: *std.ArrayList(TemporalEntry), q: ast.Query) !void {
-            if (q.where_clause) |e| try walkExpr(dst, e);
-            if (q.with_clause) |wth| for (wth.items) |it| try walkExpr(dst, it.expr);
-            if (q.group_by) |gb| for (gb.keys) |k| try walkExpr(dst, k);
-            if (q.having) |hv| try walkExpr(dst, hv);
-            for (q.ret.items) |it| try walkExpr(dst, it.expr);
-            if (q.order_by) |ob| for (ob.keys) |k| try walkExpr(dst, k.expr);
+        fn walkQuery(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), q: ast.Query) !void {
+            if (q.where_clause) |e| try walkExpr(ally_inner, dst, e);
+            if (q.with_clause) |wth| for (wth.items) |it| try walkExpr(ally_inner, dst, it.expr);
+            if (q.group_by) |gb| for (gb.keys) |k| try walkExpr(ally_inner, dst, k);
+            if (q.having) |hv| try walkExpr(ally_inner, dst, hv);
+            for (q.ret.items) |it| try walkExpr(ally_inner, dst, it.expr);
+            if (q.order_by) |ob| for (ob.keys) |k| try walkExpr(ally_inner, dst, k.expr);
         }
-        fn walkExpr(dst: *std.ArrayList(TemporalEntry), e: ast.Expr) !void {
+        fn walkExpr(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), e: ast.Expr) !void {
             switch (e) {
-                .Date => |d| try dst.append(.{ .Date = d.parsed }),
-                .Time => |t| try dst.append(.{ .Time = t.parsed }),
-                .DateTime => |dt| try dst.append(.{ .DateTime = dt.parsed }),
-                .LocalDateTime => |ldt| try dst.append(.{ .LocalDateTime = ldt.parsed }),
-                .Unary => |u| try walkExpr(dst, u.expr.*),
+                .Date => |d| try dst.append(ally_inner, .{ .Date = d.parsed }),
+                .Time => |t| try dst.append(ally_inner, .{ .Time = t.parsed }),
+                .DateTime => |dt| try dst.append(ally_inner, .{ .DateTime = dt.parsed }),
+                .LocalDateTime => |ldt| try dst.append(ally_inner, .{ .LocalDateTime = ldt.parsed }),
+                .Unary => |u| try walkExpr(ally_inner, dst, u.expr.*),
                 .Binary => |b| {
-                    try walkExpr(dst, b.left.*);
-                    try walkExpr(dst, b.right.*);
+                    try walkExpr(ally_inner, dst, b.left.*);
+                    try walkExpr(ally_inner, dst, b.right.*);
                 },
-                .Member => |m| try walkExpr(dst, m.target.*),
+                .Member => |m| try walkExpr(ally_inner, dst, m.target.*),
                 .Call => |c| {
-                    try walkExpr(dst, c.callee.*);
-                    for (c.args) |a| try walkExpr(dst, a.*);
+                    try walkExpr(ally_inner, dst, c.callee.*);
+                    for (c.args) |a| try walkExpr(ally_inner, dst, a.*);
                 },
-                .List => |items| for (items) |it| try walkExpr(dst, it.*),
+                .List => |items| for (items) |it| try walkExpr(ally_inner, dst, it.*),
                 .In => |inn| {
-                    try walkExpr(dst, inn.value.*);
-                    for (inn.set) |it| try walkExpr(dst, it.*);
+                    try walkExpr(ally_inner, dst, inn.value.*);
+                    for (inn.set) |it| try walkExpr(ally_inner, dst, it.*);
                 },
                 .NotIn => |nin| {
-                    try walkExpr(dst, nin.value.*);
-                    for (nin.set) |it| try walkExpr(dst, it.*);
+                    try walkExpr(ally_inner, dst, nin.value.*);
+                    for (nin.set) |it| try walkExpr(ally_inner, dst, it.*);
                 },
-                .IsNull => |nz| try walkExpr(dst, nz.target.*),
+                .IsNull => |nz| try walkExpr(ally_inner, dst, nz.target.*),
                 .Case => |c| {
-                    if (c.operand) |op| try walkExpr(dst, op.*);
+                    if (c.operand) |op| try walkExpr(ally_inner, dst, op.*);
                     for (c.whens) |wh| {
-                        try walkExpr(dst, wh.when.*);
-                        try walkExpr(dst, wh.then_expr.*);
+                        try walkExpr(ally_inner, dst, wh.when.*);
+                        try walkExpr(ally_inner, dst, wh.then_expr.*);
                     }
-                    if (c.else_expr) |el| try walkExpr(dst, el.*);
+                    if (c.else_expr) |el| try walkExpr(ally_inner, dst, el.*);
                 },
                 .PatternComp => |pc| {
-                    if (pc.where) |we| try walkExpr(dst, we.*);
-                    try walkExpr(dst, pc.map.*);
+                    if (pc.where) |we| try walkExpr(ally_inner, dst, we.*);
+                    try walkExpr(ally_inner, dst, pc.map.*);
                 },
                 else => {},
             }
         }
     };
-    for (prog.statements) |st| try self.walkStmt(&list, st);
+    for (prog.statements) |st| try self.walkStmt(ally, &list, st);
     return list;
 }
 
@@ -397,10 +401,10 @@ pub fn printExpr(w: anytype, e: ast.Expr, prec: u8) !void {
 
 // Helper to stringify a single expression with options, for granular tests and utilities.
 pub fn stringifyExprAlloc(ally: std.mem.Allocator, e: ast.Expr, opts: PrintOptions) ![]u8 {
-    var buf = std.ArrayList(u8).init(ally);
-    errdefer buf.deinit();
-    try printExprWith(buf.writer(), e, 0, opts);
-    return buf.toOwnedSlice();
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    try printExprWith(buf.writer(ally), e, 0, opts);
+    return buf.toOwnedSlice(ally);
 }
 
 pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !void {
@@ -442,33 +446,33 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .Date => |d| if (!opts.normalize_temporals) {
             try w.print("DATE\"{s}\"", .{d.raw});
         } else {
-            var buf = std.ArrayList(u8).init(std.heap.page_allocator);
-            defer buf.deinit();
-            try temporal.formatDate(buf.writer(), d.parsed);
+            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
+            defer buf.deinit(std.heap.page_allocator);
+            try temporal.formatDate(buf.writer(std.heap.page_allocator), d.parsed);
             try w.print("DATE\"{s}\"", .{buf.items});
         },
         .DateTime => |dt| if (!opts.normalize_temporals) {
             try w.print("DATETIME\"{s}\"", .{dt.raw});
         } else {
-            var buf = std.ArrayList(u8).init(std.heap.page_allocator);
-            defer buf.deinit();
-            try temporal.formatDateTime(buf.writer(), dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
+            defer buf.deinit(std.heap.page_allocator);
+            try temporal.formatDateTime(buf.writer(std.heap.page_allocator), dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("DATETIME\"{s}\"", .{buf.items});
         },
         .Time => |t| if (!opts.normalize_temporals) {
             try w.print("TIME\"{s}\"", .{t.raw});
         } else {
-            var buf = std.ArrayList(u8).init(std.heap.page_allocator);
-            defer buf.deinit();
-            try temporal.formatTime(buf.writer(), t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
+            defer buf.deinit(std.heap.page_allocator);
+            try temporal.formatTime(buf.writer(std.heap.page_allocator), t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("TIME\"{s}\"", .{buf.items});
         },
         .LocalDateTime => |ldt| if (!opts.normalize_temporals) {
             try w.print("LOCAL DATETIME\"{s}\"", .{ldt.raw});
         } else {
-            var buf = std.ArrayList(u8).init(std.heap.page_allocator);
-            defer buf.deinit();
-            try temporal.formatDateTime(buf.writer(), ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
+            defer buf.deinit(std.heap.page_allocator);
+            try temporal.formatDateTime(buf.writer(std.heap.page_allocator), ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("LOCAL DATETIME\"{s}\"", .{buf.items});
         },
         .StartsWith => |sw| {

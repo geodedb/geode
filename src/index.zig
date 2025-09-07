@@ -2,7 +2,7 @@ const std = @import("std");
 const parseInt = std.fmt.parseInt;
 
 pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.io.getStdout().writer();
 
     try stdout.print("Hello, {s}!\n", .{"world"});
 }

@@ -26,7 +26,13 @@ pub const StorageEngine = struct {
         csrNeighbors: *const fn (ctx: *anyopaque, src: u64) anyerror!NeighborIter,
     };
 
-    pub fn deinit(self: StorageEngine) void { self.vtable.deinit(self.ctx); }
-    pub fn csrAddEdge(self: StorageEngine, src: u64, dst: u64) !void { return self.vtable.csrAddEdge(self.ctx, src, dst); }
-    pub fn csrNeighbors(self: StorageEngine, src: u64) !NeighborIter { return self.vtable.csrNeighbors(self.ctx, src); }
+    pub fn deinit(self: StorageEngine) void {
+        self.vtable.deinit(self.ctx);
+    }
+    pub fn csrAddEdge(self: StorageEngine, src: u64, dst: u64) !void {
+        return self.vtable.csrAddEdge(self.ctx, src, dst);
+    }
+    pub fn csrNeighbors(self: StorageEngine, src: u64) !NeighborIter {
+        return self.vtable.csrNeighbors(self.ctx, src);
+    }
 };

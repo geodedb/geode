@@ -120,8 +120,8 @@ test "printer normalization for temporal literals" {
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const program = try p.parseProgram();
     // Print normalized query
-    var out = std.ArrayList(u8).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList(u8).initCapacity(ally, 0) catch @panic("OOM");
+    defer out.deinit(ally);
     const q = blk: {
         const st = program.statements[0];
         switch (st) {
@@ -129,7 +129,7 @@ test "printer normalization for temporal literals" {
             else => return error.Unexpected,
         }
     };
-    try printer.printQueryWith(out.writer(), q, 0, .{ .normalize_temporals = true, .clamp_frac_digits = 3 });
+    try printer.printQueryWith(out.writer(ally), q, 0, .{ .normalize_temporals = true, .clamp_frac_digits = 3 });
     const s = out.items;
     try std.testing.expect(std.mem.indexOf(u8, s, "TIME\"10:05:03.123Z\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "DATETIME\"2024-08-12T10:05:03.123Z\"") != null);
@@ -143,8 +143,8 @@ test "printer normalization: offset and fraction clamping" {
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const program = try p.parseProgram();
-    var out = std.ArrayList(u8).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList(u8).initCapacity(ally, 0) catch @panic("OOM");
+    defer out.deinit(ally);
     const q = blk: {
         const st = program.statements[0];
         switch (st) {
@@ -152,7 +152,7 @@ test "printer normalization: offset and fraction clamping" {
             else => return error.Unexpected,
         }
     };
-    try printer.printQueryWith(out.writer(), q, 0, .{ .normalize_temporals = true, .clamp_frac_digits = 6 });
+    try printer.printQueryWith(out.writer(ally), q, 0, .{ .normalize_temporals = true, .clamp_frac_digits = 6 });
     const s = out.items;
     // offset formatting is normalized, fraction clamped below
     // Fraction clamped to 6
@@ -168,8 +168,8 @@ test "DATE/TIME two-digit component formatting in normalization" {
     var lx2 = Lexer{ .src = src2 };
     var p2 = Parser{ .lx = &lx2, .arena = &arena, .cur = lx2.next() };
     const pr = try p2.parseProgram();
-    var out = std.ArrayList(u8).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList(u8).initCapacity(ally, 0) catch @panic("OOM");
+    defer out.deinit(ally);
     const q = blk: {
         const st = pr.statements[0];
         switch (st) {
@@ -177,7 +177,7 @@ test "DATE/TIME two-digit component formatting in normalization" {
             else => return error.Unexpected,
         }
     };
-    try printer.printQueryWith(out.writer(), q, 0, .{ .normalize_temporals = true });
+    try printer.printQueryWith(out.writer(ally), q, 0, .{ .normalize_temporals = true });
     const s = out.items;
     try std.testing.expect(std.mem.indexOf(u8, s, "DATE\"2024-01-02\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "TIME\"03:04\"") != null);
@@ -191,9 +191,9 @@ test "JSON verbose temporals includes kind/raw/parsed" {
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const program = try p.parseProgram();
-    var out = std.ArrayList(u8).init(ally);
-    defer out.deinit();
-    try printer.printProgramJsonWith(out.writer(), program, .{ .verbose_temporals = true });
+    var out = std.ArrayList(u8).initCapacity(ally, 0) catch @panic("OOM");
+    defer out.deinit(ally);
+    try printer.printProgramJsonWith(out.writer(ally), program, .{ .verbose_temporals = true });
     const s = out.items;
     // Top-level temporals array exists
     try std.testing.expect(std.mem.indexOf(u8, s, "\"temporals\"") != null);
@@ -420,11 +420,11 @@ test "parameters in GROUP BY, ORDER BY, and RETURN print" {
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const program = try p.parseProgram();
     try std.testing.expect(program.statements.len == 1);
-    var out = std.ArrayList(u8).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList(u8).initCapacity(ally, 0) catch @panic("OOM");
+    defer out.deinit(ally);
     const st = program.statements[0];
     switch (st) {
-        .Query => |q| try printer.printQueryWith(out.writer(), q, 0, .{}),
+        .Query => |q| try printer.printQueryWith(out.writer(ally), q, 0, .{}),
         else => return error.Unexpected,
     }
     const s = out.items;

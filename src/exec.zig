@@ -150,13 +150,13 @@ pub fn multisetIntersect(ally: std.mem.Allocator, a: []const i64, b: []const i64
         const cur = map.get(v) orelse 0;
         _ = try map.put(v, cur + 1);
     }
-    var out = std.ArrayList(i64).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList(i64).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     for (b) |v| if (map.get(v)) |cnt| if (cnt > 0) {
-        try out.append(v);
+        try out.append(ally, v);
         _ = try map.put(v, cnt - 1);
     };
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 // ===========================
@@ -183,36 +183,36 @@ pub fn runGroupedQuery(
     if (q.group_by == null) return error.Invalid; // requires GROUP BY
     const gb = q.group_by.?;
     // 1) Collect aggregates from RETURN and HAVING
-    var aggs = std.ArrayList(Agg).init(ally);
-    defer aggs.deinit();
-    var arg_exprs = std.ArrayList(?ast.Expr).init(ally); // one per agg; null for COUNT(*)
-    defer arg_exprs.deinit();
+    var aggs = std.ArrayList(Agg).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer aggs.deinit(ally);
+    var arg_exprs = std.ArrayList(?ast.Expr).initCapacity(ally, 0) catch return error.OutOfMemory; // one per agg; null for COUNT(*)
+    defer arg_exprs.deinit(ally);
 
     const addAggFromExpr = struct {
-        fn go(aggs_out: *std.ArrayList(Agg), args_out: *std.ArrayList(?ast.Expr), e: ast.Expr) void {
+        fn go(ally_inner: std.mem.Allocator, aggs_out: *std.ArrayList(Agg), args_out: *std.ArrayList(?ast.Expr), e: ast.Expr) void {
             switch (e) {
                 .Call => |c| switch (c.callee.*) {
                     .Ident => |nm| {
                         if (std.ascii.eqlIgnoreCase(nm, "count")) {
                             if (c.args.len == 0) {
-                                aggs_out.append(.CountStar) catch {};
-                                args_out.append(null) catch {};
+                                aggs_out.append(ally_inner, .CountStar) catch {};
+                                args_out.append(ally_inner, null) catch {};
                             } else {
-                                aggs_out.append(.Count) catch {};
-                                args_out.append(c.args[0].*) catch {};
+                                aggs_out.append(ally_inner, .Count) catch {};
+                                args_out.append(ally_inner, c.args[0].*) catch {};
                             }
                         } else if (std.ascii.eqlIgnoreCase(nm, "sum")) {
-                            aggs_out.append(.Sum) catch {};
-                            args_out.append(c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Sum) catch {};
+                            args_out.append(ally_inner, c.args[0].*) catch {};
                         } else if (std.ascii.eqlIgnoreCase(nm, "min")) {
-                            aggs_out.append(.Min) catch {};
-                            args_out.append(c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Min) catch {};
+                            args_out.append(ally_inner, c.args[0].*) catch {};
                         } else if (std.ascii.eqlIgnoreCase(nm, "max")) {
-                            aggs_out.append(.Max) catch {};
-                            args_out.append(c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Max) catch {};
+                            args_out.append(ally_inner, c.args[0].*) catch {};
                         } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {
-                            aggs_out.append(.Avg) catch {};
-                            args_out.append(c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Avg) catch {};
+                            args_out.append(ally_inner, c.args[0].*) catch {};
                         }
                     },
                     else => {},
@@ -221,18 +221,18 @@ pub fn runGroupedQuery(
             }
         }
     }.go;
-    for (q.ret.items) |it| addAggFromExpr(&aggs, &arg_exprs, it.expr);
-    if (q.having) |hv| addAggFromExpr(&aggs, &arg_exprs, hv);
+    for (q.ret.items) |it| addAggFromExpr(ally, &aggs, &arg_exprs, it.expr);
+    if (q.having) |hv| addAggFromExpr(ally, &aggs, &arg_exprs, hv);
     if (aggs.items.len == 0) {
         // Default to COUNT(*)
-        try aggs.append(.CountStar);
-        try arg_exprs.append(null);
+        try aggs.append(ally, .CountStar);
+        try arg_exprs.append(ally, null);
     }
 
     // 2) Build input binding rows: evaluate group keys and aggregate arguments per input row
     const key_len = gb.keys.len;
-    var rows = std.ArrayList([]const BindingValue).init(ally);
-    defer rows.deinit();
+    var rows = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer rows.deinit(ally);
     // Build a map to memoize argument expression stringified forms to index
     var arg_sig_to_idx = std.StringHashMap(usize).init(ally);
     defer arg_sig_to_idx.deinit();
@@ -290,7 +290,7 @@ pub fn runGroupedQuery(
                 out_row[key_len + ai] = BindingValue{ .Null = {} };
             }
         }
-        try rows.append(out_row);
+        try rows.append(ally, out_row);
     }
 
     // 3) Run grouping
@@ -311,17 +311,17 @@ pub fn runGroupedQuery(
     var key_map = std.StringHashMap(usize).init(ally);
     defer key_map.deinit();
     // Map each key's stringified expr to its index
-    var tmp_allocd = std.ArrayList([]const u8).init(ally);
+    var tmp_allocd = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     defer {
         for (tmp_allocd.items) |s| ally.free(s);
-        tmp_allocd.deinit();
+        tmp_allocd.deinit(ally);
     }
     var kx: usize = 0;
     while (kx < key_len) : (kx += 1) {
         const ks = printer.stringifyExprAlloc(ally, gb.keys[kx], .{}) catch "";
         if (ks.len > 0) {
             try key_map.put(ks, kx);
-            try tmp_allocd.append(ks);
+            try tmp_allocd.append(ally, ks);
         }
     }
     var agg_map = std.StringHashMap(usize).init(ally);
@@ -329,67 +329,67 @@ pub fn runGroupedQuery(
     // Build normalized signatures for collected aggregates
     var ai2: usize = 0;
     while (ai2 < aggs.items.len) : (ai2 += 1) {
-        var sig = std.ArrayList(u8).init(ally);
-        defer sig.deinit();
+        var sig = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+        defer sig.deinit(ally);
         switch (aggs.items[ai2]) {
-            .CountStar => try sig.appendSlice("count(*)"),
+            .CountStar => try sig.appendSlice(ally, "count(*)"),
             .Count => {
-                try sig.appendSlice("count(");
+                try sig.appendSlice(ally, "count(");
                 const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
                 defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(s);
-                try sig.append(')');
+                try sig.appendSlice(ally, s);
+                try sig.append(ally, ')');
             },
             .Sum => {
-                try sig.appendSlice("sum(");
+                try sig.appendSlice(ally, "sum(");
                 const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
                 defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(s);
-                try sig.append(')');
+                try sig.appendSlice(ally, s);
+                try sig.append(ally, ')');
             },
             .Min => {
-                try sig.appendSlice("min(");
+                try sig.appendSlice(ally, "min(");
                 const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
                 defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(s);
-                try sig.append(')');
+                try sig.appendSlice(ally, s);
+                try sig.append(ally, ')');
             },
             .Max => {
-                try sig.appendSlice("max(");
+                try sig.appendSlice(ally, "max(");
                 const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
                 defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(s);
-                try sig.append(')');
+                try sig.appendSlice(ally, s);
+                try sig.append(ally, ')');
             },
             .Avg => {
-                try sig.appendSlice("avg(");
+                try sig.appendSlice(ally, "avg(");
                 const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
                 defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(s);
-                try sig.append(')');
+                try sig.appendSlice(ally, s);
+                try sig.append(ally, ')');
             },
         }
         try agg_map.put(sig.items, ai2);
     }
 
     // Filtered aggregated rows
-    var kept = std.ArrayList([]const BindingValue).init(ally);
-    defer kept.deinit();
+    var kept = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer kept.deinit(ally);
     if (q.having) |hv| {
         for (grouped) |gr| {
             const rewritten = rewriteExprWithAggregates(ally, hv, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
             const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{} }) catch eval.Value{ .Null = {} };
-            if (v == .Bool and v.Bool) try kept.append(gr);
+            if (v == .Bool and v.Bool) try kept.append(ally, gr);
         }
     } else {
         // keep all
-        for (grouped) |gr| try kept.append(gr);
+        for (grouped) |gr| try kept.append(ally, gr);
     }
 
     // 5) Project RETURN items for each kept row
     // Build maps for projection reuse (as above): key_map and agg_map already exist.
-    var out = std.ArrayList([]const BindingValue).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     for (kept.items) |gr| {
         var prow = try ally.alloc(BindingValue, q.ret.items.len);
         var ri: usize = 0;
@@ -403,20 +403,20 @@ pub fn runGroupedQuery(
                         .Ident => |s| s,
                         else => break :blk_c,
                     };
-                    var sig = std.ArrayList(u8).init(ally);
-                    defer sig.deinit();
+                    var sig = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+                    defer sig.deinit(ally);
                     // lowercase name
                     var ii: usize = 0;
-                    while (ii < nm.len) : (ii += 1) try sig.append(std.ascii.toLower(nm[ii]));
-                    try sig.append('(');
+                    while (ii < nm.len) : (ii += 1) try sig.append(ally, std.ascii.toLower(nm[ii]));
+                    try sig.append(ally, '(');
                     if (c.args.len == 0) {
-                        try sig.append('*');
+                        try sig.append(ally, '*');
                     } else if (c.args.len == 1) {
                         const s = printer.stringifyExprAlloc(ally, c.args[0].*, .{}) catch "";
                         defer if (s.len > 0) ally.free(s);
-                        try sig.appendSlice(s);
+                        try sig.appendSlice(ally, s);
                     }
-                    try sig.append(')');
+                    try sig.append(ally, ')');
                     if (agg_map.get(sig.items)) |rel| {
                         prow[ri] = gr[key_len + rel];
                         set = true;
@@ -433,7 +433,7 @@ pub fn runGroupedQuery(
             }
             if (!set) prow[ri] = BindingValue{ .Null = {} };
         }
-        try out.append(prow);
+        try out.append(ally, prow);
     }
     // 6) ORDER BY on aggregated output, if present
     if (q.order_by) |ob| {
@@ -512,14 +512,14 @@ pub fn runGroupedQuery(
                 }
             }.less);
             // Apply permutation
-            var sorted = std.ArrayList([]const BindingValue).init(ally);
-            defer sorted.deinit();
-            for (idxs) |ix| try sorted.append(out.items[ix]);
-            out.deinit();
+            var sorted = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+            defer sorted.deinit(ally);
+            for (idxs) |ix| try sorted.append(ally, out.items[ix]);
+            out.deinit(ally);
             out = sorted;
         }
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 fn valueToBinding(v: eval.Value) BindingValue {
@@ -835,27 +835,27 @@ pub fn multisetExcept(ally: std.mem.Allocator, a: []const i64, b: []const i64) !
         const cur = map.get(v) orelse 0;
         _ = try map.put(v, cur + 1);
     }
-    var out = std.ArrayList(i64).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList(i64).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     for (a) |v| {
         const cnt = map.get(v) orelse 0;
         if (cnt == 0) {
-            try out.append(v);
+            try out.append(ally, v);
         } else {
             _ = try map.put(v, cnt - 1);
         }
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 test "set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL" {
     const A = [_]i64{ 1, 2, 2, 3 };
     const B = [_]i64{ 2, 3, 4 };
     // UNION DISTINCT
-    var union_all = std.ArrayList(i64).init(std.testing.allocator);
-    defer union_all.deinit();
-    try union_all.appendSlice(&A);
-    try union_all.appendSlice(&B);
+    var union_all = std.ArrayList(i64).initCapacity(std.testing.allocator, 0) catch return error.OutOfMemory;
+    defer union_all.deinit(std.testing.allocator);
+    try union_all.appendSlice(std.testing.allocator, &A);
+    try union_all.appendSlice(std.testing.allocator, &B);
     const union_distinct = try dedupInts(std.testing.allocator, union_all.items);
     defer std.testing.allocator.free(union_distinct);
     try std.testing.expectEqualSlices(i64, &[_]i64{ 1, 2, 3, 4 }, union_distinct);
@@ -1049,38 +1049,38 @@ fn rowEq(a: []const BindingValue, b: []const BindingValue) bool {
     return true;
 }
 
-fn encodeValueKey(buf: *std.ArrayList(u8), v: BindingValue) !void {
+fn encodeValueKey(ally: std.mem.Allocator, buf: *std.ArrayList(u8), v: BindingValue) !void {
     // Simple, deterministic encoding: type tag + length + payload; NULL is just tag.
     switch (v) {
-        .Null => try buf.append('N'),
+        .Null => try buf.append(ally, 'N'),
         .Bool => |b| {
-            try buf.append('B');
-            try buf.append(if (b) '1' else '0');
+            try buf.append(ally, 'B');
+            try buf.append(ally, if (b) '1' else '0');
         },
         .Int => |n| {
-            try buf.append('I');
-            try buf.writer().print("{d};", .{n});
+            try buf.append(ally, 'I');
+            try buf.writer(ally).print("{d};", .{n});
         },
         .Decimal => |d| {
-            try buf.append('D');
-            try buf.writer().print("{d}@{d};", .{ d.coeff, d.scale });
+            try buf.append(ally, 'D');
+            try buf.writer(ally).print("{d}@{d};", .{ d.coeff, d.scale });
         },
         .Str => |s| {
-            try buf.append('S');
-            try buf.writer().print("{d}:", .{s.len});
-            try buf.appendSlice(s);
+            try buf.append(ally, 'S');
+            try buf.writer(ally).print("{d}:", .{s.len});
+            try buf.appendSlice(ally, s);
         },
     }
 }
 
 fn rowKeyAlloc(ally: std.mem.Allocator, row: []const BindingValue) ![]u8 {
-    var buf = std.ArrayList(u8).init(ally);
-    errdefer buf.deinit();
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
     for (row, 0..) |v, i| {
-        if (i > 0) try buf.append('|');
-        try encodeValueKey(&buf, v);
+        if (i > 0) try buf.append(ally, '|');
+        try encodeValueKey(ally, &buf, v);
     }
-    return buf.toOwnedSlice();
+    return buf.toOwnedSlice(ally);
 }
 
 fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []const BindingValue) ![]const []const BindingValue {
@@ -1094,22 +1094,22 @@ fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []const BindingValue) !
         }
     }.less);
     if (tmp.len == 0) return tmp;
-    var out = std.ArrayList([]const BindingValue).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     var i: usize = 0;
     while (i < tmp.len) : (i += 1) {
         if (out.items.len == 0 or !rowEq(out.items[out.items.len - 1], tmp[i])) {
-            try out.append(tmp[i]);
+            try out.append(ally, tmp[i]);
         }
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 pub fn unionDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var all = std.ArrayList([]const BindingValue).init(ally);
-    defer all.deinit();
-    try all.appendSlice(a);
-    try all.appendSlice(b);
+    var all = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer all.deinit(ally);
+    try all.appendSlice(ally, a);
+    try all.appendSlice(ally, b);
     return try sortUniqueRows(ally, all.items[0..]);
 }
 
@@ -1119,8 +1119,8 @@ pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []const Bi
     if (total < threshold) return try unionDistinctRows(ally, a, b);
     var set = std.StringHashMap(void).init(ally);
     defer set.deinit();
-    var uniq = std.ArrayList([]const BindingValue).init(ally);
-    defer uniq.deinit();
+    var uniq = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer uniq.deinit(ally);
     // Insert all rows from a, then b
     var i: usize = 0;
     while (i < a.len) : (i += 1) {
@@ -1128,7 +1128,7 @@ pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []const Bi
         defer ally.free(key);
         if (!set.contains(key)) {
             _ = try set.put(key, {});
-            try uniq.append(a[i]);
+            try uniq.append(ally, a[i]);
         }
     }
     i = 0;
@@ -1137,7 +1137,7 @@ pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []const Bi
         defer ally.free(key);
         if (!set.contains(key)) {
             _ = try set.put(key, {});
-            try uniq.append(b[i]);
+            try uniq.append(ally, b[i]);
         }
     }
     // Ensure deterministic order for DISTINCT: sort lexicographically
@@ -1145,11 +1145,11 @@ pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []const Bi
 }
 
 pub fn unionAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var out = std.ArrayList([]const BindingValue).init(ally);
-    defer out.deinit();
-    try out.appendSlice(a);
-    try out.appendSlice(b);
-    return out.toOwnedSlice();
+    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
+    try out.appendSlice(ally, a);
+    try out.appendSlice(ally, b);
+    return out.toOwnedSlice(ally);
 }
 
 pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
@@ -1162,19 +1162,19 @@ pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []const BindingValue
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
-    var out = std.ArrayList([]const BindingValue).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     for (a) |row| {
         const key = try rowKeyAlloc(ally, row);
         defer ally.free(key);
         if (counts.get(key)) |cnt| {
             if (cnt > 0) {
-                try out.append(row);
+                try out.append(ally, row);
                 try counts.put(key, cnt - 1);
             }
         }
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
@@ -1185,8 +1185,8 @@ pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []const Binding
         defer ally.free(key);
         _ = try setA.put(key, {});
     }
-    var uniq = std.ArrayList([]const BindingValue).init(ally);
-    defer uniq.deinit();
+    var uniq = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer uniq.deinit(ally);
     var seen = std.StringHashMap(void).init(ally);
     defer seen.deinit();
     for (b) |row| {
@@ -1194,7 +1194,7 @@ pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []const Binding
         defer ally.free(key);
         if (setA.contains(key) and !seen.contains(key)) {
             _ = try seen.put(key, {});
-            try uniq.append(row);
+            try uniq.append(ally, row);
         }
     }
     // Sort for deterministic order
@@ -1211,22 +1211,22 @@ pub fn exceptAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
-    var out = std.ArrayList([]const BindingValue).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     for (a) |row| {
         const key = try rowKeyAlloc(ally, row);
         defer ally.free(key);
         if (counts.get(key)) |cnt| {
             if (cnt == 0) {
-                try out.append(row);
+                try out.append(ally, row);
             } else {
                 try counts.put(key, cnt - 1);
             }
         } else {
-            try out.append(row);
+            try out.append(ally, row);
         }
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 // ===========================
@@ -1428,8 +1428,8 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
         }
     }
     // Materialize output rows: key columns first, then aggregate outputs as Int or Null
-    var out = std.ArrayList([]const BindingValue).init(ally);
-    defer out.deinit();
+    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out.deinit(ally);
     var it = map.valueIterator();
     while (it.next()) |p| {
         const acc = p.*;
@@ -1471,9 +1471,9 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
                 .Max => row[dst] = acc.maxs[a] orelse BindingValue{ .Null = {} },
             }
         }
-        try out.append(row);
+        try out.append(ally, row);
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(ally);
 }
 
 fn i128ToI64(x: i128) ?i64 {
@@ -1570,24 +1570,24 @@ pub fn rewriteExprWithAggregates(
                 .Ident => |s| s,
                 else => break :blk_call .{ .Null = {} },
             };
-            var sig_buf = std.ArrayList(u8).init(ally);
-            defer sig_buf.deinit();
+            var sig_buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+            defer sig_buf.deinit(ally);
             // append lowercase function name
             var i_nm: usize = 0;
             while (i_nm < nm.len) : (i_nm += 1) {
-                try sig_buf.append(std.ascii.toLower(nm[i_nm]));
+                try sig_buf.append(ally, std.ascii.toLower(nm[i_nm]));
             }
-            try sig_buf.append('(');
+            try sig_buf.append(ally, '(');
             if (c.args.len == 0) {
-                try sig_buf.append('*');
+                try sig_buf.append(ally, '*');
             } else if (c.args.len == 1) {
                 const s = printer.stringifyExprAlloc(ally, c.args[0].*, .{}) catch "";
                 defer if (s.len > 0) ally.free(s);
-                try sig_buf.appendSlice(s);
+                try sig_buf.appendSlice(ally, s);
             } else {
                 // not expected in HAVING for current aggregates
             }
-            try sig_buf.append(')');
+            try sig_buf.append(ally, ')');
             const sig = sig_buf.items;
             if (agg_map.get(sig)) |rel| {
                 const v = row[key_len + rel];
@@ -1634,8 +1634,8 @@ pub fn exceptDistinctRows(ally: std.mem.Allocator, a: []const []const BindingVal
         defer ally.free(key);
         _ = try setB.put(key, {});
     }
-    var uniq = std.ArrayList([]const BindingValue).init(ally);
-    defer uniq.deinit();
+    var uniq = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer uniq.deinit(ally);
     var seen = std.StringHashMap(void).init(ally);
     defer seen.deinit();
     for (a) |row| {
@@ -1643,7 +1643,7 @@ pub fn exceptDistinctRows(ally: std.mem.Allocator, a: []const []const BindingVal
         defer ally.free(key);
         if (!setB.contains(key) and !seen.contains(key)) {
             _ = try seen.put(key, {});
-            try uniq.append(row);
+            try uniq.append(ally, row);
         }
     }
     return try sortUniqueRows(ally, uniq.items);
