@@ -1,24 +1,211 @@
-name: Build
+name: CI
 
 on:
   push:
+    branches: [main, '**']
   pull_request:
-    branches:
-      - main
+    branches: ['**']
 
-permissions:
-  contents: write
-  deployments: write
-  packages: write
-  pages: write
-
-env:
-  GOPRIVATE: ${{ vars.GOPRIVATE }}
-  GH_ACCESS_TOKEN: ${{ secrets.GH_PAT }}
-  OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_TOKEN }}
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }}, zig ${{ matrix.zig }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        zig: ['0.15.1']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Zig version
+        run: zig version
+      - name: Build and Test
+        run: make build test
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ runner.os }}-zig-${{ matrix.zig }}
+          path: |
+            zig-out/bin/
+            zig-out/lib/
+            include/
+          retention-days: 7
+
+  build-linux-xdp:
+    name: Build (ubuntu-latest, zig ${{ matrix.zig }}, -Dxdp=true)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        zig: ['0.15.1']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Zig version
+        run: zig version
+      - name: Build (xdp)
+        run: make build ZIG_FLAGS='-Dxdp=true'
+      - name: Upload artifacts (xdp)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-ubuntu-xdp-zig-${{ matrix.zig }}
+          path: |
+            zig-out/bin/
+            zig-out/lib/
+            include/
+          retention-days: 7
+
   build:
-    uses: devnw/workflows/.github/workflows/make-ci.yml@main
-    secrets: inherit # pragma: allowlist secret
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Build
+        run: zig build
+      - name: Unit tests
+        run: make test
+      - name: Build fuzzers
+        run: make fuzz
+      - name: Build bench
+        run: make bench
+      - name: Doccheck
+        run: make doccheck
+      - name: Ensure GAP updated when code changes
+        if: github.event_name == 'pull_request'
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}... | grep -E '\\.(zig|zon|yml)$' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "Code changes detected:"; echo "$CHANGED"
+            echo "Checking GAP.md update..."
+            git diff --name-only origin/${{ github.base_ref }}... | grep -q docs/GAP.md || { echo "GAP.md not updated"; exit 1; }
+            zig build tools
+            ./zig-out/bin/update-gap --summary "CI: code changed in PR" || true
+          fi
+
+  cross-builds:
+    name: Cross builds (${{ matrix.archive_os }}-${{ matrix.archive_arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: arm-linux-gnueabihf
+            archive_os: linux
+            archive_arch: arm
+          - runner: ubuntu-latest
+            target: aarch64-linux-gnu
+            archive_os: linux
+            archive_arch: arm64
+          - runner: ubuntu-latest
+            target: riscv64-linux-gnu
+            archive_os: linux
+            archive_arch: riscv64
+          - runner: macos-14
+            target: x86_64-macos
+            archive_os: macos
+            archive_arch: x86_64
+          - runner: windows-latest
+            target: aarch64-windows-msvc
+            archive_os: windows
+            archive_arch: arm64
+        zig: ['0.15.1']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Zig version
+        run: zig version
+      - name: Build (cross)
+        run: make build ZIG_FLAGS='-Dtarget=${{ matrix.target }}'
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ matrix.archive_os }}-${{ matrix.archive_arch }}-zig-${{ matrix.zig }}
+          path: |
+            zig-out/bin/
+            zig-out/lib/
+            include/
+          retention-days: 7
+
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+        zig: [0.15.1]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
+      - name: Build
+        run: make build ZIG_FLAGS='-Drelease-safe=false'
+      - name: Run tests
+        run: zig build test
+      - name: Build fuzzers
+        run: make fuzz
+      - name: Build bench
+        run: make bench
+      - name: Build tools
+        run: zig build tools
+      - name: Doccheck
+        run: ./zig-out/bin/doccheck
+      - name: Ensure GAP updated on code changes
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          if git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }} | grep -E '\\.(zig|zon|md|yml)$' >/dev/null; then
+            if ! git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }} | grep -E '^docs/GAP.md$' >/dev/null; then
+              echo "GAP.md not updated for code changes" >&2
+              exit 1
+            fi
+          fi
+
+  dev-release:
+    name: Create or update dev release with tarball
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create source tarball
+        run: git archive --format=tar.gz -o quic-dev.tar.gz --prefix=quic-dev/ HEAD
+      - name: Create/update dev release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev
+          name: dev
+          body: 'Automated dev release for ${{ github.sha }}'
+          prerelease: true
+          files: quic-dev.tar.gz
+          fail_on_unmatched_files: true
