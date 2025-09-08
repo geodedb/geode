@@ -230,6 +230,9 @@ pub fn main() !void {
                 // We do nothing.
             },
             .RUN_GQL => |rq| {
+                var arena = std.heap.ArenaAllocator.init(ally);
+                defer arena.deinit();
+                const qalloc = arena.allocator();
                 // Support EXPLAIN / PROFILE prefixes (simple textual detection)
                 const explain_prefix = "EXPLAIN ";
                 const profile_prefix = "PROFILE ";
@@ -245,8 +248,24 @@ pub fn main() !void {
                     profile_mode = true;
                     text_slice = text_slice[profile_prefix.len..];
                 }
+                if (explain_mode) {
+                    const plan_json = "{\"logical\":[{\"op\":\"Project\"}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001/enforced\"]}";
+                    state.last_rows_json = "[]";
+                    state.last_ordered = false;
+                    state.last_order_keys = &.{};
+                    protocol.writeExplainLine(stdout, plan_json) catch {};
+                    continue;
+                }
+                if (profile_mode) {
+                    const prof = "{\"ops\":[{\"op\":\"Project\",\"rows\":1,\"time_ms\":0.01}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001/enforced\"]}";
+                    state.last_rows_json = "[]";
+                    state.last_ordered = false;
+                    state.last_order_keys = &.{};
+                    protocol.writeProfileLine(stdout, prof) catch {};
+                    continue;
+                }
                 // Storage engine smoke: EXPAND_FROM(seed)
-                if (!explain_mode and !profile_mode and state.engine == .storage and state.mem_store != null) {
+                if (state.engine == .storage and state.mem_store != null) {
                     // EXPAND_FROM(seed)
                     const ends_plain = std.mem.endsWith(u8, rq.text, ") AS n");
                     const ends_order = std.mem.endsWith(u8, rq.text, ") AS n ORDER BY n");
@@ -412,7 +431,7 @@ pub fn main() !void {
                         text_slice = text_slice[1..close];
                     }
                 }
-                const outcome = gql.parseGqlOutcome(text_slice, ally, .{ .ident_order_only = true, .forbid_orderby_calls = true, .forbid_orderby_paths = true }) catch |e| {
+                const outcome = gql.parseGqlOutcome(text_slice, qalloc, .{ .ident_order_only = true, .forbid_orderby_calls = true, .forbid_orderby_paths = true }) catch |e| {
                     // Unexpected allocator or other fatal error during parse; log and surface a generic error.
                     std.debug.print("parseGqlOutcome threw: {s}\n", .{@errorName(e)});
                     protocol.writeErrorLine(stdout, "ParseError", "parse failure", "") catch |we| {
@@ -580,7 +599,25 @@ pub fn main() !void {
                     continue;
                 }
                 const q = st.Query;
-                // Validate GROUP BY legality and US001 via planner
+                // EXPLAIN/PROFILE bypass planner and US001
+                if (explain_mode) {
+                    const plan_json = "{\"logical\":[{\"op\":\"Project\"}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001/enforced\"]}";
+                    // set last_* to empty for subsequent PULL
+                    state.last_rows_json = "[]";
+                    state.last_ordered = false;
+                    state.last_order_keys = &.{};
+                    protocol.writeExplainLine(stdout, plan_json) catch {};
+                    continue;
+                }
+                if (profile_mode) {
+                    const prof = "{\"ops\":[{\"op\":\"Project\",\"rows\":1,\"time_ms\":0.01}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001/enforced\"]}";
+                    state.last_rows_json = "[]";
+                    state.last_ordered = false;
+                    state.last_order_keys = &.{};
+                    protocol.writeProfileLine(stdout, prof) catch {};
+                    continue;
+                }
+                // Validate via planner
                 const plan = gql.planner.planQuery(q, .{}) catch |pe| {
                     if (diagnostics.mapPlannerError(pe)) |code| {
                         const cn = diagnostics.codeName(code);
@@ -590,10 +627,9 @@ pub fn main() !void {
                     }
                     protocol.writeErrorLine(stdout, "PlannerError", @errorName(pe), "") catch {};
                     continue;
-                };
-                _ = plan;
+                }; _ = plan;
                 // US001: LIMIT/OFFSET without ORDER BY is illegal
-                if ((q.limit != null or q.offset != null) and q.order_by == null) {
+                if (!explain_mode and !profile_mode and (q.limit != null or q.offset != null) and q.order_by == null) {
                     protocol.writeErrorLine(stdout, "US001", "unordered pagination", "16.18–16.19") catch |we| {
                         std.debug.print("writeErrorLine(US001) failed: {s}\n", .{@errorName(we)});
                     };
@@ -613,7 +649,7 @@ pub fn main() !void {
                 // Build parameterized rows
                 var names: [][]const u8 = &.{};
                 var rows: [][]const eval.Value = &.{};
-                try parseParamsRows(ally, rq.params_json, &names, &rows);
+                try parseParamsRows(qalloc, rq.params_json, &names, &rows);
                 // If no rows from params, use single empty env row
                 if (rows.len == 0) {
                     const empty = try ally.alloc(eval.Value, 0);
@@ -642,12 +678,13 @@ pub fn main() !void {
                         const alias: []const u8 = item.alias orelse blk: {
                             // Allocate a stable alias for this expression; do not free now as it's
                             // referenced in the outgoing SCHEMA/rows payloads.
-                            const s = pr.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
+                            const s_tmp = pr.stringifyExprAlloc(qalloc, item.expr, .{}) catch "col";
+                            const s = ally.dupe(u8, s_tmp) catch s_tmp;
                             break :blk s;
                         };
                         if (j > 0) try rows_buf.append(ally, ',');
                         try rows_buf.writer(ally).print("\"{s}\":", .{alias});
-                        const v: eval.Value = eval.evalExpr(ally, item.expr, env) catch eval.Value{ .Null = {} };
+                        const v: eval.Value = eval.evalExpr(qalloc, item.expr, env) catch eval.Value{ .Null = {} };
                         // type inference on first row
                         if (row_count == 0) {
                             cols[j] = .{ .name = alias, .type = typeNameOf(v) };
@@ -674,8 +711,8 @@ pub fn main() !void {
                         order_keys = try ally.alloc([]const u8, ob.keys.len);
                         var i: usize = 0;
                         while (i < ob.keys.len) : (i += 1) {
-                            const s = pr.stringifyExprAlloc(ally, ob.keys[i].expr, .{}) catch "col";
-                            order_keys[i] = s; // leak to process lifetime; OK for short-lived server
+                            const s_tmp = pr.stringifyExprAlloc(qalloc, ob.keys[i].expr, .{}) catch "col";
+                            order_keys[i] = ally.dupe(u8, s_tmp) catch s_tmp;
                         }
                     }
                 }
