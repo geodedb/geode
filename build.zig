@@ -151,4 +151,38 @@ pub fn build(b: *std.Build) void {
 
     // Ensure binaries are installed before tests so e2e can run them
     test_step.dependOn(b.getInstallStep());
+
+    // --- Fuzz harness (placeholder) ---
+    // Provides a simple executable that can later be extended with real fuzz targets.
+    const fuzz_exe = b.addExecutable(.{
+        .name = "fuzz",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/fuzz/main.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(fuzz_exe);
+    const fuzz_run = b.addRunArtifact(fuzz_exe);
+    const fuzz_step = b.step("fuzz", "Run fuzz harnesses (placeholder)");
+    fuzz_step.dependOn(&fuzz_run.step);
+
+    // --- Benchmark harness (placeholder) ---
+    const bench_exe = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/bench/main.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(bench_exe);
+    const bench_run = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run micro benchmarks (placeholder)");
+    bench_step.dependOn(&bench_run.step);
+
+    // --- Tools (doccheck etc.) ---
+    const doccheck_exe = b.addExecutable(.{
+        .name = "doccheck",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/doccheck.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(doccheck_exe);
+    const doccheck_run = b.addRunArtifact(doccheck_exe);
+    const doccheck_step = b.step("doccheck", "Validate documentation conformance tables");
+    doccheck_step.dependOn(&doccheck_run.step);
+
+    const tools_step = b.step("tools", "Build all auxiliary tools");
+    tools_step.dependOn(&doccheck_exe.step);
 }
