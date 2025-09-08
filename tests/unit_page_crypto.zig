@@ -1,6 +1,6 @@
 const std = @import("std");
-const disk = @import("../src/storage/disk.zig");
-const iface = @import("../src/storage/interface.zig");
+const disk = @import("storage/disk.zig");
+const iface = @import("storage/interface.zig");
 
 test "disk crypto: roundtrip" {
     // set env: GEODE_DISK_ENCRYPTION=on and a fixed key

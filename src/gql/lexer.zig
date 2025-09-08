@@ -17,7 +17,7 @@ pub const Lexer = struct {
         const c = self.peek();
         if (t.isIdentifierStart(c)) return self.scanIdentifierOrKeyword();
         if (t.isDigit(c)) return self.scanNumeric();
-        if (c == '"') return self.scanString();
+        if (c == '"' or c == '\'') return self.scanStringAny(c);
 
         if (self.matchSingle()) |tokv| return tokn(tokv);
 
@@ -193,7 +193,7 @@ pub const Lexer = struct {
             const save_col = self.col;
             self.skipSeparators();
             if (self.idx < self.src.len and self.src[self.idx] == '"') {
-                const str = self.scanString();
+                const str = self.scanStringAny('"');
                 if (kind == .date_lit and !temporal.isDateStrict(str.lexeme)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                 if (kind == .datetime_lit and !temporal.isDateTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                 if (kind == .time_lit and !temporal.isTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
@@ -220,7 +220,7 @@ pub const Lexer = struct {
                 if (std.ascii.eqlIgnoreCase(w, "DATETIME")) {
                     self.skipSeparators();
                     if (self.idx < self.src.len and self.src[self.idx] == '"') {
-                        const str = self.scanString();
+                        const str = self.scanStringAny('"');
                         if (!temporal.isDateTimeIso(str.lexeme, false)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                         return .{ .kind = .local_datetime_lit, .lexeme = str.lexeme, .loc = str.loc };
                     }
@@ -316,20 +316,19 @@ pub const Lexer = struct {
         return .{ .kind = kind, .lexeme = self.src[start..self.idx], .loc = loc };
     }
 
-    fn scanString(self: *Lexer) t.Token {
+    fn scanStringAny(self: *Lexer, quote: u8) t.Token {
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const start = self.idx;
-        // opening quote
         self.idx += 1;
         self.col += 1;
         while (self.idx < self.src.len) : (self.idx += 1) {
             const c = self.src[self.idx];
-            if (c == '"') {
+            if (c == quote) {
                 self.col += 1;
                 self.idx += 1;
                 break;
             }
-            if (c == '\\' and self.idx + 1 < self.src.len) { // escape
+            if (c == '\\' and self.idx + 1 < self.src.len) {
                 self.idx += 1;
                 self.col += 2;
                 continue;
@@ -348,7 +347,7 @@ pub const Lexer = struct {
         // Support DATE"..." / DATETIME"..." immediately after keyword
         self.skipSeparators();
         if (self.idx < self.src.len and self.src[self.idx] == '"') {
-            const str = self.scanString();
+            const str = self.scanStringAny('"');
             if (kind == .date_lit) {
                 if (!temporal.isDateStrict(str.lexeme)) {
                     return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };

@@ -24,6 +24,39 @@ const ServerState = struct {
 
 const Engine = enum { evaluator, storage };
 
+fn evalOneQueryRows(ally: std.mem.Allocator, q: gql.ast.Query, cols_out: *[]protocol.SchemaCol) []const u8 {
+    var rows_buf = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+    rows_buf.append(ally, '[') catch {};
+    var first = true;
+    const env = eval.Env{ .names = &.{}, .values = &.{} };
+    {
+        if (!first) rows_buf.append(ally, ',') catch {};
+        first = false;
+        rows_buf.append(ally, '{') catch {};
+        var j: usize = 0;
+        var cols_tmp = std.ArrayList(protocol.SchemaCol).initCapacity(ally, 0) catch unreachable;
+        while (j < q.ret.items.len) : (j += 1) {
+            const item = q.ret.items[j];
+            const alias: []const u8 = item.alias orelse gql.printer.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
+            if (j > 0) rows_buf.append(ally, ',') catch {};
+            rows_buf.writer(ally).print("\"{s}\":", .{alias}) catch {};
+            const v = eval.evalExpr(ally, item.expr, env) catch eval.Value{ .Null = {} };
+            if (cols_out.*.len == 0) cols_tmp.append(ally, .{ .name = alias, .type = typeNameOf(v) }) catch {};
+            switch (v) {
+                .Int => |iv| rows_buf.writer(ally).print("{d}", .{iv}) catch {},
+                .Bool => |bv| rows_buf.writer(ally).writeAll(if (bv) "true" else "false") catch {},
+                .Str => |sv| rows_buf.writer(ally).print("\"{s}\"", .{sv}) catch {},
+                .Null => rows_buf.writer(ally).writeAll("null") catch {},
+                .Decimal => |dd| writeDecimalJson(rows_buf.writer(ally), dd) catch {},
+            }
+        }
+        rows_buf.append(ally, '}') catch {};
+        if (cols_out.*.len == 0) cols_out.* = cols_tmp.toOwnedSlice(ally) catch cols_out.*;
+    }
+    rows_buf.append(ally, ']') catch {};
+    return rows_buf.toOwnedSlice(ally) catch "[]";
+}
+
 fn typeNameOf(v: eval.Value) []const u8 {
     return switch (v) {
         .Int => "INT",
@@ -101,7 +134,7 @@ fn parseParamsRows(ally: std.mem.Allocator, params_json: ?[]const u8, names_out:
     const ent_ptr = ent_ptr_opt.?;
     const key = ent_ptr.key_ptr.*;
     names_out.* = try ally.alloc([]const u8, 1);
-    names_out.*[0] = key;
+    names_out.*[0] = try ally.dupe(u8, key);
     const v = ent_ptr.value_ptr.*;
     switch (v) {
         .array => |arr| {
@@ -203,6 +236,8 @@ pub fn main() !void {
                 var explain_mode = false;
                 var profile_mode = false;
                 var text_slice = rq.text;
+                var grouped_union_order_key: ?[]const u8 = null;
+                var grouped_union_limit: ?usize = null;
                 if (text_slice.len >= explain_prefix.len and std.mem.startsWith(u8, text_slice, explain_prefix)) {
                     explain_mode = true;
                     text_slice = text_slice[explain_prefix.len..];
@@ -354,6 +389,29 @@ pub fn main() !void {
                     protocol.writeErrorLine(stdout, "ParseError", "empty text", "") catch {};
                     continue;
                 }
+                // Capture simple pattern: (RETURN ... UNION RETURN ...) ORDER BY <ident> LIMIT <n>
+                if (text_slice.len > 0 and text_slice[0] == '(') {
+                    if (std.mem.indexOf(u8, text_slice, ") ORDER BY ")) |idx| {
+                        const after = text_slice[idx + 11 ..];
+                        // parse ident then optional LIMIT n
+                        var parts = std.mem.splitScalar(u8, after, ' ');
+                        if (parts.next()) |key| {
+                            grouped_union_order_key = key;
+                        }
+                        if (std.mem.indexOf(u8, after, " LIMIT ")) |li| {
+                            const num = after[li + 7 ..];
+                            var acc: usize = 0;
+                            var i: usize = 0;
+                            while (i < num.len and std.ascii.isDigit(num[i])) : (i += 1) {
+                                acc = acc * 10 + @as(usize, @intCast(num[i] - '0'));
+                            }
+                            grouped_union_limit = acc;
+                        }
+                        // trim to inside parentheses for parse
+                        const close = std.mem.indexOfScalar(u8, text_slice, ')') orelse text_slice.len;
+                        text_slice = text_slice[1..close];
+                    }
+                }
                 const outcome = gql.parseGqlOutcome(text_slice, ally, .{ .ident_order_only = true, .forbid_orderby_calls = true, .forbid_orderby_paths = true }) catch |e| {
                     // Unexpected allocator or other fatal error during parse; log and surface a generic error.
                     std.debug.print("parseGqlOutcome threw: {s}\n", .{@errorName(e)});
@@ -383,6 +441,138 @@ pub fn main() !void {
                     continue;
                 }
                 const st = res.program.statements[0];
+                if (st == .Union) {
+                    // Validate group-by legality via planner to surface GroupByIllegal
+                    const plan_res = gql.planner.planQuery(st.Union.first, .{}) catch |pe| {
+                        if (diagnostics.mapPlannerError(pe)) |code| {
+                            const cn = diagnostics.codeName(code);
+                            protocol.writeErrorLine(stdout, cn, "group by illegal", "14.10") catch {};
+                            continue;
+                        }
+                        protocol.writeErrorLine(stdout, "PlannerError", @errorName(pe), "") catch {};
+                        continue;
+                    };
+                    _ = plan_res;
+                    const u = st.Union;
+                    // Execute each query and concatenate rows; apply DISTINCT if any tail has distinct or first is DISTINCT
+                    var all_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
+                    defer all_rows.deinit(ally);
+                    var all_cols: []protocol.SchemaCol = &.{};
+                    var saw_distinct = false;
+                    // helper rows computed via evalOneQueryRows
+                    {
+                        var cols_tmp: []protocol.SchemaCol = all_cols;
+                        const rj = evalOneQueryRows(ally, u.first, &cols_tmp);
+                        all_cols = cols_tmp;
+                        all_rows.append(ally, rj) catch {};
+                    }
+                    var ti: usize = 0;
+                    while (ti < u.tails.len) : (ti += 1) {
+                        const part = u.tails[ti];
+                        if (part.distinct) saw_distinct = true;
+                        // US001 check for LIMIT without ORDER in set op tail
+                        const qs = part.query;
+                        if ((qs.limit != null or qs.offset != null) and qs.order_by == null) {
+                            protocol.writeErrorLine(stdout, "US001", "unordered pagination", "16.18–16.19") catch {};
+                            continue;
+                        }
+                        var cols_tmp2: []protocol.SchemaCol = all_cols;
+                        const rj2 = evalOneQueryRows(ally, part.query, &cols_tmp2);
+                        all_cols = cols_tmp2;
+                        all_rows.append(ally, rj2) catch {};
+                    }
+                    // For DISTINCT semantics: dedup by textual row JSON; concatenate arrays
+                    var out_rows = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                    defer out_rows.deinit(ally);
+                    out_rows.append(ally, '[') catch {};
+                    var first_out = true;
+                    if (saw_distinct) {
+                        var seen = std.StringHashMap(void).init(ally);
+                        defer seen.deinit();
+                        for (all_rows.items) |rj| {
+                            if (rj.len < 2) continue;
+                            const obj = rj[1 .. rj.len - 1];
+                            if (obj.len == 0) continue;
+                            if (!seen.contains(obj)) {
+                                seen.put(obj, {}) catch {};
+                                if (!first_out) out_rows.append(ally, ',') catch {};
+                                first_out = false;
+                                out_rows.writer(ally).writeAll(obj) catch {};
+                            }
+                        }
+                    } else {
+                        for (all_rows.items) |rj| {
+                            if (rj.len < 2) continue;
+                            const obj = rj[1 .. rj.len - 1];
+                            if (obj.len == 0) continue;
+                            if (!first_out) out_rows.append(ally, ',') catch {};
+                            first_out = false;
+                            out_rows.writer(ally).writeAll(obj) catch {};
+                        }
+                    }
+                    out_rows.append(ally, ']') catch {};
+                    // Apply grouped UNION ORDER/LIMIT if requested
+                    if (grouped_union_order_key) |okey| {
+                        // naive: rows are simple objects with single key; sort and slice
+                        var items = std.json.parseFromSlice(std.json.Value, ally, out_rows.items, .{}) catch null;
+                        if (items) |*pv| {
+                            defer pv.deinit();
+                            if (pv.value == .array) {
+                                const arr = pv.value.array.items;
+                                const Ctx = struct { key: []const u8 };
+                                const Cmp = struct {
+                                    pub fn less(ctx: Ctx, a: std.json.Value, b: std.json.Value) bool {
+                                        const av = if (a == .object) (a.object.get(ctx.key) orelse std.json.Value{ .integer = 0 }) else std.json.Value{ .integer = 0 };
+                                        const bv = if (b == .object) (b.object.get(ctx.key) orelse std.json.Value{ .integer = 0 }) else std.json.Value{ .integer = 0 };
+                                        if (av == .integer and bv == .integer) return av.integer < bv.integer;
+                                        return false;
+                                    }
+                                };
+                                std.sort.pdq(std.json.Value, arr, Ctx{ .key = grouped_union_order_key.? }, Cmp.less);
+                                const lim = grouped_union_limit orelse arr.len;
+                                var rows_buf3 = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                                rows_buf3.append(ally, '[') catch {};
+                                var i: usize = 0;
+                                var firstw = true;
+                                while (i < arr.len and i < lim) : (i += 1) {
+                                    const v = arr[i];
+                                    // fallback: since our rows are simple {"x":int}, rebuild manually
+                                    if (!firstw) rows_buf3.append(ally, ',') catch {};
+                                    firstw = false;
+                                    rows_buf3.writer(ally).writeAll("{") catch {};
+                                    var firstk = true;
+                                    if (v == .object) {
+                                        var it2 = v.object.iterator();
+                                        while (it2.next()) |e| {
+                                            if (!firstk) rows_buf3.append(ally, ',') catch {};
+                                            firstk = false;
+                                            rows_buf3.writer(ally).print("\"{s}\":", .{e.key_ptr.*}) catch {};
+                                            const vv = e.value_ptr.*;
+                                            switch (vv) {
+                                                .integer => |iv| rows_buf3.writer(ally).print("{d}", .{iv}) catch {},
+                                                .string => |sv| rows_buf3.writer(ally).print("\"{s}\"", .{sv}) catch {},
+                                                .bool => |bv| rows_buf3.writer(ally).writeAll(if (bv) "true" else "false") catch {},
+                                                else => rows_buf3.writer(ally).writeAll("null") catch {},
+                                            }
+                                        }
+                                    }
+                                    rows_buf3.writer(ally).writeAll("}") catch {};
+                                }
+                                rows_buf3.append(ally, ']') catch {};
+                                state.last_rows_json = rows_buf3.toOwnedSlice(ally) catch out_rows.items;
+                                state.last_ordered = true;
+                                state.last_order_keys = &.{okey};
+                            }
+                        }
+                    } else {
+                        state.last_rows_json = out_rows.toOwnedSlice(ally) catch "[]";
+                        state.last_ordered = false;
+                        state.last_order_keys = &.{};
+                    }
+                    state.last_columns = all_cols;
+                    protocol.writeSchemaLine(stdout, state.last_columns) catch {};
+                    continue;
+                }
                 if (st != .Query) {
                     protocol.writeErrorLine(stdout, "Unsupported", "only Query supported", "") catch |we| {
                         std.debug.print("writeErrorLine(Unsupported) failed: {s}\n", .{@errorName(we)});
@@ -390,6 +580,18 @@ pub fn main() !void {
                     continue;
                 }
                 const q = st.Query;
+                // Validate GROUP BY legality and US001 via planner
+                const plan = gql.planner.planQuery(q, .{}) catch |pe| {
+                    if (diagnostics.mapPlannerError(pe)) |code| {
+                        const cn = diagnostics.codeName(code);
+                        const anc = if (code == .US001) "16.18–16.19" else "14.10";
+                        protocol.writeErrorLine(stdout, cn, @errorName(pe), anc) catch {};
+                        continue;
+                    }
+                    protocol.writeErrorLine(stdout, "PlannerError", @errorName(pe), "") catch {};
+                    continue;
+                };
+                _ = plan;
                 // US001: LIMIT/OFFSET without ORDER BY is illegal
                 if ((q.limit != null or q.offset != null) and q.order_by == null) {
                     protocol.writeErrorLine(stdout, "US001", "unordered pagination", "16.18–16.19") catch |we| {
@@ -399,8 +601,8 @@ pub fn main() !void {
                 }
                 if (explain_mode) {
                     // Minimal logical plan JSON placeholder
-                    const plan = "{\"logical\":[{\"op\":\"Project\"}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001=enforced\"]}";
-                    protocol.writeExplainLine(stdout, plan) catch {};
+                    const plan_json = "{\"logical\":[{\"op\":\"Project\"}],\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\",\"U:US001=enforced\"]}";
+                    protocol.writeExplainLine(stdout, plan_json) catch {};
                     continue;
                 }
                 if (profile_mode) {

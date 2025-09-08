@@ -134,22 +134,31 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
     }
     if (allowed.count() == 0) return PlanError.GroupByIllegal;
     // Return items must be either aggregate calls or belong to allowed set (by ident/member).
+    // Additionally, every GROUP BY key must appear as a non-aggregate RETURN item (policy for this project).
+    var nonagg = std.StringHashMap(void).init(std.heap.page_allocator);
+    defer nonagg.deinit();
     for (q.ret.items) |it| {
         const e = it.expr;
         if (isAggregateCall(e)) continue;
         switch (e) {
-            .Ident => |s| if (allowed.contains(s)) continue else return PlanError.GroupByIllegal,
+            .Ident => |s| {
+                if (!allowed.contains(s)) return PlanError.GroupByIllegal;
+                _ = nonagg.put(s, {}) catch {};
+            },
             .Member => {
                 const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch return PlanError.GroupByIllegal;
                 defer std.heap.page_allocator.free(ss);
-                if (allowed.contains(ss)) {
-                    continue;
-                } else {
-                    return PlanError.GroupByIllegal;
-                }
+                if (!allowed.contains(ss)) return PlanError.GroupByIllegal;
+                _ = nonagg.put(ss, {}) catch {};
             },
             else => return PlanError.GroupByIllegal,
         }
+    }
+    // Ensure each group key is present in non-aggregate returns
+    var it_allowed = allowed.keyIterator();
+    while (it_allowed.next()) |kptr| {
+        const k = kptr.*;
+        if (!nonagg.contains(k)) return PlanError.GroupByIllegal;
     }
     // HAVING: must be aggregate predicate or refer only to grouped identifiers/members (strict)
     if (q.having) |hv| {

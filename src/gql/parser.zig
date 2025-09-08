@@ -119,8 +119,62 @@ pub const Parser = struct {
                 break :blk_query .{ .Query = first };
             },
             .RETURN => blk_r: {
-                const q = try self.parseQuery();
-                break :blk_r .{ .Query = q };
+                // Parenthesized set expression grouping: (RETURN ... UNION ...)
+                if (self.cur.kind == .l_paren) {
+                    self.advance();
+                    const first = try self.parseQuery();
+                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    if (self.cur.kind != .UNION) return error.UnexpectedToken;
+                    while (self.cur.kind == .UNION) {
+                        self.advance();
+                        var all = false;
+                        var distinct = false;
+                        if (self.cur.kind == .ALL) { all = true; self.advance(); }
+                        else if (self.cur.kind == .DISTINCT) { distinct = true; self.advance(); }
+                        if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+                        const q2 = try self.parseQuery();
+                        try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
+                    }
+                    _ = try self.expect(.r_paren);
+                    // After grouped set expr, allow ORDER/LIMIT/OFFSET handled by outer caller; here we return a Union statement
+                    break :blk_r .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
+                }
+                const first = try self.parseQuery();
+                if (self.cur.kind == .UNION) {
+                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    while (self.cur.kind == .UNION) {
+                        self.advance();
+                        var all = false;
+                        var distinct = false;
+                        if (self.cur.kind == .ALL) {
+                            all = true;
+                            self.advance();
+                        } else if (self.cur.kind == .DISTINCT) {
+                            distinct = true;
+                            self.advance();
+                        }
+                        if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+                        const q2 = try self.parseQuery();
+                        try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
+                    }
+                    break :blk_r .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
+                }
+                if (self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+                    const kind = self.cur.kind;
+                    self.advance();
+                    var all = false;
+                    var distinct = false;
+                    if (self.cur.kind == .ALL) { all = true; self.advance(); }
+                    else if (self.cur.kind == .DISTINCT) { distinct = true; self.advance(); }
+                    if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+                    const rhs = try self.parseQuery();
+                    if (kind == .INTERSECT) {
+                        break :blk_r .{ .Intersect = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
+                    } else {
+                        break :blk_r .{ .Except = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
+                    }
+                }
+                break :blk_r .{ .Query = first };
             },
             .SESSION => blk: {
                 self.advance();
@@ -239,6 +293,23 @@ pub const Parser = struct {
         var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         try self.parseProjectionItems(&items);
 
+        // Allow GROUP BY (and optional HAVING) after RETURN as well
+        if (self.cur.kind == .GROUP) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys_list2 = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            while (true) {
+                try keys_list2.append(self.arena.allocator(), try self.parseOrExpr());
+                if (self.cur.kind != .comma) break;
+                self.advance();
+            }
+            group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
+            if (self.cur.kind == .HAVING) {
+                self.advance();
+                having_expr = try self.parseOrExpr();
+            }
+        }
+
         var ord: ?ast.OrderBy = null;
         if (self.cur.kind == .ORDER) {
             self.advance();
@@ -247,7 +318,7 @@ pub const Parser = struct {
             // first expression key
             const expr1 = try self.parseOrExpr();
             if (self.forbid_orderby_calls and self.containsCall(expr1)) return self.unexpected("function calls in ORDER BY are disabled");
-            if (self.ident_order_only and !(expr1 == .Ident)) return self.unexpected("ORDER BY key must be identifier");
+            if (self.ident_order_only and !(expr1 == .Ident or (expr1 == .Int and self.isValidOrdinal(expr1.Int, items.items.len)))) return self.unexpected("ORDER BY key must be identifier");
             if (!self.ident_order_only and self.strict_order_keys and !self.isSimpleOrderKey(expr1)) return self.unexpected("ORDER BY key must be identifier or member");
             if (self.forbid_orderby_paths and self.isPathAlias(expr1)) return self.unexpected("ORDER BY cannot reference path alias");
             if (self.ident_order_only and expr1 == .Ident) {
@@ -278,7 +349,7 @@ pub const Parser = struct {
                 self.advance();
                 const exprk = try self.parseOrExpr();
                 if (self.forbid_orderby_calls and self.containsCall(exprk)) return self.unexpected("function calls in ORDER BY are disabled");
-                if (self.ident_order_only and !(exprk == .Ident)) return self.unexpected("ORDER BY key must be identifier");
+                if (self.ident_order_only and !(exprk == .Ident or (exprk == .Int and self.isValidOrdinal(exprk.Int, items.items.len)))) return self.unexpected("ORDER BY key must be identifier");
                 if (!self.ident_order_only and self.strict_order_keys and !self.isSimpleOrderKey(exprk)) return self.unexpected("ORDER BY key must be identifier or member");
                 if (self.forbid_orderby_paths and self.isPathAlias(exprk)) return self.unexpected("ORDER BY cannot reference path alias");
                 if (self.ident_order_only and exprk == .Ident) {
@@ -334,6 +405,13 @@ pub const Parser = struct {
             .offset = offset,
         };
     }
+    fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {
+        _ = self;
+        if (n <= 0) return false;
+        const idx: usize = @intCast(n);
+        return idx >= 1 and idx <= items_len;
+    }
+
     fn isPathAlias(self: *Parser, e: ast.Expr) bool {
         // True only if expr is an identifier that matches a collected chain alias.
         if (e != .Ident) return false;

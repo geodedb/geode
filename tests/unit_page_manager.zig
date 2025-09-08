@@ -1,5 +1,5 @@
 const std = @import("std");
-const disk = @import("../src/storage/disk.zig");
+const disk = @import("storage/disk.zig");
 
 fn set_env(k: []const u8, v: []const u8) void {
     std.process.setEnvVarOwned(std.testing.allocator, k, v) catch {};

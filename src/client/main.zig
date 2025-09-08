@@ -56,7 +56,10 @@ pub fn main() !void {
             const stderr_writer = stderr_file.deprecatedWriter();
             try stderr_writer.writeAll(ack);
             try stderr_writer.writeAll("\n");
-            child.stdin.?.close();
+            if (child.stdin) |s| {
+                s.close();
+                child.stdin = null;
+            }
             _ = try child.wait();
             std.process.exit(2);
         }
@@ -85,7 +88,10 @@ pub fn main() !void {
         const stderr_writer = stderr_file.deprecatedWriter();
         try stderr_writer.writeAll(line1);
         try stderr_writer.writeAll("\n");
-        child.stdin.?.close();
+        if (child.stdin) |s| {
+            s.close();
+            child.stdin = null;
+        }
         _ = try child.wait();
         std.process.exit(2);
     }
@@ -118,7 +124,10 @@ pub fn main() !void {
             const stderr_writer = stderr_file.deprecatedWriter();
             try stderr_writer.writeAll(ackc);
             try stderr_writer.writeAll("\n");
-            child.stdin.?.close();
+            if (child.stdin) |s| {
+                s.close();
+                child.stdin = null;
+            }
             _ = try child.wait();
             std.process.exit(2);
         }
@@ -131,7 +140,10 @@ pub fn main() !void {
             const stderr_writer = stderr_file.deprecatedWriter();
             try stderr_writer.writeAll(ackr);
             try stderr_writer.writeAll("\n");
-            child.stdin.?.close();
+            if (child.stdin) |s| {
+                s.close();
+                child.stdin = null;
+            }
             _ = try child.wait();
             std.process.exit(2);
         }
