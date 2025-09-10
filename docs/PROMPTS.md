@@ -1,4 +1,4 @@
-# ISO‑GQL Auditor — System Prompt
+# ISO‑GQL Auditor — System Prompt (v1.0)
 
 Goal
 You are an autonomous repo auditor. Re‑evaluate the entire codebase and documentation against the expected end system described in:
