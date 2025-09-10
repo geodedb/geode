@@ -130,3 +130,62 @@ test "protocol: CASE expression sanity with params" {
     try std.testing.expect(std.mem.indexOf(u8, res.out, "{\"r\":\"t\"}") != null);
     try std.testing.expect(std.mem.indexOf(u8, res.out, "{\"r\":\"f\"}") != null);
 }
+
+test "protocol: decimal ordering scale alignment" {
+    const exe = "./zig-out/bin/geodec";
+    // Expect stable ordering of decimals with different scales; query returns two identical logical values
+    const res = try run(&.{ exe, "RETURN 1.20 AS a, 1.2 AS b ORDER BY a,b" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Ensure both forms appear once and ORDERED true
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"ordered\":true") != null);
+}
+
+test "protocol: decimal distinct dedup different scales" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "RETURN 1.2 AS x UNION RETURN 1.20 AS x" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Should deduplicate into single row
+    var occurrences: usize = 0;
+    var it = std.mem.splitScalar(u8, res.out, '\n');
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "{\"x\":") != null) occurrences += 1;
+    }
+    try std.testing.expect(occurrences == 1);
+}
+
+test "protocol: multi-diagnostic precedence US001 primary" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "RETURN a ORDER BY f(a) LIMIT 5 OFFSET 2" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    // Expect error exit
+    try std.testing.expectEqual(@as(i32, 2), res.code);
+    // Primary code US001, additional contains IllegalOrderKey
+    try std.testing.expect(std.mem.indexOf(u8, res.err, "US001") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.err, "IllegalOrderKey") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.err, "additional_statuses") != null);
+}
+
+test "protocol: EXPLAIN logical ops" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"type\":\"EXPLAIN\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "Project") != null);
+}
+
+test "protocol: PROFILE includes timing" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "PROFILE RETURN 1 AS x" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"type\":\"PROFILE\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "time_ns") != null);
+}

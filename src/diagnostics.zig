@@ -42,16 +42,31 @@ pub const Diagnostic = struct {
 };
 
 pub fn precedence(a: Code, b: Code) Code {
-    // Simple precedence: lower numeric code wins
-    return if (@intFromEnum(a) <= @intFromEnum(b)) a else b;
+    // Explicit precedence ordering table (lower index wins): US001, IllegalOrderKey, GroupByIllegal, TypeMismatch
+    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch }) |ord| {
+        if (a == ord and b == ord) return a;
+    }
+    // If different, pick the one that appears earlier in the sequence above.
+    const idx = struct {
+        fn rank(c: Code) u8 {
+            return switch (c) {
+                .US001 => 0,
+                .IllegalOrderKey => 1,
+                .GroupByIllegal => 2,
+                .TypeMismatch => 3,
+            };
+        }
+    };
+    return if (idx.rank(a) <= idx.rank(b)) a else b;
 }
 
 pub fn sortByPrecedence(codes: []Code) void {
+    // Simple insertion sort using precedence() comparator
     var i: usize = 1;
     while (i < codes.len) : (i += 1) {
         const key = codes[i];
         var j: isize = @as(isize, @intCast(i)) - 1;
-        while (j >= 0 and @intFromEnum(codes[@as(usize, @intCast(j))]) > @intFromEnum(key)) : (j -= 1) {
+        while (j >= 0 and precedence(codes[@as(usize, @intCast(j))], key) == key) : (j -= 1) {
             codes[@as(usize, @intCast(j + 1))] = codes[@as(usize, @intCast(j))];
         }
         codes[@as(usize, @intCast(j + 1))] = key;

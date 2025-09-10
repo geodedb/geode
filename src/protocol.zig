@@ -129,22 +129,44 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
     return buf.toOwnedSlice(ally);
 }
 
-pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8) ![]u8 {
+pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\",\"json\":");
     try w.writeAll(json_payload);
+    if (flags.len > 0) {
+        try w.writeAll(",\"flagger_findings\":[");
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(flags[fi]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
     try w.writeAll("}}\n");
     return buf.toOwnedSlice(ally);
 }
 
-pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8) ![]u8 {
+pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":");
     try w.writeAll(json_payload);
+    if (flags.len > 0) {
+        try w.writeAll(",\"flagger_findings\":[");
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(flags[fi]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
     try w.writeAll("}}\n");
     return buf.toOwnedSlice(ally);
 }
@@ -173,6 +195,7 @@ pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, messag
     try w.writeAll(message);
     try w.writeAll("\",\"anchor\":\"");
     try w.writeAll(anchor);
+    try w.writeAll("\"");
     if (additional.len > 0) {
         try w.writeAll(",\"additional_statuses\":[");
         var i: usize = 0;
@@ -183,8 +206,6 @@ pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, messag
             try w.writeAll("\"");
         }
         try w.writeAll("]");
-    } else {
-        try w.writeAll("\"");
     }
     if (flags.len > 0) {
         try w.writeAll(",\"flagger_findings\":[");

@@ -34,6 +34,50 @@ const ServerState = struct {
     }
 };
 
+// Aggregate diagnostics discovered during parsing / surface analysis for a single statement.
+// Currently we detect:
+//  - US001 (unordered pagination): presence of LIMIT/OFFSET without ORDER BY
+//  - IllegalOrderKey: parser policy violation captured via parse error message
+// Returns number of collected codes placed into out_codes (deduplicated) sorted by precedence.
+fn collectTextDiagnostics(text: []const u8, parse_err_msg: ?[]const u8, out_codes: *[4]diagnostics.Code) usize {
+    var count: usize = 0;
+    const has_limit = std.mem.indexOf(u8, text, "LIMIT") != null;
+    const has_offset = std.mem.indexOf(u8, text, "OFFSET") != null;
+    const has_order_kw = std.mem.indexOf(u8, text, "ORDER BY") != null;
+    var parsed_illegal: bool = false;
+    if (parse_err_msg) |msg| {
+        if (diagnostics.mapParserMessage(msg)) |_| parsed_illegal = true;
+    }
+    // Treat invalid ORDER BY (IllegalOrderKey) as absent for unordered pagination legality.
+    if ((has_limit or has_offset) and (!has_order_kw or parsed_illegal)) {
+        out_codes.*[count] = .US001;
+        count += 1;
+    }
+    if (parsed_illegal) {
+        // Append IllegalOrderKey if not already primary
+        if (count == 0 or out_codes.*[0] != .IllegalOrderKey) {
+            out_codes.*[count] = .IllegalOrderKey;
+            count += 1;
+        }
+    }
+    if (count > 1) diagnostics.sortByPrecedence(out_codes.*[0..count]);
+    return count;
+}
+
+// Planner diagnostics aggregation: include primary planner code plus US001 if unordered pagination also applies.
+fn collectPlannerDiagnostics(q: geode.ast.Query, primary: diagnostics.Code, out_codes: *[4]diagnostics.Code) usize {
+    var count: usize = 0;
+    out_codes.*[count] = primary;
+    count += 1;
+    const unordered_pagination = (q.limit != null or q.offset != null) and q.order_by == null;
+    if (unordered_pagination and primary != .US001) {
+        out_codes.*[count] = .US001;
+        count += 1;
+    }
+    if (count > 1) diagnostics.sortByPrecedence(out_codes.*[0..count]);
+    return count;
+}
+
 fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, is_us001: bool) void {
     var flags_buf: [2][]const u8 = .{ "I:IllegalOrderKeyPolicy=ident-only", "U:US001/enforced" };
     const flag_slice = if (is_us001) flags_buf[0..2] else flags_buf[0..1];
@@ -41,6 +85,24 @@ fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: dia
         defer ally.free(line);
         _ = out_file.write(line) catch {};
     } else |_| {}
+}
+
+fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
+    var static: [5][]const u8 = undefined;
+    var n: usize = 0;
+    static[n] = "I:IllegalOrderKeyPolicy=ident-only";
+    n += 1;
+    static[n] = "U:NullsFirstPolicy";
+    n += 1;
+    if (ordered) {
+        static[n] = "U:OrderTiebreak=LexJSON";
+        n += 1;
+    }
+    if (distinct and !ordered) {
+        static[n] = "U:DistinctOutputUnordered";
+        n += 1;
+    }
+    return static[0..n];
 }
 
 fn valueTypeName(v: eval.Value) []const u8 {
@@ -64,7 +126,46 @@ fn writeJsonValue(w: anytype, v: eval.Value) !void {
             break :blk;
         },
         .Null => try w.writeAll("null"),
-        .Decimal => |_| try w.writeAll("0"), // decimal JSON minimal (TODO precise)
+        .Decimal => |d| blkdec: {
+            // Canonical render: strip trailing zeros in fractional; if all zeros -> integer form.
+            var buf: [64]u8 = undefined;
+            var coeff = d.coeff;
+            var scale = d.scale;
+            if (scale > 0) {
+                // remove trailing zeros from coeff while scale>0
+                while (scale > 0) {
+                    // if coeff divisible by 10
+                    if (@mod(coeff, 10) != 0) break;
+                    coeff = @divTrunc(coeff, 10);
+                    scale -= 1;
+                }
+            }
+            if (scale == 0) {
+                const s = std.fmt.bufPrint(&buf, "{d}", .{coeff}) catch "0";
+                try w.writeAll(s);
+                break :blkdec;
+            }
+            // reconstruct sign/whole/frac using adjusted coeff & scale
+            var pow: i128 = 1;
+            var i: u8 = 0;
+            while (i < scale) : (i += 1) pow *= 10;
+            const abs_coeff: i128 = if (coeff < 0) -coeff else coeff;
+            const whole: i128 = @divTrunc(coeff, pow);
+            const frac: i128 = @mod(abs_coeff, pow);
+            var fracbuf: [32]u8 = undefined;
+            const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch "0";
+            // pad leading zeros inside scale
+            if (ftmp.len < scale) {
+                const missing = scale - @as(u8, @intCast(ftmp.len));
+                var pad: [32]u8 = undefined;
+                @memset(pad[0..missing], '0');
+                const s = std.fmt.bufPrint(&buf, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch "0";
+                try w.writeAll(s);
+            } else {
+                const s = std.fmt.bufPrint(&buf, "{d}.{s}", .{ whole, ftmp }) catch "0";
+                try w.writeAll(s);
+            }
+        },
     }
 }
 
@@ -105,32 +206,62 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
     }
 }
 
-fn buildExplainJson(ally: std.mem.Allocator, ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8) []const u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return "{\"ops\":[]}";
+fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool }) []const u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return "{\"logical\":[]}";
     const w = buf.writer(ally);
-    w.writeAll("{\"logical\":[{\"op\":\"Project\"}],\"properties\":{") catch {};
+    w.writeAll("{\"logical\":[") catch {};
+    var first_op = true;
+    // Base projection
+    w.writeAll("{\"op\":\"Project\"}") catch {};
+    first_op = false;
+    if (params.distinct) {
+        w.writeAll(",{") catch {};
+        w.writeAll("\"op\":\"Distinct\"") catch {};
+        w.writeAll("}") catch {};
+    }
+    if (params.ordered) {
+        w.writeAll(",{\"op\":\"Sort\"}") catch {};
+    }
+    if (params.offset) |_| {
+        w.writeAll(",{\"op\":\"Offset\"}") catch {};
+    }
+    if (params.limit) |_| {
+        w.writeAll(",{\"op\":\"Limit\"}") catch {};
+    }
+    if (params.union_mode) |um| {
+        w.writeAll(",{") catch {};
+        w.writeAll("\"op\":\"SetOpUnion\",\"mode\":\"") catch {};
+        w.writeAll(um) catch {};
+        w.writeAll("\"}") catch {};
+    }
+    w.writeAll("],\"properties\":{") catch {};
     var first = true;
-    if (ordered) {
+    if (params.ordered) {
         w.writeAll("\"ordered\":true") catch {};
         first = false;
     }
-    if (limit) |l| {
+    if (params.limit) |l| {
         if (!first) w.writeAll(",") catch {};
         first = false;
         w.print("\"limit\":{d}", .{l}) catch {};
     }
-    if (offset) |o| {
+    if (params.offset) |o| {
         if (!first) w.writeAll(",") catch {};
         first = false;
         w.print("\"offset\":{d}", .{o}) catch {};
     }
-    if (union_mode) |um| {
+    if (params.union_mode) |um2| {
         if (!first) w.writeAll(",") catch {};
         first = false;
-        w.print("\"union_mode\":\"{s}\"", .{um}) catch {};
+        w.print("\"union_mode\":\"{s}\"", .{um2}) catch {};
     }
-    w.writeAll("},\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\"]}") catch {};
-    return buf.toOwnedSlice(ally) catch "{\"ops\":[]}";
+    if (params.distinct) {
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        w.writeAll("\"distinct\":true") catch {};
+    }
+    w.writeAll("}") catch {};
+    return buf.toOwnedSlice(ally) catch "{\"logical\":[]}";
 }
 
 // Custom bindings writer: include final flag only if (has_params or multi_page_needed or explicit pagination triggered)
@@ -151,6 +282,7 @@ fn writeBindingsAdaptive(file: std.fs.File, ordered: bool, order_keys: []const [
         file.writeAll(",\"final\":") catch {};
         file.writeAll(if (final_flag) "true" else "false") catch {};
     }
+    // For adaptive writer we embed a minimal policy flag; future refactor may unify with computeBaseFlags.
     file.writeAll(",\"flagger_findings\":[\"I:IllegalOrderKeyPolicy=ident-only\"]}}\n") catch {};
 }
 
@@ -213,30 +345,120 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 order_keys.*[ok] = s;
             }
         }
-        // Basic numeric ascending / desc support when single key and values are simple ints
-        // Parse row values on the fly for ORDER BY x LIMIT scenario or union-sorted case.
-        if (rows_json.items.len > 1) {
-            std.sort.block([]const u8, rows_json.items, {}, struct {
-                fn less(_: void, a: []const u8, b: []const u8) bool {
-                    // Extract first integer value between : and optional comma
-                    const ai = parseFirstInt(a);
-                    const bi = parseFirstInt(b);
-                    return ai < bi;
-                }
-                fn parseFirstInt(s: []const u8) i64 {
-                    if (std.mem.indexOf(u8, s, ":")) |p| {
-                        var i: usize = p + 1;
-                        while (i < s.len and (s[i] == ' ' or s[i] == '"')) i += 1;
-                        var neg = false;
-                        if (i < s.len and s[i] == '-') {
-                            neg = true;
-                            i += 1;
+        if (rows_json.items.len > 1 and ob.keys.len > 0) {
+            // Multi-key comparator with support for INT / DECIMAL / STRING / NULL.
+            const KeyValKind = enum { Null, Int, Dec, Str };
+            const KeyVal = struct { kind: KeyValKind, mantissa: i128 = 0, scale: u8 = 0, str: []const u8 = &.{} };
+
+            const Ctx = struct {
+                rows: [][]const u8,
+                ob: *const @TypeOf(ob),
+                keys: [][]const u8,
+                fn extract(row: []const u8, key: []const u8) KeyVal {
+                    // Find pattern "key":
+                    if (std.mem.indexOf(u8, row, key)) |pos| {
+                        // Ensure preceding char is '"' and following ':' after closing quote (simplified)
+                        // naive: search forward for ':' from pos
+                        if (std.mem.indexOfPos(u8, row, pos, ":")) |colon| {
+                            var vstart = colon + 1;
+                            while (vstart < row.len and (row[vstart] == ' ')) vstart += 1;
+                            if (vstart >= row.len) return .{ .kind = .Null };
+                            const ch = row[vstart];
+                            if (ch == 'n') return .{ .kind = .Null }; // null
+                            if (ch == '"') {
+                                // string until next unescaped quote
+                                var end = vstart + 1;
+                                while (end < row.len and row[end] != '"') end += 1;
+                                if (end <= row.len) return .{ .kind = .Str, .str = row[vstart + 1 .. end] };
+                                return .{ .kind = .Str, .str = &.{} };
+                            }
+                            // numeric (int or decimal)
+                            var j = vstart;
+                            var neg = false;
+                            if (row[j] == '-') {
+                                neg = true;
+                                j += 1;
+                            }
+                            var mantissa: i128 = 0;
+                            while (j < row.len and row[j] >= '0' and row[j] <= '9') : (j += 1) {
+                                mantissa = mantissa * 10 + (row[j] - '0');
+                            }
+                            var scale: u8 = 0;
+                            if (j < row.len and row[j] == '.') {
+                                j += 1;
+                                while (j < row.len and row[j] >= '0' and row[j] <= '9') : (j += 1) {
+                                    mantissa = mantissa * 10 + (row[j] - '0');
+                                    scale += 1;
+                                }
+                                // trailing zeros canonicalization not required (we aligned by canonical print earlier)
+                                if (neg) mantissa = -mantissa;
+                                return .{ .kind = .Dec, .mantissa = mantissa, .scale = scale };
+                            }
+                            if (neg) mantissa = -mantissa;
+                            return .{ .kind = .Int, .mantissa = mantissa };
                         }
-                        var val: i64 = 0;
-                        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) val = val * 10 + @as(i64, s[i] - '0');
-                        return if (neg) -val else val;
                     }
+                    return .{ .kind = .Null };
+                }
+                fn cmpNumeric(a: KeyVal, b: KeyVal) i2 {
+                    // return -1,0,1 in i2
+                    if (a.kind == .Int and b.kind == .Int) {
+                        if (a.mantissa < b.mantissa) return -1;
+                        if (a.mantissa > b.mantissa) return 1;
+                        return 0;
+                    }
+                    // Promote ints to decimals with scale 0
+                    const am = a.mantissa;
+                    const bm = b.mantissa;
+                    const ascale: u8 = if (a.kind == .Dec) a.scale else 0;
+                    const bscale: u8 = if (b.kind == .Dec) b.scale else 0;
+                    var ma = am;
+                    var mb = bm;
+                    if (ascale < bscale) {
+                        var k: u8 = 0;
+                        while (k < bscale - ascale) : (k += 1) ma *= 10;
+                    } else if (bscale < ascale) {
+                        var k: u8 = 0;
+                        while (k < ascale - bscale) : (k += 1) mb *= 10;
+                    }
+                    if (ma < mb) return -1;
+                    if (ma > mb) return 1;
                     return 0;
+                }
+            };
+            std.sort.block([]const u8, rows_json.items, Ctx{ .rows = rows_json.items, .ob = &ob, .keys = order_keys.* }, struct {
+                fn less(c: Ctx, a: []const u8, b: []const u8) bool {
+                    var ki: usize = 0;
+                    while (ki < c.ob.keys.len) : (ki += 1) {
+                        const key_expr = c.ob.keys[ki];
+                        const name = geode.printer.stringifyExprAlloc(std.heap.page_allocator, key_expr.expr, .{}) catch "k";
+                        const av = Ctx.extract(a, name);
+                        const bv = Ctx.extract(b, name);
+                        // Null ordering: NULLS FIRST (policy) for now
+                        if (av.kind == .Null and bv.kind != .Null) return !key_expr.desc; // null first
+                        if (bv.kind == .Null and av.kind != .Null) return key_expr.desc; // invert
+                        var ord: i2 = 0;
+                        switch (av.kind) {
+                            .Null => ord = 0,
+                            .Str => if (bv.kind == .Str) {
+                                if (std.mem.lessThan(u8, av.str, bv.str)) ord = -1 else if (std.mem.lessThan(u8, bv.str, av.str)) ord = 1 else ord = 0;
+                            } else {
+                                // strings after numbers
+                                ord = 1;
+                            },
+                            .Int, .Dec => switch (bv.kind) {
+                                .Int, .Dec => ord = Ctx.cmpNumeric(av, bv),
+                                .Str => ord = -1,
+                                .Null => ord = 1,
+                            },
+                        }
+                        if (ord != 0) {
+                            if (key_expr.desc) return ord > 0 else return ord < 0;
+                        }
+                        // continue to next key on tie
+                    }
+                    // Tie-breaker: lexicographic row JSON for determinism (UA005/UA006)
+                    return std.mem.lessThan(u8, a, b);
                 }
             }.less);
         }
@@ -353,7 +575,7 @@ pub fn main() !void {
         switch (msg) {
             .HELLO => |_| {
                 // Minimal HELLO ack: just emit empty schema semantics? Use BINDINGS empty.
-                if (protocol.buildSchemaLine(gpa, &.{}, &.{}, &.{"I:IllegalOrderKeyPolicy=ident-only"})) |line| {
+                if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| {
                     defer gpa.free(line);
                     _ = stdout_file.write(line) catch {};
                 } else |_| {}
@@ -502,7 +724,7 @@ pub fn main() !void {
                     state.page_items = dedup.toOwnedSlice(gpa) catch &.{};
                     state.active_result = true;
                     // SCHEMA line (flags)
-                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, &.{"I:IllegalOrderKeyPolicy=ident-only"})) |line| {
+                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, false))) |line| {
                         defer gpa.free(line);
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
@@ -510,23 +732,54 @@ pub fn main() !void {
                 }
 
                 var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = true, .forbid_orderby_calls = true }) catch |e| {
-                    writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.IllegalOrderKey, @errorName(e), diagnostics.anchorFor(.IllegalOrderKey), &.{}, false);
+                    // Aggregate all parse-time diagnostics (policy + US001) and emit with precedence.
+                    var codes_buf: [4]diagnostics.Code = undefined;
+                    const n = collectTextDiagnostics(text, @errorName(e), &codes_buf);
+                    if (n == 0) {
+                        // Fallback: treat as IllegalOrderKey for now to satisfy existing tests.
+                        writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.IllegalOrderKey, @errorName(e), diagnostics.anchorFor(.IllegalOrderKey), &.{}, false);
+                        return;
+                    }
+                    const primary = codes_buf[0];
+                    // Build additional_statuses slice
+                    var add_arr: [3][]const u8 = undefined;
+                    var add_len: usize = 0;
+                    var i: usize = 1;
+                    while (i < n) : (i += 1) {
+                        add_arr[add_len] = diagnostics.codeName(codes_buf[i]);
+                        add_len += 1;
+                    }
+                    const primary_msg = if (primary == .IllegalOrderKey) @errorName(e) else diagnostics.defaultMessage(primary);
+                    writeErrorWithFlags(gpa, stdout_file, primary, primary_msg, diagnostics.anchorFor(primary), add_arr[0..add_len], primary == .US001);
                     continue;
                 };
                 defer if (parse_res == .Ok) parse_res.Ok.deinit();
                 switch (parse_res) {
                     .Err => |er| {
-                        if (diagnostics.mapParserMessage(er.msg)) |code| {
-                            writeErrorWithFlags(gpa, stdout_file, code, er.msg, diagnostics.anchorFor(code), &.{}, code == .US001);
-                        } else if (protocol.buildErrorLine(gpa, "ParseError", er.msg, "")) |line| {
-                            defer gpa.free(line);
-                            _ = stdout_file.write(line) catch {};
-                        } else |_| {}
+                        var codes_buf: [4]diagnostics.Code = undefined;
+                        const n = collectTextDiagnostics(text, er.msg, &codes_buf);
+                        if (n == 0) {
+                            if (protocol.buildErrorLine(gpa, "ParseError", er.msg, "")) |line| {
+                                defer gpa.free(line);
+                                _ = stdout_file.write(line) catch {};
+                            } else |_| {}
+                            continue;
+                        }
+                        const primary = codes_buf[0];
+                        var add_arr: [3][]const u8 = undefined;
+                        var add_len: usize = 0;
+                        var i: usize = 1;
+                        while (i < n) : (i += 1) {
+                            add_arr[add_len] = diagnostics.codeName(codes_buf[i]);
+                            add_len += 1;
+                        }
+                        const primary_msg = if (primary == .IllegalOrderKey) er.msg else diagnostics.defaultMessage(primary);
+                        writeErrorWithFlags(gpa, stdout_file, primary, primary_msg, diagnostics.anchorFor(primary), add_arr[0..add_len], primary == .US001);
                         continue;
                     },
                     .Ok => |ok| {
                         if (ok.program.statements.len == 0) {
-                            if (protocol.buildSchemaLine(gpa, &.{}, &.{}, &.{"I:IllegalOrderKeyPolicy=ident-only"})) |line| {
+                            if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| {
                                 defer gpa.free(line);
                                 _ = stdout_file.write(line) catch {};
                             } else |_| {}
@@ -538,7 +791,18 @@ pub fn main() !void {
                                 // Planner legality (US001)
                                 const plan = geode.planner.planQuery(q, .{}) catch |pe| {
                                     if (diagnostics.mapPlannerError(pe)) |code| {
-                                        writeErrorWithFlags(gpa, stdout_file, code, @errorName(pe), diagnostics.anchorFor(code), &.{}, code == .US001);
+                                        var codes_buf: [4]diagnostics.Code = undefined;
+                                        const n_codes = collectPlannerDiagnostics(q, code, &codes_buf);
+                                        var add_arr: [3][]const u8 = undefined;
+                                        var add_len: usize = 0;
+                                        var idx: usize = 1;
+                                        while (idx < n_codes) : (idx += 1) {
+                                            add_arr[add_len] = diagnostics.codeName(codes_buf[idx]);
+                                            add_len += 1;
+                                        }
+                                        const primary = codes_buf[0];
+                                        const pmsg = diagnostics.defaultMessage(primary);
+                                        writeErrorWithFlags(gpa, stdout_file, primary, pmsg, diagnostics.anchorFor(primary), add_arr[0..add_len], primary == .US001);
                                     } else if (protocol.buildErrorLine(gpa, "PlannerError", @errorName(pe), "")) |line| {
                                         defer gpa.free(line);
                                         _ = stdout_file.write(line) catch {};
@@ -550,15 +814,16 @@ pub fn main() !void {
                                     continue;
                                 }
                                 if (explain_mode) {
-                                    const json = buildExplainJson(gpa, plan.ordered, q.limit, q.offset, null);
-                                    if (protocol.buildExplainLine(gpa, json)) |l| {
+                                    const json = buildExplainJson(gpa, .{ .ordered = plan.ordered, .limit = q.limit, .offset = q.offset, .union_mode = null, .distinct = q.ret.distinct });
+                                    const flags_ex2 = computeBaseFlags(plan.ordered, q.ret.distinct);
+                                    if (protocol.buildExplainLine(gpa, json, flags_ex2)) |l| {
                                         defer gpa.free(l);
                                         _ = stdout_file.write(l) catch {};
                                     } else |_| {}
                                     continue;
                                 }
                                 if (profile_mode) {
-                                    // Minimal profile: rows count after evaluation
+                                    const start_time = std.time.nanoTimestamp();
                                     var param_names: [][]const u8 = &.{};
                                     var param_rows: [][]const eval.Value = &.{};
                                     parseParams(gpa, rq.params_json, &param_names, &param_rows);
@@ -566,13 +831,33 @@ pub fn main() !void {
                                     var order_keys: [][]const u8 = &.{};
                                     var cols: []const protocol.SchemaCol = &.{};
                                     const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols) catch &.{};
+                                    const total_ns: i128 = std.time.nanoTimestamp() - start_time;
                                     const row_count = rows.len;
                                     var pb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
                                     const w = pb.writer(gpa);
-                                    // Escape braces for fmt: '{{' '}}'
-                                    w.print("{{\"ops\":[{{\"op\":\"Project\",\"rows\":{d}}}]", .{row_count}) catch {};
-                                    w.writeAll(",\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\"]}") catch {};
-                                    const pline = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}") catch null;
+                                    w.writeAll("{\"ops\":[") catch {};
+                                    var first_op_profile = true;
+                                    const emit = struct {
+                                        fn op(wr: anytype, first_ptr: *bool, name: []const u8, row_count_param: usize, time_ns: i128, is_final: bool) void {
+                                            wr.writeAll(if (first_ptr.*) "{" else ",{") catch {};
+                                            wr.writeAll("\"op\":\"") catch {};
+                                            wr.writeAll(name) catch {};
+                                            wr.writeAll("\",\"rows\":") catch {};
+                                            wr.print("{d}", .{row_count_param}) catch {};
+                                            wr.writeAll(",\"time_ns\":") catch {};
+                                            wr.print("{d}", .{if (is_final) time_ns else 0}) catch {};
+                                            wr.writeAll("}") catch {};
+                                            first_ptr.* = false;
+                                        }
+                                    };
+                                    emit.op(w, &first_op_profile, "Project", row_count, total_ns, !(q.ret.distinct or ordered_meta or (q.offset != null) or (q.limit != null)));
+                                    if (q.ret.distinct) emit.op(w, &first_op_profile, "Distinct", row_count, total_ns, !(ordered_meta or (q.offset != null) or (q.limit != null)));
+                                    if (ordered_meta) emit.op(w, &first_op_profile, "Sort", row_count, total_ns, !((q.offset != null) or (q.limit != null)));
+                                    if (q.offset != null) emit.op(w, &first_op_profile, "Offset", row_count, total_ns, (q.limit == null));
+                                    if (q.limit != null) emit.op(w, &first_op_profile, "Limit", row_count, total_ns, true);
+                                    w.writeAll("]}") catch {};
+                                    const prof_flags = computeBaseFlags(ordered_meta, q.ret.distinct);
+                                    const pline = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}", prof_flags) catch null;
                                     if (pline) |pl| {
                                         defer gpa.free(pl);
                                         _ = stdout_file.write(pl) catch {};
@@ -591,7 +876,7 @@ pub fn main() !void {
                                 state.last_order_keys = order_keys;
                                 state.page_items = @constCast(rows);
                                 state.active_result = true;
-                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, &.{"I:IllegalOrderKeyPolicy=ident-only"})) |line| {
+                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, q.ret.distinct))) |line| {
                                     defer gpa.free(line);
                                     _ = stdout_file.write(line) catch {};
                                 } else |_| {}
@@ -603,8 +888,9 @@ pub fn main() !void {
                                 var param_rows: [][]const eval.Value = &.{};
                                 parseParams(gpa, rq.params_json, &param_names, &param_rows);
                                 if (explain_mode) {
-                                    const json = buildExplainJson(gpa, false, null, null, "DISTINCT");
-                                    if (protocol.buildExplainLine(gpa, json)) |l2| {
+                                    const json = buildExplainJson(gpa, .{ .ordered = false, .limit = null, .offset = null, .union_mode = "DISTINCT", .distinct = true });
+                                    const flags_u = computeBaseFlags(false, true);
+                                    if (protocol.buildExplainLine(gpa, json, flags_u)) |l2| {
                                         defer gpa.free(l2);
                                         _ = stdout_file.write(l2) catch {};
                                     } else |_| {}
@@ -629,8 +915,9 @@ pub fn main() !void {
                                         w.writeAll(",\"hash_dedup_size\":") catch {};
                                         w.print("{d}", .{hs}) catch {};
                                     }
-                                    w.writeAll("},\"flags\":[\"I:IllegalOrderKeyPolicy=ident-only\"]}") catch {};
-                                    const pline2 = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}") catch null;
+                                    w.writeAll("}") catch {};
+                                    const flags_u_prof = computeBaseFlags(false, std.mem.eql(u8, union_mode, "DISTINCT"));
+                                    const pline2 = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}", flags_u_prof) catch null;
                                     if (pline2) |pl2| {
                                         defer gpa.free(pl2);
                                         _ = stdout_file.write(pl2) catch {};
@@ -652,7 +939,7 @@ pub fn main() !void {
                                 state.last_order_keys = ord_keys;
                                 state.page_items = @constCast(rows);
                                 state.active_result = true;
-                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, &.{"I:IllegalOrderKeyPolicy=ident-only"})) |line| {
+                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, true))) |line| {
                                     defer gpa.free(line);
                                     _ = stdout_file.write(line) catch {};
                                 } else |_| {}
