@@ -42,3 +42,64 @@ test "protocol: IllegalOrderKey error includes ident-only policy flag" {
     try std.testing.expect(contains(res.err, "IllegalOrderKey"));
     try std.testing.expect(contains(res.err, "I:IllegalOrderKeyPolicy=ident-only"));
 }
+
+test "flags: DISTINCT unordered emits DistinctOutputUnordered" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1 AS x" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(contains(res.out, "DistinctOutputUnordered"));
+}
+
+test "flags: ordered query has OrderTiebreak but not DistinctOutputUnordered" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(contains(res.out, "OrderTiebreak=LexJSON"));
+    try std.testing.expect(!contains(res.out, "DistinctOutputUnordered"));
+}
+
+test "flags: NullsFirstPolicy present in DISTINCT unordered set where NULL participates" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "RETURN null AS a UNION RETURN 1 AS a" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(contains(res.out, "NullsFirstPolicy"));
+}
+
+test "flags: EXPLAIN includes base policy flags" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(contains(res.out, "\"type\":\"EXPLAIN\""));
+    try std.testing.expect(contains(res.out, "IllegalOrderKeyPolicy=ident-only"));
+    try std.testing.expect(contains(res.out, "OrderTiebreak=LexJSON"));
+}
+
+test "flags: PROFILE includes base policy flags and per-op timings" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(contains(res.out, "\"type\":\"PROFILE\""));
+    try std.testing.expect(contains(res.out, "OrderTiebreak=LexJSON"));
+    // Expect total_time_ns and at least one op timing key
+    try std.testing.expect(contains(res.out, "total_time_ns"));
+    try std.testing.expect(contains(res.out, "\"op\":\"Project\""));
+}
+
+test "flags: transaction ACK frames carry policy flags" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "RETURN 1 AS x", "--begin", "--commit" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(contains(res.out, "IllegalOrderKeyPolicy=ident-only"));
+}

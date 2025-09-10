@@ -168,3 +168,23 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
 ## Cutline
 
 Deferred until core protocol + storage stabilize: Full WAL/ARIES recovery validation, MVCC, path patterns, distributed scaffold, adaptive & ranked enumeration optimization.
+
+## Added / Recent Progress
+
+- Completed:
+  - Dynamic flagger on SCHEMA/BINDINGS/EXPLAIN/PROFILE + txn ACK frames (IllegalOrderKeyPolicy, NullsFirstPolicy, OrderTiebreak=LexJSON, DistinctOutputUnordered)
+  - StageTimings struct introduced for per-operator PROFILE metrics (simple query path only)
+  - Granular UNION PROFILE phases (UnionLeft, UnionTails, UnionDedup, SetOpUnion) + U:UnionPhaseTimings flag
+  - Parenthesized UNION pattern support ((q1 UNION q2) ORDER BY k LIMIT n)
+- Planned (immediate):
+  - Runtime evaluation diagnostics aggregation (TypeMismatch) merged with planner/parse precedence
+  - Comparator micro-bench & fuzz harness
+  - EXPLAIN/PROFILE docs for new UNION phase ops & conformance matrix update
+- Upcoming (short-term):
+  - Text/plain encoding path
+  - GROUP BY execution (phase 1)
+  - Parameter vectorization optimization
+  - Clarify DistinctOutputUnordered semantics in multi-page streaming path
+- Open Questions:
+  - Include memory stats per phase? (pending design)
+  - Should UNION ALL still emit UnionPhaseTimings flag (currently yes) or a separate indicator?
