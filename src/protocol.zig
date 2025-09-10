@@ -44,21 +44,51 @@ pub const Status = struct {
     status_subclass: ?[]const u8 = null,
 };
 
-pub fn writeSchemaLine(w: anytype, cols: []const SchemaCol) !void {
+pub fn buildSchemaLine(ally: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
     var i: usize = 0;
     while (i < cols.len) : (i += 1) {
         if (i > 0) try w.writeAll(",");
         try w.writeAll("{\"name\":\"");
-        try w.print("{s}", .{cols[i].name});
+        try w.writeAll(cols[i].name);
         try w.writeAll("\",\"type\":\"");
-        try w.print("{s}", .{cols[i].type});
+        try w.writeAll(cols[i].type);
         try w.writeAll("\"}");
     }
-    try w.writeAll("]}}\n");
+    try w.writeAll("]");
+    if (additional.len > 0) {
+        try w.writeAll(",\"additional_statuses\":[");
+        var ai: usize = 0;
+        while (ai < additional.len) : (ai += 1) {
+            if (ai > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(additional[ai]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
+    if (flags.len > 0) {
+        try w.writeAll(",\"flagger_findings\":[");
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(flags[fi]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
+    try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
 }
 
-pub fn writeBindingsLine(w: anytype, ordered: bool, order_keys: []const []const u8, rows_json: []const u8) !void {
+pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final: bool, additional: []const []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":");
     try w.writeAll(if (ordered) "true" else "false");
     try w.writeAll(",\"order_keys\":[");
@@ -66,35 +96,109 @@ pub fn writeBindingsLine(w: anytype, ordered: bool, order_keys: []const []const 
     while (i < order_keys.len) : (i += 1) {
         if (i > 0) try w.writeAll(",");
         try w.writeAll("\"");
-        try w.print("{s}", .{order_keys[i]});
+        try w.writeAll(order_keys[i]);
         try w.writeAll("\"");
     }
     try w.writeAll("],\"rows\":");
     try w.writeAll(rows_json);
+    try w.writeAll(",\"final\":");
+    try w.writeAll(if (final) "true" else "false");
+    if (additional.len > 0) {
+        try w.writeAll(",\"additional_statuses\":[");
+        var ai: usize = 0;
+        while (ai < additional.len) : (ai += 1) {
+            if (ai > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(additional[ai]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
+    if (flags.len > 0) {
+        try w.writeAll(",\"flagger_findings\":[");
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(flags[fi]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
     try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
 }
 
-pub fn writeExplainLine(w: anytype, json_payload: []const u8) !void {
+pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\",\"json\":");
     try w.writeAll(json_payload);
     try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
 }
 
-pub fn writeProfileLine(w: anytype, json_payload: []const u8) !void {
+pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":");
     try w.writeAll(json_payload);
     try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
 }
 
-pub fn writeErrorLine(w: anytype, code: []const u8, message: []const u8, anchor: []const u8) !void {
-    // Minimal error line; client may print stderr separately
+pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"02000\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
-    try w.print("{s}", .{code});
+    try w.writeAll(code);
     try w.writeAll("\",\"message\":\"");
-    try w.print("{s}", .{message});
+    try w.writeAll(message);
     try w.writeAll("\",\"anchor\":\"");
-    try w.print("{s}", .{anchor});
+    try w.writeAll(anchor);
     try w.writeAll("\"}}\n");
+    return buf.toOwnedSlice(ally);
+}
+
+pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
+    try w.writeAll("{\"status_class\":\"02000\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
+    try w.writeAll(code);
+    try w.writeAll("\",\"message\":\"");
+    try w.writeAll(message);
+    try w.writeAll("\",\"anchor\":\"");
+    try w.writeAll(anchor);
+    if (additional.len > 0) {
+        try w.writeAll(",\"additional_statuses\":[");
+        var i: usize = 0;
+        while (i < additional.len) : (i += 1) {
+            if (i > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(additional[i]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    } else {
+        try w.writeAll("\"");
+    }
+    if (flags.len > 0) {
+        try w.writeAll(",\"flagger_findings\":[");
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(flags[fi]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
+    try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
 }
 
 pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMessage {

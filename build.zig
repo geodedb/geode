@@ -31,6 +31,9 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+    const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
+    const build_opts = b.addOptions();
+    build_opts.addOption(bool, "enable_sentinel", enable_san);
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -102,13 +105,16 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
+    lib_unit_tests.root_module.addOptions("build_options", build_opts);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
+    exe_unit_tests.root_module.addOptions("build_options", build_opts);
 
     // add the types unit tests to the executable test
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
+    gql_unit_tests.root_module.addOptions("build_options", build_opts);
     // Allow tests to import gql submodule path too
     gql_unit_tests.root_module.addImport("gql", gql_mod);
 
@@ -131,6 +137,9 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("geode", root_mod);
     geoded_exe.root_module.addImport("gql", gql_mod);
     geoded_exe.root_module.addImport("protocol", protocol_mod);
+    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("sentinel", sentinel_mod);
+    geoded_exe.root_module.addOptions("build_options", build_opts);
     // storage: only add inmemory module; it imports interface relatively
     const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("storage_mem", storage_mem_mod);
@@ -147,6 +156,8 @@ pub fn build(b: *std.Build) void {
         .name = "geodec",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/client/main.zig"), .target = target, .optimize = optimize }),
     });
+    geodec_exe.root_module.addImport("sentinel", sentinel_mod);
+    geodec_exe.root_module.addOptions("build_options", build_opts);
     b.installArtifact(geodec_exe);
 
     // Ensure binaries are installed before tests so e2e can run them

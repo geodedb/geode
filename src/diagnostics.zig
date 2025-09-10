@@ -16,6 +16,23 @@ pub fn codeName(c: Code) []const u8 {
     };
 }
 
+pub fn anchorFor(c: Code) []const u8 {
+    return switch (c) {
+        .US001 => "16.18–16.19",
+        .IllegalOrderKey, .GroupByIllegal => "14.10",
+        .TypeMismatch => "",
+    };
+}
+
+pub fn defaultMessage(c: Code) []const u8 {
+    return switch (c) {
+        .US001 => "unordered pagination",
+        .IllegalOrderKey => "ORDER BY key must be identifier",
+        .GroupByIllegal => "group by illegal",
+        .TypeMismatch => "type mismatch",
+    };
+}
+
 pub const Severity = enum { Info, Warning, Error };
 
 pub const Diagnostic = struct {
@@ -29,9 +46,29 @@ pub fn precedence(a: Code, b: Code) Code {
     return if (@intFromEnum(a) <= @intFromEnum(b)) a else b;
 }
 
+pub fn sortByPrecedence(codes: []Code) void {
+    var i: usize = 1;
+    while (i < codes.len) : (i += 1) {
+        const key = codes[i];
+        var j: isize = @as(isize, @intCast(i)) - 1;
+        while (j >= 0 and @intFromEnum(codes[@as(usize, @intCast(j))]) > @intFromEnum(key)) : (j -= 1) {
+            codes[@as(usize, @intCast(j + 1))] = codes[@as(usize, @intCast(j))];
+        }
+        codes[@as(usize, @intCast(j + 1))] = key;
+    }
+}
+
 test "diagnostics: code name and precedence" {
     try std.testing.expectEqualStrings("US001", codeName(.US001));
     try std.testing.expect(precedence(.GroupByIllegal, .US001) == .US001);
+}
+
+test "diagnostics: sortByPrecedence orders ascending" {
+    var arr: [3]Code = .{ .IllegalOrderKey, .US001, .TypeMismatch };
+    sortByPrecedence(arr[0..]);
+    try std.testing.expect(arr[0] == .US001);
+    try std.testing.expect(arr[1] == .IllegalOrderKey);
+    try std.testing.expect(arr[2] == .TypeMismatch);
 }
 
 pub fn mapPlannerError(e: anytype) ?Code {

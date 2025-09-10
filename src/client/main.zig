@@ -1,11 +1,13 @@
 const std = @import("std");
 
 pub fn main() !void {
-    const gpa = std.heap.page_allocator;
+    const build_options = @import("build_options");
+    const sentinel = @import("sentinel");
+    const gpa = if (build_options.enable_sentinel) sentinel.maybeSentinel(std.heap.page_allocator) else std.heap.page_allocator;
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     if (argv.len < 2) {
-        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server ./zig-out/bin/geoded] [--begin] [--commit|--rollback]\n", .{});
+        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server ./zig-out/bin/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback]\n", .{});
         return;
     }
     const text: []const u8 = argv[1];
@@ -15,7 +17,11 @@ pub fn main() !void {
     var do_begin = false;
     var do_commit = false;
     var do_rollback = false;
+    var page_size: usize = 1000;
+    var pull_all = false;
     var i: usize = 2;
+    var extra_pulls: usize = 0;
+    var fmt_txt = false;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) break;
@@ -26,12 +32,28 @@ pub fn main() !void {
             param_name = argv[i + 1];
             param_json = argv[i + 2];
             i += 2;
+        } else if (std.mem.eql(u8, argv[i], "--page-size")) {
+            if (i + 1 >= argv.len) break;
+            page_size = std.fmt.parseInt(usize, argv[i + 1], 10) catch 1000;
+            if (page_size == 0) page_size = 1000;
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--pull-all")) {
+            pull_all = true;
+        } else if (std.mem.eql(u8, argv[i], "--format")) {
+            if (i + 1 >= argv.len) break;
+            const f = argv[i + 1];
+            if (std.mem.eql(u8, f, "txt") or std.mem.eql(u8, f, "text")) fmt_txt = true;
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--begin")) {
             do_begin = true;
         } else if (std.mem.eql(u8, argv[i], "--commit")) {
             do_commit = true;
         } else if (std.mem.eql(u8, argv[i], "--rollback")) {
             do_rollback = true;
+        } else if (std.mem.eql(u8, argv[i], "--extra-pull")) {
+            if (i + 1 >= argv.len) break;
+            extra_pulls = std.fmt.parseInt(usize, argv[i + 1], 10) catch 0;
+            i += 1;
         }
     }
 
@@ -96,20 +118,119 @@ pub fn main() !void {
         std.process.exit(2);
     }
 
-    // Print SCHEMA line and request PULL
-    {
+    // Print or translate SCHEMA line and request PULL
+    var schema_columns: [][]const u8 = &.{};
+    if (!fmt_txt) {
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         const outw = out_file.deprecatedWriter();
         try outw.writeAll(line1);
         try outw.writeAll("\n");
+    } else {
+        const parsed = std.json.parseFromSlice(std.json.Value, gpa, line1, .{}) catch {
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            try stderr_file.deprecatedWriter().writeAll("schema parse error\n");
+            std.process.exit(2);
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) std.process.exit(2);
+        const robj = parsed.value.object;
+        const result_v = robj.get("result") orelse std.process.exit(2);
+        if (result_v != .object) std.process.exit(2);
+        const cols_v = result_v.object.get("columns") orelse std.process.exit(2);
+        if (cols_v != .array) std.process.exit(2);
+        const arr = cols_v.array.items;
+        schema_columns = try gpa.alloc([]const u8, arr.len);
+        var ci: usize = 0;
+        while (ci < arr.len) : (ci += 1) {
+            const cv = arr[ci];
+            if (cv != .object) std.process.exit(2);
+            const name_v = cv.object.get("name") orelse std.process.exit(2);
+            if (name_v != .string) std.process.exit(2);
+            schema_columns[ci] = try gpa.dupe(u8, name_v.string);
+        }
+        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const outw = out_file.deprecatedWriter();
+        var hi: usize = 0;
+        while (hi < schema_columns.len) : (hi += 1) {
+            if (hi > 0) try outw.writeAll("\t");
+            try outw.writeAll(schema_columns[hi]);
+        }
+        try outw.writeAll("\n");
     }
-    try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}\n");
+    try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
+    try child_stdin.print("{d}", .{page_size});
+    try child_stdin.writeAll("}\n");
     const line2 = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
     defer gpa.free(line2);
-    {
+    if (!fmt_txt) {
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         const outw = out_file.deprecatedWriter();
         try outw.writeAll(line2);
+        try outw.writeAll("\n");
+    } else {
+        const parsedB = std.json.parseFromSlice(std.json.Value, gpa, line2, .{}) catch {
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            try stderr_file.deprecatedWriter().writeAll("bindings parse error\n");
+            std.process.exit(2);
+        };
+        defer parsedB.deinit();
+        if (parsedB.value != .object) std.process.exit(2);
+        const broot = parsedB.value.object;
+        const resultB = broot.get("result") orelse std.process.exit(2);
+        if (resultB != .object) std.process.exit(2);
+        const rows_v = resultB.object.get("rows") orelse std.process.exit(2);
+        if (rows_v != .array) std.process.exit(2);
+        const rows_arr = rows_v.array.items;
+        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const outw = out_file.deprecatedWriter();
+        var ri: usize = 0;
+        while (ri < rows_arr.len) : (ri += 1) {
+            const rv = rows_arr[ri];
+            if (rv != .object) continue;
+            var cj: usize = 0;
+            while (cj < schema_columns.len) : (cj += 1) {
+                if (cj > 0) try outw.writeAll("\t");
+                const key = schema_columns[cj];
+                const val = rv.object.get(key) orelse std.json.Value{ .null = {} };
+                switch (val) {
+                    .string => |s| try outw.writeAll(s),
+                    .integer => |iv| try outw.print("{d}", .{iv}),
+                    .bool => |bv| try outw.writeAll(if (bv) "true" else "false"),
+                    .null => try outw.writeAll("null"),
+                    else => try outw.writeAll("null"),
+                }
+            }
+            try outw.writeAll("\n");
+        }
+    }
+
+    if (pull_all and !fmt_txt) {
+        // Continue pulling while final:false appears
+        var keep = std.mem.indexOf(u8, line2, "\"final\":false") != null;
+        while (keep) {
+            try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
+            try child_stdin.print("{d}", .{page_size});
+            try child_stdin.writeAll("}\n");
+            const more = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+            defer gpa.free(more);
+            const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const outw = out_file.deprecatedWriter();
+            try outw.writeAll(more);
+            try outw.writeAll("\n");
+            keep = std.mem.indexOf(u8, more, "\"final\":false") != null;
+        }
+    }
+
+    var ep: usize = 0;
+    while (ep < extra_pulls and !fmt_txt) : (ep += 1) {
+        try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
+        try child_stdin.print("{d}", .{page_size});
+        try child_stdin.writeAll("}\n");
+        const extra = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+        defer gpa.free(extra);
+        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const outw = out_file.deprecatedWriter();
+        try outw.writeAll(extra);
         try outw.writeAll("\n");
     }
 
