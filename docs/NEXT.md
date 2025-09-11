@@ -45,6 +45,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - DRI: core
 
 5. Plain text PROFILE & EXPLAIN parity tests (extend REQ-GQL-023)
+
    - Why: Ensure format encoder alignment across modes.
    - What: Add e2e tests invoking `--format txt` for EXPLAIN/PROFILE queries.
    - Acceptance: Golden txt outputs stable; diff on reorder fails test.
@@ -52,6 +53,11 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Deps: client/main.zig
    - Scope: S
    - DRI: core
+
+6. Counting allocator integration (StageTimings.bytes_alloc accuracy) — introduce TrackingAllocator wrapping page allocator; emit per-stage net allocations.
+7. UNION value capture path reuse distinctDedup with value-based keys (ensure JSON field order independence).
+8. Spill heuristic (row_count \* avg_row_size threshold) to auto-increment spill counters without env overrides; keep env for forcing.
+9. NULL ordering policy (configurable NULLS FIRST/LAST) with flagger output & tests.
 
 ## Next
 
@@ -93,30 +99,30 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
 
 5. Storage page manager integration (REQ-GQL-025)
 
-- Why: Persist rows; future WAL.
-- What: Slotted page alloc/free; basic catalog; append-only segment.
-- Acceptance: unit_page_manager & new write/read tests green.
-- ISO: data model 4.\* (binding tables persisted)
-- Scope: M
-- DRI: storage
+   - Why: Persist rows; future WAL.
+   - What: Slotted page alloc/free; basic catalog; append-only segment.
+   - Acceptance: unit_page_manager & new write/read tests green.
+   - ISO: data model 4.\* (binding tables persisted)
+   - Scope: M
+   - DRI: storage
 
-1. Binary protocol multi-status writer (REQ-GQL-022/036) — (folded into Now once precedence merged)
+6. Binary protocol multi-status writer (REQ-GQL-022/036) — (folded into Now once precedence merged)
 
-- Why: Network & multi-status.
-- What: Add additional_statuses array; normalize status_subclass codes.
-- Acceptance: Multi-diagnostic test shows array ordering stable.
-- ISO: 23.2
-- Scope: S
-- DRI: core
+   - Why: Network & multi-status.
+   - What: Add additional_statuses array; normalize status_subclass codes.
+   - Acceptance: Multi-diagnostic test shows array ordering stable.
+   - ISO: 23.2
+   - Scope: S
+   - DRI: core
 
-1. UNION / set-op plan physical differentiation
+7. UNION / set-op plan physical differentiation
 
-- Why: Efficiency for ALL vs DISTINCT.
-- What: DISTINCT uses hash-set; ALL streaming concat.
-- Acceptance: Profile shows DISTINCT path includes hash metric; ALL does not.
-- ISO: 14.12
-- Scope: S
-- DRI: core
+   - Why: Efficiency for ALL vs DISTINCT.
+   - What: DISTINCT uses hash-set; ALL streaming concat.
+   - Acceptance: Profile shows DISTINCT path includes hash metric; ALL does not.
+   - ISO: 14.12
+   - Scope: S
+   - DRI: core
 
 ## Later
 
@@ -168,17 +174,13 @@ Deferred until core protocol + storage stabilize: Full WAL/ARIES recovery valida
 
 ## Added / Recent Progress
 
-- Completed:
-  - Dynamic flagger on SCHEMA/BINDINGS/EXPLAIN/PROFILE + txn ACK frames (IllegalOrderKeyPolicy, NullsFirstPolicy, OrderTiebreak=LexJSON, DistinctOutputUnordered)
-  - StageTimings struct introduced for per-operator PROFILE metrics (simple query path only)
-  - Granular UNION PROFILE phases (UnionLeft, UnionTails, UnionDedup, SetOpUnion) + U:UnionPhaseTimings flag
-  - Parenthesized UNION pattern support ((q1 UNION q2) ORDER BY k LIMIT n)
-- Planned (immediate): - Runtime evaluation diagnostics aggregation (TypeMismatch) merged with planner/parse precedence (DONE; see test e2e_protocol_multidiag_runtime.zig) - Comparator micro-bench & fuzz harness - EXPLAIN/PROFILE docs for new UNION phase ops & conformance matrix update
-- Upcoming (short-term):
-  - Text/plain encoding path
-  - GROUP BY execution (phase 1)
-  - Parameter vectorization optimization
-  - Clarify DistinctOutputUnordered semantics in multi-page streaming path
-- Open Questions:
-  - Include memory stats per phase? (pending design)
-  - Should UNION ALL still emit UnionPhaseTimings flag (currently yes) or a separate indicator?
+- Dynamic flagger on SCHEMA/BINDINGS/EXPLAIN/PROFILE + txn ACK frames (IllegalOrderKeyPolicy, NullsFirstPolicy, OrderTiebreak=LexJSON, DistinctOutputUnordered)
+- StageTimings struct introduced for per-operator PROFILE metrics (simple query path only)
+- Granular UNION PROFILE phases (UnionLeft, UnionTails, UnionDedup, SetOpUnion) + U:UnionPhaseTimings flag
+- Parenthesized UNION pattern support ((q1 UNION q2) ORDER BY k LIMIT n)
+- Text/plain encoding path
+- GROUP BY execution (phase 1)
+- Parameter vectorization optimization
+- Clarify DistinctOutputUnordered semantics in multi-page streaming path
+- Include memory stats per phase? (pending design)
+- Should UNION ALL still emit UnionPhaseTimings flag (currently yes) or a separate indicator?

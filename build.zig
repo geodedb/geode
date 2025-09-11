@@ -150,6 +150,9 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("wal", wal_mod);
     const dist_mod = b.createModule(.{ .root_source_file = b.path("src/dist/scaffold.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("dist", dist_mod);
+    // util: tracking allocator module
+    const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("tracking_alloc", util_tracking_mod);
     b.installArtifact(geoded_exe);
 
     const geodec_exe = b.addExecutable(.{

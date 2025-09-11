@@ -34,11 +34,20 @@ Profiling & Metrics (current implementation)
 
 - Per-operator metrics emitted in PROFILE JSON under result.json.ops[]:
 
+  - profile_version: schema version (integer) for forward compatibility
   - op: Project | Distinct | Sort | Offset | Limit | AggregateBuild | AggregateEmit
   - input_rows / rows: pre/post tuple counts for the stage
   - time_ns: wall clock nanoseconds spent inside the stage (coarse; single-threaded)
+  - cumulative_time_ns: running sum of time_ns across emitted ops (monotonic)
   - bytes_out: approximate logical bytes of JSON row fragments (future: physical size once structured rows land)
-  - bytes_alloc: heuristic currently mirroring bytes_out; roadmap to replace with real allocator delta sampling
+  - bytes_alloc: stage allocation delta (net allocator growth attributable to the stage); falls back to bytes_out if tracking unavailable
+  - estimate_bytes: planner-style heuristic for expected memory usage (per stage)
+  - estimate_vs_actual: (bytes_alloc \* 100) / estimate_bytes (0 if estimate_bytes==0 or bytes_alloc==0)
+  - percent_peak: integer percentage (0-100) of process peak_bytes consumed by this stage's allocation delta
+  - percent_net: percentage of current net_bytes represented by this stage's allocation delta at emission time
+  - peak_contributors: top 3 ops by bytes_alloc with their allocation values
+  - spill*reason: "forced" when triggered by GEODE_FORCE*\* env vars; "threshold" when peak_bytes >= GEODE_SPILL_THRESHOLD_BYTES
+  - setop.distinct_fill_pct (UNION DISTINCT only): percentage of unique rows (hash_dedup_size) relative to total input rows (left+right); coarse selectivity signal
 
 - Aggregation:
 
@@ -48,7 +57,10 @@ Profiling & Metrics (current implementation)
 - Planned enhancements:
 
   - Structured row arena to measure precise bytes_out and allocation churn
-  - Allocator wrapper capturing allocated/freed bytes per phase
+  - Freed bytes per stage (allocator hooks) & net_after_op field
+  - Percent-of-peak cumulative validation & sum-of-deltas vs peak invariant tests (partial: initial invariants + top contributors in place)
+  - Allocator wrapper capturing allocated/freed bytes per phase (delta implemented; freed pending)
+  - Estimate calibration & error bounds (planner feedback loop)
   - Operator ID + dependency graph for multi-branch pipelines (joins, optional matches)
   - Distinct spill / Sort spill counters when external memory introduced
 

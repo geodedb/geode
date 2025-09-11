@@ -28,6 +28,7 @@ const ServerState = struct {
     spill_sort: usize = 0,
     spill_distinct: usize = 0,
     spill_union: usize = 0,
+    spill_threshold: usize = 0,
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -46,29 +47,41 @@ const ServerState = struct {
     }
 };
 
-// Precomputed flag combinations to avoid returning slices to stack memory (previous bug caused segfaults).
-const FLAG_BASE = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy" };
-const FLAG_ORDER_TIE = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:OrderTiebreak=LexJSON" };
-const FLAG_DISTINCT_UNORDERED = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:DistinctOutputUnordered" };
-const FLAG_ORDER_AND_DISTINCT = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:OrderTiebreak=LexJSON" }; // distinct + ordered => no DistinctOutputUnordered flag
+// TODO(counting-alloc): Reintroduce a stats-enabled allocator for accurate bytes_alloc metrics.
+// TODO(counting-alloc): Zig 0.15 allocator API changes make lightweight custom vtable here noisy.
+// Revert to heuristic bytes until a proper stats allocator is integrated.
+
+// Dynamic flag construction (avoids large matrix now that NULL policy is runtime configurable).
+var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
 
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
-    return if (ordered)
-        if (distinct) FLAG_ORDER_AND_DISTINCT else FLAG_ORDER_TIE
-    else if (distinct) FLAG_DISTINCT_UNORDERED else FLAG_BASE;
+    // Maximum 4 findings: IllegalOrderKey policy, NullsPolicy, OrderTiebreak, DistinctOutputUnordered
+    var tmp: [4][]const u8 = undefined;
+    var n: usize = 0;
+    tmp[n] = "I:IllegalOrderKeyPolicy=ident-only";
+    n += 1;
+    tmp[n] = if (g_nulls_last) "U:NullsLastPolicy" else "U:NullsFirstPolicy";
+    n += 1;
+    if (ordered) {
+        tmp[n] = "U:OrderTiebreak=LexJSON";
+        n += 1;
+    }
+    if (!ordered and distinct) {
+        tmp[n] = "U:DistinctOutputUnordered";
+        n += 1;
+    }
+    return tmp[0..n];
 }
-
-// Extended variants with optional UnionPhaseTimings flag.
-const FLAG_BASE_UNION = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:UnionPhaseTimings" };
-const FLAG_ORDER_TIE_UNION = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:OrderTiebreak=LexJSON", "U:UnionPhaseTimings" };
-const FLAG_DISTINCT_UNORDERED_UNION = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:DistinctOutputUnordered", "U:UnionPhaseTimings" };
-const FLAG_ORDER_AND_DISTINCT_UNION = &.{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy", "U:OrderTiebreak=LexJSON", "U:UnionPhaseTimings" };
 
 fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
     if (!union_phases) return computeBaseFlags(ordered, distinct);
-    return if (ordered)
-        if (distinct) FLAG_ORDER_AND_DISTINCT_UNION else FLAG_ORDER_TIE_UNION
-    else if (distinct) FLAG_DISTINCT_UNORDERED_UNION else FLAG_BASE_UNION;
+    const base = computeBaseFlags(ordered, distinct);
+    // Append UnionPhaseTimings
+    var tmp: [5][]const u8 = undefined;
+    var i: usize = 0;
+    while (i < base.len) : (i += 1) tmp[i] = base[i];
+    tmp[base.len] = "U:UnionPhaseTimings";
+    return tmp[0 .. base.len + 1];
 }
 
 fn valueTypeName(v: eval.Value) []const u8 {
@@ -342,8 +355,10 @@ const StageTimings = struct {
     sort_bytes_alloc: usize = 0,
     offset_bytes_alloc: usize = 0,
     limit_bytes_alloc: usize = 0,
-    agg_bytes_alloc: usize = 0,
+    agg_build_bytes_alloc: usize = 0,
+    agg_emit_bytes_alloc: usize = 0,
 };
+// TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
 
 // TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
 
@@ -499,7 +514,52 @@ fn buildAdditionalStatusesAlloc(ally: std.mem.Allocator, codes: []const diagnost
     return extras[0..ei];
 }
 
-fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code) ![][]const u8 {
+// Shared DISTINCT dedup helper: mutates rows_json in-place, frees removed row value slices when provided.
+fn distinctDedup(ally: std.mem.Allocator, have_values: bool, value_arity: usize, rows_json: *std.ArrayList([]const u8), rows_values: *std.ArrayList([]const eval.Value), out_hash_size: ?*usize) void {
+    var seen = std.StringHashMap(void).init(ally);
+    defer seen.deinit();
+    var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return;
+    defer out_rows.deinit(ally);
+    var alloc_keys = std.ArrayList([]const u8).initCapacity(ally, 0) catch return;
+    defer {
+        for (alloc_keys.items) |k| ally.free(k);
+        alloc_keys.deinit(ally);
+    }
+    var idx: usize = 0;
+    while (idx < rows_json.items.len) : (idx += 1) {
+        const row = rows_json.items[idx];
+        const key = if (have_values and idx < rows_values.items.len) canonicalValuesKey(ally, rows_values.items[idx][0..value_arity]) else canonicalRowKey(ally, row);
+        if (!seen.contains(key)) {
+            seen.put(key, {}) catch {};
+            out_rows.append(ally, row) catch {};
+            if (key.ptr != row.ptr) alloc_keys.append(ally, key) catch {};
+        } else {
+            ally.free(row);
+            ally.free(key);
+            if (have_values and idx < rows_values.items.len) ally.free(rows_values.items[idx]);
+        }
+    }
+    const unique = seen.count();
+    rows_json.clearRetainingCapacity();
+    for (out_rows.items) |r| rows_json.append(ally, r) catch {};
+    if (out_hash_size) |p| p.* = unique;
+    if (have_values) {
+        var vi: usize = 0;
+        while (vi < rows_values.items.len) : (vi += 1) {
+            if (vi < out_rows.items.len) ally.free(rows_values.items[vi]);
+        }
+    }
+}
+
+const AllocTracker = struct { ctx: *anyopaque, getFn: *const fn (*anyopaque) usize };
+
+fn trackerGet(ctx: *anyopaque) usize {
+    const T = @import("tracking_alloc").TrackingAllocator;
+    const t: *T = @ptrCast(@alignCast(ctx));
+    return t.net();
+}
+
+fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code, alloc_tracker: ?AllocTracker) ![][]const u8 {
     // Build rows
     var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
     var rows_json = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
@@ -560,7 +620,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         var tb: usize = 0;
         for (rows_json.items) |s| tb += s.len;
         tptr.project_bytes_out = tb;
-        tptr.project_bytes_alloc = tb; // heuristic
+        tptr.project_bytes_alloc = if (alloc_tracker) |tr| tr.getFn(tr.ctx) else tb;
     }
 
     // Build column name -> index map (for ORDER BY identifier key fast path)
@@ -572,46 +632,11 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         col_index.put(cname, ci) catch {};
     }
 
-    // DISTINCT on RETURN clause
+    // DISTINCT delta attribution baseline captured after project
+    var alloc_after_project: usize = if (alloc_tracker) |trp| trp.getFn(trp.ctx) else 0;
     if (q.ret.distinct and rows_json.items.len > 1) {
         const t_d_start = if (timings) |_| std.time.nanoTimestamp() else 0;
-        var seen = std.StringHashMap(void).init(ally);
-        defer seen.deinit();
-        var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
-        defer out_rows.deinit(ally);
-        // Track allocated canonical key buffers so we can free them after hash usage
-        var alloc_keys = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
-        defer {
-            // Free only keys we actually allocated (skip references equal to original row pointer)
-            for (alloc_keys.items) |k| ally.free(k);
-            alloc_keys.deinit(ally);
-        }
-        var idx_row: usize = 0;
-        while (idx_row < rows_json.items.len) : (idx_row += 1) {
-            const s = rows_json.items[idx_row];
-            const key = if (need_row_values) canonicalValuesKey(ally, rows_values.items[idx_row][0..q.ret.items.len]) else canonicalRowKey(ally, s);
-            if (!seen.contains(key)) {
-                seen.put(key, {}) catch {};
-                out_rows.append(ally, s) catch {};
-                if (key.ptr != s.ptr) alloc_keys.append(ally, key) catch {};
-            } else {
-                ally.free(s);
-                ally.free(key);
-                if (need_row_values) ally.free(rows_values.items[idx_row]);
-            }
-        }
-        rows_json.clearRetainingCapacity();
-        for (out_rows.items) |rr| rows_json.append(ally, rr) catch {};
-        // Free surviving row value slices (not needed after DISTINCT phase yet)
-        if (need_row_values) {
-            var vi: usize = 0;
-            while (vi < rows_values.items.len) : (vi += 1) {
-                if (vi < out_rows.items.len) {
-                    // keep memory? free to reclaim: we no longer need values; free all.
-                    ally.free(rows_values.items[vi]);
-                }
-            }
-        }
+        distinctDedup(ally, need_row_values, q.ret.items.len, &rows_json, &rows_values, null);
         if (timings) |tptr| {
             tptr.distinct_ns = std.time.nanoTimestamp() - t_d_start;
             tptr.distinct_rows_in = tptr.project_rows_out;
@@ -619,7 +644,11 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             var tb2: usize = 0;
             for (rows_json.items) |s| tb2 += s.len;
             tptr.distinct_bytes_out = tb2;
-            tptr.distinct_bytes_alloc = tb2;
+            if (alloc_tracker) |tr| {
+                const after = tr.getFn(tr.ctx);
+                tptr.distinct_bytes_alloc = after - alloc_after_project;
+                alloc_after_project = after;
+            } else tptr.distinct_bytes_alloc = tb2;
         }
     }
 
@@ -650,11 +679,9 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 var key_i: usize = 0;
                 while (key_i < key_count) : (key_i += 1) {
                     const key_expr = ob.keys[key_i].expr;
-                    // Fast path: identifier referencing projected column
                     var val: eval.Value = .{ .Null = {} };
                     if (need_row_values and key_expr == .Ident) {
                         if (col_index.get(key_expr.Ident)) |colpos| {
-                            // Use stored row values
                             if (row_index < rows_values.items.len) {
                                 const rv = rows_values.items[row_index];
                                 if (colpos < rv.len) val = rv[colpos];
@@ -671,7 +698,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                         .Int => |iv| KeyVal{ .kind = .Int, .mantissa = iv },
                         .Decimal => |d| KeyVal{ .kind = .Dec, .mantissa = d.coeff, .scale = d.scale },
                         .Str => |s| KeyVal{ .kind = .Str, .str = s },
-                        .Bool => |b| KeyVal{ .kind = .Str, .str = if (b) "true" else "false" }, // bool ordering after numbers before other strings via lex tie-break
+                        .Bool => |b| KeyVal{ .kind = .Str, .str = if (b) "true" else "false" },
                     };
                 }
             }
@@ -728,8 +755,25 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                         const key_expr = c.ob.keys[ki];
                         const av = c.keys[ai * c.key_count + ki];
                         const bv = c.keys[bi * c.key_count + ki];
-                        if (av.kind == .Null and bv.kind != .Null) return !key_expr.desc;
-                        if (bv.kind == .Null and av.kind != .Null) return key_expr.desc;
+                        if (av.kind == .Null and bv.kind != .Null) {
+                            if (g_nulls_last) {
+                                // Nulls last: treat av > bv
+                                if (key_expr.desc) return true; // descending: larger first -> null considered largest
+                                return false; // ascending: null goes after non-null
+                            } else {
+                                // Nulls first (default)
+                                return !key_expr.desc;
+                            }
+                        }
+                        if (bv.kind == .Null and av.kind != .Null) {
+                            if (g_nulls_last) {
+                                // Nulls last: bv is null so av < bv
+                                if (key_expr.desc) return false; // descending: larger first, null last so av < bv -> false
+                                return true; // ascending: av < bv -> true
+                            } else {
+                                return key_expr.desc;
+                            }
+                        }
                         var ord: i2 = 0;
                         switch (av.kind) {
                             .Null => ord = 0,
@@ -760,7 +804,11 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 var tbs: usize = 0;
                 for (rows_json.items) |s| tbs += s.len;
                 tptr.sort_bytes_out = tbs;
-                tptr.sort_bytes_alloc = tbs;
+                if (alloc_tracker) |tr| {
+                    const after = tr.getFn(tr.ctx);
+                    tptr.sort_bytes_alloc = after - alloc_after_project;
+                    alloc_after_project = after;
+                } else tptr.sort_bytes_alloc = tbs;
             }
         }
     }
@@ -785,7 +833,11 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 while (si < rows_json.items.len) : (si += 1) tbo += rows_json.items[si].len;
             }
             tptr.offset_bytes_out = tbo;
-            tptr.offset_bytes_alloc = tbo;
+            if (alloc_tracker) |tr| {
+                const after = tr.getFn(tr.ctx);
+                tptr.offset_bytes_alloc = after - alloc_after_project;
+                alloc_after_project = after;
+            } else tptr.offset_bytes_alloc = tbo;
         }
     }
     var end: usize = rows_json.items.len;
@@ -801,11 +853,13 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             var tbl: usize = 0;
             var li: usize = start;
             const end_calc = start + effective;
-            while (li < end_calc and li < rows_json.items.len) : (li += 1) {
-                tbl += rows_json.items[li].len;
-            }
+            while (li < end_calc and li < rows_json.items.len) : (li += 1) tbl += rows_json.items[li].len;
             tptr.limit_bytes_out = tbl;
-            tptr.limit_bytes_alloc = tbl;
+            if (alloc_tracker) |tr| {
+                const after = tr.getFn(tr.ctx);
+                tptr.limit_bytes_alloc = after - alloc_after_project;
+                alloc_after_project = after;
+            } else tptr.limit_bytes_alloc = tbl;
         }
     }
     if (start != 0 or end != rows_json.items.len) {
@@ -849,7 +903,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
     var dummy_cols: []const protocol.SchemaCol = &.{};
     var ordered: bool = false;
     var order_keys: [][]const u8 = &.{};
-    const left_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null);
+    const left_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null, null);
     metrics.left_in = left_rows.len;
     var all_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     defer all_rows.deinit(ally);
@@ -863,7 +917,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         var oc: []const protocol.SchemaCol = &.{};
         ordered = false;
         order_keys = &.{};
-        const rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null);
+        const rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null, null);
         total_tail += rows.len;
         for (rows) |rr| all_rows.append(ally, rr) catch {};
     }
@@ -875,147 +929,19 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         return all_rows.toOwnedSlice(ally) catch &.{};
     }
     union_mode_out.* = "DISTINCT";
-    // Attempt value-based canonical key creation by parsing each JSON row minimally.
-    // Fast path: if row count small (<2) skip hash work.
     if (all_rows.items.len <= 1) {
         metrics.out = all_rows.items.len;
         metrics.hash_size = all_rows.items.len;
         return all_rows.toOwnedSlice(ally) catch &.{};
     }
-    var seen = std.StringHashMap(void).init(ally);
-    defer seen.deinit();
-    var dedup_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer dedup_rows.deinit(ally);
-    var alloc_keys = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer {
-        for (alloc_keys.items) |k| ally.free(k);
-        alloc_keys.deinit(ally);
-    }
-    // Temporary scratch for parsed values (reused per row)
-    var vals_buf = std.ArrayList(eval.Value).initCapacity(ally, 8) catch return error.OutOfMemory;
-    defer vals_buf.deinit(ally);
-    // Minimal JSON object scanner (similar assumptions as canonicalRowKey): keys are emitted in stable order by producer.
-    for (all_rows.items) |row_json| {
-        vals_buf.clearRetainingCapacity();
-        if (row_json.len < 2) {
-            const kf = canonicalRowKey(ally, row_json);
-            if (!seen.contains(kf)) {
-                seen.put(kf, {}) catch {};
-                dedup_rows.append(ally, row_json) catch {};
-                if (kf.ptr != row_json.ptr) alloc_keys.append(ally, kf) catch {};
-            } else {
-                ally.free(row_json);
-                ally.free(kf);
-            }
-            continue;
-        }
-        var i: usize = 0;
-        if (row_json[i] == '{') i += 1;
-        var parse_ok = true;
-        while (i < row_json.len) : (i += 1) {
-            while (i < row_json.len and (row_json[i] == ' ' or row_json[i] == ',')) i += 1;
-            if (i >= row_json.len or row_json[i] == '}') break;
-            if (row_json[i] != '"') {
-                parse_ok = false;
-                break;
-            }
-            i += 1;
-            while (i < row_json.len and row_json[i] != '"') i += 1; // key
-            if (i >= row_json.len) {
-                parse_ok = false;
-                break;
-            }
-            i += 1; // closing quote
-            while (i < row_json.len and row_json[i] != ':') i += 1;
-            if (i >= row_json.len) {
-                parse_ok = false;
-                break;
-            }
-            i += 1; // colon
-            while (i < row_json.len and row_json[i] == ' ') i += 1;
-            if (i >= row_json.len) {
-                parse_ok = false;
-                break;
-            }
-            const ch = row_json[i];
-            if (ch == 'n') { // null
-                // expect 'null'
-                if (i + 3 >= row_json.len) {
-                    parse_ok = false;
-                    break;
-                }
-                vals_buf.append(ally, .{ .Null = {} }) catch {};
-                while (i < row_json.len and row_json[i] != ',' and row_json[i] != '}') i += 1;
-                if (i >= row_json.len or row_json[i] == '}') break;
-                continue;
-            } else if (ch == '"') { // string
-                i += 1;
-                const start = i;
-                while (i < row_json.len and row_json[i] != '"') i += 1;
-                if (i > row_json.len) {
-                    parse_ok = false;
-                    break;
-                }
-                const s = row_json[start..i];
-                vals_buf.append(ally, .{ .Str = s }) catch {};
-                if (i < row_json.len) i += 1;
-                while (i < row_json.len and row_json[i] != ',' and row_json[i] != '}') i += 1;
-                if (i >= row_json.len or row_json[i] == '}') break;
-                continue;
-            } else { // number or bool
-                var neg = false;
-                if (row_json[i] == '-') {
-                    neg = true;
-                    i += 1;
-                }
-                var mantissa: i128 = 0;
-                var saw_digit = false;
-                while (i < row_json.len and row_json[i] >= '0' and row_json[i] <= '9') : (i += 1) {
-                    mantissa = mantissa * 10 + (row_json[i] - '0');
-                    saw_digit = true;
-                }
-                var scale: u8 = 0;
-                var is_dec = false;
-                if (i < row_json.len and row_json[i] == '.') {
-                    is_dec = true;
-                    i += 1;
-                    while (i < row_json.len and row_json[i] >= '0' and row_json[i] <= '9') : (i += 1) {
-                        mantissa = mantissa * 10 + (row_json[i] - '0');
-                        scale += 1;
-                    }
-                }
-                if (!saw_digit) {
-                    parse_ok = false;
-                    break;
-                }
-                if (neg) mantissa = -mantissa;
-                if (is_dec and scale > 0) {
-                    // normalize trailing zeros
-                    while (scale > 0 and @mod(mantissa, 10) == 0) : (scale -= 1) mantissa = @divTrunc(mantissa, 10);
-                    vals_buf.append(ally, .{ .Decimal = .{ .coeff = mantissa, .scale = scale } }) catch {};
-                } else {
-                    var m64: i64 = undefined;
-                    if (mantissa > std.math.maxInt(i64)) m64 = std.math.maxInt(i64) else if (mantissa < std.math.minInt(i64)) m64 = std.math.minInt(i64) else m64 = @intCast(mantissa);
-                    vals_buf.append(ally, .{ .Int = m64 }) catch {};
-                }
-                while (i < row_json.len and row_json[i] != ',' and row_json[i] != '}') i += 1;
-                if (i >= row_json.len or row_json[i] == '}') break;
-                continue;
-            }
-        }
-        const key = if (parse_ok) canonicalValuesKey(ally, vals_buf.items) else canonicalRowKey(ally, row_json);
-        if (!seen.contains(key)) {
-            seen.put(key, {}) catch {};
-            dedup_rows.append(ally, row_json) catch {};
-            if (key.ptr != row_json.ptr) alloc_keys.append(ally, key) catch {};
-        } else {
-            ally.free(row_json);
-            ally.free(key);
-        }
-    }
-    metrics.out = dedup_rows.items.len;
-    metrics.hash_size = seen.count();
-    return dedup_rows.toOwnedSlice(ally) catch &.{};
+    // Reuse shared helper directly on all_rows (in-place). We pass a dummy values list.
+    var dummy_vals = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer dummy_vals.deinit(ally);
+    var hash_size: usize = 0;
+    distinctDedup(ally, false, 0, &all_rows, &dummy_vals, &hash_size);
+    metrics.out = all_rows.items.len;
+    metrics.hash_size = hash_size;
+    return all_rows.toOwnedSlice(ally) catch &.{};
 }
 
 pub fn main() !void {
@@ -1024,12 +950,15 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     var result_format_txt = false;
+    var disable_estimates = false;
     var ai: usize = 1;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
             const f = args[ai + 1];
             if (std.mem.eql(u8, f, "txt") or std.mem.eql(u8, f, "text")) result_format_txt = true;
             ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--no-estimates")) {
+            disable_estimates = true;
         }
     }
     var state = ServerState{ .allocator = gpa };
@@ -1040,6 +969,12 @@ pub fn main() !void {
         if (env.get("GEODE_FORCE_SORT_SPILL")) |_| state.spill_sort = 1;
         if (env.get("GEODE_FORCE_DISTINCT_SPILL")) |_| state.spill_distinct = 1;
         if (env.get("GEODE_FORCE_UNION_SPILL")) |_| state.spill_union = 1;
+        if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
+            state.spill_threshold = std.fmt.parseInt(usize, th, 10) catch 0;
+        }
+        if (env.get("GEODE_NULLS_LAST")) |_| {
+            g_nulls_last = true;
+        }
     } else |_| {}
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [8192]u8 = undefined;
@@ -1197,8 +1132,10 @@ pub fn main() !void {
                                 if (profile_mode) {
                                     // PROFILE mode: we stage PROFILE json and emit SCHEMA now; PROFILE frame on first PULL.
                                     const start_time = std.time.nanoTimestamp();
-                                    // TODO(alloc-metrics): real allocation tracking; use base allocator for now.
-                                    const prof_ally = gpa;
+                                    // Counting allocator wrapper for profiling.
+                                    var track = @import("tracking_alloc").TrackingAllocator{ .inner = gpa };
+                                    track.init(gpa);
+                                    const prof_ally = track.allocator;
                                     var param_names: [][]const u8 = &.{};
                                     var param_rows: [][]const eval.Value = &.{};
                                     parseParams(prof_ally, rq.params_json, &param_names, &param_rows);
@@ -1245,7 +1182,7 @@ pub fn main() !void {
                                         timings.sort_bytes_out = rb;
                                         timings.offset_bytes_out = rb;
                                         timings.limit_bytes_out = rb;
-                                        timings.agg_bytes_alloc = rb;
+                                        // Placeholder; actual allocation deltas captured below after build/emit phases
                                         timings.project_bytes_alloc = rb;
                                         timings.distinct_bytes_alloc = rb;
                                         timings.sort_bytes_alloc = rb;
@@ -1253,9 +1190,18 @@ pub fn main() !void {
                                         timings.limit_bytes_alloc = rb;
                                         cols_mut = mut_cols_slice;
                                         cols = cols_mut;
+                                        // Delta-based allocation: capture after aggregate build+emit (no separate row materialization phases yet)
+                                        const alloc_after_build = track.net();
+                                        timings.agg_build_bytes_alloc = alloc_after_build; // build delta (since start)
+                                        // Emit phase currently trivial for prototype; treat emit alloc delta as zero additional unless net grows later
+                                        const alloc_after_emit = track.net();
+                                        timings.agg_emit_bytes_alloc = if (alloc_after_emit > alloc_after_build) alloc_after_emit - alloc_after_build else 0;
+                                        const total_after_agg = alloc_after_emit;
+                                        timings.project_bytes_alloc = if (timings.project_bytes_alloc == 0) total_after_agg else timings.project_bytes_alloc;
                                     } else {
                                         var run_code: diagnostics.Code = .IllegalOrderKey; // init sentinel
-                                        const rows_prof = evaluateSimpleQuery(prof_ally, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, &timings, &run_code) catch &.{};
+                                        const at: AllocTracker = .{ .ctx = @ptrCast(&track), .getFn = trackerGet };
+                                        const rows_prof = evaluateSimpleQuery(prof_ally, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, &timings, &run_code, at) catch &.{};
                                         if (run_code == .TypeMismatch) {
                                             var buf_codes: [2]diagnostics.Code = undefined;
                                             var len_codes: usize = 0;
@@ -1291,20 +1237,76 @@ pub fn main() !void {
                                         // Free rows; PROFILE does not return them
                                         var frp: usize = 0;
                                         while (frp < rows_prof.len) : (frp += 1) prof_ally.free(rows_prof[frp]);
+                                        // After evaluateSimpleQuery we can snapshot bytes for distinct/sort/offset/limit based on timings ordering.
+                                        const alloc_after_project = track.net();
+                                        if (timings.project_bytes_alloc == 0) timings.project_bytes_alloc = alloc_after_project; // baseline
+                                        // Heuristic attribution: since we free nothing yet, additional growth after each stage boundary approximated by bytes_out delta.
+                                        // For now treat all later stage alloc equal to net usage (will refine once stage-level alloc hooks added).
+                                        timings.distinct_bytes_alloc = timings.distinct_bytes_out;
+                                        timings.sort_bytes_alloc = timings.sort_bytes_out;
+                                        timings.offset_bytes_alloc = timings.offset_bytes_out;
+                                        timings.limit_bytes_alloc = timings.limit_bytes_out;
                                     }
                                     const total_ns: i128 = std.time.nanoTimestamp() - start_time;
+                                    // net_alloc skipped (counting allocator not active)
                                     // Replace heuristic bytes_alloc metrics with net allocations at time of each stage end if captured.
                                     // For now we approximate by proportionally distributing total peak across stages that produced bytes_out.
                                     // bytes_alloc remain heuristic (mirrors bytes_out) until counting allocator lands.
                                     var pb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
                                     const w = pb.writer(gpa);
-                                    w.writeAll("{\"ops\":[") catch {};
+                                    w.writeAll("{\"profile_version\":1,\"ops\":[") catch {};
                                     var first_op_profile = true;
+                                    const peak_bytes: usize = track.peakBytes();
+                                    if (state.spill_threshold > 0 and peak_bytes >= state.spill_threshold) {
+                                        if (ordered_meta) state.spill_sort = 1;
+                                        if (q.ret.distinct) state.spill_distinct = 1;
+                                    }
                                     const emit = struct {
-                                        fn op(wr: anytype, first_ptr: *bool, name: []const u8, in_rows: usize, out_rows: usize, time_ns: i128, bytes_out: usize, bytes_alloc: usize) void {
+                                        const TopTracker = struct { names: [3][24]u8 = .{ [_]u8{0} ** 24, [_]u8{0} ** 24, [_]u8{0} ** 24 }, lens: [3]usize = .{ 0, 0, 0 }, vals: [3]usize = .{ 0, 0, 0 } };
+                                        fn maybeRecord(tt: *TopTracker, name: []const u8, val: usize) void {
+                                            var min_i: usize = 0;
+                                            var min_v: usize = tt.vals[0];
+                                            var i: usize = 1;
+                                            while (i < 3) : (i += 1) {
+                                                if (tt.vals[i] < min_v) {
+                                                    min_v = tt.vals[i];
+                                                    min_i = i;
+                                                }
+                                            }
+                                            if (val > min_v) {
+                                                const copy_len = if (name.len < tt.names[min_i].len) name.len else tt.names[min_i].len;
+                                                std.mem.copyForwards(u8, tt.names[min_i][0..copy_len], name[0..copy_len]);
+                                                tt.lens[min_i] = copy_len;
+                                                tt.vals[min_i] = val;
+                                            }
+                                        }
+                                        fn op(
+                                            wr: anytype,
+                                            tt: *TopTracker,
+                                            op_index: *usize,
+                                            cum_time: *i128,
+                                            prev_net: *usize,
+                                            net_after_sum: *usize,
+                                            first_ptr: *bool,
+                                            error_min_pct: *usize,
+                                            error_max_pct: *usize,
+                                            error_sum_pct: *usize,
+                                            error_count: *usize,
+                                            name: []const u8,
+                                            in_rows: usize,
+                                            out_rows: usize,
+                                            time_ns: i128,
+                                            bytes_out: usize,
+                                            bytes_alloc: usize,
+                                            est_bytes: usize,
+                                            peak_total: usize,
+                                            net_total: usize,
+                                        ) void {
                                             if (first_ptr.*) wr.writeAll("{") catch {} else wr.writeAll(",{") catch {};
                                             wr.writeAll("\"op\":\"") catch {};
                                             wr.writeAll(name) catch {};
+                                            wr.writeAll(",\"op_index\":") catch {};
+                                            wr.print("{d}", .{op_index.*}) catch {};
                                             wr.writeAll("\",\"input_rows\":") catch {};
                                             wr.print("{d}", .{in_rows}) catch {};
                                             wr.writeAll(",\"rows\":") catch {};
@@ -1315,19 +1317,116 @@ pub fn main() !void {
                                             wr.print("{d}", .{bytes_out}) catch {};
                                             wr.writeAll(",\"bytes_alloc\":") catch {};
                                             wr.print("{d}", .{bytes_alloc}) catch {};
+                                            wr.writeAll(",\"estimate_bytes\":") catch {};
+                                            wr.print("{d}", .{est_bytes}) catch {};
+                                            const estimate_vs_actual: usize = if (est_bytes > 0 and bytes_alloc > 0) (bytes_alloc * 100) / est_bytes else 0;
+                                            wr.writeAll(",\"estimate_vs_actual\":") catch {};
+                                            wr.print("{d}", .{estimate_vs_actual}) catch {};
+                                            // percent_peak = allocation share of peak (delta attribution already applied to bytes_alloc)
+                                            const percent_peak: usize = if (peak_total > 0 and bytes_alloc > 0) (bytes_alloc * 100) / peak_total else 0;
+                                            wr.writeAll(",\"percent_peak\":") catch {};
+                                            wr.print("{d}", .{percent_peak}) catch {};
+                                            const percent_net: usize = if (net_total > 0 and bytes_alloc > 0) (bytes_alloc * 100) / net_total else 0;
+                                            wr.writeAll(",\"percent_net\":") catch {};
+                                            wr.print("{d}", .{percent_net}) catch {};
+                                            cum_time.* += time_ns;
+                                            wr.writeAll(",\"cumulative_time_ns\":") catch {};
+                                            wr.print("{d}", .{cum_time.*}) catch {};
+                                            // freed_bytes & net_after_op tracking
+                                            const net_after = net_total;
+                                            const freed_bytes: usize = if (net_after < prev_net.*) prev_net.* - net_after else 0;
+                                            wr.writeAll(",\"freed_bytes\":") catch {};
+                                            wr.print("{d}", .{freed_bytes}) catch {};
+                                            wr.writeAll(",\"net_after_op\":") catch {};
+                                            wr.print("{d}", .{net_after}) catch {};
+                                            prev_net.* = net_after;
+                                            if (est_bytes > 0) net_after_sum.* += est_bytes;
+                                            if (est_bytes > 0) {
+                                                // error metrics
+                                                const err_abs: isize = @as(isize, @intCast(bytes_alloc)) - @as(isize, @intCast(est_bytes));
+                                                const err_bytes: usize = if (err_abs < 0) @intCast(-err_abs) else @intCast(err_abs);
+                                                const err_pct: usize = if (est_bytes > 0 and err_bytes > 0) (err_bytes * 100) / est_bytes else 0;
+                                                wr.writeAll(",\"error_bytes\":") catch {};
+                                                wr.print("{d}", .{err_bytes}) catch {};
+                                                wr.writeAll(",\"error_abs_pct\":") catch {};
+                                                wr.print("{d}", .{err_pct}) catch {};
+                                                if (error_count.* == 0 or err_pct < error_min_pct.*) error_min_pct.* = err_pct;
+                                                if (err_pct > error_max_pct.*) error_max_pct.* = err_pct;
+                                                error_sum_pct.* += err_pct;
+                                                error_count.* += 1;
+                                            } else {
+                                                wr.writeAll(",\"error_bytes\":0,\"error_abs_pct\":0") catch {};
+                                            }
+                                            op_index.* += 1;
                                             wr.writeAll("}") catch {};
+                                            if (bytes_alloc > 0) maybeRecord(tt, name, bytes_alloc);
                                             first_ptr.* = false;
                                         }
                                     };
+                                    var top_tracker: emit.TopTracker = .{};
+                                    var cumulative_time_ns: i128 = 0;
+                                    var prev_net_after: usize = 0;
+                                    var sum_estimated: usize = 0;
+                                    var sum_actual_estimated: usize = 0; // accumulate bytes_alloc for stages with estimates
+                                    var op_index_counter: usize = 0;
+                                    var err_min_pct: usize = 0;
+                                    var err_max_pct: usize = 0;
+                                    var err_sum_pct: usize = 0;
+                                    var err_count: usize = 0;
                                     if (q.group_by != null) {
-                                        emit.op(w, &first_op_profile, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_bytes_alloc);
-                                        emit.op(w, &first_op_profile, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_bytes_alloc);
+                                        const net_now = track.net();
+                                        const est_build = if (disable_estimates) 0 else timings.agg_rows_in * 32;
+                                        const est_emit = if (disable_estimates) 0 else timings.agg_rows_out * 16;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now);
+                                        if (est_build > 0) sum_actual_estimated += timings.agg_build_bytes_alloc;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now);
+                                        if (est_emit > 0) sum_actual_estimated += timings.agg_emit_bytes_alloc;
                                     }
-                                    emit.op(w, &first_op_profile, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc);
-                                    if (q.ret.distinct) emit.op(w, &first_op_profile, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, timings.distinct_bytes_alloc);
-                                    if (ordered_meta) emit.op(w, &first_op_profile, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, timings.sort_bytes_alloc);
-                                    if (q.offset != null) emit.op(w, &first_op_profile, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, timings.offset_bytes_alloc);
-                                    if (q.limit != null) emit.op(w, &first_op_profile, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, timings.limit_bytes_alloc);
+                                    const net_post_group = track.net();
+                                    const est_project = if (disable_estimates) 0 else timings.project_rows_out * 8;
+                                    emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc, est_project, peak_bytes, net_post_group);
+                                    if (est_project > 0) sum_actual_estimated += timings.project_bytes_alloc;
+                                    if (q.ret.distinct) {
+                                        const est_distinct = if (disable_estimates) 0 else timings.distinct_rows_in * 24;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out, est_distinct, peak_bytes, net_post_group);
+                                        if (est_distinct > 0) sum_actual_estimated += if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out;
+                                    }
+                                    if (ordered_meta) {
+                                        const est_sort = if (disable_estimates) 0 else timings.sort_rows_in * 16;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out, est_sort, peak_bytes, net_post_group);
+                                        if (est_sort > 0) sum_actual_estimated += if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out;
+                                    }
+                                    if (q.offset != null) emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, if (timings.offset_bytes_alloc != 0) timings.offset_bytes_alloc else timings.offset_bytes_out, 0, peak_bytes, net_post_group);
+                                    if (q.limit != null) emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, if (timings.limit_bytes_alloc != 0) timings.limit_bytes_alloc else timings.limit_bytes_out, 0, peak_bytes, net_post_group);
+                                    // Emit peak_contributors array (filter zero entries, sort descending)
+                                    // Simple selection sort of top_tracker arrays
+                                    // Build temporary indices
+                                    var order_idx: [3]usize = .{ 0, 1, 2 };
+                                    var oi: usize = 0;
+                                    while (oi < 3) : (oi += 1) {
+                                        var oj: usize = oi + 1;
+                                        while (oj < 3) : (oj += 1) {
+                                            if (top_tracker.vals[oj] > top_tracker.vals[order_idx[oi]]) {
+                                                const tmp = order_idx[oi];
+                                                order_idx[oi] = oj;
+                                                order_idx[oj] = tmp;
+                                            }
+                                        }
+                                    }
+                                    w.writeAll(",\"peak_contributors\":[") catch {};
+                                    var pc_first = true;
+                                    var pci: usize = 0;
+                                    while (pci < 3) : (pci += 1) {
+                                        const idx = order_idx[pci];
+                                        if (top_tracker.vals[idx] == 0 or top_tracker.lens[idx] == 0) continue;
+                                        if (!pc_first) w.writeAll(",") catch {} else pc_first = false;
+                                        w.writeAll("{\"op\":\"") catch {};
+                                        w.writeAll(top_tracker.names[idx][0..top_tracker.lens[idx]]) catch {};
+                                        w.writeAll("\",\"bytes_alloc\":") catch {};
+                                        w.print("{d}", .{top_tracker.vals[idx]}) catch {};
+                                        w.writeAll("}") catch {};
+                                    }
+                                    w.writeAll("]") catch {};
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};
                                     w.writeAll(",\"spills\":{") catch {};
@@ -1335,6 +1434,33 @@ pub fn main() !void {
                                     w.print("\"distinct_spills\":{d},", .{state.spill_distinct}) catch {};
                                     w.print("\"union_spills\":{d}", .{state.spill_union}) catch {};
                                     w.writeAll("}") catch {};
+                                    // spill_reason if any
+                                    if (state.spill_sort + state.spill_distinct + state.spill_union > 0) {
+                                        var spill_reason: []const u8 = "forced";
+                                        if (state.spill_threshold > 0 and peak_bytes >= state.spill_threshold) spill_reason = "threshold";
+                                        w.writeAll(",\"spill_reason\":\"") catch {};
+                                        w.writeAll(spill_reason) catch {};
+                                        w.writeAll("\"") catch {};
+                                    }
+                                    // Memory summary (net/peak so far) - counting allocator 'track'
+                                    w.writeAll(",\"memory\":{") catch {};
+                                    w.print("\"net_bytes\":{d},", .{track.net()}) catch {};
+                                    w.print("\"peak_bytes\":{d},", .{track.peakBytes()}) catch {};
+                                    w.print("\"total_alloc_bytes\":{d}", .{track.total_alloc}) catch {};
+                                    w.writeAll("}") catch {};
+                                    // planner_estimates summary (only if estimates enabled)
+                                    if (!disable_estimates) {
+                                        w.writeAll(",\"planner_estimates\":{") catch {};
+                                        w.print("\"sum_estimate_bytes\":{d},", .{sum_estimated}) catch {};
+                                        w.print("\"sum_actual_bytes\":{d},", .{sum_actual_estimated}) catch {};
+                                        w.print("\"count_estimated_ops\":{d}", .{err_count}) catch {};
+                                        if (err_count > 0) {
+                                            const mean_err: usize = err_sum_pct / err_count;
+                                            w.writeAll(",") catch {};
+                                            w.print("\"min_error_abs_pct\":{d},\"max_error_abs_pct\":{d},\"mean_error_abs_pct\":{d}", .{ err_min_pct, err_max_pct, mean_err }) catch {};
+                                        }
+                                        w.writeAll("}") catch {};
+                                    }
                                     state.profile_json = pb.toOwnedSlice(gpa) catch "{}";
                                     state.profile_flags = computeBaseFlags(ordered_meta, q.ret.distinct);
                                     state.last_columns = cols;
@@ -1356,7 +1482,7 @@ pub fn main() !void {
                                 var order_keys: [][]const u8 = &.{};
                                 var cols: []const protocol.SchemaCol = &.{};
                                 var run_code: diagnostics.Code = .IllegalOrderKey; // init sentinel
-                                const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null, &run_code) catch |e| blk_runerr: {
+                                const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null, &run_code, null) catch |e| blk_runerr: {
                                     if (diagnostics.mapEvalError(e)) |c| {
                                         writeErrorWithFlags(gpa, stdout_file, c, diagnostics.defaultMessage(c), diagnostics.anchorFor(c), &.{}, false);
                                         break :blk_runerr &.{};
@@ -1450,19 +1576,24 @@ pub fn main() !void {
                                 if (profile_mode) {
                                     // Granular union profiling phases.
                                     const total_start = std.time.nanoTimestamp();
+                                    // Counting allocator for union profiling (independent from simple query path typical usage)
+                                    var track_u = @import("tracking_alloc").TrackingAllocator{ .inner = gpa };
+                                    track_u.init(gpa);
+                                    const u_ally = track_u.allocator;
                                     // Phase 1: left
                                     const left_start = std.time.nanoTimestamp();
                                     var dummy_cols_l: []const protocol.SchemaCol = &.{};
                                     var ordered_l = false;
                                     var order_keys_l: [][]const u8 = &.{};
-                                    const left_rows = evaluateSimpleQuery(gpa, u_stmt.first, param_names, param_rows, &ordered_l, &order_keys_l, &dummy_cols_l, null, null) catch &.{};
+                                    const left_rows = evaluateSimpleQuery(u_ally, u_stmt.first, param_names, param_rows, &ordered_l, &order_keys_l, &dummy_cols_l, null, null, null) catch &.{};
                                     metrics.left_in = left_rows.len;
                                     const time_left = std.time.nanoTimestamp() - left_start;
+                                    const alloc_after_left = track_u.net();
                                     // Phase 2: tails
                                     const tails_start = std.time.nanoTimestamp();
-                                    var all_rows = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-                                    defer all_rows.deinit(gpa);
-                                    for (left_rows) |lr| all_rows.append(gpa, lr) catch {};
+                                    var all_rows = std.ArrayList([]const u8).initCapacity(u_ally, 0) catch @panic("OOM");
+                                    defer all_rows.deinit(u_ally);
+                                    for (left_rows) |lr| all_rows.append(u_ally, lr) catch {};
                                     var any_all = false;
                                     var right_total: usize = 0;
                                     var ti_prof: usize = 0;
@@ -1472,61 +1603,84 @@ pub fn main() !void {
                                         var oc_prof: []const protocol.SchemaCol = &.{};
                                         ordered_l = false;
                                         order_keys_l = &.{};
-                                        const pr = evaluateSimpleQuery(gpa, part.query, param_names, param_rows, &ordered_l, &order_keys_l, &oc_prof, null, null) catch &.{};
+                                        const pr = evaluateSimpleQuery(u_ally, part.query, param_names, param_rows, &ordered_l, &order_keys_l, &oc_prof, null, null, null) catch &.{};
                                         right_total += pr.len;
-                                        for (pr) |rr| all_rows.append(gpa, rr) catch {};
-                                        gpa.free(oc_prof);
+                                        for (pr) |rr| all_rows.append(u_ally, rr) catch {};
+                                        u_ally.free(oc_prof);
                                     }
                                     metrics.right_in = right_total;
                                     const time_tails = std.time.nanoTimestamp() - tails_start;
+                                    const alloc_after_tails = track_u.net();
                                     // Phase 3: dedup (if DISTINCT)
                                     var dedup_time: i128 = 0;
                                     var final_rows: [][]const u8 = &.{};
                                     if (!any_all) {
                                         const dedup_start = std.time.nanoTimestamp();
-                                        var seen = std.StringHashMap(void).init(gpa);
+                                        var seen = std.StringHashMap(void).init(u_ally);
                                         defer seen.deinit();
-                                        var dedup = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-                                        defer dedup.deinit(gpa);
+                                        var dedup = std.ArrayList([]const u8).initCapacity(u_ally, 0) catch @panic("OOM");
+                                        defer dedup.deinit(u_ally);
                                         for (all_rows.items) |s| {
                                             if (!seen.contains(s)) {
                                                 seen.put(s, {}) catch {};
-                                                dedup.append(gpa, s) catch {};
+                                                dedup.append(u_ally, s) catch {};
                                             } else gpa.free(s);
                                         }
                                         metrics.out = dedup.items.len;
                                         metrics.hash_size = seen.count();
-                                        final_rows = dedup.toOwnedSlice(gpa) catch &.{};
+                                        final_rows = dedup.toOwnedSlice(u_ally) catch &.{};
                                         dedup_time = std.time.nanoTimestamp() - dedup_start;
                                         union_mode = "DISTINCT";
                                     } else {
                                         union_mode = "ALL";
                                         metrics.out = all_rows.items.len;
                                         metrics.hash_size = null;
-                                        final_rows = all_rows.toOwnedSlice(gpa) catch &.{};
+                                        final_rows = all_rows.toOwnedSlice(u_ally) catch &.{};
                                     }
                                     const total_elapsed = std.time.nanoTimestamp() - total_start;
+                                    const alloc_after_dedup = track_u.net();
                                     // Build profiling JSON with phase ops
                                     var pb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
                                     const w = pb.writer(gpa);
                                     w.writeAll("{\"ops\":[") catch {};
+                                    const peak_u = track_u.peakBytes();
+                                    if (state.spill_threshold > 0 and peak_u >= state.spill_threshold and std.mem.eql(u8, union_mode, "DISTINCT")) {
+                                        state.spill_union = 1;
+                                    }
                                     // UnionLeft
                                     w.writeAll("{\"op\":\"UnionLeft\",\"rows\":") catch {};
                                     w.print("{d}", .{metrics.left_in}) catch {};
                                     w.writeAll(",\"time_ns\":") catch {};
                                     w.print("{d}", .{time_left}) catch {};
+                                    w.writeAll(",\"bytes_alloc\":") catch {};
+                                    w.print("{d}", .{alloc_after_left}) catch {};
+                                    const percent_left: usize = if (peak_u > 0 and alloc_after_left > 0) (alloc_after_left * 100) / peak_u else 0;
+                                    w.writeAll(",\"percent_peak\":") catch {};
+                                    w.print("{d}", .{percent_left}) catch {};
                                     w.writeAll("},") catch {};
                                     // UnionTails
                                     w.writeAll("{\"op\":\"UnionTails\",\"rows\":") catch {};
                                     w.print("{d}", .{metrics.right_in}) catch {};
                                     w.writeAll(",\"time_ns\":") catch {};
                                     w.print("{d}", .{time_tails}) catch {};
+                                    w.writeAll(",\"bytes_alloc\":") catch {};
+                                    const tails_delta = alloc_after_tails - alloc_after_left;
+                                    w.print("{d}", .{tails_delta}) catch {};
+                                    const percent_tails: usize = if (peak_u > 0 and tails_delta > 0) (tails_delta * 100) / peak_u else 0;
+                                    w.writeAll(",\"percent_peak\":") catch {};
+                                    w.print("{d}", .{percent_tails}) catch {};
                                     w.writeAll("},") catch {};
                                     if (std.mem.eql(u8, union_mode, "DISTINCT")) {
                                         w.writeAll("{\"op\":\"UnionDedup\",\"rows\":") catch {};
                                         w.print("{d}", .{metrics.out}) catch {};
                                         w.writeAll(",\"time_ns\":") catch {};
                                         w.print("{d}", .{dedup_time}) catch {};
+                                        w.writeAll(",\"bytes_alloc\":") catch {};
+                                        const dedup_delta = alloc_after_dedup - alloc_after_tails;
+                                        w.print("{d}", .{dedup_delta}) catch {};
+                                        const percent_dedup: usize = if (peak_u > 0 and dedup_delta > 0) (dedup_delta * 100) / peak_u else 0;
+                                        w.writeAll(",\"percent_peak\":") catch {};
+                                        w.print("{d}", .{percent_dedup}) catch {};
                                         w.writeAll("},") catch {};
                                     }
                                     // Final summary op
@@ -1547,6 +1701,12 @@ pub fn main() !void {
                                     if (metrics.hash_size) |hs2| {
                                         w.writeAll(",\"hash_dedup_size\":") catch {};
                                         w.print("{d}", .{hs2}) catch {};
+                                        const total_in: usize = metrics.left_in + metrics.right_in;
+                                        if (total_in > 0) {
+                                            const fill_pct: usize = (hs2 * 100) / total_in; // integer percent of distinct vs input
+                                            w.writeAll(",\"distinct_fill_pct\":") catch {};
+                                            w.print("{d}", .{fill_pct}) catch {};
+                                        }
                                     }
                                     w.writeAll("},\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_elapsed}) catch {};
@@ -1554,6 +1714,11 @@ pub fn main() !void {
                                     w.print("\"sort_spills\":{d},", .{state.spill_sort}) catch {};
                                     w.print("\"distinct_spills\":{d},", .{state.spill_distinct}) catch {};
                                     w.print("\"union_spills\":{d}", .{state.spill_union}) catch {};
+                                    w.writeAll("}") catch {};
+                                    w.writeAll(",\"memory\":{") catch {};
+                                    w.print("\"net_bytes\":{d},", .{track_u.net()}) catch {};
+                                    w.print("\"peak_bytes\":{d},", .{track_u.peakBytes()}) catch {};
+                                    w.print("\"total_alloc_bytes\":{d}", .{track_u.total_alloc}) catch {};
                                     w.writeAll("}") catch {};
                                     const flags_u_prof = computeFlagsExtended(false, std.mem.eql(u8, union_mode, "DISTINCT"), true);
                                     const pline2 = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}", flags_u_prof) catch null;
