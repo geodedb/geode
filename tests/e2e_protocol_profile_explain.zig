@@ -18,7 +18,9 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = code, .out = out, .err = err };
 }
 
-fn contains(hay: []const u8, needle: []const u8) bool { return std.mem.indexOf(u8, hay, needle) != null; }
+fn contains(hay: []const u8, needle: []const u8) bool {
+    return std.mem.indexOf(u8, hay, needle) != null;
+}
 
 test "protocol: EXPLAIN bypasses planner and emits EXPLAIN frame" {
     const exe = "./zig-out/bin/geodec";
@@ -38,4 +40,8 @@ test "protocol: PROFILE bypasses planner and emits PROFILE frame" {
     try std.testing.expectEqual(@as(i32, 0), res.code);
     try std.testing.expect(contains(res.out, "\"type\":\"PROFILE\""));
     try std.testing.expect(contains(res.out, "\"ops\""));
+    // bytes_out metric should now be present for each op
+    try std.testing.expect(contains(res.out, "\"bytes_out\""));
+    try std.testing.expect(contains(res.out, "\"bytes_alloc\""));
+    try std.testing.expect(contains(res.out, "\"input_rows\""));
 }

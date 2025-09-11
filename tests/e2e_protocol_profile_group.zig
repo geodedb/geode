@@ -38,4 +38,8 @@ test "protocol: PROFILE grouped query includes aggregate ops" {
     try std.testing.expect(contains(res.out, "AggregateEmit"));
     // Project should still appear
     try std.testing.expect(contains(res.out, "Project"));
+    // bytes_out metric should be present
+    try std.testing.expect(contains(res.out, "bytes_out"));
+    try std.testing.expect(contains(res.out, "input_rows"));
+    try std.testing.expect(contains(res.out, "bytes_alloc"));
 }
