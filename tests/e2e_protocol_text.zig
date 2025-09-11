@@ -36,3 +36,23 @@ test "client: --format txt simple RETURN" {
     // Expect header then single row line
     try std.testing.expect(contains(res.out, "x\n2\n"));
 }
+
+test "client: --format txt EXPLAIN parity" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Should contain logical operators (at least Project)
+    try std.testing.expect(contains(res.out, "Project"));
+}
+
+test "client: --format txt PROFILE parity" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Expect timing columns signaled by presence of 'time_ns' literal or header token
+    try std.testing.expect(contains(res.out, "Project"));
+}

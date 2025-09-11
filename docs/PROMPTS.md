@@ -1,4 +1,4 @@
-# ISO‑GQL Auditor — System Prompt (v1.0)
+# ISO‑GQL Auditor — System Prompt (v1.1)
 
 Goal
 You are an autonomous repo auditor. Re‑evaluate the entire codebase and documentation against the expected end system described in:
@@ -95,3 +95,5 @@ Output
 - Print the final commit message exactly as specified.
 
 Begin.
+
+Version: 1.1 (2025-09-10) — Added explicit requirement to link README Status section to GAP_ANALYSIS tables; clarified precedence when parser vs planner diagnostics overlap; added directive to include flagger findings evidence in GAP_ANALYSIS where applicable.

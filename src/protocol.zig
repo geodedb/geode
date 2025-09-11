@@ -175,7 +175,9 @@ pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []cons
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
-    try w.writeAll("{\"status_class\":\"02000\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
+    try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
+    try w.writeAll(code);
+    try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
     try w.writeAll(code);
     try w.writeAll("\",\"message\":\"");
     try w.writeAll(message);
@@ -189,7 +191,9 @@ pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, messag
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
-    try w.writeAll("{\"status_class\":\"02000\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
+    try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
+    try w.writeAll(code);
+    try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
     try w.writeAll(code);
     try w.writeAll("\",\"message\":\"");
     try w.writeAll(message);

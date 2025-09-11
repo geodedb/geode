@@ -330,7 +330,135 @@ const StageTimings = struct {
     limit_ns: i128 = 0,
     agg_build_ns: i128 = 0,
     agg_emit_ns: i128 = 0,
+    project_rows_out: usize = 0,
+    distinct_rows_out: usize = 0,
+    sort_rows_out: usize = 0,
+    offset_rows_out: usize = 0,
+    limit_rows_out: usize = 0,
+    agg_rows_out: usize = 0,
+    project_rows_in: usize = 0,
+    distinct_rows_in: usize = 0,
+    sort_rows_in: usize = 0,
+    offset_rows_in: usize = 0,
+    limit_rows_in: usize = 0,
+    agg_rows_in: usize = 0,
 };
+
+// Build canonical key for a row JSON string so that numerically equal values with different scales map identically.
+fn canonicalRowKey(ally: std.mem.Allocator, row: []const u8) []const u8 {
+    if (row.len < 2) return row; // fallback
+    var idx: usize = 0;
+    if (row[idx] == '{') idx += 1;
+    var key_buf = std.ArrayList(u8).initCapacity(ally, 0) catch return row;
+    const w = key_buf.writer(ally);
+    var field_i: usize = 0;
+    while (idx < row.len) : (idx += 1) {
+        while (idx < row.len and (row[idx] == ' ' or row[idx] == ',')) idx += 1;
+        if (idx >= row.len or row[idx] == '}') break;
+        if (row[idx] != '"') break; // malformed
+        idx += 1; // skip opening quote of key
+        while (idx < row.len and row[idx] != '"') idx += 1; // skip key chars
+        if (idx >= row.len) break;
+        idx += 1; // skip closing quote
+        while (idx < row.len and row[idx] != ':') idx += 1;
+        if (idx >= row.len) break;
+        idx += 1; // colon
+        while (idx < row.len and row[idx] == ' ') idx += 1;
+        if (idx >= row.len) break;
+        if (field_i > 0) w.writeAll("|") catch {};
+        const ch = row[idx];
+        if (ch == 'n') { // null
+            w.writeAll("n") catch {};
+            while (idx < row.len and row[idx] != ',' and row[idx] != '}') idx += 1;
+            if (idx >= row.len or row[idx] == '}') break;
+            field_i += 1;
+            continue;
+        } else if (ch == '"') { // string
+            idx += 1;
+            const start = idx;
+            while (idx < row.len and row[idx] != '"') idx += 1;
+            const s = if (idx <= row.len) row[start..idx] else &.{};
+            w.writeAll("s:") catch {};
+            w.print("{d}:", .{s.len}) catch {};
+            w.writeAll(s) catch {};
+            if (idx < row.len) idx += 1;
+            while (idx < row.len and row[idx] != ',' and row[idx] != '}') idx += 1;
+            if (idx >= row.len or row[idx] == '}') break;
+            field_i += 1;
+            continue;
+        } else {
+            // number or bool token
+            const startn = idx;
+            var neg = false;
+            if (row[idx] == '-') {
+                neg = true;
+                idx += 1;
+            }
+            var mantissa: i128 = 0;
+            var saw_digit = false;
+            while (idx < row.len and row[idx] >= '0' and row[idx] <= '9') : (idx += 1) {
+                mantissa = mantissa * 10 + (row[idx] - '0');
+                saw_digit = true;
+            }
+            var scale: u8 = 0;
+            var is_dec = false;
+            if (idx < row.len and row[idx] == '.') {
+                is_dec = true;
+                idx += 1;
+                while (idx < row.len and row[idx] >= '0' and row[idx] <= '9') : (idx += 1) {
+                    mantissa = mantissa * 10 + (row[idx] - '0');
+                    scale += 1;
+                    saw_digit = true;
+                }
+            }
+            if (!saw_digit) {
+                // bool token -> canonical as string
+                var endtok = startn;
+                while (endtok < row.len and row[endtok] != ',' and row[endtok] != '}') endtok += 1;
+                const tok = row[startn..endtok];
+                w.writeAll("s:") catch {};
+                w.print("{d}:", .{tok.len}) catch {};
+                w.writeAll(tok) catch {};
+                idx = endtok;
+            } else {
+                if (neg) mantissa = -mantissa;
+                if (is_dec) {
+                    while (scale > 0 and @mod(mantissa, 10) == 0) : (scale -= 1) mantissa = @divTrunc(mantissa, 10);
+                    if (scale == 0) {
+                        // becomes int
+                        w.writeAll("i:") catch {};
+                        w.print("{d}", .{mantissa}) catch {};
+                    } else {
+                        w.writeAll("d:") catch {};
+                        w.print("{d}:", .{mantissa}) catch {};
+                        w.print("{d}", .{scale}) catch {};
+                    }
+                } else {
+                    w.writeAll("i:") catch {};
+                    w.print("{d}", .{mantissa}) catch {};
+                }
+            }
+            while (idx < row.len and row[idx] != ',' and row[idx] != '}') idx += 1;
+            if (idx >= row.len or row[idx] == '}') break;
+            field_i += 1;
+            continue;
+        }
+    }
+    return key_buf.toOwnedSlice(ally) catch row;
+}
+
+fn buildAdditionalStatusesAlloc(ally: std.mem.Allocator, codes: []const diagnostics.Code, primary: diagnostics.Code) []const []const u8 {
+    if (codes.len <= 1) return &.{};
+    var extras = ally.alloc([]const u8, codes.len - 1) catch return &.{};
+    var ei: usize = 0;
+    var i: usize = 0;
+    while (i < codes.len) : (i += 1) {
+        if (codes[i] == primary) continue;
+        extras[ei] = diagnostics.codeName(codes[i]);
+        ei += 1;
+    }
+    return extras[0..ei];
+}
 
 fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code) ![][]const u8 {
     // Build rows
@@ -342,9 +470,12 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
 
     const has_params = param_matrix.len > 0;
     const num_rows = if (has_params) param_matrix.len else 1;
+    // Capture per-row evaluation environments for later ORDER BY key evaluation.
+    var envs = try ally.alloc(eval.Env, num_rows);
     var r: usize = 0;
     while (r < num_rows) : (r += 1) {
         const env: eval.Env = if (has_params) .{ .names = param_names, .values = param_matrix[r] } else .{ .names = &.{}, .values = &.{} };
+        envs[r] = env;
         // Build JSON row
         var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
         const w = buf.writer(ally);
@@ -371,24 +502,36 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         rows_json.append(ally, buf.toOwnedSlice(ally) catch "{}") catch {};
     }
 
-    if (timings) |tptr| tptr.project_ns = if (timings != null) (std.time.nanoTimestamp() - t_start) else 0;
+    if (timings) |tptr| {
+        tptr.project_ns = std.time.nanoTimestamp() - t_start;
+        tptr.project_rows_in = num_rows;
+        tptr.project_rows_out = rows_json.items.len;
+    }
 
     // DISTINCT on RETURN clause
     if (q.ret.distinct and rows_json.items.len > 1) {
         const t_d_start = if (timings) |_| std.time.nanoTimestamp() else 0;
         var seen = std.StringHashMap(void).init(ally);
         defer seen.deinit();
-        var dedup = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
-        defer dedup.deinit(ally);
+        var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
+        defer out_rows.deinit(ally);
         for (rows_json.items) |s| {
-            if (!seen.contains(s)) {
-                seen.put(s, {}) catch {};
-                dedup.append(ally, s) catch {};
-            } else ally.free(s);
+            const key = canonicalRowKey(ally, s);
+            if (!seen.contains(key)) {
+                seen.put(key, {}) catch {};
+                out_rows.append(ally, s) catch {};
+            } else {
+                ally.free(s);
+                ally.free(key);
+            }
         }
         rows_json.clearRetainingCapacity();
-        for (dedup.items) |s| rows_json.append(ally, s) catch {};
-        if (timings) |tptr| tptr.distinct_ns = std.time.nanoTimestamp() - t_d_start;
+        for (out_rows.items) |rr| rows_json.append(ally, rr) catch {};
+        if (timings) |tptr| {
+            tptr.distinct_ns = std.time.nanoTimestamp() - t_d_start;
+            tptr.distinct_rows_in = tptr.project_rows_out;
+            tptr.distinct_rows_out = rows_json.items.len;
+        }
     }
 
     // ORDER BY (metadata always set when present; we will not reorder unless needed by tests with actual ordering semantics)
@@ -404,94 +547,95 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         }
         if (rows_json.items.len > 1 and ob.keys.len > 0) {
             const t_sort_start = if (timings) |_| std.time.nanoTimestamp() else 0;
-            // Multi-key comparator with support for INT / DECIMAL / STRING / NULL.
-            const KeyValKind = enum { Null, Int, Dec, Str };
-            const KeyVal = struct { kind: KeyValKind, mantissa: i128 = 0, scale: u8 = 0, str: []const u8 = &.{} };
+            const KeyKind = enum { Null, Int, Dec, Str };
+            const KeyVal = struct { kind: KeyKind, mantissa: i128 = 0, scale: u8 = 0, str: []const u8 = &.{} };
+            // Flattened matrix: row-major [row * key_count + key]
+            const key_count = ob.keys.len;
+            var key_matrix: []KeyVal = ally.alloc(KeyVal, rows_json.items.len * key_count) catch &.{};
+            defer if (key_matrix.len != 0) ally.free(key_matrix);
+            // For each row, re-evaluate each ORDER BY expression in the same environment used originally.
+            // NOTE: For correctness with aliases/ordinals, planner already validated keys are simple identifiers/ordinals.
+            var row_index: usize = 0;
+            while (row_index < rows_json.items.len) : (row_index += 1) {
+                // Reconstruct evaluation environment identical to projection (params only in current prototype).
+                var key_i: usize = 0;
+                while (key_i < key_count) : (key_i += 1) {
+                    const key_expr = ob.keys[key_i].expr;
+                    const val = eval.evalExpr(ally, key_expr, envs[row_index]) catch eval.Value{ .Null = {} };
+                    const slot_index = row_index * key_count + key_i;
+                    key_matrix[slot_index] = switch (val) {
+                        .Null => KeyVal{ .kind = .Null },
+                        .Int => |iv| KeyVal{ .kind = .Int, .mantissa = iv },
+                        .Decimal => |d| KeyVal{ .kind = .Dec, .mantissa = d.coeff, .scale = d.scale },
+                        .Str => |s| KeyVal{ .kind = .Str, .str = s },
+                        .Bool => |b| KeyVal{ .kind = .Str, .str = if (b) "true" else "false" }, // bool ordering after numbers before other strings via lex tie-break
+                    };
+                }
+            }
             const Ctx = struct {
                 rows: [][]const u8,
                 ob: *const @TypeOf(ob),
-                keys: [][]const u8,
-                fn extract(row: []const u8, key: []const u8) KeyVal {
-                    if (std.mem.indexOf(u8, row, key)) |pos| {
-                        if (std.mem.indexOfPos(u8, row, pos, ":")) |colon| {
-                            var vstart = colon + 1;
-                            while (vstart < row.len and (row[vstart] == ' ')) vstart += 1;
-                            if (vstart >= row.len) return .{ .kind = .Null };
-                            const ch = row[vstart];
-                            if (ch == 'n') return .{ .kind = .Null };
-                            if (ch == '"') {
-                                var end = vstart + 1;
-                                while (end < row.len and row[end] != '"') end += 1;
-                                if (end <= row.len) return .{ .kind = .Str, .str = row[vstart + 1 .. end] };
-                                return .{ .kind = .Str, .str = &.{} };
-                            }
-                            var j = vstart;
-                            var neg = false;
-                            if (row[j] == '-') {
-                                neg = true;
-                                j += 1;
-                            }
-                            var mantissa: i128 = 0;
-                            while (j < row.len and row[j] >= '0' and row[j] <= '9') : (j += 1) mantissa = mantissa * 10 + (row[j] - '0');
-                            var scale: u8 = 0;
-                            if (j < row.len and row[j] == '.') {
-                                j += 1;
-                                while (j < row.len and row[j] >= '0' and row[j] <= '9') : (j += 1) {
-                                    mantissa = mantissa * 10 + (row[j] - '0');
-                                    scale += 1;
-                                }
-                                if (neg) mantissa = -mantissa;
-                                return .{ .kind = .Dec, .mantissa = mantissa, .scale = scale };
-                            }
-                            if (neg) mantissa = -mantissa;
-                            return .{ .kind = .Int, .mantissa = mantissa };
-                        }
-                    }
-                    return .{ .kind = .Null };
-                }
+                keys: []KeyVal,
+                key_count: usize,
                 fn cmpNumeric(a: KeyVal, b: KeyVal) i2 {
                     if (a.kind == .Int and b.kind == .Int) {
                         if (a.mantissa < b.mantissa) return -1;
                         if (a.mantissa > b.mantissa) return 1;
                         return 0;
                     }
-                    const am = a.mantissa;
-                    const bm = b.mantissa;
-                    const ascale: u8 = if (a.kind == .Dec) a.scale else 0;
-                    const bscale: u8 = if (b.kind == .Dec) b.scale else 0;
-                    var ma = am;
-                    var mb = bm;
+                    var ma = a.mantissa;
+                    var mb = b.mantissa;
+                    var ascale: u8 = if (a.kind == .Dec) a.scale else 0;
+                    var bscale: u8 = if (b.kind == .Dec) b.scale else 0;
+                    if (ascale > 0 and a.kind == .Dec) {
+                        while (ascale > 0 and @mod(ma, 10) == 0) : (ascale -= 1) {
+                            ma = @divTrunc(ma, 10);
+                        }
+                    }
+                    if (bscale > 0 and b.kind == .Dec) {
+                        while (bscale > 0 and @mod(mb, 10) == 0) : (bscale -= 1) {
+                            mb = @divTrunc(mb, 10);
+                        }
+                    }
+                    if (ascale == bscale) {
+                        if (ma < mb) return -1;
+                        if (ma > mb) return 1;
+                        return 0;
+                    }
                     if (ascale < bscale) {
-                        var k: u8 = 0;
-                        while (k < bscale - ascale) : (k += 1) ma *= 10;
-                    } else if (bscale < ascale) {
-                        var k: u8 = 0;
-                        while (k < ascale - bscale) : (k += 1) mb *= 10;
+                        var diff = bscale - ascale;
+                        while (diff > 0) : (diff -= 1) ma *= 10;
+                    } else {
+                        var diff = ascale - bscale;
+                        while (diff > 0) : (diff -= 1) mb *= 10;
                     }
                     if (ma < mb) return -1;
                     if (ma > mb) return 1;
                     return 0;
                 }
             };
-            std.sort.block([]const u8, rows_json.items, Ctx{ .rows = rows_json.items, .ob = &ob, .keys = order_keys.* }, struct {
+            std.sort.block([]const u8, rows_json.items, Ctx{ .rows = rows_json.items, .ob = &ob, .keys = key_matrix, .key_count = key_count }, struct {
                 fn less(c: Ctx, a: []const u8, b: []const u8) bool {
+                    // Compute indices by locating a & b in rows (linear scan acceptable for small test data)
+                    // Optimize: build index map if row count grows.
+                    var ai: usize = 0;
+                    var bi: usize = 0;
+                    while (ai < c.rows.len and !std.mem.eql(u8, c.rows[ai], a)) : (ai += 1) {}
+                    while (bi < c.rows.len and !std.mem.eql(u8, c.rows[bi], b)) : (bi += 1) {}
                     var ki: usize = 0;
                     while (ki < c.ob.keys.len) : (ki += 1) {
                         const key_expr = c.ob.keys[ki];
-                        const name = geode.printer.stringifyExprAlloc(std.heap.page_allocator, key_expr.expr, .{}) catch "k";
-                        const av = Ctx.extract(a, name);
-                        const bv = Ctx.extract(b, name);
-                        // Null ordering: NULLS FIRST (policy) for now
-                        if (av.kind == .Null and bv.kind != .Null) return !key_expr.desc; // null first
-                        if (bv.kind == .Null and av.kind != .Null) return key_expr.desc; // invert
+                        const av = c.keys[ai * c.key_count + ki];
+                        const bv = c.keys[bi * c.key_count + ki];
+                        if (av.kind == .Null and bv.kind != .Null) return !key_expr.desc;
+                        if (bv.kind == .Null and av.kind != .Null) return key_expr.desc;
                         var ord: i2 = 0;
                         switch (av.kind) {
                             .Null => ord = 0,
                             .Str => if (bv.kind == .Str) {
                                 if (std.mem.lessThan(u8, av.str, bv.str)) ord = -1 else if (std.mem.lessThan(u8, bv.str, av.str)) ord = 1 else ord = 0;
                             } else {
-                                // strings after numbers
-                                ord = 1;
+                                ord = 1; // strings after numbers
                             },
                             .Int, .Dec => switch (bv.kind) {
                                 .Int, .Dec => ord = Ctx.cmpNumeric(av, bv),
@@ -499,16 +643,16 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                                 .Null => ord = 1,
                             },
                         }
-                        if (ord != 0) {
-                            if (key_expr.desc) return ord > 0 else return ord < 0;
-                        }
-                        // continue to next key on tie
+                        if (ord != 0) return if (key_expr.desc) ord > 0 else ord < 0;
                     }
-                    // Tie-breaker: lexicographic row JSON for determinism (UA005/UA006)
                     return std.mem.lessThan(u8, a, b);
                 }
             }.less);
-            if (timings) |tptr| tptr.sort_ns = std.time.nanoTimestamp() - t_sort_start;
+            if (timings) |tptr| {
+                tptr.sort_ns = std.time.nanoTimestamp() - t_sort_start;
+                tptr.sort_rows_in = if (tptr.distinct_rows_out != 0) tptr.distinct_rows_out else tptr.project_rows_out;
+                tptr.sort_rows_out = rows_json.items.len;
+            }
         }
     }
 
@@ -522,14 +666,23 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         } else {
             start = rows_json.items.len;
         }
-        if (timings) |tptr| tptr.offset_ns = std.time.nanoTimestamp() - t_offset_start;
+        if (timings) |tptr| {
+            tptr.offset_ns = std.time.nanoTimestamp() - t_offset_start;
+            tptr.offset_rows_in = if (tptr.sort_rows_out != 0) tptr.sort_rows_out else if (tptr.distinct_rows_out != 0) tptr.distinct_rows_out else tptr.project_rows_out;
+            tptr.offset_rows_out = if (off < rows_json.items.len) rows_json.items.len - off else 0;
+        }
     }
     var end: usize = rows_json.items.len;
     var t_limit_start: i128 = 0;
     if (q.limit) |lim| {
         if (timings) |_| t_limit_start = std.time.nanoTimestamp();
         if (start + lim < end) end = start + lim;
-        if (timings) |tptr| tptr.limit_ns = std.time.nanoTimestamp() - t_limit_start;
+        if (timings) |tptr| {
+            tptr.limit_ns = std.time.nanoTimestamp() - t_limit_start;
+            tptr.limit_rows_in = if (tptr.offset_rows_out != 0) tptr.offset_rows_out else if (tptr.sort_rows_out != 0) tptr.sort_rows_out else tptr.project_rows_out;
+            const effective = if (start + lim < rows_json.items.len) lim else rows_json.items.len - start;
+            tptr.limit_rows_out = effective;
+        }
     }
     if (start != 0 or end != rows_json.items.len) {
         var slice_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
@@ -541,6 +694,18 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         while (skip_i < rows_json.items.len) : (skip_i += 1) if (skip_i < start or skip_i >= end) ally.free(rows_json.items[skip_i]);
         rows_json.clearRetainingCapacity();
         for (slice_rows.items) |s| rows_json.append(ally, s) catch {};
+    }
+
+    // If some phases not executed, propagate previous row counts for clarity
+    if (timings) |tptr| {
+        if (tptr.distinct_rows_out == 0) tptr.distinct_rows_out = tptr.project_rows_out;
+        if (tptr.sort_rows_out == 0) tptr.sort_rows_out = if (tptr.distinct_rows_out != 0) tptr.distinct_rows_out else tptr.project_rows_out;
+        if (tptr.offset_rows_out == 0) tptr.offset_rows_out = tptr.sort_rows_out;
+        if (tptr.limit_rows_out == 0) tptr.limit_rows_out = if (q.limit != null) @min(rows_json.items.len, tptr.offset_rows_out) else rows_json.items.len;
+        if (tptr.distinct_rows_in == 0) tptr.distinct_rows_in = tptr.project_rows_out;
+        if (tptr.sort_rows_in == 0) tptr.sort_rows_in = tptr.distinct_rows_out;
+        if (tptr.offset_rows_in == 0) tptr.offset_rows_in = tptr.sort_rows_out;
+        if (tptr.limit_rows_in == 0) tptr.limit_rows_in = tptr.offset_rows_out;
     }
 
     cols_out.* = cols;
@@ -578,20 +743,24 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         return all_rows.toOwnedSlice(ally) catch &.{};
     }
     union_mode_out.* = "DISTINCT";
-    // Deduplicate
+    // Structured dedup
     var seen = std.StringHashMap(void).init(ally);
     defer seen.deinit();
-    var dedup = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer dedup.deinit(ally);
+    var dedup_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer dedup_rows.deinit(ally);
     for (all_rows.items) |s| {
-        if (!seen.contains(s)) {
-            seen.put(s, {}) catch {};
-            dedup.append(ally, s) catch {};
-        } else ally.free(s);
+        const key = canonicalRowKey(ally, s);
+        if (!seen.contains(key)) {
+            seen.put(key, {}) catch {};
+            dedup_rows.append(ally, s) catch {};
+        } else {
+            ally.free(s);
+            ally.free(key);
+        }
     }
-    metrics.out = dedup.items.len;
+    metrics.out = dedup_rows.items.len;
     metrics.hash_size = seen.count();
-    return dedup.toOwnedSlice(ally) catch &.{};
+    return dedup_rows.toOwnedSlice(ally) catch &.{};
 }
 
 pub fn main() !void {
@@ -690,30 +859,25 @@ pub fn main() !void {
                 var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = true, .forbid_orderby_calls = true }) catch |e| {
                     // Aggregate all parse-time diagnostics (policy + US001) and emit with precedence.
                     var codes_buf: [4]diagnostics.Code = undefined;
-                    const n = collectTextDiagnostics(text, @errorName(e), &codes_buf);
+                    const n_raw = collectTextDiagnostics(text, @errorName(e), &codes_buf);
+                    const n = diagnostics.foldCodes(codes_buf[0..n_raw]);
                     if (n == 0) {
                         // Fallback: treat as IllegalOrderKey for now to satisfy existing tests.
                         writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.IllegalOrderKey, @errorName(e), diagnostics.anchorFor(.IllegalOrderKey), &.{}, false);
                         return;
                     }
                     const primary = codes_buf[0];
-                    // Build additional_statuses slice
-                    var add_arr: [3][]const u8 = undefined;
-                    var add_len: usize = 0;
-                    var i: usize = 1;
-                    while (i < n) : (i += 1) {
-                        add_arr[add_len] = diagnostics.codeName(codes_buf[i]);
-                        add_len += 1;
-                    }
+                    const add_slice = buildAdditionalStatusesAlloc(gpa, codes_buf[0..n], primary);
                     const primary_msg = if (primary == .IllegalOrderKey) @errorName(e) else diagnostics.defaultMessage(primary);
-                    writeErrorWithFlags(gpa, stdout_file, primary, primary_msg, diagnostics.anchorFor(primary), add_arr[0..add_len], primary == .US001);
+                    writeErrorWithFlags(gpa, stdout_file, primary, primary_msg, diagnostics.anchorFor(primary), add_slice, primary == .US001);
                     continue;
                 };
                 defer if (parse_res == .Ok) parse_res.Ok.deinit();
                 switch (parse_res) {
                     .Err => |er| {
                         var codes_buf: [4]diagnostics.Code = undefined;
-                        const n = collectTextDiagnostics(text, er.msg, &codes_buf);
+                        const n_raw = collectTextDiagnostics(text, er.msg, &codes_buf);
+                        const n = diagnostics.foldCodes(codes_buf[0..n_raw]);
                         if (n == 0) {
                             if (protocol.buildErrorLine(gpa, "ParseError", er.msg, "")) |line| {
                                 defer gpa.free(line);
@@ -722,15 +886,9 @@ pub fn main() !void {
                             continue;
                         }
                         const primary = codes_buf[0];
-                        var add_arr: [3][]const u8 = undefined;
-                        var add_len: usize = 0;
-                        var i: usize = 1;
-                        while (i < n) : (i += 1) {
-                            add_arr[add_len] = diagnostics.codeName(codes_buf[i]);
-                            add_len += 1;
-                        }
+                        const add_slice = buildAdditionalStatusesAlloc(gpa, codes_buf[0..n], primary);
                         const primary_msg = if (primary == .IllegalOrderKey) er.msg else diagnostics.defaultMessage(primary);
-                        writeErrorWithFlags(gpa, stdout_file, primary, primary_msg, diagnostics.anchorFor(primary), add_arr[0..add_len], primary == .US001);
+                        writeErrorWithFlags(gpa, stdout_file, primary, primary_msg, diagnostics.anchorFor(primary), add_slice, primary == .US001);
                         continue;
                     },
                     .Ok => |ok| {
@@ -747,18 +905,13 @@ pub fn main() !void {
                                 // Planner legality (US001)
                                 const plan = geode.planner.planQuery(q, .{}) catch |pe| {
                                     if (diagnostics.mapPlannerError(pe)) |code| {
-                                        var codes_buf: [4]diagnostics.Code = undefined;
-                                        const n_codes = collectPlannerDiagnostics(q, code, &codes_buf);
-                                        var add_arr: [3][]const u8 = undefined;
-                                        var add_len: usize = 0;
-                                        var idx: usize = 1;
-                                        while (idx < n_codes) : (idx += 1) {
-                                            add_arr[add_len] = diagnostics.codeName(codes_buf[idx]);
-                                            add_len += 1;
-                                        }
-                                        const primary = codes_buf[0];
-                                        const pmsg = diagnostics.defaultMessage(primary);
-                                        writeErrorWithFlags(gpa, stdout_file, primary, pmsg, diagnostics.anchorFor(primary), add_arr[0..add_len], primary == .US001);
+                                        var codes_buf_pl: [4]diagnostics.Code = undefined;
+                                        const n_codes_pl_raw = collectPlannerDiagnostics(q, code, &codes_buf_pl);
+                                        const n_codes_pl = diagnostics.foldCodes(codes_buf_pl[0..n_codes_pl_raw]);
+                                        const primary_pl = if (n_codes_pl > 0) codes_buf_pl[0] else code;
+                                        const add_slice_pl = buildAdditionalStatusesAlloc(gpa, codes_buf_pl[0..n_codes_pl], primary_pl);
+                                        const pmsg = diagnostics.defaultMessage(primary_pl);
+                                        writeErrorWithFlags(gpa, stdout_file, primary_pl, pmsg, diagnostics.anchorFor(primary_pl), add_slice_pl, primary_pl == .US001);
                                     } else if (protocol.buildErrorLine(gpa, "PlannerError", @errorName(pe), "")) |line| {
                                         defer gpa.free(line);
                                         _ = stdout_file.write(line) catch {};
@@ -794,6 +947,8 @@ pub fn main() !void {
                                         var agg_timings: exec.AggStageTimings = .{};
                                         const g_out = exec.runGroupedQuery(gpa, q, &.{}, &.{}, &.{}, &.{}, &agg_timings) catch &.{};
                                         row_count = g_out.len;
+                                        timings.agg_rows_out = row_count;
+                                        timings.project_rows_out = row_count; // projection after aggregate
                                         timings.agg_build_ns = agg_timings.build_ns;
                                         timings.agg_emit_ns = agg_timings.emit_ns;
                                         // Build synthetic columns from RETURN items
@@ -809,7 +964,30 @@ pub fn main() !void {
                                     } else {
                                         var run_code: diagnostics.Code = .IllegalOrderKey; // init sentinel
                                         const rows_prof = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, &timings, &run_code) catch &.{};
+                                        if (run_code == .TypeMismatch) {
+                                            var buf_codes: [2]diagnostics.Code = undefined;
+                                            var len_codes: usize = 0;
+                                            buf_codes[len_codes] = .TypeMismatch;
+                                            len_codes += 1;
+                                            if ((q.limit != null or q.offset != null) and q.order_by == null) {
+                                                buf_codes[len_codes] = .US001;
+                                                len_codes += 1;
+                                            }
+                                            const slice_codes = buf_codes[0..len_codes];
+                                            if (slice_codes.len > 1) diagnostics.sortByPrecedence(slice_codes);
+                                            const primary_eval = slice_codes[0];
+                                            const add_eval = buildAdditionalStatusesAlloc(gpa, slice_codes, primary_eval);
+                                            writeErrorWithFlags(gpa, stdout_file, primary_eval, diagnostics.defaultMessage(primary_eval), diagnostics.anchorFor(primary_eval), add_eval, primary_eval == .US001);
+                                            var fre: usize = 0;
+                                            while (fre < rows_prof.len) : (fre += 1) gpa.free(rows_prof[fre]);
+                                            continue;
+                                        }
                                         row_count = rows_prof.len;
+                                        timings.project_rows_out = row_count;
+                                        timings.distinct_rows_out = row_count; // placeholders until per-phase slicing implemented
+                                        timings.sort_rows_out = row_count;
+                                        timings.offset_rows_out = if (q.offset) |offv| if (offv < row_count) row_count - offv else 0 else row_count;
+                                        timings.limit_rows_out = if (q.limit) |limv| if (limv < row_count) limv else row_count else row_count;
                                         // Free rows; PROFILE does not return them
                                         var frp: usize = 0;
                                         while (frp < rows_prof.len) : (frp += 1) gpa.free(rows_prof[frp]);
@@ -820,12 +998,14 @@ pub fn main() !void {
                                     w.writeAll("{\"ops\":[") catch {};
                                     var first_op_profile = true;
                                     const emit = struct {
-                                        fn op(wr: anytype, first_ptr: *bool, name: []const u8, row_count_param: usize, time_ns: i128) void {
+                                        fn op(wr: anytype, first_ptr: *bool, name: []const u8, in_rows: usize, out_rows: usize, time_ns: i128) void {
                                             if (first_ptr.*) wr.writeAll("{") catch {} else wr.writeAll(",{") catch {};
                                             wr.writeAll("\"op\":\"") catch {};
                                             wr.writeAll(name) catch {};
-                                            wr.writeAll("\",\"rows\":") catch {};
-                                            wr.print("{d}", .{row_count_param}) catch {};
+                                            wr.writeAll("\",\"input_rows\":") catch {};
+                                            wr.print("{d}", .{in_rows}) catch {};
+                                            wr.writeAll(",\"rows\":") catch {};
+                                            wr.print("{d}", .{out_rows}) catch {};
                                             wr.writeAll(",\"time_ns\":") catch {};
                                             wr.print("{d}", .{time_ns}) catch {};
                                             wr.writeAll("}") catch {};
@@ -833,14 +1013,14 @@ pub fn main() !void {
                                         }
                                     };
                                     if (q.group_by != null) {
-                                        emit.op(w, &first_op_profile, "AggregateBuild", row_count, timings.agg_build_ns);
-                                        emit.op(w, &first_op_profile, "AggregateEmit", row_count, timings.agg_emit_ns);
+                                        emit.op(w, &first_op_profile, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns);
+                                        emit.op(w, &first_op_profile, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns);
                                     }
-                                    emit.op(w, &first_op_profile, "Project", row_count, timings.project_ns);
-                                    if (q.ret.distinct) emit.op(w, &first_op_profile, "Distinct", row_count, timings.distinct_ns);
-                                    if (ordered_meta) emit.op(w, &first_op_profile, "Sort", row_count, timings.sort_ns);
-                                    if (q.offset != null) emit.op(w, &first_op_profile, "Offset", row_count, timings.offset_ns);
-                                    if (q.limit != null) emit.op(w, &first_op_profile, "Limit", row_count, timings.limit_ns);
+                                    emit.op(w, &first_op_profile, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns);
+                                    if (q.ret.distinct) emit.op(w, &first_op_profile, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns);
+                                    if (ordered_meta) emit.op(w, &first_op_profile, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns);
+                                    if (q.offset != null) emit.op(w, &first_op_profile, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns);
+                                    if (q.limit != null) emit.op(w, &first_op_profile, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns);
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};
                                     w.writeAll("}") catch {};
@@ -873,6 +1053,25 @@ pub fn main() !void {
                                     break :blk_runerr &.{};
                                 };
                                 if (rows.len == 0 and run_code == .TypeMismatch) continue;
+                                if (run_code == .TypeMismatch) {
+                                    var buf_codes2: [2]diagnostics.Code = undefined;
+                                    var len2: usize = 0;
+                                    buf_codes2[len2] = .TypeMismatch;
+                                    len2 += 1;
+                                    if ((q.limit != null or q.offset != null) and q.order_by == null) {
+                                        buf_codes2[len2] = .US001;
+                                        len2 += 1;
+                                    }
+                                    const slice2 = buf_codes2[0..len2];
+                                    const n_fold2 = diagnostics.foldCodes(slice2);
+                                    const primary2 = slice2[0];
+                                    const add2 = buildAdditionalStatusesAlloc(gpa, slice2[0..n_fold2], primary2);
+                                    writeErrorWithFlags(gpa, stdout_file, primary2, diagnostics.defaultMessage(primary2), diagnostics.anchorFor(primary2), add2, primary2 == .US001);
+                                    // free row fragments
+                                    var fr2: usize = 0;
+                                    while (fr2 < rows.len) : (fr2 += 1) gpa.free(rows[fr2]);
+                                    continue;
+                                }
                                 state.last_columns = cols;
                                 state.last_ordered = ordered_meta;
                                 state.last_order_keys = order_keys;

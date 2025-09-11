@@ -4,20 +4,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
 
 ## Now
 
-1. Fix ORDER BY BINDINGS panic (REQ-GQL-037 / 001)
-
-   - Why: Blocks all protocol conformance and hides diagnostics (14.10; 16.18–16.19; 23.2)
-   - What: Root-cause write corruption; add allocator invariants; fuzz minimal ORDER queries.
-   - Acceptance:
-     - Query: `RETURN 1 AS x ORDER BY x LIMIT 1` → two JSON lines (SCHEMA then ordered BINDINGS) exit 0.
-     - `RETURN 1 LIMIT 5 OFFSET 2` → exit 2; stderr contains `US001` + anchor `16.18–16.19`.
-     - Memory sanitizer build (if feature flag) shows 0 invalid frees.
-   - ISO: 14.10, 16.18–16.19, 23.2
-   - Deps: protocol.zig, server/main.zig
-   - Scope: M
-   - DRI: core
-
-2. Diagnostics precedence + additional_statuses (REQ-GQL-022/030/036)
+1. Diagnostics precedence + additional_statuses (REQ-GQL-022/030/036)
 
    - Why: Multi-condition errors need deterministic ordering (23.2; 24.\* UA002)
    - What: Introduce precedence table; fold multiple findings into `additional_statuses` array.
@@ -27,7 +14,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: S
    - DRI: core
 
-3. EXPLAIN / PROFILE stabilization (REQ-GQL-019/020/033)
+2. EXPLAIN / PROFILE stabilization (REQ-GQL-019/020/033)
 
    - Why: Required for plan introspection & performance tuning (14.10)
    - What: Integrate planner metadata; emit logical op array + stable ordering; PROFILE adds per-op rows/time.
@@ -37,7 +24,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: M
    - DRI: core
 
-4. Decimal comparison & ordering (REQ-GQL-031)
+3. Decimal comparison & ordering (REQ-GQL-031)
 
    - Why: Needed for ORDER BY numeric correctness (16.\*)
    - What: Implement compare aligning scales; add tests mixing scales & negative.
@@ -47,18 +34,28 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: S
    - DRI: core
 
-5. Flagger emission (REQ-GQL-029 / 020)
-   - Why: Surface impl-defined (I*) & dependent (U*) decisions (24.\*)
-   - What: Add `flagger_findings` array to all result frames with US001 policy, DISTINCT ordering policy.
-   - Acceptance: Any LIMIT query without ORDER shows finding `U:US001=enforced` when rejected.
-   - ISO: 24.\*, 16.18–16.19
-   - Deps: protocol.zig
+4. ORDER BY path fuzz harness (follow-up to REQ-GQL-037)
+
+   - Why: Prevent regression of fixed panic; broaden input space.
+   - What: Lightweight generator for random ORDER BY queries (ints/decimals/nulls) feeding server in-process.
+   - Acceptance: 10k iterations no crash; coverage counters show distinct key shapes explored.
+   - ISO: 14.10, 16.18–16.19
+   - Deps: server/main.zig, tests fuzz harness
+   - Scope: S
+   - DRI: core
+
+5. Plain text PROFILE & EXPLAIN parity tests (extend REQ-GQL-023)
+   - Why: Ensure format encoder alignment across modes.
+   - What: Add e2e tests invoking `--format txt` for EXPLAIN/PROFILE queries.
+   - Acceptance: Golden txt outputs stable; diff on reorder fails test.
+   - ISO: 24.\* (output representation)
+   - Deps: client/main.zig
    - Scope: S
    - DRI: core
 
 ## Next
 
-1. Text/plain encoding path (REQ-GQL-023)
+1. GROUP BY execution phase 1 (aggregation runtime) (REQ-GQL-016)
 
    - Why: Conformance option & lightweight inspection.
    - What: `--format=txt` emits header line + tab-separated rows, deterministic value formatting.
@@ -67,7 +64,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: S
    - DRI: core
 
-1. GROUP BY execution phase 1 (aggregation runtime) (REQ-GQL-016)
+2. Text/plain extended coverage (complex queries) (REQ-GQL-023 follow-up)
 
    - Why: Unlock analytics queries.
    - What: Hash aggregate operator; map HAVING to post-agg filter.
@@ -76,7 +73,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: M
    - DRI: core
 
-1. Parameter vectorization optimization (REQ-GQL-032)
+3. Parameter vectorization optimization (REQ-GQL-032)
 
    - Why: Reduce alloc churn; prepare for batch execution.
    - What: Pre-size env arrays; arena reinstated with safety tests.
@@ -85,7 +82,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: S
    - DRI: core
 
-1. Transactions demarcation + state (REQ-GQL-027 subset)
+4. Transactions demarcation + state (REQ-GQL-027 subset)
 
    - Why: Prepare MVCC; user-visible semantics.
    - What: BEGIN/COMMIT/ROLLBACK frames with status codes; reject nested.
@@ -94,7 +91,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
    - Scope: M
    - DRI: core
 
-1. Storage page manager integration (REQ-GQL-025)
+5. Storage page manager integration (REQ-GQL-025)
 
 - Why: Persist rows; future WAL.
 - What: Slotted page alloc/free; basic catalog; append-only segment.
@@ -103,7 +100,7 @@ Swimlanes: Now (active), Next (queued), Later (strategic). Each task lists Why /
 - Scope: M
 - DRI: storage
 
-1. Binary protocol framing refinement (REQ-GQL-021/022)
+1. Binary protocol multi-status writer (REQ-GQL-022/036) — (folded into Now once precedence merged)
 
 - Why: Network & multi-status.
 - What: Add additional_statuses array; normalize status_subclass codes.
@@ -176,10 +173,7 @@ Deferred until core protocol + storage stabilize: Full WAL/ARIES recovery valida
   - StageTimings struct introduced for per-operator PROFILE metrics (simple query path only)
   - Granular UNION PROFILE phases (UnionLeft, UnionTails, UnionDedup, SetOpUnion) + U:UnionPhaseTimings flag
   - Parenthesized UNION pattern support ((q1 UNION q2) ORDER BY k LIMIT n)
-- Planned (immediate):
-  - Runtime evaluation diagnostics aggregation (TypeMismatch) merged with planner/parse precedence
-  - Comparator micro-bench & fuzz harness
-  - EXPLAIN/PROFILE docs for new UNION phase ops & conformance matrix update
+- Planned (immediate): - Runtime evaluation diagnostics aggregation (TypeMismatch) merged with planner/parse precedence (DONE; see test e2e_protocol_multidiag_runtime.zig) - Comparator micro-bench & fuzz harness - EXPLAIN/PROFILE docs for new UNION phase ops & conformance matrix update
 - Upcoming (short-term):
   - Text/plain encoding path
   - GROUP BY execution (phase 1)

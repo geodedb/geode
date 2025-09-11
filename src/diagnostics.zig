@@ -73,6 +73,33 @@ pub fn sortByPrecedence(codes: []Code) void {
     }
 }
 
+// foldCodes applies precedence (UA002 policy) to a set of diagnostic codes:
+//  - de-duplicates in-place (stable first occurrence)
+//  - sorts by precedence (lowest rank first)
+//  - returns slice length after dedup (leading portion of input slice)
+pub fn foldCodes(codes: []Code) usize {
+    if (codes.len == 0) return 0;
+    // Deduplicate (small N; O(n^2) acceptable)
+    var out_idx: usize = 0;
+    var i: usize = 0;
+    while (i < codes.len) : (i += 1) {
+        var seen = false;
+        var j: usize = 0;
+        while (j < out_idx) : (j += 1) {
+            if (codes[j] == codes[i]) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            codes[out_idx] = codes[i];
+            out_idx += 1;
+        }
+    }
+    sortByPrecedence(codes[0..out_idx]);
+    return out_idx;
+}
+
 test "diagnostics: code name and precedence" {
     try std.testing.expectEqualStrings("US001", codeName(.US001));
     try std.testing.expect(precedence(.GroupByIllegal, .US001) == .US001);
@@ -81,6 +108,15 @@ test "diagnostics: code name and precedence" {
 test "diagnostics: sortByPrecedence orders ascending" {
     var arr: [3]Code = .{ .IllegalOrderKey, .US001, .TypeMismatch };
     sortByPrecedence(arr[0..]);
+    try std.testing.expect(arr[0] == .US001);
+    try std.testing.expect(arr[1] == .IllegalOrderKey);
+    try std.testing.expect(arr[2] == .TypeMismatch);
+}
+
+test "diagnostics: foldCodes dedup + precedence" {
+    var arr: [5]Code = .{ .TypeMismatch, .US001, .IllegalOrderKey, .US001, .IllegalOrderKey };
+    const n = foldCodes(arr[0..]);
+    try std.testing.expect(n == 3);
     try std.testing.expect(arr[0] == .US001);
     try std.testing.expect(arr[1] == .IllegalOrderKey);
     try std.testing.expect(arr[2] == .TypeMismatch);
