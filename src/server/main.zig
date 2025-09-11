@@ -21,6 +21,9 @@ const ServerState = struct {
     active_result: bool = false,
     in_txn: bool = false,
     allocator: std.mem.Allocator,
+    // PROFILE mode staging: we emit SCHEMA immediately and defer PROFILE frame until first PULL.
+    profile_json: ?[]const u8 = null,
+    profile_flags: []const []const u8 = &.{},
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -33,6 +36,9 @@ const ServerState = struct {
         self.last_order_keys = &.{};
         self.last_ordered = false;
         self.last_distinct = false;
+        if (self.profile_json) |pj| self.allocator.free(pj);
+        self.profile_json = null;
+        self.profile_flags = &.{};
     }
 };
 
@@ -322,9 +328,11 @@ const StageTimings = struct {
     sort_ns: i128 = 0,
     offset_ns: i128 = 0,
     limit_ns: i128 = 0,
+    agg_build_ns: i128 = 0,
+    agg_emit_ns: i128 = 0,
 };
 
-fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings) ![][]const u8 {
+fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code) ![][]const u8 {
     // Build rows
     var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
     var rows_json = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
@@ -348,7 +356,12 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 const tmp = geode.printer.stringifyExprAlloc(ally, it.expr, .{}) catch "col";
                 break :blk tmp;
             };
-            const val = eval.evalExpr(ally, it.expr, env) catch eval.Value{ .Null = {} };
+            const val = eval.evalExpr(ally, it.expr, env) catch |e| blk_evalerr: {
+                if (eval_diag) |ed| {
+                    if (diagnostics.mapEvalError(e)) |c| ed.* = c;
+                }
+                break :blk_evalerr eval.Value{ .Null = {} };
+            };
             if (r == 0) cols[j] = .{ .name = alias, .type = valueTypeName(val) };
             if (j > 0) w.writeAll(",") catch {};
             w.print("\"{s}\":", .{alias}) catch {};
@@ -539,7 +552,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
     var dummy_cols: []const protocol.SchemaCol = &.{};
     var ordered: bool = false;
     var order_keys: [][]const u8 = &.{};
-    const left_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null);
+    const left_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null);
     metrics.left_in = left_rows.len;
     var all_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     defer all_rows.deinit(ally);
@@ -553,7 +566,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         var oc: []const protocol.SchemaCol = &.{};
         ordered = false;
         order_keys = &.{};
-        const rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null);
+        const rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null);
         total_tail += rows.len;
         for (rows) |rr| all_rows.append(ally, rr) catch {};
     }
@@ -583,6 +596,18 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
+    // Parse server CLI args for optional result format.
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+    var result_format_txt = false;
+    var ai: usize = 1;
+    while (ai < args.len) : (ai += 1) {
+        if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
+            const f = args[ai + 1];
+            if (std.mem.eql(u8, f, "txt") or std.mem.eql(u8, f, "text")) result_format_txt = true;
+            ai += 1;
+        }
+    }
     var state = ServerState{ .allocator = gpa };
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [8192]u8 = undefined;
@@ -606,7 +631,7 @@ pub fn main() !void {
                 read_len += 1;
             } else break;
         }
-        if (read_len == 0) break;
+        if (read_len == 0) continue;
         const raw = line_storage[0..read_len];
         if (raw.len == 0) continue;
         // Parse client message
@@ -614,25 +639,24 @@ pub fn main() !void {
         defer arena.deinit();
         const msg = protocol.parseClientMessage(arena.allocator(), raw) catch continue; // ignore invalid
         switch (msg) {
-            .HELLO => |_| {
-                // Minimal HELLO ack: just emit empty schema semantics? Use BINDINGS empty.
-                if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| {
-                    defer gpa.free(line);
-                    _ = stdout_file.write(line) catch {};
-                } else |_| {}
-            },
+            .HELLO => |_| {},
             .BEGIN => |_| {
                 if (state.in_txn) {
-                    writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.US001, "already in transaction", "8", &.{}, false); // reuse code ordering policy; anchor 8
+                    if (protocol.buildErrorLine(gpa, "TxnState", "already in transaction", "8")) |line| {
+                        defer gpa.free(line);
+                        _ = stdout_file.write(line) catch {};
+                    } else |_| {}
                 } else {
                     state.in_txn = true;
-                    // Ack as single empty bindings frame
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
             },
             .COMMIT => |_| {
                 if (!state.in_txn) {
-                    writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.US001, "no active transaction", "8", &.{}, false);
+                    if (protocol.buildErrorLine(gpa, "TxnState", "no active transaction", "8")) |line| {
+                        defer gpa.free(line);
+                        _ = stdout_file.write(line) catch {};
+                    } else |_| {}
                 } else {
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
@@ -640,7 +664,10 @@ pub fn main() !void {
             },
             .ROLLBACK => |_| {
                 if (!state.in_txn) {
-                    writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.US001, "no active transaction", "8", &.{}, false);
+                    if (protocol.buildErrorLine(gpa, "TxnState", "no active transaction", "8")) |line| {
+                        defer gpa.free(line);
+                        _ = stdout_file.write(line) catch {};
+                    } else |_| {}
                 } else {
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
@@ -651,118 +678,13 @@ pub fn main() !void {
                 var text = rq.text;
                 var explain_mode = false;
                 var profile_mode = false;
-                if (std.mem.startsWith(u8, text, "EXPLAIN ")) {
-                    explain_mode = true;
-                    text = text[8..];
-                }
                 if (std.mem.startsWith(u8, text, "PROFILE ")) {
                     profile_mode = true;
                     text = text[8..];
                 }
-
-                // Special handling for parenthesized UNION ORDER BY pattern not supported by parser
-                var union_parenthetical: bool = false;
-                if (text.len > 0 and text[0] == '(' and std.mem.indexOf(u8, text, ") ORDER BY ") != null) {
-                    union_parenthetical = true;
-                }
-
-                if (union_parenthetical) {
-                    // Re-implemented parenthesized UNION handling: (q1 UNION q2 ...) ORDER BY <key> LIMIT n
-                    const close_idx = std.mem.indexOfScalar(u8, text, ')') orelse text.len - 1;
-                    const inner = text[1..close_idx];
-                    const tail = std.mem.trim(u8, text[close_idx + 1 ..], " ");
-                    // Parse ORDER BY single key + LIMIT (heuristic, matches tests expectation)
-                    var order_key_buf: [][]const u8 = &.{};
-                    var limit_val: ?usize = null;
-                    if (std.mem.indexOf(u8, tail, "ORDER BY ")) |obi| {
-                        const seg = tail[obi + 9 ..];
-                        var it_word = std.mem.splitAny(u8, seg, " ");
-                        if (it_word.next()) |okraw| {
-                            const cleaned = std.mem.trim(u8, okraw, " ,");
-                            if (cleaned.len > 0) order_key_buf = @constCast(&[_][]const u8{cleaned});
-                        }
-                        if (std.mem.indexOf(u8, seg, "LIMIT ")) |li| {
-                            const rest = seg[li + 6 ..];
-                            limit_val = std.fmt.parseInt(usize, rest, 10) catch null;
-                        }
-                    }
-                    // Split UNION parts
-                    var parts_iter = std.mem.splitSequence(u8, inner, " UNION ");
-                    var union_parts = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-                    defer union_parts.deinit(gpa);
-                    while (parts_iter.next()) |seg| union_parts.append(gpa, std.mem.trim(u8, seg, " ")) catch {};
-
-                    // Evaluate each part (parameters supported)
-                    var param_names: [][]const u8 = &.{};
-                    var param_rows: [][]const eval.Value = &.{};
-                    parseParams(gpa, rq.params_json, &param_names, &param_rows);
-                    var ordered_flag = false; // outer ORDER applied later
-                    var order_meta: [][]const u8 = &.{};
-                    var first_cols: []const protocol.SchemaCol = &.{};
-                    var all_rows = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-                    defer all_rows.deinit(gpa);
-                    var upi: usize = 0;
-                    while (upi < union_parts.items.len) : (upi += 1) {
-                        const part_src = union_parts.items[upi];
-                        var parse_res = geode.parseGqlOptions(part_src, gpa, .{ .ident_order_only = true, .forbid_orderby_calls = true }) catch |e| {
-                            writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.IllegalOrderKey, @errorName(e), diagnostics.anchorFor(.IllegalOrderKey), &.{}, false);
-                            break;
-                        };
-                        defer parse_res.deinit();
-                        if (parse_res.program.statements.len == 0) continue;
-                        const st_inner = parse_res.program.statements[0];
-                        switch (st_inner) {
-                            .Query => |qq| {
-                                var cols_tmp: []const protocol.SchemaCol = &.{};
-                                const rows = evaluateSimpleQuery(gpa, qq, param_names, param_rows, &ordered_flag, &order_meta, &cols_tmp, null) catch &.{};
-                                if (upi == 0) {
-                                    first_cols = cols_tmp;
-                                } else {
-                                    gpa.free(cols_tmp);
-                                }
-                                for (rows) |r| all_rows.append(gpa, r) catch {};
-                            },
-                            else => {},
-                        }
-                    }
-                    // UNION DISTINCT default dedup
-                    var seen = std.StringHashMap(void).init(gpa);
-                    defer seen.deinit();
-                    var dedup = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-                    defer dedup.deinit(gpa);
-                    for (all_rows.items) |s| {
-                        if (!seen.contains(s)) {
-                            seen.put(s, {}) catch {};
-                            dedup.append(gpa, s) catch {};
-                        } else gpa.free(s);
-                    }
-                    if (order_key_buf.len > 0) {
-                        ordered_flag = true;
-                        order_meta = order_key_buf;
-                        std.sort.block([]const u8, dedup.items, {}, struct {
-                            fn less(_: void, a: []const u8, b: []const u8) bool {
-                                return std.mem.lessThan(u8, a, b);
-                            }
-                        }.less);
-                    }
-                    if (limit_val) |limv| {
-                        if (dedup.items.len > limv) {
-                            var i_lim: usize = limv;
-                            while (i_lim < dedup.items.len) : (i_lim += 1) gpa.free(dedup.items[i_lim]);
-                            dedup.resize(gpa, limv) catch {};
-                        }
-                    }
-                    state.last_columns = first_cols;
-                    state.last_ordered = ordered_flag;
-                    state.last_order_keys = order_meta;
-                    state.last_distinct = true;
-                    state.page_items = dedup.toOwnedSlice(gpa) catch &.{};
-                    state.active_result = true;
-                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, state.last_distinct))) |line| {
-                        defer gpa.free(line);
-                        _ = stdout_file.write(line) catch {};
-                    } else |_| {}
-                    continue;
+                if (std.mem.startsWith(u8, text, "EXPLAIN ")) {
+                    explain_mode = true;
+                    text = text[8..];
                 }
 
                 var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = true, .forbid_orderby_calls = true }) catch |e| {
@@ -857,28 +779,49 @@ pub fn main() !void {
                                     continue;
                                 }
                                 if (profile_mode) {
+                                    // PROFILE mode: we stage PROFILE json and emit SCHEMA now; PROFILE frame on first PULL.
                                     const start_time = std.time.nanoTimestamp();
                                     var param_names: [][]const u8 = &.{};
                                     var param_rows: [][]const eval.Value = &.{};
                                     parseParams(gpa, rq.params_json, &param_names, &param_rows);
                                     var ordered_meta = false;
                                     var order_keys: [][]const u8 = &.{};
-                                    var cols: []const protocol.SchemaCol = &.{};
+                                    var cols_mut: []protocol.SchemaCol = &.{}; // mutable during build
+                                    var cols: []const protocol.SchemaCol = &.{}; // const view stored in state
                                     var timings: StageTimings = .{};
-                                    const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, &timings) catch &.{};
+                                    var row_count: usize = 0;
+                                    if (q.group_by != null) {
+                                        var agg_timings: exec.AggStageTimings = .{};
+                                        const g_out = exec.runGroupedQuery(gpa, q, &.{}, &.{}, &.{}, &.{}, &agg_timings) catch &.{};
+                                        row_count = g_out.len;
+                                        timings.agg_build_ns = agg_timings.build_ns;
+                                        timings.agg_emit_ns = agg_timings.emit_ns;
+                                        // Build synthetic columns from RETURN items
+                                        var mut_cols_slice: []protocol.SchemaCol = gpa.alloc(protocol.SchemaCol, q.ret.items.len) catch &.{};
+                                        var idx_fill: usize = 0;
+                                        while (idx_fill < q.ret.items.len) : (idx_fill += 1) {
+                                            const it2 = q.ret.items[idx_fill];
+                                            const alias2 = it2.alias orelse geode.printer.stringifyExprAlloc(gpa, it2.expr, .{}) catch "col";
+                                            mut_cols_slice[idx_fill] = .{ .name = alias2, .type = "INT" };
+                                        }
+                                        cols_mut = mut_cols_slice;
+                                        cols = cols_mut;
+                                    } else {
+                                        var run_code: diagnostics.Code = .IllegalOrderKey; // init sentinel
+                                        const rows_prof = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, &timings, &run_code) catch &.{};
+                                        row_count = rows_prof.len;
+                                        // Free rows; PROFILE does not return them
+                                        var frp: usize = 0;
+                                        while (frp < rows_prof.len) : (frp += 1) gpa.free(rows_prof[frp]);
+                                    }
                                     const total_ns: i128 = std.time.nanoTimestamp() - start_time;
-                                    // Build PROFILE json payload
                                     var pb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
                                     const w = pb.writer(gpa);
                                     w.writeAll("{\"ops\":[") catch {};
                                     var first_op_profile = true;
                                     const emit = struct {
                                         fn op(wr: anytype, first_ptr: *bool, name: []const u8, row_count_param: usize, time_ns: i128) void {
-                                            if (first_ptr.*) {
-                                                wr.writeAll("{") catch {};
-                                            } else {
-                                                wr.writeAll(",{") catch {};
-                                            }
+                                            if (first_ptr.*) wr.writeAll("{") catch {} else wr.writeAll(",{") catch {};
                                             wr.writeAll("\"op\":\"") catch {};
                                             wr.writeAll(name) catch {};
                                             wr.writeAll("\",\"rows\":") catch {};
@@ -889,7 +832,10 @@ pub fn main() !void {
                                             first_ptr.* = false;
                                         }
                                     };
-                                    const row_count = rows.len;
+                                    if (q.group_by != null) {
+                                        emit.op(w, &first_op_profile, "AggregateBuild", row_count, timings.agg_build_ns);
+                                        emit.op(w, &first_op_profile, "AggregateEmit", row_count, timings.agg_emit_ns);
+                                    }
                                     emit.op(w, &first_op_profile, "Project", row_count, timings.project_ns);
                                     if (q.ret.distinct) emit.op(w, &first_op_profile, "Distinct", row_count, timings.distinct_ns);
                                     if (ordered_meta) emit.op(w, &first_op_profile, "Sort", row_count, timings.sort_ns);
@@ -898,12 +844,18 @@ pub fn main() !void {
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};
                                     w.writeAll("}") catch {};
-                                    const prof_flags = computeBaseFlags(ordered_meta, q.ret.distinct);
-                                    const pline = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}", prof_flags) catch null;
-                                    if (pline) |pl| {
-                                        defer gpa.free(pl);
-                                        _ = stdout_file.write(pl) catch {};
-                                    }
+                                    state.profile_json = pb.toOwnedSlice(gpa) catch "{}";
+                                    state.profile_flags = computeBaseFlags(ordered_meta, q.ret.distinct);
+                                    state.last_columns = cols;
+                                    state.last_ordered = ordered_meta;
+                                    state.last_order_keys = order_keys;
+                                    state.last_distinct = q.ret.distinct;
+                                    state.active_result = true; // so PULL will emit PROFILE
+                                    // Emit SCHEMA now
+                                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, state.profile_flags)) |line| {
+                                        defer gpa.free(line);
+                                        _ = stdout_file.write(line) catch {};
+                                    } else |_| {}
                                     continue;
                                 }
                                 var param_names: [][]const u8 = &.{};
@@ -912,17 +864,61 @@ pub fn main() !void {
                                 var ordered_meta = false;
                                 var order_keys: [][]const u8 = &.{};
                                 var cols: []const protocol.SchemaCol = &.{};
-                                const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null) catch &.{};
+                                var run_code: diagnostics.Code = .IllegalOrderKey; // init sentinel
+                                const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null, &run_code) catch |e| blk_runerr: {
+                                    if (diagnostics.mapEvalError(e)) |c| {
+                                        writeErrorWithFlags(gpa, stdout_file, c, diagnostics.defaultMessage(c), diagnostics.anchorFor(c), &.{}, false);
+                                        break :blk_runerr &.{};
+                                    }
+                                    break :blk_runerr &.{};
+                                };
+                                if (rows.len == 0 and run_code == .TypeMismatch) continue;
                                 state.last_columns = cols;
                                 state.last_ordered = ordered_meta;
                                 state.last_order_keys = order_keys;
                                 state.last_distinct = q.ret.distinct;
                                 state.page_items = @constCast(rows);
                                 state.active_result = true;
-                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, q.ret.distinct))) |line| {
-                                    defer gpa.free(line);
-                                    _ = stdout_file.write(line) catch {};
-                                } else |_| {}
+                                if (result_format_txt) {
+                                    // Plain text mode: emit header once then all rows (single page). Disable further pulls.
+                                    var hi: usize = 0;
+                                    while (hi < state.last_columns.len) : (hi += 1) {
+                                        if (hi > 0) stdout_file.writeAll("\t") catch {};
+                                        stdout_file.writeAll(state.last_columns[hi].name) catch {};
+                                    }
+                                    stdout_file.writeAll("\n") catch {};
+                                    var ri: usize = 0;
+                                    while (ri < state.page_items.len) : (ri += 1) {
+                                        const row = state.page_items[ri];
+                                        var cj: usize = 0;
+                                        while (cj < state.last_columns.len) : (cj += 1) {
+                                            if (cj > 0) stdout_file.writeAll("\t") catch {};
+                                            const cname = state.last_columns[cj].name;
+                                            if (std.mem.indexOf(u8, row, cname)) |pos| {
+                                                if (std.mem.indexOfPos(u8, row, pos, ":")) |colon| {
+                                                    var startv = colon + 1;
+                                                    while (startv < row.len and (row[startv] == ' ')) startv += 1;
+                                                    var endv = startv;
+                                                    if (startv < row.len and row[startv] == '"') {
+                                                        endv = startv + 1;
+                                                        while (endv < row.len and row[endv] != '"') endv += 1;
+                                                        stdout_file.writeAll(row[startv + 1 .. endv]) catch {};
+                                                    } else {
+                                                        while (endv < row.len and row[endv] != ',' and row[endv] != '}') endv += 1;
+                                                        stdout_file.writeAll(row[startv..endv]) catch {};
+                                                    }
+                                                } else stdout_file.writeAll("null") catch {};
+                                            } else stdout_file.writeAll("null") catch {};
+                                        }
+                                        stdout_file.writeAll("\n") catch {};
+                                    }
+                                    state.active_result = false; // fully emitted
+                                } else {
+                                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, q.ret.distinct))) |line| {
+                                        defer gpa.free(line);
+                                        _ = stdout_file.write(line) catch {};
+                                    } else |_| {}
+                                }
                                 continue;
                             },
                             .Union => |u_stmt| {
@@ -949,7 +945,7 @@ pub fn main() !void {
                                     var dummy_cols_l: []const protocol.SchemaCol = &.{};
                                     var ordered_l = false;
                                     var order_keys_l: [][]const u8 = &.{};
-                                    const left_rows = evaluateSimpleQuery(gpa, u_stmt.first, param_names, param_rows, &ordered_l, &order_keys_l, &dummy_cols_l, null) catch &.{};
+                                    const left_rows = evaluateSimpleQuery(gpa, u_stmt.first, param_names, param_rows, &ordered_l, &order_keys_l, &dummy_cols_l, null, null) catch &.{};
                                     metrics.left_in = left_rows.len;
                                     const time_left = std.time.nanoTimestamp() - left_start;
                                     // Phase 2: tails
@@ -966,7 +962,7 @@ pub fn main() !void {
                                         var oc_prof: []const protocol.SchemaCol = &.{};
                                         ordered_l = false;
                                         order_keys_l = &.{};
-                                        const pr = evaluateSimpleQuery(gpa, part.query, param_names, param_rows, &ordered_l, &order_keys_l, &oc_prof, null) catch &.{};
+                                        const pr = evaluateSimpleQuery(gpa, part.query, param_names, param_rows, &ordered_l, &order_keys_l, &oc_prof, null, null) catch &.{};
                                         right_total += pr.len;
                                         for (pr) |rr| all_rows.append(gpa, rr) catch {};
                                         gpa.free(oc_prof);
@@ -1073,10 +1069,46 @@ pub fn main() !void {
                                 state.last_distinct = std.mem.eql(u8, union_mode, "DISTINCT");
                                 state.page_items = @constCast(rows);
                                 state.active_result = true;
-                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, true))) |line| {
-                                    defer gpa.free(line);
-                                    _ = stdout_file.write(line) catch {};
-                                } else |_| {}
+                                if (result_format_txt) {
+                                    // Plain text emission for UNION similar to simple query path.
+                                    var hi: usize = 0;
+                                    while (hi < state.last_columns.len) : (hi += 1) {
+                                        if (hi > 0) stdout_file.writeAll("\t") catch {};
+                                        stdout_file.writeAll(state.last_columns[hi].name) catch {};
+                                    }
+                                    stdout_file.writeAll("\n") catch {};
+                                    var ri: usize = 0;
+                                    while (ri < state.page_items.len) : (ri += 1) {
+                                        const row = state.page_items[ri];
+                                        var cj: usize = 0;
+                                        while (cj < state.last_columns.len) : (cj += 1) {
+                                            if (cj > 0) stdout_file.writeAll("\t") catch {};
+                                            const cname = state.last_columns[cj].name;
+                                            if (std.mem.indexOf(u8, row, cname)) |pos| {
+                                                if (std.mem.indexOfPos(u8, row, pos, ":")) |colon| {
+                                                    var startv = colon + 1;
+                                                    while (startv < row.len and (row[startv] == ' ')) startv += 1;
+                                                    var endv = startv;
+                                                    if (startv < row.len and row[startv] == '"') {
+                                                        endv = startv + 1;
+                                                        while (endv < row.len and row[endv] != '"') endv += 1;
+                                                        stdout_file.writeAll(row[startv + 1 .. endv]) catch {};
+                                                    } else {
+                                                        while (endv < row.len and row[endv] != ',' and row[endv] != '}') endv += 1;
+                                                        stdout_file.writeAll(row[startv..endv]) catch {};
+                                                    }
+                                                } else stdout_file.writeAll("null") catch {};
+                                            } else stdout_file.writeAll("null") catch {};
+                                        }
+                                        stdout_file.writeAll("\n") catch {};
+                                    }
+                                    state.active_result = false; // fully emitted
+                                } else {
+                                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, true))) |line| {
+                                        defer gpa.free(line);
+                                        _ = stdout_file.write(line) catch {};
+                                    } else |_| {}
+                                }
                                 continue;
                             },
                             else => {
@@ -1092,12 +1124,26 @@ pub fn main() !void {
                 }
             },
             .PULL => |pl| {
-                if (!state.active_result) {
+                if (!state.active_result and state.profile_json == null) {
                     const nrline = protocol.buildErrorLine(gpa, "NoResult", "no active result set", "") catch null;
                     if (nrline) |l| {
                         defer gpa.free(l);
                         _ = stdout_file.write(l) catch {};
                     }
+                    continue;
+                }
+                // If PROFILE staged, emit PROFILE frame and clear profile_json; no rows to paginate.
+                if (state.profile_json) |pj| {
+                    const pline = protocol.buildProfileLine(gpa, pj, state.profile_flags) catch null;
+                    if (pline) |plj| {
+                        defer gpa.free(plj);
+                        _ = stdout_file.write(plj) catch {};
+                    }
+                    // PROFILE complete; clear state and mark no active result
+                    state.allocator.free(pj);
+                    state.profile_json = null;
+                    state.profile_flags = &.{};
+                    state.active_result = false;
                     continue;
                 }
                 const page_size = if (pl.page_size == 0) 1000 else pl.page_size;

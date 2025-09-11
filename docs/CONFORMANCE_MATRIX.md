@@ -19,7 +19,7 @@ Legend: D = Done (parse/AST/print); P = Parse-only; N = Not yet; Pol = Policy do
 | Temporal literals           | 16.x               | DATE"yyyy-mm-dd", DATETIME"...", TIME"...", LOCAL DATETIME"..." | D      | tokens/lexer; `Expr.Date/DateTime/Time/LocalDateTime`; parser/printer; tests |
 | Params, NULLS FIRST/LAST    | 16.x               | `$param`, nulls policy                                          | N      | —                                                                            |
 | Aggregation semantics       | 14.10              | HAVING, scope checks                                            | N      | —                                                                            |
-| Diagnostics + Flagger       | Annex/UA           | precedence, UA002                                               | N/Pol  | to be added per NEXT.md                                                      |
+| Diagnostics + Flagger       | Annex/UA; 23.2     | precedence, UA002, runtime TypeMismatch                         | D/Pol  | `diagnostics.zig`, runtime eval capture in `server/main.zig`                 |
 
 Notes:
 

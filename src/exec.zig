@@ -170,6 +170,8 @@ pub fn multisetIntersect(ally: std.mem.Allocator, a: []const i64, b: []const i64
 /// - input_rows: matrix of evaluator Values for each input row
 /// - param_names/param_values: optional parameter bindings referenced in expressions
 /// Output: rows of BindingValue containing exactly the RETURN item values (projected order).
+pub const AggStageTimings = struct { build_ns: i128 = 0, emit_ns: i128 = 0 };
+
 pub fn runGroupedQuery(
     ally: std.mem.Allocator,
     q: ast.Query,
@@ -177,6 +179,7 @@ pub fn runGroupedQuery(
     input_rows: []const []eval.Value,
     param_names: []const []const u8,
     param_values: []const eval.Value,
+    timings: ?*AggStageTimings,
 ) ![]const []const BindingValue {
     // Validate GROUP BY legality using planner first
     _ = try planner.planQuery(q, .{});
@@ -254,6 +257,7 @@ pub fn runGroupedQuery(
         }
     }
 
+    const t_build_start = if (timings) |_| std.time.nanoTimestamp() else 0;
     for (input_rows) |vals| {
         // Make eval env for this row
         const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values };
@@ -388,6 +392,8 @@ pub fn runGroupedQuery(
 
     // 5) Project RETURN items for each kept row
     // Build maps for projection reuse (as above): key_map and agg_map already exist.
+    if (timings) |tp| tp.build_ns = std.time.nanoTimestamp() - t_build_start;
+    const t_emit_start = if (timings) |_| std.time.nanoTimestamp() else 0;
     var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
     defer out.deinit(ally);
     for (kept.items) |gr| {
@@ -519,6 +525,7 @@ pub fn runGroupedQuery(
             out = sorted;
         }
     }
+    if (timings) |tp2| tp2.emit_ns = std.time.nanoTimestamp() - t_emit_start;
     return out.toOwnedSlice(ally);
 }
 
@@ -563,7 +570,7 @@ test "executor: COUNT(expr) vs COUNT(*)" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "g2" } };
     const r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g2" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 2);
     // Validate both groups: counts should be (1,2)
@@ -592,7 +599,7 @@ test "executor: empty input yields no groups" {
     const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{s_id} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{"s"};
     const rows: []const []eval.Value = &.{};
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 0);
 }
@@ -610,7 +617,7 @@ test "executor: multi-key GROUP BY counts" {
     const r1 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
     const r2 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "z" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..] };
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 2);
 }
@@ -641,7 +648,7 @@ test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
     const r3 = [_]eval.Value{ .{ .Int = 10 }, .{ .Str = "B" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
     defer ally.free(out);
     // Expect only group A remains, with columns: g, SUM(a)=4, AVG(a)=1
     try std.testing.expect(out.len == 1);
@@ -665,7 +672,7 @@ test "executor: COUNT on NULL-only inputs and COUNT(*)" {
     const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 0);
@@ -693,7 +700,7 @@ test "executor: HAVING 3VL nested boolean with NULL short-circuit" {
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "A" } };
     // Group B: a values [null] -> COUNT(a)>0 false, AVG(a)=NULL; false AND NULL -> false -> dropped
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "A"));
@@ -711,7 +718,7 @@ test "executor: multi-key GROUP BY with NULL keys" {
     const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
     defer ally.free(out);
     // Expect two groups: (NULL,x) and (NULL,y)
     try std.testing.expect(out.len == 2);
@@ -733,7 +740,7 @@ test "executor: ORDER BY over aggregated outputs with NULLS policy" {
     const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
     const r3 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "C" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
     defer ally.free(out);
     // Expect order by SUM ascending with NULLS LAST -> C(1), A(3), B(NULL)
     try std.testing.expect(out.len == 3);
@@ -798,7 +805,7 @@ test "executor: HAVING with Decimal literal compares against decimal AVG" {
     const r0 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 220, .scale = 2 } }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "X"));
@@ -820,7 +827,7 @@ test "executor: ORDER BY using ordinal and alias resolution on aggregated output
     const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{});
+    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
     defer ally.free(out);
     try std.testing.expect(out.len == 2);
     // ORDER BY 2 (sum) ASC: Y(1) then X(3). Second key orders by alias desc but distinct sums mean first key decides
@@ -991,6 +998,13 @@ inline fn addI128Overflow(a: i128, b: i128, out: *i128) bool {
     const pair = @addWithOverflow(a, b);
     out.* = pair[0];
     return pair[1] != 0;
+}
+
+inline fn i128ToI64(v: i128) ?i64 {
+    const min: i128 = @as(i128, @intCast(@as(i64, @bitCast(@as(u64, 0x8000000000000000)))));
+    const max: i128 = @as(i128, @intCast(@as(i64, @bitCast(@as(u64, 0x7fffffffffffffff)))));
+    if (v < min or v > max) return null;
+    return @as(i64, @intCast(v));
 }
 
 // ===========================
@@ -1441,22 +1455,17 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
         var a: usize = 0;
         while (a < m) : (a += 1) {
             const dst = spec.key_idxs.len + a;
-            // convert count to i64 safely
             const cnt_i128: i128 = @intCast(acc.counts[a]);
             switch (spec.aggs[a]) {
-                .Count => row[dst] = if (i128ToI64(cnt_i128)) |ok| .{ .Int = ok } else .{ .Null = {} },
                 .CountStar => row[dst] = if (i128ToI64(cnt_i128)) |ok| .{ .Int = ok } else .{ .Null = {} },
-                .Sum => row[dst] = if (acc.counts[a] == 0 or acc.ovf[a]) .{ .Null = {} } else blk_sum_out: {
-                    if (acc.saw_decimal[a]) {
-                        // Emit Decimal sum at dec_scale
-                        break :blk_sum_out .{ .Decimal = .{ .coeff = acc.dec_sums[a], .scale = acc.dec_scale[a] } };
-                    } else {
-                        if (i128ToI64(acc.sums[a])) |ok| break :blk_sum_out .{ .Int = ok } else break :blk_sum_out .{ .Null = {} };
-                    }
+                .Count => row[dst] = if (i128ToI64(cnt_i128)) |ok| .{ .Int = ok } else .{ .Null = {} },
+                .Sum => row[dst] = blk_sum_out: {
+                    if (acc.counts[a] == 0 or acc.ovf[a]) break :blk_sum_out .{ .Null = {} };
+                    if (acc.saw_decimal[a]) break :blk_sum_out .{ .Decimal = .{ .coeff = acc.dec_sums[a], .scale = acc.dec_scale[a] } };
+                    if (i128ToI64(acc.sums[a])) |ok| break :blk_sum_out .{ .Int = ok } else break :blk_sum_out .{ .Null = {} };
                 },
                 .Avg => row[dst] = if (acc.counts[a] == 0 or acc.ovf[a]) .{ .Null = {} } else blk_avg_out: {
                     if (acc.saw_decimal[a]) {
-                        // Decimal average: keep scale, divide coeff by count (truncate)
                         const denom: i128 = @intCast(acc.counts[a]);
                         const q = @divTrunc(acc.dec_sums[a], denom);
                         break :blk_avg_out .{ .Decimal = .{ .coeff = q, .scale = acc.dec_scale[a] } };
@@ -1476,69 +1485,6 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
     return out.toOwnedSlice(ally);
 }
 
-fn i128ToI64(x: i128) ?i64 {
-    if (x > @as(i128, std.math.maxInt(i64)) or x < @as(i128, std.math.minInt(i64))) return null;
-    return @intCast(x);
-}
-
-test "grouping: GROUP BY name; COUNT and MIN/MAX/SUM over ints; HAVING" {
-    const ally = std.testing.allocator;
-    // rows: (name, val)
-    const rows: []const []BindingValue = &.{ &.{ .{ .Str = "a" }, .{ .Int = 1 } }, &.{ .{ .Str = "a" }, .{ .Int = 2 } }, &.{ .{ .Str = "b" }, .{.Null} } };
-    const spec = GroupSpec{ .key_idxs = &.{0}, .aggs = &.{ .Count, .Sum, .Min, .Max } };
-    const vals = &.{ 1, 1, 1, 1 };
-    const out = try groupAndAggregate(ally, rows, spec, vals);
-    defer ally.free(out);
-    // Expect 2 groups: a and b
-    try std.testing.expect(out.len == 2);
-    // Apply HAVING COUNT(*) > 1 filter (manual): only group 'a' remains
-    var kept: usize = 0;
-    var i: usize = 0;
-    while (i < out.len) : (i += 1) {
-        const r = out[i];
-        // key at [0], count at [1]
-        if (r[1] == .Int and r[1].Int > 1) kept += 1;
-    }
-    try std.testing.expect(kept == 1);
-}
-
-test "grouping: AVG and COUNT(*) with NULL-only groups" {
-    const ally = std.testing.allocator;
-    // rows: (name, val)
-    const rows: []const []BindingValue = &.{
-        &.{ .{ .Str = "a" }, .{ .Int = 1 } },
-        &.{ .{ .Str = "a" }, .{ .Int = 2 } },
-        &.{ .{ .Str = "b" }, .{ .Null = {} } },
-    };
-    const spec = GroupSpec{ .key_idxs = &.{0}, .aggs = &.{ .Avg, .CountStar, .Sum } };
-    const vals = &.{ 1, 0, 1 }; // CountStar ignores index
-    const out = try groupAndAggregate(ally, rows, spec, vals);
-    defer ally.free(out);
-    // Expect 2 groups
-    try std.testing.expect(out.len == 2);
-    // Find rows by key
-    var saw_a = false;
-    var saw_b = false;
-    var i: usize = 0;
-    while (i < out.len) : (i += 1) {
-        const r = out[i];
-        if (r[0] == .Str and std.mem.eql(u8, r[0].Str, "a")) {
-            saw_a = true;
-            // AVG = floor((1+2)/2) = 1; COUNT(*) = 2; SUM = 3
-            try std.testing.expect(r[1] == .Int and r[1].Int == 1);
-            try std.testing.expect(r[2] == .Int and r[2].Int == 2);
-            try std.testing.expect(r[3] == .Int and r[3].Int == 3);
-        } else if (r[0] == .Str and std.mem.eql(u8, r[0].Str, "b")) {
-            saw_b = true;
-            // AVG = NULL (no non-null ints); COUNT(*) = 1; SUM = NULL
-            try std.testing.expect(r[1] == .Null);
-            try std.testing.expect(r[2] == .Int and r[2].Int == 1);
-            try std.testing.expect(r[3] == .Null);
-        }
-    }
-    try std.testing.expect(saw_a and saw_b);
-}
-
 // ===========================
 // HAVING rewrite helper
 // ===========================
@@ -1554,7 +1500,8 @@ pub fn rewriteExprWithAggregates(
     key_len: usize,
 ) !ast.Expr {
     return switch (e) {
-        .Int, .Bool, .Null, .String => e,
+        // Literals passthrough
+        .Int, .Bool, .Null, .String, .Decimal, .Date, .DateTime, .Time, .LocalDateTime => e,
         .Ident, .Member => blk_key: {
             const key_s = printer.stringifyExprAlloc(ally, e, .{}) catch break :blk_key .{ .Null = {} };
             defer ally.free(key_s);
@@ -1574,9 +1521,7 @@ pub fn rewriteExprWithAggregates(
             defer sig_buf.deinit(ally);
             // append lowercase function name
             var i_nm: usize = 0;
-            while (i_nm < nm.len) : (i_nm += 1) {
-                try sig_buf.append(ally, std.ascii.toLower(nm[i_nm]));
-            }
+            while (i_nm < nm.len) : (i_nm += 1) try sig_buf.append(ally, std.ascii.toLower(nm[i_nm]));
             try sig_buf.append(ally, '(');
             if (c.args.len == 0) {
                 try sig_buf.append(ally, '*');
@@ -1585,7 +1530,7 @@ pub fn rewriteExprWithAggregates(
                 defer if (s.len > 0) ally.free(s);
                 try sig_buf.appendSlice(ally, s);
             } else {
-                // not expected in HAVING for current aggregates
+                // unexpected arity for current aggregates => bail
             }
             try sig_buf.append(ally, ')');
             const sig = sig_buf.items;

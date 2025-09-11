@@ -16,6 +16,16 @@ pub const Value = union(enum) {
     Decimal: struct { coeff: i128, scale: u8 },
 };
 
+const Dec = struct { coeff: i128, scale: u8 };
+
+fn toDec(v: Value) Dec {
+    return switch (v) {
+        .Decimal => |d| .{ .coeff = d.coeff, .scale = d.scale },
+        .Int => |iv| .{ .coeff = @as(i128, iv), .scale = 0 },
+        else => unreachable,
+    };
+}
+
 pub const Env = struct {
     // Simple linear env for tests/demos
     names: []const []const u8,
@@ -180,14 +190,41 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
         .Or => or3(l, r),
         .Add => blk: {
             if (l == .Int and r == .Int) break :blk .{ .Int = l.Int + r.Int };
+            // Decimal + Int / Int + Decimal / Decimal + Decimal
+            if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
+                const ld = toDec(l);
+                const rd = toDec(r);
+                const maxs: u8 = @max(ld.scale, rd.scale);
+                const lc = try scaleTo(ld.coeff, ld.scale, maxs);
+                const rc = try scaleTo(rd.coeff, rd.scale, maxs);
+                const sum = lc + rc; // overflow ignored for now (would return Unsupported if needed)
+                break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
+            }
             return EvalError.TypeMismatch;
         },
         .Sub => blk2: {
             if (l == .Int and r == .Int) break :blk2 .{ .Int = l.Int - r.Int };
+            if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
+                const ld = toDec(l);
+                const rd = toDec(r);
+                const maxs: u8 = @max(ld.scale, rd.scale);
+                const lc = try scaleTo(ld.coeff, ld.scale, maxs);
+                const rc = try scaleTo(rd.coeff, rd.scale, maxs);
+                const diff = lc - rc;
+                break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
+            }
             return EvalError.TypeMismatch;
         },
         .Mul => blk3: {
             if (l == .Int and r == .Int) break :blk3 .{ .Int = l.Int * r.Int };
+            if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
+                const ld = toDec(l);
+                const rd = toDec(r);
+                // result scale = sum of scales; coeff multiply
+                const res_scale: u8 = ld.scale + rd.scale;
+                const prod = ld.coeff * rd.coeff; // naive; overflow risk
+                break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
+            }
             return EvalError.TypeMismatch;
         },
         .Div => blk4: {

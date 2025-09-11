@@ -405,7 +405,7 @@ pub fn main() !void {
                         var r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "Carol" } };
                         var r4 = [_]eval.Value{ .{ .Int = 2 }, .{ .Null = {} } };
                         const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] };
-                        const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items) catch |e| {
+                        const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items, null) catch |e| {
                             std.debug.print("demo-eval(grouped): error {s}\n", .{@errorName(e)});
                             return;
                         };

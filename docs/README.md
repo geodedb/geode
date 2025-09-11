@@ -12,6 +12,7 @@
 - IllegalOrderKey — ORDER BY key violates ident‑only policy (ISO 14.10).
 - GroupByIllegal — RETURN/HAVING expressions not aligned with GROUP BY keys or aggregates (ISO 14.10).
 - TypeMismatch — Incomparable types for the requested operation (e.g., ordering across heterogeneous types) (ISO 16.x; 23.2).
+  - Can arise at runtime during expression evaluation (e.g., attempting arithmetic across incompatible types) as well as during planning. Runtime occurrences surface as ERROR frames with primary code=TypeMismatch and no additional status codes.
 
 ## Flagger Findings (policy / behavior flags)
 
