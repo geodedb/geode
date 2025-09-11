@@ -48,9 +48,10 @@
 
 ## CLI Flags
 
-| Flag             | Effect                                                              |
-| ---------------- | ------------------------------------------------------------------- |
-| `--no-estimates` | Suppress estimate\_\* fields and aggregate planner_estimates object |
+| Flag                | Effect                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--no-estimates`    | Suppress estimate\_\* fields and aggregate planner_estimates object                                                     |
+| `--profile-compact` | Omit zero-value optional metrics (estimate*bytes, estimate_vs_actual, percent_peak, percent_net, freed_bytes, error*\*) |
 
 ## Versioning Policy
 

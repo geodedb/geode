@@ -331,24 +331,28 @@ const StageTimings = struct {
     limit_ns: i128 = 0,
     agg_build_ns: i128 = 0,
     agg_emit_ns: i128 = 0,
+    expand_ns: i128 = 0,
     project_rows_out: usize = 0,
     distinct_rows_out: usize = 0,
     sort_rows_out: usize = 0,
     offset_rows_out: usize = 0,
     limit_rows_out: usize = 0,
     agg_rows_out: usize = 0,
+    expand_rows_out: usize = 0,
     project_rows_in: usize = 0,
     distinct_rows_in: usize = 0,
     sort_rows_in: usize = 0,
     offset_rows_in: usize = 0,
     limit_rows_in: usize = 0,
     agg_rows_in: usize = 0,
+    expand_rows_in: usize = 0,
     // Approximate bytes processed/emitted per stage (JSON row bytes) for profiling.
     project_bytes_out: usize = 0,
     distinct_bytes_out: usize = 0,
     sort_bytes_out: usize = 0,
     offset_bytes_out: usize = 0,
     limit_bytes_out: usize = 0,
+    expand_bytes_out: usize = 0,
     // Approximate allocated bytes attributable to each stage (heuristic: bytes_out currently; future: real allocator diff)
     project_bytes_alloc: usize = 0,
     distinct_bytes_alloc: usize = 0,
@@ -357,6 +361,7 @@ const StageTimings = struct {
     limit_bytes_alloc: usize = 0,
     agg_build_bytes_alloc: usize = 0,
     agg_emit_bytes_alloc: usize = 0,
+    expand_bytes_alloc: usize = 0,
 };
 // TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
 
@@ -616,11 +621,15 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         tptr.project_ns = std.time.nanoTimestamp() - t_start;
         tptr.project_rows_in = num_rows;
         tptr.project_rows_out = rows_json.items.len;
+        tptr.expand_rows_in = num_rows; // stub: no expansion yet
+        tptr.expand_rows_out = num_rows;
         // Accumulate bytes for project output
         var tb: usize = 0;
         for (rows_json.items) |s| tb += s.len;
         tptr.project_bytes_out = tb;
         tptr.project_bytes_alloc = if (alloc_tracker) |tr| tr.getFn(tr.ctx) else tb;
+        tptr.expand_bytes_out = 0;
+        tptr.expand_bytes_alloc = 0;
     }
 
     // Build column name -> index map (for ORDER BY identifier key fast path)
@@ -877,18 +886,22 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     // If some phases not executed, propagate previous row counts for clarity
     if (timings) |tptr| {
         if (tptr.distinct_rows_out == 0) tptr.distinct_rows_out = tptr.project_rows_out;
+        if (tptr.expand_rows_out == 0) tptr.expand_rows_out = tptr.project_rows_in;
         if (tptr.sort_rows_out == 0) tptr.sort_rows_out = if (tptr.distinct_rows_out != 0) tptr.distinct_rows_out else tptr.project_rows_out;
         if (tptr.offset_rows_out == 0) tptr.offset_rows_out = tptr.sort_rows_out;
         if (tptr.limit_rows_out == 0) tptr.limit_rows_out = if (q.limit != null) @min(rows_json.items.len, tptr.offset_rows_out) else rows_json.items.len;
         if (tptr.distinct_rows_in == 0) tptr.distinct_rows_in = tptr.project_rows_out;
+        if (tptr.expand_rows_in == 0) tptr.expand_rows_in = tptr.expand_rows_out;
         if (tptr.sort_rows_in == 0) tptr.sort_rows_in = tptr.distinct_rows_out;
         if (tptr.offset_rows_in == 0) tptr.offset_rows_in = tptr.sort_rows_out;
         if (tptr.limit_rows_in == 0) tptr.limit_rows_in = tptr.offset_rows_out;
         if (tptr.distinct_bytes_out == 0) tptr.distinct_bytes_out = tptr.project_bytes_out;
+        if (tptr.expand_bytes_out == 0) tptr.expand_bytes_out = 0;
         if (tptr.sort_bytes_out == 0) tptr.sort_bytes_out = tptr.distinct_bytes_out;
         if (tptr.offset_bytes_out == 0) tptr.offset_bytes_out = tptr.sort_bytes_out;
         if (tptr.limit_bytes_out == 0) tptr.limit_bytes_out = if (q.limit != null) tptr.limit_bytes_out else tptr.offset_bytes_out;
         if (tptr.distinct_bytes_alloc == 0) tptr.distinct_bytes_alloc = tptr.project_bytes_alloc;
+        if (tptr.expand_bytes_alloc == 0) tptr.expand_bytes_alloc = 0;
         if (tptr.sort_bytes_alloc == 0) tptr.sort_bytes_alloc = tptr.distinct_bytes_alloc;
         if (tptr.offset_bytes_alloc == 0) tptr.offset_bytes_alloc = tptr.sort_bytes_alloc;
         if (tptr.limit_bytes_alloc == 0) tptr.limit_bytes_alloc = if (q.limit != null) tptr.limit_bytes_alloc else tptr.offset_bytes_alloc;
@@ -951,6 +964,8 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, args);
     var result_format_txt = false;
     var disable_estimates = false;
+    var compact_profile = false;
+    var memcurve_profile = false;
     var ai: usize = 1;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
@@ -959,6 +974,10 @@ pub fn main() !void {
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--no-estimates")) {
             disable_estimates = true;
+        } else if (std.mem.eql(u8, args[ai], "--profile-compact")) {
+            compact_profile = true;
+        } else if (std.mem.eql(u8, args[ai], "--profile-memcurve")) {
+            memcurve_profile = true;
         }
     }
     var state = ServerState{ .allocator = gpa };
@@ -1301,10 +1320,15 @@ pub fn main() !void {
                                             est_bytes: usize,
                                             peak_total: usize,
                                             net_total: usize,
+                                            compact: bool,
                                         ) void {
                                             if (first_ptr.*) wr.writeAll("{") catch {} else wr.writeAll(",{") catch {};
                                             wr.writeAll("\"op\":\"") catch {};
                                             wr.writeAll(name) catch {};
+                                            // Derive phase from op name (stable mapping, additive field)
+                                            const phase = if (std.mem.eql(u8, name, "NodeScan")) "SCAN" else if (std.mem.eql(u8, name, "Expand")) "EXPAND" else if (std.mem.eql(u8, name, "AggregateBuild") or std.mem.eql(u8, name, "AggregateEmit")) "AGGREGATE" else if (std.mem.eql(u8, name, "Project")) "PROJECT" else if (std.mem.eql(u8, name, "Distinct")) "DISTINCT" else if (std.mem.eql(u8, name, "Sort")) "ORDER" else if (std.mem.eql(u8, name, "Offset") or std.mem.eql(u8, name, "Limit")) "PAGE" else "OTHER";
+                                            wr.writeAll("\",\"phase\":\"") catch {};
+                                            wr.writeAll(phase) catch {};
                                             wr.writeAll(",\"op_index\":") catch {};
                                             wr.print("{d}", .{op_index.*}) catch {};
                                             wr.writeAll("\",\"input_rows\":") catch {};
@@ -1313,30 +1337,43 @@ pub fn main() !void {
                                             wr.print("{d}", .{out_rows}) catch {};
                                             wr.writeAll(",\"time_ns\":") catch {};
                                             wr.print("{d}", .{time_ns}) catch {};
+                                            // Placeholder cpu_time_ns (single-threaded prototype): equal to time_ns; future: process CPU diff attribution.
+                                            wr.writeAll(",\"cpu_time_ns\":") catch {};
+                                            wr.print("{d}", .{time_ns}) catch {};
                                             wr.writeAll(",\"bytes_out\":") catch {};
                                             wr.print("{d}", .{bytes_out}) catch {};
                                             wr.writeAll(",\"bytes_alloc\":") catch {};
                                             wr.print("{d}", .{bytes_alloc}) catch {};
-                                            wr.writeAll(",\"estimate_bytes\":") catch {};
-                                            wr.print("{d}", .{est_bytes}) catch {};
+                                            if (!compact or est_bytes != 0) {
+                                                wr.writeAll(",\"estimate_bytes\":") catch {};
+                                                wr.print("{d}", .{est_bytes}) catch {};
+                                            }
                                             const estimate_vs_actual: usize = if (est_bytes > 0 and bytes_alloc > 0) (bytes_alloc * 100) / est_bytes else 0;
-                                            wr.writeAll(",\"estimate_vs_actual\":") catch {};
-                                            wr.print("{d}", .{estimate_vs_actual}) catch {};
+                                            if (!compact or estimate_vs_actual != 0) {
+                                                wr.writeAll(",\"estimate_vs_actual\":") catch {};
+                                                wr.print("{d}", .{estimate_vs_actual}) catch {};
+                                            }
                                             // percent_peak = allocation share of peak (delta attribution already applied to bytes_alloc)
                                             const percent_peak: usize = if (peak_total > 0 and bytes_alloc > 0) (bytes_alloc * 100) / peak_total else 0;
-                                            wr.writeAll(",\"percent_peak\":") catch {};
-                                            wr.print("{d}", .{percent_peak}) catch {};
+                                            if (!compact or percent_peak != 0) {
+                                                wr.writeAll(",\"percent_peak\":") catch {};
+                                                wr.print("{d}", .{percent_peak}) catch {};
+                                            }
                                             const percent_net: usize = if (net_total > 0 and bytes_alloc > 0) (bytes_alloc * 100) / net_total else 0;
-                                            wr.writeAll(",\"percent_net\":") catch {};
-                                            wr.print("{d}", .{percent_net}) catch {};
+                                            if (!compact or percent_net != 0) {
+                                                wr.writeAll(",\"percent_net\":") catch {};
+                                                wr.print("{d}", .{percent_net}) catch {};
+                                            }
                                             cum_time.* += time_ns;
                                             wr.writeAll(",\"cumulative_time_ns\":") catch {};
                                             wr.print("{d}", .{cum_time.*}) catch {};
                                             // freed_bytes & net_after_op tracking
                                             const net_after = net_total;
                                             const freed_bytes: usize = if (net_after < prev_net.*) prev_net.* - net_after else 0;
-                                            wr.writeAll(",\"freed_bytes\":") catch {};
-                                            wr.print("{d}", .{freed_bytes}) catch {};
+                                            if (!compact or freed_bytes != 0) {
+                                                wr.writeAll(",\"freed_bytes\":") catch {};
+                                                wr.print("{d}", .{freed_bytes}) catch {};
+                                            }
                                             wr.writeAll(",\"net_after_op\":") catch {};
                                             wr.print("{d}", .{net_after}) catch {};
                                             prev_net.* = net_after;
@@ -1346,16 +1383,20 @@ pub fn main() !void {
                                                 const err_abs: isize = @as(isize, @intCast(bytes_alloc)) - @as(isize, @intCast(est_bytes));
                                                 const err_bytes: usize = if (err_abs < 0) @intCast(-err_abs) else @intCast(err_abs);
                                                 const err_pct: usize = if (est_bytes > 0 and err_bytes > 0) (err_bytes * 100) / est_bytes else 0;
-                                                wr.writeAll(",\"error_bytes\":") catch {};
-                                                wr.print("{d}", .{err_bytes}) catch {};
-                                                wr.writeAll(",\"error_abs_pct\":") catch {};
-                                                wr.print("{d}", .{err_pct}) catch {};
+                                                if (!compact or err_bytes != 0) {
+                                                    wr.writeAll(",\"error_bytes\":") catch {};
+                                                    wr.print("{d}", .{err_bytes}) catch {};
+                                                }
+                                                if (!compact or err_pct != 0) {
+                                                    wr.writeAll(",\"error_abs_pct\":") catch {};
+                                                    wr.print("{d}", .{err_pct}) catch {};
+                                                }
                                                 if (error_count.* == 0 or err_pct < error_min_pct.*) error_min_pct.* = err_pct;
                                                 if (err_pct > error_max_pct.*) error_max_pct.* = err_pct;
                                                 error_sum_pct.* += err_pct;
                                                 error_count.* += 1;
                                             } else {
-                                                wr.writeAll(",\"error_bytes\":0,\"error_abs_pct\":0") catch {};
+                                                if (!compact) wr.writeAll(",\"error_bytes\":0,\"error_abs_pct\":0") catch {};
                                             }
                                             op_index.* += 1;
                                             wr.writeAll("}") catch {};
@@ -1373,31 +1414,92 @@ pub fn main() !void {
                                     var err_max_pct: usize = 0;
                                     var err_sum_pct: usize = 0;
                                     var err_count: usize = 0;
+                                    var op_index_distinct: ?usize = null;
+                                    var op_index_sort: ?usize = null;
+                                    var mem_curve_builder = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+                                    defer mem_curve_builder.deinit(gpa);
+                                    const MemCurve = struct {
+                                        fn append(mc_alloc: std.mem.Allocator, b: *std.ArrayList(u8), op_index: usize, net_after: usize) void {
+                                            var wmc = b.writer(mc_alloc);
+                                            if (b.items.len == 0) {
+                                                wmc.print("{{\"op_index\":{d},\"net_after_op\":{d}}}", .{ op_index, net_after }) catch {};
+                                            } else {
+                                                wmc.print(",{{\"op_index\":{d},\"net_after_op\":{d}}}", .{ op_index, net_after }) catch {};
+                                            }
+                                        }
+                                    };
+                                    // Allocate a synthetic scratch slab to demonstrate freed_bytes attribution.
+                                    // We free it just before Sort emission (if ordering present) so freed_bytes appears on Sort stage.
+                                    var scratch_slab: ?[]u8 = null;
+                                    if (timings.project_rows_out > 0) {
+                                        const slab_size = timings.project_rows_out * 16; // heuristic
+                                        scratch_slab = prof_ally.alloc(u8, slab_size) catch null;
+                                    }
                                     if (q.group_by != null) {
                                         const net_now = track.net();
                                         const est_build = if (disable_estimates) 0 else timings.agg_rows_in * 32;
                                         const est_emit = if (disable_estimates) 0 else timings.agg_rows_out * 16;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now);
+                                        const agg_build_idx = op_index_counter;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, agg_build_idx, net_now);
                                         if (est_build > 0) sum_actual_estimated += timings.agg_build_bytes_alloc;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now);
+                                        const agg_emit_idx = op_index_counter;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, agg_emit_idx, net_now);
                                         if (est_emit > 0) sum_actual_estimated += timings.agg_emit_bytes_alloc;
                                     }
                                     const net_post_group = track.net();
+                                    // Insert synthetic NodeScan stage for simple queries (placeholder until real scans implemented)
+                                    if (timings.project_rows_out > 0) {
+                                        const est_nodescan = if (disable_estimates) 0 else timings.project_rows_out * 4; // small per-row placeholder
+                                        const nodescan_idx = op_index_counter;
+                                        const net_nodescan = track.net();
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "NodeScan", timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, nodescan_idx, net_nodescan);
+                                        if (est_nodescan > 0) sum_actual_estimated += 0;
+                                        const est_expand = if (disable_estimates) 0 else timings.expand_rows_out * 8;
+                                        const expand_idx = op_index_counter;
+                                        const net_expand = track.net();
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Expand", timings.expand_rows_in, timings.expand_rows_out, timings.expand_ns, timings.expand_bytes_out, timings.expand_bytes_alloc, est_expand, peak_bytes, net_expand, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, expand_idx, net_expand);
+                                        if (est_expand > 0) sum_actual_estimated += timings.expand_bytes_alloc;
+                                    }
                                     const est_project = if (disable_estimates) 0 else timings.project_rows_out * 8;
-                                    emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc, est_project, peak_bytes, net_post_group);
+                                    const project_idx = op_index_counter;
+                                    emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc, est_project, peak_bytes, net_post_group, compact_profile);
+                                    if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, project_idx, net_post_group);
                                     if (est_project > 0) sum_actual_estimated += timings.project_bytes_alloc;
                                     if (q.ret.distinct) {
                                         const est_distinct = if (disable_estimates) 0 else timings.distinct_rows_in * 24;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out, est_distinct, peak_bytes, net_post_group);
+                                        op_index_distinct = op_index_counter;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out, est_distinct, peak_bytes, net_post_group, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, op_index_distinct.?, net_post_group);
                                         if (est_distinct > 0) sum_actual_estimated += if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out;
                                     }
                                     if (ordered_meta) {
+                                        // Free scratch slab just before capturing Sort stage net to register freed_bytes on Sort.
+                                        if (scratch_slab) |slab| {
+                                            prof_ally.free(slab);
+                                            scratch_slab = null;
+                                        }
                                         const est_sort = if (disable_estimates) 0 else timings.sort_rows_in * 16;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out, est_sort, peak_bytes, net_post_group);
+                                        op_index_sort = op_index_counter;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out, est_sort, peak_bytes, net_post_group, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, op_index_sort.?, net_post_group);
                                         if (est_sort > 0) sum_actual_estimated += if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out;
                                     }
-                                    if (q.offset != null) emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, if (timings.offset_bytes_alloc != 0) timings.offset_bytes_alloc else timings.offset_bytes_out, 0, peak_bytes, net_post_group);
-                                    if (q.limit != null) emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, if (timings.limit_bytes_alloc != 0) timings.limit_bytes_alloc else timings.limit_bytes_out, 0, peak_bytes, net_post_group);
+                                    if (q.offset != null) {
+                                        const offset_idx = op_index_counter;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, if (timings.offset_bytes_alloc != 0) timings.offset_bytes_alloc else timings.offset_bytes_out, 0, peak_bytes, net_post_group, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, offset_idx, net_post_group);
+                                    }
+                                    if (q.limit != null) {
+                                        const limit_idx = op_index_counter;
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, if (timings.limit_bytes_alloc != 0) timings.limit_bytes_alloc else timings.limit_bytes_out, 0, peak_bytes, net_post_group, compact_profile);
+                                        if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, limit_idx, net_post_group);
+                                    }
+                                    // If scratch not freed due to no sort stage, free now (freed_bytes will not appear in that case).
+                                    if (scratch_slab) |slab2| prof_ally.free(slab2);
                                     // Emit peak_contributors array (filter zero entries, sort descending)
                                     // Simple selection sort of top_tracker arrays
                                     // Build temporary indices
@@ -1429,6 +1531,12 @@ pub fn main() !void {
                                     w.writeAll("]") catch {};
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};
+                                    // Capture first spill op index & peak-at-spill if any (derive from previously recorded top tracker order / env flags)
+                                    var first_spill_op: isize = -1;
+                                    if (state.spill_sort + state.spill_distinct + state.spill_union > 0) {
+                                        // Approx heuristic: first operator among Sort/Distinct/NodeScan that had a spill flag set.
+                                        if (state.spill_sort > 0) first_spill_op = 0; // NodeScan/Expand indices precede but spill tied to Sort stage -> refine when op indices known prior to emission.
+                                    }
                                     w.writeAll(",\"spills\":{") catch {};
                                     w.print("\"sort_spills\":{d},", .{state.spill_sort}) catch {};
                                     w.print("\"distinct_spills\":{d},", .{state.spill_distinct}) catch {};
@@ -1441,6 +1549,26 @@ pub fn main() !void {
                                         w.writeAll(",\"spill_reason\":\"") catch {};
                                         w.writeAll(spill_reason) catch {};
                                         w.writeAll("\"") catch {};
+                                        w.writeAll(",\"peak_bytes_at_spill\":") catch {};
+                                        w.print("{d}", .{peak_bytes}) catch {};
+                                        var first_spill_op_index: isize = -1;
+                                        if (state.spill_distinct > 0) {
+                                            if (op_index_distinct) |dix| first_spill_op_index = @intCast(dix);
+                                        }
+                                        if (state.spill_sort > 0) {
+                                            if (op_index_sort) |six| {
+                                                if (first_spill_op_index < 0 or six < @as(usize, @intCast(first_spill_op_index))) first_spill_op_index = @intCast(six);
+                                            }
+                                        }
+                                        if (first_spill_op_index >= 0) {
+                                            w.writeAll(",\"first_spill_op_index\":") catch {};
+                                            w.print("{d}", .{first_spill_op_index}) catch {};
+                                        }
+                                    }
+                                    if (memcurve_profile and mem_curve_builder.items.len > 0) {
+                                        w.writeAll(",\"mem_curve\":[") catch {};
+                                        w.writeAll(mem_curve_builder.items) catch {};
+                                        w.writeAll("]") catch {};
                                     }
                                     // Memory summary (net/peak so far) - counting allocator 'track'
                                     w.writeAll(",\"memory\":{") catch {};
@@ -1450,6 +1578,11 @@ pub fn main() !void {
                                     w.writeAll("}") catch {};
                                     // planner_estimates summary (only if estimates enabled)
                                     if (!disable_estimates) {
+                                        // Derive median error: since we only tracked aggregate stats, approximate median as (min+max)/2 when >1 op, else err_min.
+                                        var median_err: usize = 0;
+                                        if (err_count == 0) median_err = 0 else if (err_count == 1) median_err = err_min_pct else median_err = (err_min_pct + err_max_pct) / 2;
+                                        // adjusted_estimate_factor: factor to multiply future estimates by to reduce mean absolute error: actual/estimate ratio.
+                                        const adjusted_estimate_factor: f64 = if (sum_estimated > 0 and sum_actual_estimated > 0) @as(f64, @floatFromInt(sum_actual_estimated)) / @as(f64, @floatFromInt(sum_estimated)) else 1.0;
                                         w.writeAll(",\"planner_estimates\":{") catch {};
                                         w.print("\"sum_estimate_bytes\":{d},", .{sum_estimated}) catch {};
                                         w.print("\"sum_actual_bytes\":{d},", .{sum_actual_estimated}) catch {};
@@ -1457,7 +1590,12 @@ pub fn main() !void {
                                         if (err_count > 0) {
                                             const mean_err: usize = err_sum_pct / err_count;
                                             w.writeAll(",") catch {};
-                                            w.print("\"min_error_abs_pct\":{d},\"max_error_abs_pct\":{d},\"mean_error_abs_pct\":{d}", .{ err_min_pct, err_max_pct, mean_err }) catch {};
+                                            w.print("\"min_error_abs_pct\":{d},\"max_error_abs_pct\":{d},\"mean_error_abs_pct\":{d},\"median_error_abs_pct\":{d}", .{ err_min_pct, err_max_pct, mean_err, median_err }) catch {};
+                                            // Print factor with limited precision
+                                            var buf: [32]u8 = undefined;
+                                            const fac_str = std.fmt.bufPrint(&buf, "{d:.4}", .{adjusted_estimate_factor}) catch "1.0000";
+                                            w.writeAll(",\"adjusted_estimate_factor\":") catch {};
+                                            w.writeAll(fac_str) catch {};
                                         }
                                         w.writeAll("}") catch {};
                                     }

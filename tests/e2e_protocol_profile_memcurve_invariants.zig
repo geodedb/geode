@@ -1,0 +1,71 @@
+const std = @import("std");
+const testing = std.testing;
+
+fn run(args: []const []const u8) ![]u8 {
+    var child = std.process.Child.init(args, testing.allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
+    const out = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 18);
+    _ = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 16);
+    const term = try child.wait();
+    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
+    return out;
+}
+
+fn parseMemCurve(profile_line: []const u8) !struct { indices: []usize, nets: []usize } {
+    const allocator = testing.allocator;
+    const tag = "\"mem_curve\":[";
+    const start_pos_opt = std.mem.indexOf(u8, profile_line, tag) orelse return error.NoMemCurve;
+    var pos = start_pos_opt + tag.len;
+    var idx_list = std.ArrayList(usize).initCapacity(allocator, 0) catch return error.OOM;
+    var net_list = std.ArrayList(usize).initCapacity(allocator, 0) catch return error.OOM;
+    errdefer idx_list.deinit(allocator);
+    errdefer net_list.deinit(allocator);
+    while (pos < profile_line.len and profile_line[pos] != ']') {
+        // Expect object starting with {"op_index":
+        const oi_tag = "{\"op_index\":";
+        if (!std.mem.startsWith(u8, profile_line[pos..], oi_tag)) return error.BadFormat;
+        pos += oi_tag.len;
+        const oi_begin = pos;
+        while (pos < profile_line.len and profile_line[pos] >= '0' and profile_line[pos] <= '9') pos += 1;
+        const oi_slice = profile_line[oi_begin..pos];
+        const op_index = try std.fmt.parseInt(usize, oi_slice, 10);
+        const na_tag = ",\"net_after_op\":";
+        if (!std.mem.startsWith(u8, profile_line[pos..], na_tag)) return error.BadFormat;
+        pos += na_tag.len;
+        const na_begin = pos;
+        while (pos < profile_line.len and profile_line[pos] >= '0' and profile_line[pos] <= '9') pos += 1;
+        const na_slice = profile_line[na_begin..pos];
+        const net_after = try std.fmt.parseInt(usize, na_slice, 10);
+        try idx_list.append(allocator, op_index);
+        try net_list.append(allocator, net_after);
+        // Skip closing }
+        if (pos >= profile_line.len or profile_line[pos] != '}') return error.BadFormat;
+        pos += 1;
+        if (pos < profile_line.len and profile_line[pos] == ',') pos += 1; // move past comma for next object
+    }
+    if (pos >= profile_line.len or profile_line[pos] != ']') return error.BadFormat;
+    const indices_slice = idx_list.toOwnedSlice(allocator) catch return error.OOM;
+    const nets_slice = net_list.toOwnedSlice(allocator) catch return error.OOM;
+    return .{ .indices = indices_slice, .nets = nets_slice };
+}
+
+test "protocol: PROFILE mem_curve invariants monotonic indices" {
+    const exe = "zig-out/bin/geoded";
+    const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[1,1,2,3,5,8]" });
+    defer testing.allocator.free(out);
+    var it = std.mem.splitScalar(u8, out, '\n');
+    _ = it.next(); // schema
+    const profile_line = it.next() orelse return error.MissingProfile;
+    const parsed = try parseMemCurve(profile_line);
+    defer testing.allocator.free(parsed.indices);
+    defer testing.allocator.free(parsed.nets);
+    try testing.expect(parsed.indices.len == parsed.nets.len);
+    if (parsed.indices.len > 0) {
+        var i: usize = 1;
+        while (i < parsed.indices.len) : (i += 1) {
+            try testing.expect(parsed.indices[i] > parsed.indices[i - 1]);
+        }
+    }
+}

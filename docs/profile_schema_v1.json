@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://geode.dev/profile_schema_v1.json",
+  "title": "Geode PROFILE Schema v1",
+  "type": "object",
+  "required": ["profile_version", "ops", "memory", "total_time_ns"],
+  "properties": {
+    "profile_version": { "type": "integer", "const": 1 },
+    "total_time_ns": { "type": "integer", "minimum": 0 },
+    "peak_contributors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["op", "bytes_alloc"],
+        "properties": {
+          "op": { "type": "string" },
+          "bytes_alloc": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "spills": {
+      "type": "object",
+      "properties": {
+        "sort_spills": { "type": "integer", "minimum": 0 },
+        "distinct_spills": { "type": "integer", "minimum": 0 },
+        "union_spills": { "type": "integer", "minimum": 0 },
+        "spill_reason": { "type": "string", "enum": ["forced", "threshold"] },
+        "peak_bytes_at_spill": { "type": "integer", "minimum": 0 },
+        "first_spill_op_index": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["sort_spills", "distinct_spills", "union_spills"]
+    },
+    "mem_curve": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["op_index", "net_after_op"],
+        "properties": {
+          "op_index": { "type": "integer", "minimum": 0 },
+          "net_after_op": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "required": ["net_bytes", "peak_bytes", "total_alloc_bytes"],
+      "properties": {
+        "net_bytes": { "type": "integer", "minimum": 0 },
+        "peak_bytes": { "type": "integer", "minimum": 0 },
+        "total_alloc_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "planner_estimates": {
+      "type": "object",
+      "required": [
+        "sum_estimate_bytes",
+        "sum_actual_bytes",
+        "count_estimated_ops",
+        "min_error_abs_pct",
+        "max_error_abs_pct",
+        "mean_error_abs_pct"
+      ],
+      "properties": {
+        "sum_estimate_bytes": { "type": "integer", "minimum": 0 },
+        "sum_actual_bytes": { "type": "integer", "minimum": 0 },
+        "count_estimated_ops": { "type": "integer", "minimum": 0 },
+        "min_error_abs_pct": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "max_error_abs_pct": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "mean_error_abs_pct": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "median_error_abs_pct": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "adjusted_estimate_factor": {
+          "type": ["number", "integer"],
+          "minimum": 0
+        }
+      }
+    },
+    "ops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "op",
+          "phase",
+          "op_index",
+          "input_rows",
+          "rows",
+          "time_ns",
+          "cumulative_time_ns",
+          "bytes_out",
+          "bytes_alloc",
+          "net_after_op"
+        ],
+        "properties": {
+          "op": { "type": "string" },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "SCAN",
+              "EXPAND",
+              "AGGREGATE",
+              "PROJECT",
+              "DISTINCT",
+              "ORDER",
+              "PAGE",
+              "OTHER"
+            ]
+          },
+          "op_index": { "type": "integer", "minimum": 0 },
+          "input_rows": { "type": "integer", "minimum": 0 },
+          "rows": { "type": "integer", "minimum": 0 },
+          "time_ns": { "type": "integer" },
+          "cpu_time_ns": { "type": "integer", "minimum": 0 },
+          "cumulative_time_ns": { "type": "integer" },
+          "bytes_out": { "type": "integer", "minimum": 0 },
+          "bytes_alloc": { "type": "integer", "minimum": 0 },
+          "estimate_bytes": { "type": "integer", "minimum": 0 },
+          "estimate_vs_actual": { "type": "integer", "minimum": 0 },
+          "percent_peak": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "percent_net": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "freed_bytes": { "type": "integer", "minimum": 0 },
+          "net_after_op": { "type": "integer", "minimum": 0 },
+          "error_bytes": { "type": "integer", "minimum": 0 },
+          "error_abs_pct": { "type": "integer", "minimum": 0, "maximum": 100 }
+        }
+      }
+    }
+  }
+}
