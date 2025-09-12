@@ -69,14 +69,14 @@ geodec "PROFILE RETURN a AS x DISTINCT ORDER BY x LIMIT 3" --json-param a "[1,2,
 Yields PROFILE JSON (abridged):
 
 ```json
-{"profile_version":1,"ops":[{"op":"Project","input_rows":5,"rows":5,"time_ns":...,"cumulative_time_ns":...,"bytes_out":...,"bytes_alloc":...,"estimate_bytes":...,"estimate_vs_actual":...,"percent_peak":...,"percent_net":...}],"peak_contributors":[...],"total_time_ns":...,"spills":{"sort_spills":0,"distinct_spills":0,"union_spills":0},"memory":{"net_bytes":...,"peak_bytes":...,"total_alloc_bytes":...}}
+{"profile_version":2,"ops":[{"op":"Project","input_rows":5,"rows":5,"time_ns":...,"cumulative_time_ns":...,"bytes_out":...,"bytes_alloc":...,"estimate_bytes":...,"estimate_vs_actual":...,"percent_peak":...,"percent_net":...}],"peak_contributors":[...],"total_time_ns":...,"spills":{"sort_spills":0,"distinct_spills":0,"union_spills":0},"memory":{"net_bytes":...,"peak_bytes":...,"total_alloc_bytes":...}}
 ```
 
 Metrics are stable for automation; additions bump `profile_version`.
 
 ## Stability & Fuzz Coverage
 
-- PROFILE / EXPLAIN schema frozen at `profile_version=1`. Any structural key additions or removals REQUIRE incrementing this version and updating snapshot signatures.
+- PROFILE / EXPLAIN schema frozen at `profile_version=2`. Any structural key additions or removals REQUIRE incrementing this version and updating snapshot signatures.
 - Decimal ordering correctness validated by a 10k pair randomized fuzz harness (`e2e_protocol_decimal_fuzz.zig`) covering mixed int/decimal scales and ensuring transitive comparator semantics.
 - Comparator invariants: antisymmetry, transitivity, and total ordering over (int, decimal) domain with scale normalization. Violations would panic in fuzz; current corpus passes.
 - Version bump policy: (1) modify schema, (2) update freeze tests (`e2e_protocol_profile_explain_freeze.zig`), (3) bump `profile_version`, (4) regenerate README example if changed.

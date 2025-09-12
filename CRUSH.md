@@ -27,6 +27,9 @@ Project conventions
 - Policy: LIMIT/OFFSET requires stable ORDER (US001) unless configured; ORDER BY keys identifiers-only by default (IllegalOrderKey)
 - Logging: JSON Lines at INFO; errors at ERROR
 
+Pending Commit Message:
+chore(docs): refresh GAP analysis + next steps; add ISO-GQL conformance profile & crosswalk
+
 Cursor/Copilot rules to honor
 - .github/copilot-instructions.md defines scope (full DB), protocol frames, diagnostics policy, tests, and required outputs. Follow these when adding features or tests.
 

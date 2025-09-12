@@ -7,7 +7,7 @@ Each task: Why • What • Acceptance (GQL + expected binding schema / diagnost
 ## Recently Completed (P0 wrap-up)
 
 1. Diagnostics precedence & multi-status cluster (REQ-GQL-014/022/030/036) — precedence table validated via multidiag tests.
-2. EXPLAIN / PROFILE stabilization (REQ-GQL-019/020/033) — profile_version=1 frozen; snapshot freeze tests added.
+2. EXPLAIN / PROFILE stabilization (REQ-GQL-019/020/033) — profile_version=2 frozen; snapshot freeze tests added.
 3. Decimal ordering correctness & fuzz (REQ-GQL-031/037/013) — 10k pair fuzz + mixed-scale comparator.
 4. Storage integration phase 0 (REQ-GQL-025) — slotted page manager + unit test.
 5. Parameter arrays: empty & hetero coverage (REQ-GQL-015/032) — zero-length expansion semantics.
