@@ -19,7 +19,9 @@ const ServerState = struct {
     page_items: [][]const u8 = &.{}, // each: JSON row fragment {..}
     page_index: usize = 0,
     active_result: bool = false,
+    // Transaction session state: single active txn baseline
     in_txn: bool = false,
+    txn_id: u64 = 0,
     allocator: std.mem.Allocator,
     // PROFILE mode staging: we emit SCHEMA immediately and defer PROFILE frame until first PULL.
     profile_json: ?[]const u8 = null,
@@ -49,9 +51,8 @@ const ServerState = struct {
 
 const DEBUG_PROFILE = false; // default off; enable locally when investigating PROFILE frame assembly
 
-// TODO(counting-alloc): Reintroduce a stats-enabled allocator for accurate bytes_alloc metrics.
-// TODO(counting-alloc): Zig 0.15 allocator API changes make lightweight custom vtable here noisy.
-// Revert to heuristic bytes until a proper stats allocator is integrated.
+// Tracking allocator (existing) provides basic net/peak metrics for PROFILE.
+const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 
 // Dynamic flag construction originally used stack slices causing dangling references.
 // Replace with static precomputed combinations (NULLs policy toggled at runtime where needed).
@@ -117,8 +118,9 @@ fn valueTypeName(v: eval.Value) []const u8 {
 }
 
 fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
-    var flags_buf: [2][]const u8 = .{ "I:IllegalOrderKeyPolicy=ident-only", "U:US001/enforced" };
-    const flag_slice = if (has_us001_any) flags_buf[0..2] else flags_buf[0..1];
+    var flags_buf: [3][]const u8 = .{ "I:IllegalOrderKeyPolicy=ident-only", "U:OrderTiebreak=LexJSON", "U:US001/enforced" };
+    // Always include tiebreak disclosure; append US001 enforcement when applicable.
+    const flag_slice = if (has_us001_any) flags_buf[0..3] else flags_buf[0..2];
     if (protocol.buildErrorLineWithFlags(ally, diagnostics.codeName(code), message, anchor, additional, flag_slice)) |line| {
         defer ally.free(line);
         _ = out_file.write(line) catch {};
@@ -230,6 +232,7 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
         const val = entry.value_ptr.*;
         if (val != .array) return;
         const arr = val.array.items;
+        // Empty array -> zero rows (handled by caller when constructing row pages)
         var names = ally.alloc([]const u8, 1) catch return;
         names[0] = ally.dupe(u8, key) catch key;
         // Collect raw scalar values first
@@ -261,7 +264,7 @@ fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, lim
     // Canonical pipeline order with monotonic id: Project(0), Distinct(1), Sort(2), Offset(3), Limit(4), SetOpUnion(5)
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return "{\"logical\":[]}";
     const w = buf.writer(ally);
-    w.writeAll("{\"profile_version\":1,\"logical\":[") catch {};
+    w.writeAll("{\"profile_version\":2,\"logical\":[") catch {};
     var id: usize = 0;
     // Project always present first
     // Project
@@ -669,12 +672,11 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         tptr.project_rows_out = rows_json.items.len;
         tptr.expand_rows_in = num_rows; // stub: no expansion yet
         tptr.expand_rows_out = num_rows;
-        // Accumulate bytes for project output
         var tb: usize = 0;
         for (rows_json.items) |s| tb += s.len;
         tptr.project_bytes_out = tb;
         const net_now = if (alloc_tracker) |tr| tr.getFn(tr.ctx) else tb;
-        tptr.project_bytes_alloc = net_now; // delta since start
+        tptr.project_bytes_alloc = net_now;
         tptr.net_after_project = net_now;
         tptr.expand_bytes_out = 0;
         tptr.expand_bytes_alloc = 0;
@@ -703,7 +705,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             tptr.distinct_bytes_out = tb2;
             if (alloc_tracker) |tr| {
                 const after = tr.getFn(tr.ctx);
-                tptr.distinct_bytes_alloc = after - tptr.net_after_project;
+                tptr.distinct_bytes_alloc = if (after > tptr.net_after_project) after - tptr.net_after_project else 0;
                 tptr.net_after_distinct = after;
             } else {
                 tptr.distinct_bytes_alloc = tb2;
@@ -1138,6 +1140,7 @@ pub fn main() !void {
                     } else |_| {}
                 } else {
                     state.in_txn = true;
+                    state.txn_id += 1; // simple monotonic id
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
             },
@@ -1148,6 +1151,7 @@ pub fn main() !void {
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
                 } else {
+                    // future: WAL flush for durability before ack
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
@@ -1159,6 +1163,7 @@ pub fn main() !void {
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
                 } else {
+                    // future: undo via WAL CLRs
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
@@ -1384,7 +1389,7 @@ pub fn main() !void {
                                     // bytes_alloc remain heuristic (mirrors bytes_out) until counting allocator lands.
                                     var pb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
                                     const w = pb.writer(gpa);
-                                    w.writeAll("{\"profile_version\":1,\"ops\":[") catch {};
+                                    w.writeAll("{\"profile_version\":2,\"ops\":[") catch {};
                                     var first_op_profile = true;
                                     const peak_bytes: usize = track.peakBytes();
                                     if (state.spill_threshold > 0 and peak_bytes >= state.spill_threshold) {
@@ -1560,11 +1565,11 @@ pub fn main() !void {
                                         const est_build = if (disable_estimates) 0 else timings.agg_rows_in * 32;
                                         const est_emit = if (disable_estimates) 0 else timings.agg_rows_out * 16;
                                         const agg_build_idx = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "HashAggBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, agg_build_idx, net_now);
                                         if (est_build > 0) sum_actual_estimated += timings.agg_build_bytes_alloc;
                                         const agg_emit_idx = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "HashAggEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, agg_emit_idx, net_now);
                                         if (est_emit > 0) sum_actual_estimated += timings.agg_emit_bytes_alloc;
                                     }

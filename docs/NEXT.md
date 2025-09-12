@@ -4,69 +4,74 @@
 
 Each task: Why • What • Acceptance (GQL + expected binding schema / diagnostics) • ISO anchors • Deps • Scope (S/M/L) • DRI.
 
+## Recently Completed (P0 wrap-up)
+
+1. Diagnostics precedence & multi-status cluster (REQ-GQL-014/022/030/036) — precedence table validated via multidiag tests.
+2. EXPLAIN / PROFILE stabilization (REQ-GQL-019/020/033) — profile_version=1 frozen; snapshot freeze tests added.
+3. Decimal ordering correctness & fuzz (REQ-GQL-031/037/013) — 10k pair fuzz + mixed-scale comparator.
+4. Storage integration phase 0 (REQ-GQL-025) — slotted page manager + unit test.
+5. Parameter arrays: empty & hetero coverage (REQ-GQL-015/032) — zero-length expansion semantics.
+6. Flagger enhancement (REQ-GQL-010/029) — US001/enforced flag in ERROR frames.
+
 ## Now (P0)
 
-1. Diagnostics precedence & multi-status cluster (REQ-GQL-014/022/030/036)
+1. Recovery harness (REQ-GQL-041)
 
-   - Why: Deterministic primary diagnostic per ISO 23.2; unblock reliable client UX.
-   - What: Implement precedence table (US001 < IllegalOrderKey < GroupByIllegal < TypeMismatch etc.), fold duplicates, stable ordering in additional_statuses.
-   - Acceptance: Query `RETURN a ORDER BY f(a) LIMIT 1` under ident-only policy emits primary=IllegalOrderKey (parse stage), no US001; crafted planner-stage conflict emits primary=US001 with IllegalOrderKey in additional_statuses when parser allows key. Added exhaustive precedence validation in `tests/e2e_protocol_multidiag_precedence.zig` (US001 only, IllegalOrderKey only, US001+IllegalOrderKey, TypeMismatch+US001, All three) verifying ordering & flag emission.
-   - ISO: 14.10; 16.18–16.19; 23.2 (diagnostics); 24.x (conformance disclosure).
-   - Deps: diagnostics.zig, protocol.zig.
-   - Scope: S
-   - DRI: core
-
-2. EXPLAIN / PROFILE stabilization (REQ-GQL-019/020/033)
-
-   - Why: Plan introspection & perf tuning; required for conformance evidence.
-   - What: Stable JSON schema; logical op list; per-op metrics including rows/time/bytes; golden tests (json) + later txt. Subtasks:
-   - Freeze logical form: `{"profile_version":1,"logical":[ {"op":"Project","id":0,...} ],"properties":{...}}`.
-   - Introduce `id` monotonic and canonical pipeline ordering (Project, Distinct, Sort, Offset, Limit, SetOpUnion) matching executor.
-   - PROFILE schema: `{"profile_version":1,"ops":[ {"op":"Project","id":0,"in_rows":N,"out_rows":M,"time_ns":X,"bytes_out":Y,"bytes_alloc":Z}...],"totals":{"time_ns":T,"peak_bytes":B}}`.
-   - Golden tests: explain/profile with and without ORDER BY.
-   - Tag schema version comment in `protocol.zig`.
-   - Acceptance: `EXPLAIN RETURN 1 AS x` => SCHEMA + EXPLAIN lines; PROFILE includes ops[0].op="Project" and time_ns>0; golden tests match.
-   - ISO: 14.10 (primitive result); 23.2 (diagnostic context, not failing).
-   - Deps: planner.zig, server/main.zig.
-   - Scope: M
-   - DRI: core
-
-3. Decimal ordering correctness & fuzz (REQ-GQL-031/037/013)
-
-   - Why: Prevent silent mis-ordering; foundation for numeric queries.
-   - What: Scale-align compare; fuzz harness 10k random decimals; add division-by-zero diagnostic.
-   - Acceptance: UNION DISTINCT of mixed-scale decimals dedups correctly; fuzz run no panic; div by zero -> TypeMismatch subclass.
-   - ISO: 16.x numeric; 23.2 diagnostics.
-   - Deps: eval.zig.
-   - Scope: S
-   - DRI: core
-
-4. Storage integration phase 0 (REQ-GQL-025)
-
-   - Why: Persist future catalog & stats; prepare for WAL.
-   - What: Page manager API + unit tests; slotted page read/write; simple catalog stub.
-   - Acceptance: unit test: create page, insert 3 variable records, read back; free space shrinks deterministically.
-   - ISO: 4.8 working table (persistence context impl-defined); §8 durability (future).
-   - Deps: storage/heap.zig.
+   - Why: Validate durability semantics early.
+   - What: Inject crash mid-execution; replay WAL; assert committed visible, uncommitted absent.
+   - Acceptance: deterministic test with simulated crash passes.
+   - ISO: §8 durability.
+   - Deps: wal/, storage/page_manager.
    - Scope: M
    - DRI: storage
 
-5. Parameter arrays: empty & hetero test coverage (REQ-GQL-015/032)
+2. WAL flush & durability path (REQ-GQL-026 impl)
 
-   - Why: Edge-case safety; avoid latent panics.
-   - What: Add tests for zero-length param arrays; mixed-length rejection diagnostic.
-   - Acceptance: `RETURN $a AS x` with a=[] produces zero-row BINDINGS (ordered=false); mismatched lengths -> TypeMismatch additional_status only.
-   - ISO: 16.x expressions; 23.2 diagnostics.
-   - Deps: server/main.zig.
+   - Why: Make recovery harness meaningful.
+   - What: File-backed WAL append + fsync on commit; page LSN tracking.
+   - Acceptance: commit test ensures LSN persisted; simulated crash replays.
+   - ISO: §8 WAL rule.
+   - Deps: wal/, storage/.
+   - Scope: M
+   - DRI: storage
+
+3. MVCC snapshot isolation carve-out (REQ-GQL-027)
+
+   - Why: Correct read semantics under concurrent writes.
+   - What: Per-txn read timestamp; version chains (append-only heap); simple write-write abort.
+   - Acceptance: two concurrent writers to same key -> one abort; reader sees snapshot.
+   - ISO: §8 isolation.
+   - Deps: txn/, storage/.
+   - Scope: L
+   - DRI: core
+
+4. Counting allocator refinements
+
+   - Why: Improve metric precision.
+   - What: Track per-op begin/end snapshots vs net deltas; add peak attribution list.
+   - Acceptance: PROFILE bytes_alloc sum equals memory.total_alloc_bytes.
+   - ISO: impl-defined metrics.
+   - Deps: util/counting_allocator.zig, server/main.zig.
    - Scope: S
    - DRI: core
 
-6. Flagger enhancement: explicit US001 enforcement trace (REQ-GQL-010/029)
-   - Why: Client transparency for rejected pagination.
-   - What: Add U:US001/enforced to ERROR frames; test presence.
-   - Acceptance: `RETURN 1 LIMIT 5` (no ORDER) => ERROR with US001 primary + flag present.
-   - ISO: 16.18–16.19; 23.2.
-   - Deps: protocol.zig.
+5. Index scan operator (REQ-GQL-039 exec)
+
+   - Why: Planner cost framework groundwork.
+   - What: Implement NodeIndexScan logical & physical; choose selectively.
+   - Acceptance: selective predicate chooses index in EXPLAIN.
+   - ISO: 14.4 pattern semantics.
+   - Deps: planner.zig, storage/.
+   - Scope: M
+   - DRI: core
+
+6. Doc sync CI & diagnostics fuzz
+
+   - Why: Keep ledger consistent + guard against precedence regressions.
+   - What: CI step runs doc_sync + multidiag permutation fuzz.
+   - Acceptance: CI passes; failing fold prints reproducible seed.
+   - ISO: 23.2 diagnostics.
+   - Deps: scripts/doc_sync.zig, diagnostics.zig tests.
    - Scope: S
    - DRI: core
 
@@ -97,9 +102,14 @@ Each task: Why • What • Acceptance (GQL + expected binding schema / diagnost
    - Why: Planner cost hooks; performance groundwork.
    - What: Add NodeIndexScan logical/physical; tests pick index when label selectivity low.
    - Acceptance: Query with selective label chooses index path (EXPLAIN contains NodeIndexScan).
-   - ISO: 14.4 pattern semantics.
-   - Deps: planner.zig, storage index stub.
-   - Scope: M
+
+   ## Completed (moved this cycle)
+
+   - Transactions baseline (REQ-GQL-027 subset) — session state + BEGIN/COMMIT/ROLLBACK plumbing.
+   - WAL/ARIES design & LSN layout (REQ-GQL-026 design phase) — Lsn struct, monotonic test.
+   - Multi-diagnostics reducer UA002 (REQ-GQL-014/022/030/036) — foldCodes precedence + additional_statuses.
+   - Counting allocator (initial) & accurate bytes_alloc groundwork (REQ-GQL-020 enhancement) — CountingAllocator + basic tests.
+   - Conformance auto-sync script (REQ-GQL-018) — doc_sync.zig scanning REQ-GQL-### ids.
    - DRI: core
 
 4. Result formatting parity (txt) for EXPLAIN/PROFILE (REQ-GQL-023/019/020)

@@ -74,6 +74,14 @@ Yields PROFILE JSON (abridged):
 
 Metrics are stable for automation; additions bump `profile_version`.
 
+## Stability & Fuzz Coverage
+
+- PROFILE / EXPLAIN schema frozen at `profile_version=1`. Any structural key additions or removals REQUIRE incrementing this version and updating snapshot signatures.
+- Decimal ordering correctness validated by a 10k pair randomized fuzz harness (`e2e_protocol_decimal_fuzz.zig`) covering mixed int/decimal scales and ensuring transitive comparator semantics.
+- Comparator invariants: antisymmetry, transitivity, and total ordering over (int, decimal) domain with scale normalization. Violations would panic in fuzz; current corpus passes.
+- Version bump policy: (1) modify schema, (2) update freeze tests (`e2e_protocol_profile_explain_freeze.zig`), (3) bump `profile_version`, (4) regenerate README example if changed.
+- Future extensions (counting allocator, HashAgg) will NOT alter existing keys; additions append optional fields gated by version bump if structural.
+
 ### Snapshot & Test Workflow
 
 Snapshot tests assert structural stability of PROFILE output while tolerating numeric variance.
@@ -124,3 +132,13 @@ Updating Tests for New Ops:
 | TypeMismatch    | Illegal cross-type comparison/ordering                     | 16.x        | RETURN 1 < "2"                 |
 
 The CLI and server surface diagnostics with status_class/subclass. Tests assert codes/anchors via stderr.
+
+## Documentation Sync Utility
+
+Maintain alignment between implemented requirement codes (REQ-GQL-###) and the ledger in `docs/GAP_ANALYSIS.md` using the doc sync script:
+
+```bash
+zig run scripts/doc_sync.zig
+```
+
+The script prints any MISSING (referenced in code but absent from GAP_ANALYSIS) or EXTRA (present in GAP_ANALYSIS but not found in source) requirement IDs. Resolve discrepancies by editing `docs/GAP_ANALYSIS.md` until the script outputs no differences. Integrate this check in CI to prevent drift.

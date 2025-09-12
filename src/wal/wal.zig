@@ -1,6 +1,9 @@
 const std = @import("std");
 
-pub const Lsn = u64;
+// Log Sequence Number (LSN) wrapper. Future: encode epoch or segment.
+pub const Lsn = struct {
+    value: u64,
+};
 
 pub const RecordType = enum { Begin, Update, Commit, Abort, CLR, Checkpoint };
 
@@ -14,8 +17,8 @@ pub const Record = struct {
 
 pub const Wal = struct {
     ally: std.mem.Allocator,
-    next_lsn: Lsn = 1,
-    // In-memory ring buffer stub; persistent file later
+    next_lsn: u64 = 1,
+    // In-memory buffer stub; later: mmap'd segment files.
     buf: std.ArrayList(Record),
 
     pub fn init(ally: std.mem.Allocator) Wal {
@@ -28,11 +31,15 @@ pub const Wal = struct {
         self.buf.deinit(self.ally);
     }
 
+    /// Append a record. WAL rule (write-ahead): before dirty page with update is flushed,
+    /// its corresponding log record (and predecessors) must be durable. This in-memory stub
+    /// only guarantees monotonic LSN assignment.
     pub fn append(self: *Wal, txn_id: u64, typ: RecordType, payload: []const u8) !Lsn {
-        const lsn = self.next_lsn;
+        const lsn_val = self.next_lsn;
         self.next_lsn += 1;
-        try self.buf.append(self.ally, .{ .lsn = lsn, .txn_id = txn_id, .typ = typ, .payload = payload });
-        return lsn;
+        const rec_lsn: Lsn = .{ .value = lsn_val };
+        try self.buf.append(self.ally, .{ .lsn = lsn_val, .txn_id = txn_id, .typ = typ, .payload = payload });
+        return rec_lsn;
     }
 
     pub fn iter(self: *Wal) WalIter {

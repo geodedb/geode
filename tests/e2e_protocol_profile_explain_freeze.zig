@@ -23,9 +23,9 @@ fn normalize(s: []const u8) []const u8 {
 }
 
 // Expected fragments (schema omitted for brevity; we match key structural invariants)
-const expect_explain_has = &.{ "\"profile_version\":1", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{", "\"ordered\":true", "\"limit\":1" };
-const expect_profile_has = &.{ "\"profile_version\":1", "\"ops\":[", "\"op\":\"Project\",\"phase\":\"PROJECT\",\"id\":0", "\"totals\":{", "\"time_ns\":", "\"peak_bytes\":" };
-const expect_explain_no_sort = &.{ "\"profile_version\":1", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{", "\"limit\":1" };
+const expect_explain_has = &.{ "\"profile_version\":2", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{", "\"ordered\":true", "\"limit\":1" };
+const expect_profile_has = &.{ "\"profile_version\":2", "\"ops\":[", "\"op\":\"Project\",\"phase\":\"PROJECT\",\"id\":0", "\"totals\":{", "\"time_ns\":", "\"peak_bytes\":" };
+const expect_explain_no_sort = &.{ "\"profile_version\":2", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{", "\"limit\":1" };
 
 inline fn contains(h: []const u8, n: []const u8) bool {
     return std.mem.indexOf(u8, h, n) != null;

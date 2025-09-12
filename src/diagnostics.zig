@@ -5,6 +5,7 @@ pub const Code = enum(u16) {
     GroupByIllegal = 2,
     IllegalOrderKey = 3,
     TypeMismatch = 4,
+    TxnState = 5,
 };
 
 pub fn codeName(c: Code) []const u8 {
@@ -13,6 +14,7 @@ pub fn codeName(c: Code) []const u8 {
         .GroupByIllegal => "GroupByIllegal",
         .IllegalOrderKey => "IllegalOrderKey",
         .TypeMismatch => "TypeMismatch",
+        .TxnState => "TxnState",
     };
 }
 
@@ -21,6 +23,7 @@ pub fn anchorFor(c: Code) []const u8 {
         .US001 => "16.18–16.19",
         .IllegalOrderKey, .GroupByIllegal => "14.10",
         .TypeMismatch => "",
+        .TxnState => "8",
     };
 }
 
@@ -30,6 +33,7 @@ pub fn defaultMessage(c: Code) []const u8 {
         .IllegalOrderKey => "ORDER BY key must be identifier",
         .GroupByIllegal => "group by illegal",
         .TypeMismatch => "type mismatch",
+        .TxnState => "transaction state error",
     };
 }
 
@@ -43,7 +47,7 @@ pub const Diagnostic = struct {
 
 pub fn precedence(a: Code, b: Code) Code {
     // Explicit precedence ordering table (lower index wins): US001, IllegalOrderKey, GroupByIllegal, TypeMismatch
-    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch }) |ord| {
+    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch, Code.TxnState }) |ord| {
         if (a == ord and b == ord) return a;
     }
     // If different, pick the one that appears earlier in the sequence above.
@@ -54,6 +58,7 @@ pub fn precedence(a: Code, b: Code) Code {
                 .IllegalOrderKey => 1,
                 .GroupByIllegal => 2,
                 .TypeMismatch => 3,
+                .TxnState => 4,
             };
         }
     };
