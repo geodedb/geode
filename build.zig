@@ -213,4 +213,18 @@ pub fn build(b: *std.Build) void {
 
     const tools_step = b.step("tools", "Build all auxiliary tools");
     tools_step.dependOn(&doccheck_exe.step);
+
+    // WAL compaction tool
+    const wal_compact_exe = b.addExecutable(.{
+        .name = "wal_compact",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/wal_compact.zig"), .target = target, .optimize = optimize }),
+    });
+    // import wal module for shared types
+    const wal_scan_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
+    // add storage page manager module alias required by wal.zig (@import("storage_page_manager"))
+    const storage_page_manager_mod = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_mod);
+    b.installArtifact(wal_compact_exe);
+    tools_step.dependOn(&wal_compact_exe.step);
 }

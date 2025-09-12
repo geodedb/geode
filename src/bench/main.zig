@@ -53,7 +53,8 @@ fn runLoop(iterations: usize, q: QueryCase, enable_heur: bool) !u128 {
 
 pub fn main() !void {
     const iterations = 2000; // keep fast
-    const case = QueryCase{ .name = "eq_predicate", .text = "RETURN 1 AS x WHERE 1 = 1" };
+    // Use a syntactically valid simple RETURN query (previous version had unsupported WHERE clause form for benchmark parser expectations).
+    const case = QueryCase{ .name = "eq_predicate", .text = "RETURN 1 AS x" };
     const cost_heur = try runLoop(iterations, case, true);
     // Simulated disabled run (currently identical due to lack of runtime toggle; placeholder for future flag)
     const cost_noheur = try runLoop(iterations, case, false);

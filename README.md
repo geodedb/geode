@@ -28,16 +28,10 @@ See USAGE.md for commands and flags.
 
 Use the `PROFILE` prefix before a GQL query (via server line protocol or `geodec`) to emit a PROFILE frame. The first frame is SCHEMA; the second contains JSON with:
 
-- `profile_version`: schema version integer.
-- `ops[]`: per-stage objects with:
-  - `op`, `input_rows`, `rows`, `time_ns`, `cumulative_time_ns`
-  - `bytes_out`, `bytes_alloc`
-  - `estimate_bytes`, `estimate_vs_actual`
-  - `percent_peak`, `percent_net`
-- `peak_contributors`: top 3 ops by `bytes_alloc`.
-- `total_time_ns`: wall-clock pipeline time.
-- `spills`: `{sort_spills, distinct_spills, union_spills}` plus optional `spill_reason` (`forced|threshold`).
-- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}`.
+`op`, `input_rows`, `rows`, `time_ns`, `cumulative_time_ns`
+`bytes_out`, `bytes_alloc`
+`estimate_bytes`, `estimate_vs_actual`
+`percent_peak`, `percent_net`
 
 ### Env Vars (runtime policies, spills, profiling)
 
@@ -49,6 +43,30 @@ Use the `PROFILE` prefix before a GQL query (via server line protocol or `geodec
 | `GEODE_FORCE_DISTINCT_SPILL`  | Force `distinct_spills` = 1 (spill_reason=forced).                     |
 | `GEODE_FORCE_UNION_SPILL`     | Force `union_spills` = 1 (spill_reason=forced).                        |
 | `GEODE_PROFILE_MEMCURVE`      | Enable `mem_curve` emission (alternative to CLI `--profile-memcurve`). |
+
+### WAL Compaction Tool
+
+`wal_compact` reclaims obsolete WAL segment files.
+
+Usage:
+
+```bash
+zig build tools      # build auxiliary tools
+./zig-out/bin/wal_compact --base /path/to/data/geode_wal --auto
+```
+
+Options:
+
+- `--base <path>`: Prefix path used when WAL was opened (without `.wal.N`).
+- `--auto`: Scan segments to find last checkpoint LSN and compact using that durable boundary.
+- `--durable-lsn N`: Explicit durable LSN boundary (numeric) instead of auto scan.
+
+Example flow:
+
+1. Database emits periodic checkpoints (via internal `writeCheckpoint`).
+2. Run `wal_compact --auto` after a checkpoint + data flush to reclaim older segments.
+
+Safety: Active segment (currently open for append) is not deleted even if below durable boundary. Future versions may add a rotation+compact combined command.
 
 ### CLI Profiling Flags
 

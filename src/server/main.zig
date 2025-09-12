@@ -72,33 +72,69 @@ const F_UNION_PHASES = "U:UnionPhaseTimings";
 const F_ADAPT_EST = "U:AdaptiveEstimatesPlanned"; // groundwork flag (no behavior change yet)
 const F_HEUR_INDEX = "U:HeuristicIndexSelection"; // emitted when NodeIndexScan chosen via heuristic
 
-// Basic in-memory index catalog (stub). Future: persistent system catalogs.
+// Basic in-memory index catalog (phase 2 cost stub).
 const IndexStats = struct {
     name: []const u8,
     key: []const u8,
     total_rows: usize,
     distinct_keys: usize,
-    // naive uniform model: equality selectivity = 1/distinct_keys (clamped)
     fn eqSelectivity(self: IndexStats) f64 {
         if (self.distinct_keys == 0) return 1.0;
         return 1.0 / @as(f64, @floatFromInt(self.distinct_keys));
     }
 };
 
-var g_index_catalog: []const IndexStats = &.{}; // populated at startup
+var g_index_catalog_map: std.StringHashMap(IndexStats) = undefined; // key -> stats
+var g_index_catalog_inited = false;
+var g_disable_catalog = false; // env toggle
 
 fn initIndexCatalog(ally: std.mem.Allocator) void {
-    if (g_index_catalog.len != 0) return; // idempotent
-    // Provide a single synthetic index to drive heuristic decisions in tests.
-    const idx = ally.alloc(IndexStats, 1) catch return;
-    idx[0] = .{ .name = "idx_x", .key = "x", .total_rows = 1000, .distinct_keys = 200 };
-    g_index_catalog = idx;
+    if (g_index_catalog_inited) return;
+    g_index_catalog_map = std.StringHashMap(IndexStats).init(ally);
+    // Seed with synthetic stats for x,y columns
+    g_index_catalog_map.put("x", IndexStats{ .name = "idx_x", .key = "x", .total_rows = 1000, .distinct_keys = 200 }) catch {};
+    g_index_catalog_map.put("y", IndexStats{ .name = "idx_y", .key = "y", .total_rows = 1000, .distinct_keys = 500 }) catch {};
+    g_index_catalog_inited = true;
 }
 
-fn estimatePredicateIndexStats(_: std.mem.Allocator, has_equality: bool, row_hint: usize) IndexStats {
-    if (!has_equality or g_index_catalog.len == 0) return .{ .name = "none", .key = "", .total_rows = row_hint, .distinct_keys = if (row_hint == 0) 1 else row_hint };
-    // Return first catalog entry (future: match on predicate field/label)
-    return g_index_catalog[0];
+fn chooseIndexForPredicate(ally: std.mem.Allocator, predicate_expr: ?*const anyopaque, has_equality: bool, est_rows: usize) ?IndexStats {
+    _ = ally; // currently unused for phase 2 stub
+    _ = predicate_expr; // future: inspect to derive property name
+    if (g_disable_catalog or !has_equality) return null;
+    // For prototype: iterate catalog and pick lowest selectivity.
+    var best: ?IndexStats = null;
+    var it = g_index_catalog_map.iterator();
+    while (it.next()) |entry| {
+        const st = entry.value_ptr.*;
+        if (best == null or st.eqSelectivity() < best.?.eqSelectivity()) best = st;
+    }
+    if (best) |b| {
+        // Very naive cost: full scan cost = est_rows, index cost = selectivity * total_rows + log(total_rows)
+        const scan_cost = @as(f64, @floatFromInt(est_rows));
+        const idx_rows = b.eqSelectivity() * @as(f64, @floatFromInt(b.total_rows));
+        const idx_cost = idx_rows + std.math.log(f64, 2, @as(f64, @floatFromInt(b.total_rows + 1)));
+        if (idx_cost < scan_cost * 0.9) { // require at least 10% benefit
+            return b;
+        }
+    }
+    return null;
+}
+
+// Maintenance: adjust stats for insert/delete operations (prototype; real impl needs per-index key detection).
+fn indexStatsOnInsert(key: []const u8) void {
+    if (!g_index_catalog_inited or g_disable_catalog) return;
+    if (g_index_catalog_map.getPtr(key)) |st| {
+        st.total_rows += 1;
+        // naive: assume new distinct every 5 inserts
+        if ((st.total_rows % 5) == 0) st.distinct_keys += 1;
+    }
+}
+fn indexStatsOnDelete(key: []const u8) void {
+    if (!g_index_catalog_inited or g_disable_catalog) return;
+    if (g_index_catalog_map.getPtr(key)) |st| {
+        if (st.total_rows > 0) st.total_rows -= 1;
+        // naive: distinct unaffected for prototype
+    }
 }
 
 // Helper returns correct null policy flag pointer.
@@ -1129,6 +1165,9 @@ pub fn main() !void {
         if (env.get("GEODE_ADAPT_ESTIMATES")) |_| {
             g_adapt_estimates = true; // currently only surfaces flag; no behavior change
         }
+        if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| {
+            g_disable_catalog = true;
+        }
     } else |_| {}
     // Initialize synthetic index catalog (idempotent) before serving.
     initIndexCatalog(gpa);
@@ -1651,33 +1690,51 @@ pub fn main() !void {
                                         const nodescan_idx = op_index_counter;
                                         const net_nodescan = track.net();
                                         var op_name: []const u8 = "NodeScan";
+                                        var chosen_index: ?IndexStats = null;
                                         // Minimal AST-based detection: inspect q.where (if present) for equality predicate nodes.
                                         var has_equality_pred = false;
                                         if (q.where_clause) |wexpr| {
                                             has_equality_pred = hasEqualityPredicate(wexpr);
                                         }
                                         if (has_equality_pred) {
-                                            const stats = estimatePredicateIndexStats(gpa, true, timings.project_rows_out);
-                                            if (stats.eqSelectivity() <= 0.25) { // threshold: choose index if <=25%
+                                            if (chooseIndexForPredicate(gpa, null, true, timings.project_rows_out)) |chosen| {
+                                                chosen_index = chosen;
                                                 op_name = "NodeIndexScan";
-                                                // Append heuristic flag if not already set.
-                                                var need_append = true;
-                                                var k: usize = 0;
-                                                while (k < state.profile_flags.len) : (k += 1) {
-                                                    if (std.mem.eql(u8, state.profile_flags[k], F_HEUR_INDEX)) {
-                                                        need_append = false;
-                                                        break;
-                                                    }
-                                                }
-                                                if (need_append) {
-                                                    var tmp = try gpa.alloc([]const u8, state.profile_flags.len + 1);
-                                                    @memcpy(tmp[0..state.profile_flags.len], state.profile_flags);
-                                                    tmp[state.profile_flags.len] = F_HEUR_INDEX;
-                                                    state.profile_flags = tmp;
-                                                }
                                             }
                                         }
+                                        // Emit scan op; if index chosen we embed inline metadata by writing an extension after op JSON is appended.
                                         emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, op_name, timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
+                                        if (chosen_index) |ci_meta| {
+                                            // Backpatch by locating last '}' and inserting fields before it.
+                                            var idx_back: isize = @as(isize, @intCast(pb.items.len)) - 1;
+                                            while (idx_back >= 0 and pb.items[@intCast(idx_back)] != '}') : (idx_back -= 1) {}
+                                            if (idx_back > 0) {
+                                                // Insert at idx_back position (before closing brace)
+                                                // Fields: ,"index_name":"...","selectivity":<f64>
+                                                var sel_buf: [32]u8 = undefined;
+                                                const sel_str = std.fmt.bufPrint(&sel_buf, "{d:.6}", .{ci_meta.eqSelectivity()}) catch "0.0";
+                                                const meta_prefix = ",\"index_name\":\"";
+                                                const meta_mid = "\",\"selectivity\":";
+                                                // Build insertion slice
+                                                var ins = std.ArrayList(u8).initCapacity(gpa, 0) catch unreachable;
+                                                const iw = ins.writer(gpa);
+                                                iw.writeAll(meta_prefix) catch {};
+                                                iw.writeAll(ci_meta.name) catch {};
+                                                iw.writeAll(meta_mid) catch {};
+                                                iw.writeAll(sel_str) catch {};
+                                                const insertion = ins.toOwnedSlice(gpa) catch &.{};
+                                                defer gpa.free(insertion);
+                                                // Shift existing tail (including closing brace) by insertion length.
+                                                const tail_len = pb.items.len - @as(usize, @intCast(idx_back));
+                                                // Allocate new buffer if needed
+                                                pb.ensureTotalCapacity(gpa, pb.items.len + insertion.len) catch {};
+                                                // Move tail forward
+                                                std.mem.copyBackwards(u8, pb.items[@as(usize, @intCast(idx_back)) + insertion.len .. @as(usize, @intCast(idx_back)) + insertion.len + tail_len], pb.items[@as(usize, @intCast(idx_back)) .. @as(usize, @intCast(idx_back)) + tail_len]);
+                                                // Copy insertion
+                                                std.mem.copyForwards(u8, pb.items[@as(usize, @intCast(idx_back)) .. @as(usize, @intCast(idx_back)) + insertion.len], insertion);
+                                                pb.items.len += insertion.len;
+                                            }
+                                        }
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, nodescan_idx, net_nodescan);
                                         if (est_nodescan > 0) sum_actual_estimated += 0;
                                         const est_expand = if (disable_estimates) 0 else timings.expand_rows_out * 8;
@@ -1738,6 +1795,7 @@ pub fn main() !void {
                                             }
                                         }
                                     }
+                                    // peak_contributors already assembled using top_tracker (phase 2 refinement done)
                                     w.writeAll(",\"peak_contributors\":[") catch {};
                                     var pc_first = true;
                                     var pci: usize = 0;
@@ -1758,6 +1816,8 @@ pub fn main() !void {
                                     w.print("{d}", .{total_ns}) catch {};
                                     w.writeAll(",\"peak_bytes\":") catch {};
                                     w.print("{d}", .{track.peakBytes()}) catch {};
+                                    // WAL skip ratio placeholder (storage layer not yet threaded into server state)
+                                    w.writeAll(",\"wal_skip_ratio\":0.0") catch {};
                                     w.writeAll("}") catch {};
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};

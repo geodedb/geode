@@ -4,7 +4,12 @@ const iface = @import("interface.zig");
 // Phase‑0 slotted page + in‑memory PageManager (no WAL / persistence yet).
 // Layout (page_size = 4096 default):
 // [Header|Slot array growing upward][free space][records growing downward]
-// Header: slot_count(u16), free_end(u16). free_end is first byte after last record.
+// Header (16 bytes total):
+//   [0..8)  : u64 page LSN
+//   [8..10) : u16 slot_count
+//   [10..12): u16 free_end
+//   [12..16): u32 checksum (Adler32 over full page with this field zeroed)
+// free_end is first byte after last record.
 // Each slot entry: offset(u16), size(u16).
 
 pub const Page = struct {
@@ -13,11 +18,13 @@ pub const Page = struct {
     // [0..8)  : u64 page LSN
     // [8..10) : u16 slot_count
     // [10..12): u16 free_end
-    // [12..   ): slot directory (offset,size)*
+    // [12..16): u32 checksum (Adler32 over page with checksum zeroed)
+    // [16..   ): slot directory (offset,size)*
     pub const LsnOffset: usize = 0;
     pub const SlotCountOffset: usize = 8;
     pub const FreeEndOffset: usize = 10;
-    pub const HeaderSize: usize = 12; // LSN + slot_count + free_end
+    pub const ChecksumOffset: usize = 12;
+    pub const HeaderSize: usize = 16; // LSN + slot_count + free_end + checksum
 
     pub fn slotCount(self: *const Page) u16 {
         return std.mem.readInt(u16, self.buf[SlotCountOffset .. SlotCountOffset + 2], .little);
@@ -44,12 +51,47 @@ pub const Page = struct {
         return .{ .off = std.mem.readInt(u16, self.buf[base .. base + 2], .little), .sz = std.mem.readInt(u16, self.buf[base + 2 .. base + 4], .little) };
     }
 
+    fn adler32(data: []const u8) u32 {
+        var a: u32 = 1;
+        var b: u32 = 0;
+        for (data) |c| {
+            a = (a + c) % 65521;
+            b = (b + a) % 65521;
+        }
+        return (b << 16) | a;
+    }
+
+    fn recomputeChecksum(self: *Page) void {
+        // Zero checksum field then compute over entire page.
+        std.mem.writeInt(u32, self.buf[ChecksumOffset .. ChecksumOffset + 4], 0, .little);
+        const cs = adler32(self.buf);
+        std.mem.writeInt(u32, self.buf[ChecksumOffset .. ChecksumOffset + 4], cs, .little);
+    }
+
+    fn storedChecksum(self: *const Page) u32 {
+        return std.mem.readInt(u32, self.buf[ChecksumOffset .. ChecksumOffset + 4], .little);
+    }
+
+    fn verifyChecksum(self: *const Page) bool {
+        const tmp = self.buf; // slice copy (not data copy)
+        // Build a scratch copy of header bytes to zero checksum logically during computation.
+        // Simpler: temporarily zero then restore.
+        const saved: u32 = self.storedChecksum();
+        // We cast away const for the temporary write (caller holds mutable reference when verifying after load).
+        const mut: *Page = @ptrCast(@constCast(self));
+        std.mem.writeInt(u32, mut.buf[ChecksumOffset .. ChecksumOffset + 4], 0, .little);
+        const calc = adler32(tmp);
+        std.mem.writeInt(u32, mut.buf[ChecksumOffset .. ChecksumOffset + 4], saved, .little);
+        return calc == saved;
+    }
+
     pub fn init(buf: []u8) Page {
         std.debug.assert(buf.len >= 512); // minimal sanity
         var p = Page{ .buf = buf };
         @memset(buf, 0);
         p.setSlotCount(0);
         p.setFreeEnd(@intCast(buf.len));
+        p.recomputeChecksum();
         return p;
     }
 
@@ -76,6 +118,7 @@ pub const Page = struct {
         self.setSlotCount(sc + 1);
         self.setFreeEnd(free_end);
         // NOTE: Caller should invoke setLsn() with the WAL LSN of this insert.
+        self.recomputeChecksum();
         return sc; // slot id
     }
 
@@ -93,6 +136,7 @@ pub const Page = struct {
         // zero size marks deleted; leave offset for potential future reuse/GC
         if (s.sz != 0) {
             self.writeSlot(slot_id, s.off, 0);
+            self.recomputeChecksum();
         }
     }
 };
@@ -170,6 +214,9 @@ pub const PageManager = struct {
         defer self.allocator.free(path);
         var file = try dir.createFile(path, .{ .truncate = true });
         defer file.close();
+        // ensure checksum current
+        var p = self.asPage(index);
+        p.recomputeChecksum();
         try file.writeAll(self.pages.items[index]);
         try file.sync();
     }
@@ -183,11 +230,17 @@ pub const PageManager = struct {
         const mem = try self.allocator.alloc(u8, self.page_size);
         const got = try file.readAll(mem);
         if (got != self.page_size) return error.ShortRead;
+        // verify checksum
+        var p = Page{ .buf = mem };
+        if (!p.verifyChecksum()) {
+            // Higher layer should translate error.PageChecksumMismatch to diagnostics.StoragePageChecksum.
+            return error.PageChecksumMismatch;
+        }
         try self.pages.append(mem);
     }
 };
 
-test "page_manager: insert/read & free space monotonic" {
+test "page_manager: insert/read & free space monotonic + checksum" {
     var pm = PageManager.init(std.testing.allocator, 512);
     defer pm.deinit();
     const r1 = try pm.insert("hello");
@@ -200,4 +253,11 @@ test "page_manager: insert/read & free space monotonic" {
     var p = pm.asPage(0);
     const fs_after = p.freeSpace();
     try std.testing.expect(fs_after < 512 - Page.HeaderSize);
+    // Corrupt checksum and ensure verify fails
+    const orig = std.mem.readInt(u32, p.buf[Page.ChecksumOffset .. Page.ChecksumOffset + 4], .little);
+    std.mem.writeInt(u32, p.buf[Page.ChecksumOffset .. Page.ChecksumOffset + 4], orig ^ 0xFFFF_FFFF, .little);
+    try std.testing.expect(!p.verifyChecksum());
+    // Restore
+    std.mem.writeInt(u32, p.buf[Page.ChecksumOffset .. Page.ChecksumOffset + 4], orig, .little);
+    try std.testing.expect(p.verifyChecksum());
 }
