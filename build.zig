@@ -181,6 +181,9 @@ pub fn build(b: *std.Build) void {
         .name = "fuzz",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/fuzz/main.zig"), .target = target, .optimize = optimize }),
     });
+    // Allow fuzz harnesses to import geode modules
+    fuzz_exe.root_module.addImport("geode", root_mod);
+    fuzz_exe.root_module.addImport("gql", gql_mod);
     b.installArtifact(fuzz_exe);
     const fuzz_run = b.addRunArtifact(fuzz_exe);
     const fuzz_step = b.step("fuzz", "Run fuzz harnesses (placeholder)");

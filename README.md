@@ -39,15 +39,26 @@ Use the `PROFILE` prefix before a GQL query (via server line protocol or `geodec
 - `spills`: `{sort_spills, distinct_spills, union_spills}` plus optional `spill_reason` (`forced|threshold`).
 - `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}`.
 
-### Env Vars (runtime policies & spills)
+### Env Vars (runtime policies, spills, profiling)
 
-| Variable                      | Effect                                                                |
-| ----------------------------- | --------------------------------------------------------------------- |
-| `GEODE_NULLS_LAST`            | Switch ORDER BY null ordering from default nulls-first to nulls-last. |
-| `GEODE_SPILL_THRESHOLD_BYTES` | When peak_bytes >= threshold, mark spill counters (sort/distinct).    |
-| `GEODE_FORCE_SORT_SPILL`      | Force `sort_spills` = 1 (spill_reason=forced).                        |
-| `GEODE_FORCE_DISTINCT_SPILL`  | Force `distinct_spills` = 1 (spill_reason=forced).                    |
-| `GEODE_FORCE_UNION_SPILL`     | Force `union_spills` = 1 (spill_reason=forced).                       |
+| Variable                      | Effect                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `GEODE_NULLS_LAST`            | Switch ORDER BY null ordering from default nulls-first to nulls-last.  |
+| `GEODE_SPILL_THRESHOLD_BYTES` | When peak_bytes >= threshold, mark spill counters (sort/distinct).     |
+| `GEODE_FORCE_SORT_SPILL`      | Force `sort_spills` = 1 (spill_reason=forced).                         |
+| `GEODE_FORCE_DISTINCT_SPILL`  | Force `distinct_spills` = 1 (spill_reason=forced).                     |
+| `GEODE_FORCE_UNION_SPILL`     | Force `union_spills` = 1 (spill_reason=forced).                        |
+| `GEODE_PROFILE_MEMCURVE`      | Enable `mem_curve` emission (alternative to CLI `--profile-memcurve`). |
+
+### CLI Profiling Flags
+
+| Flag                 | Effect                                     |
+| -------------------- | ------------------------------------------ |
+| `--no-estimates`     | Suppress planner estimate & error fields.  |
+| `--profile-compact`  | Omit zero-value optional metrics.          |
+| `--profile-memcurve` | Emit `mem_curve` points (same as env var). |
+
+Percentage metrics (`estimate_vs_actual`, `error_abs_pct`) are capped at 999 for stability.
 
 ### Example
 

@@ -1,0 +1,24 @@
+[debug] emitting PROFILE pj_len=2125 ptr=0x60f68857a000 flags_len=3
+[debug] pj preview '{"profile_version":1,"ops":[{"op":"NodeScan","ph'
+[debug] buildProfileLine(safe) total=38100680 payload=2125 flags=3
+Segmentation fault at address 0x0
+/nix/store/s5z0rymxpi15y6cahfjjh0fmfk6aav54-zig-0.15.1/lib/zig/compiler_rt/memcpy.zig:170:17: 0x13cfb93 in memcpyFast (compiler_rt)
+        d[i] = s[i];
+                ^
+/home/benji/src/geode/geode/src/protocol.zig:191:24: 0x11edbe5 in buildProfileLine (protocol.zig)
+            @memcpy(out[idx .. idx + f.len], f);
+                       ^
+/home/benji/src/geode/geode/src/server/main.zig:2029:60: 0x1219a56 in main (main.zig)
+                    const pline = protocol.buildProfileLine(gpa, dup_pj, state.profile_flags) catch null;
+                                                           ^
+/nix/store/s5z0rymxpi15y6cahfjjh0fmfk6aav54-zig-0.15.1/lib/zig/std/start.zig:627:37: 0x1229f79 in posixCallMainAndExit (std.zig)
+            const result = root.main() catch |err| {
+                                    ^
+/nix/store/s5z0rymxpi15y6cahfjjh0fmfk6aav54-zig-0.15.1/lib/zig/std/start.zig:232:5: 0x1176331 in _start (std.zig)
+    asm volatile (switch (native_arch) {
+    ^
+???:?:?: 0x0 in ??? (???)
+error: EndOfStream
+/home/benji/src/geode/geode/src/client/main.zig:172:19: 0x115d2e6 in main (main.zig)
+    const line2 = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+                  ^

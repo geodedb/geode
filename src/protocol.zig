@@ -1,5 +1,9 @@
 const std = @import("std");
 
+// Debug instrumentation toggle for protocol frame builders.
+// Set true locally when investigating length arithmetic or corruption.
+const PROTOCOL_DEBUG = false;
+
 pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK };
 
 pub const Hello = struct {
@@ -45,7 +49,7 @@ pub const Status = struct {
 };
 
 pub fn buildSchemaLine(ally: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).initCapacity(ally, 16) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
@@ -86,7 +90,7 @@ pub fn buildSchemaLine(ally: std.mem.Allocator, cols: []const SchemaCol, additio
 }
 
 pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final: bool, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":");
@@ -130,7 +134,7 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
 }
 
 pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\",\"json\":");
@@ -151,28 +155,74 @@ pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags
 }
 
 pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
-    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":");
-    try w.writeAll(json_payload);
+    const prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":";
+    const suffix = "}}\n";
+    // Compute flags serialization length
+    var flags_len: usize = 0;
     if (flags.len > 0) {
-        try w.writeAll(",\"flagger_findings\":[");
+        // ,"flagger_findings":["flag1","flag2"]
+        flags_len += ",\"flagger_findings\":[".len; // opening
+        var i: usize = 0;
+        while (i < flags.len) : (i += 1) {
+            if (i > 0) flags_len += 1; // comma
+            flags_len += 2; // quotes
+            flags_len += flags[i].len;
+        }
+        flags_len += 1; // closing ]
+    }
+    const total = prefix.len + json_payload.len + flags_len + suffix.len;
+    if (PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine pre total_calc payload={d} flags_len={d} prefix={d} suffix={d}\n", .{ json_payload.len, flags_len, prefix.len, suffix.len });
+    if (total < prefix.len or total < json_payload.len) return error.OutOfMemory; // overflow guard
+    if (total > 1_000_000 and json_payload.len < 10_000) {
+        if (PROTOCOL_DEBUG) std.debug.print("[warn] buildProfileLine suspicious total={d} payload={d} flags={d}; using fallback minimal profile frame\n", .{ total, json_payload.len, flags.len });
+        const fallback = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":{\"profile_version\":1,\"ops\":[],\"totals\":{}}}}\n";
+        if (ally.dupe(u8, fallback)) |dup| return dup else |_| {
+            const buf = try ally.alloc(u8, fallback.len);
+            @memcpy(buf, fallback);
+            return buf;
+        }
+    }
+    var out = try ally.alloc(u8, total);
+    var idx: usize = 0;
+    // Instrumentation
+    if (PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine(safe) total={d} payload={d} flags={d}\n", .{ total, json_payload.len, flags.len });
+    @memcpy(out[idx .. idx + prefix.len], prefix);
+    idx += prefix.len;
+    if (json_payload.len > 0) {
+        @memcpy(out[idx .. idx + json_payload.len], json_payload);
+        idx += json_payload.len;
+    }
+    if (flags.len > 0) {
+        const open = ",\"flagger_findings\":[";
+        @memcpy(out[idx .. idx + open.len], open);
+        idx += open.len;
         var fi: usize = 0;
         while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(flags[fi]);
-            try w.writeAll("\"");
+            if (fi > 0) {
+                out[idx] = ',';
+                idx += 1;
+            }
+            out[idx] = '"';
+            idx += 1;
+            const f = flags[fi];
+            if (idx + f.len + 1 > total) return error.OutOfMemory;
+            @memcpy(out[idx .. idx + f.len], f);
+            idx += f.len;
+            out[idx] = '"';
+            idx += 1;
         }
-        try w.writeAll("]");
+        out[idx] = ']';
+        idx += 1;
     }
-    try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    @memcpy(out[idx .. idx + suffix.len], suffix);
+    idx += suffix.len;
+    // Safety assert
+    if (idx != total and PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine length mismatch idx={d} total={d}\n", .{ idx, total });
+    return out;
 }
 
 pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
@@ -188,7 +238,7 @@ pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []cons
 }
 
 pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
     const w = buf.writer(ally);
     try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");

@@ -47,41 +47,56 @@ const ServerState = struct {
     }
 };
 
+const DEBUG_PROFILE = false; // default off; enable locally when investigating PROFILE frame assembly
+
 // TODO(counting-alloc): Reintroduce a stats-enabled allocator for accurate bytes_alloc metrics.
 // TODO(counting-alloc): Zig 0.15 allocator API changes make lightweight custom vtable here noisy.
 // Revert to heuristic bytes until a proper stats allocator is integrated.
 
-// Dynamic flag construction (avoids large matrix now that NULL policy is runtime configurable).
+// Dynamic flag construction originally used stack slices causing dangling references.
+// Replace with static precomputed combinations (NULLs policy toggled at runtime where needed).
 var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
 
+// Base flag strings (shared)
+const F_ILLEGAL = "I:IllegalOrderKeyPolicy=ident-only";
+const F_NULLS_FIRST = "U:NullsFirstPolicy";
+const F_NULLS_LAST = "U:NullsLastPolicy";
+const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
+const F_DISTINCT_UNORDERED = "U:DistinctOutputUnordered";
+const F_UNION_PHASES = "U:UnionPhaseTimings";
+
+// Helper returns correct null policy flag pointer.
+inline fn nullsFlag() []const u8 {
+    return if (g_nulls_last) F_NULLS_LAST else F_NULLS_FIRST;
+}
+
+var flags_buf_base: [4][]const u8 = undefined; // reused sequentially (single-threaded server)
+var flags_buf_ext: [5][]const u8 = undefined;
+
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
-    // Maximum 4 findings: IllegalOrderKey policy, NullsPolicy, OrderTiebreak, DistinctOutputUnordered
-    var tmp: [4][]const u8 = undefined;
     var n: usize = 0;
-    tmp[n] = "I:IllegalOrderKeyPolicy=ident-only";
+    flags_buf_base[n] = F_ILLEGAL;
     n += 1;
-    tmp[n] = if (g_nulls_last) "U:NullsLastPolicy" else "U:NullsFirstPolicy";
+    flags_buf_base[n] = nullsFlag();
     n += 1;
     if (ordered) {
-        tmp[n] = "U:OrderTiebreak=LexJSON";
+        flags_buf_base[n] = F_TIEBREAK;
         n += 1;
     }
     if (!ordered and distinct) {
-        tmp[n] = "U:DistinctOutputUnordered";
+        flags_buf_base[n] = F_DISTINCT_UNORDERED;
         n += 1;
     }
-    return tmp[0..n];
+    return flags_buf_base[0..n];
 }
 
 fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
     if (!union_phases) return computeBaseFlags(ordered, distinct);
     const base = computeBaseFlags(ordered, distinct);
-    // Append UnionPhaseTimings
-    var tmp: [5][]const u8 = undefined;
     var i: usize = 0;
-    while (i < base.len) : (i += 1) tmp[i] = base[i];
-    tmp[base.len] = "U:UnionPhaseTimings";
-    return tmp[0 .. base.len + 1];
+    while (i < base.len) : (i += 1) flags_buf_ext[i] = base[i];
+    flags_buf_ext[base.len] = F_UNION_PHASES;
+    return flags_buf_ext[0 .. base.len + 1];
 }
 
 fn valueTypeName(v: eval.Value) []const u8 {
@@ -220,7 +235,10 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
                 .bool => |bv| eval.Value{ .Bool = bv },
                 .string => |sv| eval.Value{ .Str = sv },
                 .null => eval.Value{ .Null = {} },
-                else => eval.Value{ .Null = {} },
+                .float => eval.Value{ .Null = {} },
+                .number_string => eval.Value{ .Null = {} },
+                .array => eval.Value{ .Null = {} },
+                .object => eval.Value{ .Null = {} },
             };
         }
         out_names.* = names;
@@ -1009,6 +1027,9 @@ pub fn main() !void {
         if (env.get("GEODE_NULLS_LAST")) |_| {
             g_nulls_last = true;
         }
+        if (env.get("GEODE_PROFILE_MEMCURVE")) |_| {
+            memcurve_profile = true;
+        }
     } else |_| {}
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [8192]u8 = undefined;
@@ -1064,6 +1085,10 @@ pub fn main() !void {
         }
         const raw = line_storage[0..read_len];
         if (raw.len == 0) continue; // ignore
+        if (DEBUG_PROFILE and raw.len > 0) {
+            const preview_len = if (raw.len < 120) raw.len else 120;
+            std.debug.print("[debug] received line len={d} head='{s}'\n", .{ raw.len, raw[0..preview_len] });
+        }
         // Parse client message
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
@@ -1383,12 +1408,13 @@ pub fn main() !void {
                                             const phase = if (std.mem.eql(u8, name, "NodeScan")) "SCAN" else if (std.mem.eql(u8, name, "Expand")) "EXPAND" else if (std.mem.eql(u8, name, "AggregateBuild") or std.mem.eql(u8, name, "AggregateEmit")) "AGGREGATE" else if (std.mem.eql(u8, name, "Project")) "PROJECT" else if (std.mem.eql(u8, name, "Distinct")) "DISTINCT" else if (std.mem.eql(u8, name, "Sort")) "ORDER" else if (std.mem.eql(u8, name, "Offset") or std.mem.eql(u8, name, "Limit")) "PAGE" else "OTHER";
                                             wr.writeAll("\",\"phase\":\"") catch {};
                                             wr.writeAll(phase) catch {};
+                                            wr.writeAll("\"") catch {}; // close phase string
                                             // Emit stable id field (alias op_index for v1)
                                             wr.writeAll(",\"id\":") catch {};
                                             wr.print("{d}", .{op_index.*}) catch {};
                                             wr.writeAll(",\"op_index\":") catch {}; // legacy field retained
                                             wr.print("{d}", .{op_index.*}) catch {};
-                                            wr.writeAll("\",\"input_rows\":") catch {};
+                                            wr.writeAll(",\"input_rows\":") catch {};
                                             wr.print("{d}", .{in_rows}) catch {};
                                             wr.writeAll(",\"rows\":") catch {};
                                             wr.print("{d}", .{out_rows}) catch {};
@@ -1405,7 +1431,8 @@ pub fn main() !void {
                                                 wr.writeAll(",\"estimate_bytes\":") catch {};
                                                 wr.print("{d}", .{est_bytes}) catch {};
                                             }
-                                            const estimate_vs_actual: usize = if (est_bytes > 0 and bytes_alloc > 0) (bytes_alloc * 100) / est_bytes else 0;
+                                            var estimate_vs_actual: usize = if (est_bytes > 0 and bytes_alloc > 0) (bytes_alloc * 100) / est_bytes else 0;
+                                            if (estimate_vs_actual > 999) estimate_vs_actual = 999; // cap extreme ratios for stability
                                             if (!compact or estimate_vs_actual != 0) {
                                                 wr.writeAll(",\"estimate_vs_actual\":") catch {};
                                                 wr.print("{d}", .{estimate_vs_actual}) catch {};
@@ -1439,7 +1466,8 @@ pub fn main() !void {
                                                 // error metrics
                                                 const err_abs: isize = @as(isize, @intCast(bytes_alloc)) - @as(isize, @intCast(est_bytes));
                                                 const err_bytes: usize = if (err_abs < 0) @intCast(-err_abs) else @intCast(err_abs);
-                                                const err_pct: usize = if (est_bytes > 0 and err_bytes > 0) (err_bytes * 100) / est_bytes else 0;
+                                                var err_pct: usize = if (est_bytes > 0 and err_bytes > 0) (err_bytes * 100) / est_bytes else 0;
+                                                if (err_pct > 999) err_pct = 999; // cap to prevent runaway percentages
                                                 if (!compact or err_bytes != 0) {
                                                     wr.writeAll(",\"error_bytes\":") catch {};
                                                     wr.print("{d}", .{err_bytes}) catch {};
@@ -1663,7 +1691,13 @@ pub fn main() !void {
                                         }
                                         w.writeAll("}") catch {};
                                     }
-                                    state.profile_json = pb.toOwnedSlice(gpa) catch "{}";
+                                    const owned_slice = pb.toOwnedSlice(gpa) catch "{}";
+                                    std.debug.print("[debug] capture PROFILE json_len={d}\n", .{owned_slice.len});
+                                    if (owned_slice.len > 0) {
+                                        const prev = if (owned_slice.len < 64) owned_slice.len else 64;
+                                        std.debug.print("[debug] profile json head='{s}'\n", .{owned_slice[0..prev]});
+                                    }
+                                    state.profile_json = owned_slice;
                                     state.profile_flags = computeBaseFlags(ordered_meta, q.ret.distinct);
                                     state.last_columns = cols;
                                     state.last_ordered = ordered_meta;
@@ -1923,7 +1957,9 @@ pub fn main() !void {
                                     w.print("\"total_alloc_bytes\":{d}", .{track_u.total_alloc}) catch {};
                                     w.writeAll("}") catch {};
                                     const flags_u_prof = computeFlagsExtended(false, std.mem.eql(u8, union_mode, "DISTINCT"), true);
-                                    const pline2 = protocol.buildProfileLine(gpa, pb.toOwnedSlice(gpa) catch "{}", flags_u_prof) catch null;
+                                    const owned_prof_json = pb.toOwnedSlice(gpa) catch "{}";
+                                    const dup_prof_json = gpa.dupe(u8, owned_prof_json) catch owned_prof_json;
+                                    const pline2 = protocol.buildProfileLine(gpa, dup_prof_json, flags_u_prof) catch null;
                                     if (pline2) |pl2| {
                                         defer gpa.free(pl2);
                                         _ = stdout_file.write(pl2) catch {};
@@ -2005,6 +2041,8 @@ pub fn main() !void {
                 }
             },
             .PULL => |pl| {
+                std.debug.print("[debug] PULL branch entry active_result={any} profile_json_is_null={any}\n", .{ state.active_result, state.profile_json == null });
+                std.debug.print("[debug] PULL received active_result={any} profile_json?={any}\n", .{ state.active_result, state.profile_json != null });
                 if (!state.active_result and state.profile_json == null) {
                     const nrline = protocol.buildErrorLine(gpa, "NoResult", "no active result set", "") catch null;
                     if (nrline) |l| {
@@ -2015,11 +2053,19 @@ pub fn main() !void {
                 }
                 // If PROFILE staged, emit PROFILE frame and clear profile_json; no rows to paginate.
                 if (state.profile_json) |pj| {
-                    const pline = protocol.buildProfileLine(gpa, pj, state.profile_flags) catch null;
+                    const dup_pj = gpa.dupe(u8, pj) catch pj;
+                    std.debug.print("[debug] emitting PROFILE pj_len={d} ptr=0x{x} flags_len={d}\n", .{ dup_pj.len, @intFromPtr(dup_pj.ptr), state.profile_flags.len });
+                    if (dup_pj.len > 0) {
+                        const pprev = if (dup_pj.len < 48) dup_pj.len else 48;
+                        std.debug.print("[debug] pj preview '{s}'\n", .{dup_pj[0..pprev]});
+                    }
+                    const pline = protocol.buildProfileLine(gpa, dup_pj, state.profile_flags) catch null;
                     if (pline) |plj| {
                         defer gpa.free(plj);
                         _ = stdout_file.write(plj) catch {};
+                        std.debug.print("[debug] wrote PROFILE frame len={d}\n", .{plj.len});
                     }
+                    if (pline == null) std.debug.print("[debug] buildProfileLine returned null (error)\n", .{});
                     // PROFILE complete; clear state and mark no active result
                     state.allocator.free(pj);
                     state.profile_json = null;
