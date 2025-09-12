@@ -15,6 +15,10 @@ pub const Statement = union(enum) {
     StartTransaction,
     Commit,
     Rollback,
+    // Simple DML prototype: INSERT VALUE <expr>
+    InsertValue: struct { expr: Expr },
+    // Scan all inserted values (heap table prototype)
+    ScanValues,
 };
 
 pub const Query = struct {

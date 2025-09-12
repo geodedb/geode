@@ -152,6 +152,9 @@ pub fn build(b: *std.Build) void {
     // storage: only add inmemory module; it imports interface relatively
     const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("storage_mem", storage_mem_mod);
+    // add storage_page_manager module alias required for checksum diagnostic path
+    const storage_page_manager_mod2 = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("storage_page_manager", storage_page_manager_mod2);
     // txn / wal / dist modules
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("txn", txn_mod);

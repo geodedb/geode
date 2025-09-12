@@ -151,6 +151,8 @@ fn tagName(st: ast.Statement) []const u8 {
         .StartTransaction => "StartTransaction",
         .Commit => "Commit",
         .Rollback => "Rollback",
+        .InsertValue => "InsertValue",
+        .ScanValues => "ScanValues",
     };
 }
 

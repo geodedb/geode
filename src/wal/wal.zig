@@ -40,6 +40,11 @@ pub const Wal = struct {
     // Metrics captured on last recovery run (for PROFILE / tests).
     last_skip_count: usize = 0,
     last_total_records: usize = 0,
+    // Test-only override: when >=0.0 this value is returned by skipRatio() instead of computed metric.
+    // Allows deterministic PROFILE tests without crafting large patterned logs.
+    test_skip_ratio_override: f64 = -1.0,
+    // Distinct committed txn ids discovered during initial scan (persisted segments)
+    recovered_committed: usize = 0,
 
     pub fn init(ally: std.mem.Allocator) Wal {
         const list = std.ArrayList(Record).initCapacity(ally, 0) catch @panic("OOM WAL init");
@@ -60,6 +65,8 @@ pub const Wal = struct {
         self.base_path = try self.ally.dupe(u8, base_path);
         self.segment_index = 0;
         try self.openSegment();
+        // Perform lightweight committed txn scan across existing segments (if any)
+        self.recovered_committed = try self.scanCommitted();
     }
 
     pub fn deinit(self: *Wal) void {
@@ -69,8 +76,52 @@ pub const Wal = struct {
     }
 
     pub fn skipRatio(self: *const Wal) f64 {
+        if (self.test_skip_ratio_override >= 0.0) return self.test_skip_ratio_override;
         if (self.last_total_records == 0) return 0.0;
         return @as(f64, @floatFromInt(self.last_skip_count)) / @as(f64, @floatFromInt(self.last_total_records));
+    }
+
+    pub fn committedTxnTotal(self: *const Wal) usize {
+        // Count commit records in in-memory buffer plus recovered_committed.
+        var map = std.AutoHashMap(u64, void).init(self.ally);
+        defer map.deinit();
+        for (self.buf.items) |r| if (r.typ == .Commit) map.put(r.txn_id, {}) catch {};
+        return self.recovered_committed + map.count();
+    }
+
+    /// Lightweight scan for committed txn ids across sequential wal segments.
+    pub fn scanCommitted(self: *Wal) !usize {
+        if (self.base_path.len == 0) return 0;
+        const dir = std.fs.cwd();
+        var seen = std.AutoHashMap(u64, void).init(self.ally);
+        defer seen.deinit();
+        var seg_index: u32 = 0;
+        const HeaderLen = 1 + 8 + 4 + 8 + 8 + 4;
+        while (seg_index <= self.segment_index + 128) : (seg_index += 1) {
+            const path = try std.fmt.allocPrint(self.ally, "{s}.wal.{d}", .{ self.base_path, seg_index });
+            defer self.ally.free(path);
+            const f = dir.openFile(path, .{ .mode = .read_only }) catch |err| switch (err) {
+                error.FileNotFound => break,
+                else => return err,
+            };
+            defer f.close();
+            var buf: [HeaderLen]u8 = undefined;
+            while (true) {
+                const n = f.readAll(&buf) catch 0; // treat any read error as segment end in lightweight scan
+                if (n != HeaderLen) break; // partial or EOF
+                const typ: RecordType = @enumFromInt(buf[0]);
+                if (typ == .Commit) {
+                    const txn_id = std.mem.readInt(u64, buf[1..9], .little);
+                    _ = seen.put(txn_id, {}) catch {};
+                }
+                const plen = std.mem.readInt(u32, buf[9..13], .little);
+                if (plen > 0) try f.seekBy(@as(i64, plen));
+                var sentinel: [4]u8 = undefined;
+                const sn = f.readAll(&sentinel) catch 0;
+                if (sn != 4) break;
+            }
+        }
+        return seen.count();
     }
 
     /// Compact WAL segments whose maximum LSN is strictly less than durable_lsn.
@@ -184,10 +235,10 @@ pub const Wal = struct {
             std.mem.writeInt(u64, header[13..21], rec.lsn.value, .little);
             std.mem.writeInt(u64, header[21..29], rec.prev_lsn, .little);
             std.mem.writeInt(u32, header[29..33], 0, .little); // zero before checksum
-            var cs_buf = std.ArrayList(u8).init(std.heap.page_allocator);
-            defer cs_buf.deinit();
-            cs_buf.appendSlice(header[0..]) catch {};
-            cs_buf.appendSlice(rec.payload) catch {};
+            var cs_buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch @panic("OOM");
+            defer cs_buf.deinit(std.heap.page_allocator);
+            cs_buf.appendSlice(std.heap.page_allocator, header[0..]) catch {};
+            cs_buf.appendSlice(std.heap.page_allocator, rec.payload) catch {};
             const cs = adler32(cs_buf.items);
             std.mem.writeInt(u32, header[29..33], cs, .little);
             // Rollover check: if writing header+payload+sentinel would exceed limit, rotate segment first.
@@ -210,7 +261,7 @@ pub const Wal = struct {
         const lsn_val = self.next_lsn;
         self.next_lsn += 1;
         const rec_lsn: Lsn = .{ .value = lsn_val };
-        const rec = Record{ .lsn = lsn_val, .txn_id = txn_id, .typ = typ, .payload = payload, .prev_lsn = prev_lsn };
+        const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = txn_id, .typ = typ, .payload = payload, .prev_lsn = prev_lsn };
         try self.buf.append(self.ally, rec);
         try self.diskWrite(rec);
         return rec_lsn;

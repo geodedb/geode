@@ -74,6 +74,24 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
         return switch (self.cur.kind) {
+            .INSERT => blk_ins: {
+                self.advance();
+                // Syntax: INSERT VALUE <expr>
+                if (self.cur.kind != .VALUE) return error.UnexpectedToken;
+                self.advance();
+                const expr = try self.parseOrExpr();
+                break :blk_ins .{ .InsertValue = .{ .expr = expr } };
+            },
+            .SCAN => blk_scan: {
+                self.advance();
+                // Syntax: SCAN VALUES; simple keyword VALUES optional
+                if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "VALUES")) {
+                    self.advance();
+                } else if (self.cur.kind == .VALUE or self.cur.kind == .VALUES) {
+                    self.advance();
+                }
+                break :blk_scan .ScanValues;
+            },
             .MATCH, .OPTIONAL => blk_query: {
                 const first = try self.parseQuery();
                 if (self.cur.kind == .UNION) {
@@ -129,8 +147,13 @@ pub const Parser = struct {
                         self.advance();
                         var all = false;
                         var distinct = false;
-                        if (self.cur.kind == .ALL) { all = true; self.advance(); }
-                        else if (self.cur.kind == .DISTINCT) { distinct = true; self.advance(); }
+                        if (self.cur.kind == .ALL) {
+                            all = true;
+                            self.advance();
+                        } else if (self.cur.kind == .DISTINCT) {
+                            distinct = true;
+                            self.advance();
+                        }
                         if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
                         const q2 = try self.parseQuery();
                         try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
@@ -164,8 +187,13 @@ pub const Parser = struct {
                     self.advance();
                     var all = false;
                     var distinct = false;
-                    if (self.cur.kind == .ALL) { all = true; self.advance(); }
-                    else if (self.cur.kind == .DISTINCT) { distinct = true; self.advance(); }
+                    if (self.cur.kind == .ALL) {
+                        all = true;
+                        self.advance();
+                    } else if (self.cur.kind == .DISTINCT) {
+                        distinct = true;
+                        self.advance();
+                    }
                     if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
                     const rhs = try self.parseQuery();
                     if (kind == .INTERSECT) {

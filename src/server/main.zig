@@ -4,6 +4,9 @@ const protocol = @import("protocol");
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const exec = geode.exec;
+const wal_mod = @import("wal");
+const storage_pm = @import("storage_page_manager");
+const txn_mgr = @import("txn");
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
@@ -31,8 +34,16 @@ const ServerState = struct {
     spill_distinct: usize = 0,
     spill_union: usize = 0,
     spill_threshold: usize = 0,
+    // WAL integration (phase: skip ratio exposure) — optional pointer injected during server bootstrap.
+    wal_ptr: ?*anyopaque = null,
+    // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
+    storage_checksum_error: bool = false,
     // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).
     query_text: ?[]const u8 = null,
+    txn_manager: txn_mgr.Manager = undefined,
+    active_txn: ?txn_mgr.Txn = null,
+    // Simple heap of inserted values (strings) for prototype DML; each entry becomes a row {v:<value>}.
+    inserted_values: std.ArrayList([]const u8) = undefined,
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -175,6 +186,66 @@ fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []con
     while (i < base.len) : (i += 1) flags_buf_ext[i] = base[i];
     flags_buf_ext[base.len] = F_UNION_PHASES;
     return flags_buf_ext[0 .. base.len + 1];
+}
+
+fn execInsertValue(state: *ServerState, expr_val: eval.Value) !void {
+    var tmp: [128]u8 = undefined; // fixed buffer for small literals
+    var fba = std.heap.FixedBufferAllocator.init(&tmp);
+    var list = std.ArrayList(u8).initCapacity(fba.allocator(), 0) catch return; // no OOM propagation needed
+    switch (expr_val) {
+        .Int => |n| std.fmt.format(list.writer(fba.allocator()), "{d}", .{n}) catch {},
+        .Bool => |b| list.appendSlice(fba.allocator(), if (b) "true" else "false") catch {},
+        .Str => |s| {
+            list.append(fba.allocator(), '"') catch {};
+            list.appendSlice(fba.allocator(), s) catch {};
+            list.append(fba.allocator(), '"') catch {};
+        },
+        else => list.appendSlice(fba.allocator(), "null") catch {},
+    }
+    const stored = try state.allocator.dupe(u8, list.items);
+    state.inserted_values.append(state.allocator, stored) catch {};
+}
+
+fn buildScanValuesResult(state: *ServerState) !void {
+    // Build schema: single column v STRING
+    state.last_columns = &.{protocol.SchemaCol{ .name = "v", .type = "STRING" }};
+    state.last_ordered = false;
+    state.last_order_keys = &.{};
+    // Build row fragments
+    var rows = std.ArrayList([]const u8).initCapacity(state.allocator, state.inserted_values.items.len) catch return;
+    var idx: usize = 0;
+    while (idx < state.inserted_values.items.len) : (idx += 1) {
+        const val = state.inserted_values.items[idx];
+        // Build row JSON manually to avoid fmt brace issues with Zig 0.15
+        const row = state.allocator.alloc(u8, 5 + val.len) catch continue; // {"v": + value + }
+        // Write {"v":
+        if (row.len >= 5) {
+            row[0] = '{';
+            row[1] = '"';
+            row[2] = 'v';
+            row[3] = '"';
+            row[4] = ':';
+        }
+        if (val.len > 0) @memcpy(row[5 .. 5 + val.len], val);
+        // append closing }
+        const resized = state.allocator.realloc(row, row.len + 1) catch row;
+        if (resized.len > row.len) resized[resized.len - 1] = '}';
+        const final_row = if (resized.len > row.len) resized else row; // fallback
+        // ensure null terminator not required; treat slice as bytes
+        const keep = final_row;
+        // Append
+        rows.append(state.allocator, keep) catch {
+            state.allocator.free(keep);
+            break;
+        };
+        rows.append(state.allocator, row) catch {
+            state.allocator.free(row);
+            break;
+        };
+    }
+    state.page_items = rows.toOwnedSlice(state.allocator) catch &.{};
+    state.page_index = 0;
+    state.active_result = true;
 }
 
 // Minimal predicate inspector: returns true if expression tree contains an equality operation.
@@ -1132,6 +1203,7 @@ pub fn main() !void {
     var compact_profile = false;
     var memcurve_profile = false;
     var ai: usize = 1;
+    var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
             const f = args[ai + 1];
@@ -1143,9 +1215,24 @@ pub fn main() !void {
             compact_profile = true;
         } else if (std.mem.eql(u8, args[ai], "--profile-memcurve")) {
             memcurve_profile = true;
+        } else if (std.mem.eql(u8, args[ai], "--test-wal-skip-ratio") and ai + 1 < args.len) {
+            const v = std.fmt.parseFloat(f64, args[ai + 1]) catch -1.0;
+            if (v >= 0.0) test_wal_skip_ratio = v;
+            ai += 1;
         }
     }
     var state = ServerState{ .allocator = gpa };
+    state.txn_manager.init(gpa);
+    state.inserted_values = .{};
+    // Initialize WAL (test / prototype). For now use a temp path under /tmp; future: data_dir option.
+    var wal = wal_mod.Wal.init(gpa);
+    defer wal.deinit();
+    // Open ephemeral WAL file (no persistence guarantee for now). Errors ignored.
+    wal.openFile("/tmp/geode_ephemeral_wal") catch {};
+    if (test_wal_skip_ratio) |ov| {
+        wal.test_skip_ratio_override = ov;
+    }
+    state.wal_ptr = @ptrCast(&wal);
     // Read environment once for spill simulation flags.
     if (std.process.getEnvMap(gpa)) |*env_ptr| {
         var env = env_ptr.*; // make mutable copy handle
@@ -1167,6 +1254,16 @@ pub fn main() !void {
         }
         if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| {
             g_disable_catalog = true;
+        }
+        if (env.get("GEODE_CHECKSUM_TEST_PATH")) |p| {
+            // Attempt to load first persisted page to surface checksum mismatch diagnostic later.
+            var pm = storage_pm.PageManager.initPersistent(gpa, 4096, p);
+            defer pm.deinit();
+            // Try load page_0.bin; if checksum mismatch mark flag.
+            pm.loadPage(p, 0) catch |e| switch (e) {
+                error.PageChecksumMismatch => state.storage_checksum_error = true,
+                else => {},
+            };
         }
     } else |_| {}
     // Initialize synthetic index catalog (idempotent) before serving.
@@ -1236,43 +1333,63 @@ pub fn main() !void {
         switch (msg) {
             .HELLO => |_| {},
             .BEGIN => |_| {
-                if (state.in_txn) {
+                if (state.active_txn != null) {
                     if (protocol.buildErrorLine(gpa, "TxnState", "already in transaction", "8")) |line| {
                         defer gpa.free(line);
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
                 } else {
+                    const t = state.txn_manager.begin();
+                    state.active_txn = t;
                     state.in_txn = true;
-                    state.txn_id += 1; // simple monotonic id
+                    state.txn_id = t.id;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
             },
             .COMMIT => |_| {
-                if (!state.in_txn) {
+                if (state.active_txn == null) {
                     if (protocol.buildErrorLine(gpa, "TxnState", "no active transaction", "8")) |line| {
                         defer gpa.free(line);
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
                 } else {
-                    // future: WAL flush for durability before ack
+                    var tx = state.active_txn.?;
+                    state.txn_manager.commit(&tx);
+                    // Append WAL commit record (empty payload) if WAL configured.
+                    if (state.wal_ptr) |wp| {
+                        const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
+                        // best-effort: ignore errors in prototype
+                        // Append commit record; ignore returned LSN (best-effort prototype)
+                        _ = wptr.append(tx.id, .Commit, &.{}, 0) catch {};
+                        wptr.fsync() catch {};
+                    }
+                    state.active_txn = null;
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
             },
             .ROLLBACK => |_| {
-                if (!state.in_txn) {
+                if (state.active_txn == null) {
                     if (protocol.buildErrorLine(gpa, "TxnState", "no active transaction", "8")) |line| {
                         defer gpa.free(line);
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
                 } else {
-                    // future: undo via WAL CLRs
+                    var tx2 = state.active_txn.?;
+                    state.txn_manager.rollback(&tx2);
+                    state.active_txn = null;
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
             },
             .RUN_GQL => |rq| {
                 state.resetResult();
+                if (state.storage_checksum_error) {
+                    // Emit diagnostic once per session (clear after emit)
+                    writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.StoragePageChecksum, diagnostics.defaultMessage(.StoragePageChecksum), diagnostics.anchorFor(.StoragePageChecksum), &.{}, false);
+                    state.storage_checksum_error = false;
+                    continue;
+                }
                 var text = rq.text;
                 var explain_mode = false;
                 var profile_mode = false;
@@ -1337,6 +1454,30 @@ pub fn main() !void {
                         }
                         const st = ok.program.statements[0];
                         switch (st) {
+                            .InsertValue => |iv| {
+                                // Evaluate expression (restrict to simple literal for prototype)
+                                const val = switch (iv.expr) {
+                                    .Int => |n| eval.Value{ .Int = n },
+                                    .String => |s| eval.Value{ .Str = s },
+                                    .Bool => |b| eval.Value{ .Bool = b },
+                                    else => eval.Value{ .Null = {} },
+                                };
+                                execInsertValue(&state, val) catch {};
+                                // Return ACK schema with zero rows
+                                if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| {
+                                    defer gpa.free(line);
+                                    _ = stdout_file.write(line) catch {};
+                                } else |_| {}
+                                continue;
+                            },
+                            .ScanValues => {
+                                buildScanValuesResult(&state) catch {};
+                                if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(false, false))) |line| {
+                                    defer gpa.free(line);
+                                    _ = stdout_file.write(line) catch {};
+                                } else |_| {}
+                                continue;
+                            },
                             .Query => |q| {
                                 // Planner legality (US001)
                                 const plan = geode.planner.planQuery(q, .{}) catch |pe| {
@@ -1705,16 +1846,16 @@ pub fn main() !void {
                                         // Emit scan op; if index chosen we embed inline metadata by writing an extension after op JSON is appended.
                                         emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, op_name, timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
                                         if (chosen_index) |ci_meta| {
-                                            // Backpatch by locating last '}' and inserting fields before it.
+                                            // Backpatch by locating last '}' and inserting inline metadata fields before it.
                                             var idx_back: isize = @as(isize, @intCast(pb.items.len)) - 1;
                                             while (idx_back >= 0 and pb.items[@intCast(idx_back)] != '}') : (idx_back -= 1) {}
                                             if (idx_back > 0) {
                                                 // Insert at idx_back position (before closing brace)
-                                                // Fields: ,"index_name":"...","selectivity":<f64>
+                                                // Fields: ,"index_name":"...","selectivity_est":<f64>
                                                 var sel_buf: [32]u8 = undefined;
                                                 const sel_str = std.fmt.bufPrint(&sel_buf, "{d:.6}", .{ci_meta.eqSelectivity()}) catch "0.0";
                                                 const meta_prefix = ",\"index_name\":\"";
-                                                const meta_mid = "\",\"selectivity\":";
+                                                const meta_mid = "\",\"selectivity_est\":";
                                                 // Build insertion slice
                                                 var ins = std.ArrayList(u8).initCapacity(gpa, 0) catch unreachable;
                                                 const iw = ins.writer(gpa);
@@ -1816,8 +1957,42 @@ pub fn main() !void {
                                     w.print("{d}", .{total_ns}) catch {};
                                     w.writeAll(",\"peak_bytes\":") catch {};
                                     w.print("{d}", .{track.peakBytes()}) catch {};
+                                    // Aggregated HashAgg metrics (if aggregation ran)
+                                    var hashagg_build_ns: i128 = 0;
+                                    var hashagg_emit_ns: i128 = 0;
+                                    var hashagg_build_bytes: usize = 0;
+                                    var hashagg_emit_bytes: usize = 0;
+                                    // We captured these in timings when q.group_by != null
+                                    if (q.group_by != null) {
+                                        hashagg_build_ns = timings.agg_build_ns;
+                                        hashagg_emit_ns = timings.agg_emit_ns;
+                                        hashagg_build_bytes = timings.agg_build_bytes_alloc;
+                                        hashagg_emit_bytes = timings.agg_emit_bytes_alloc;
+                                    }
+                                    w.writeAll(",\"hashagg_build_ns\":") catch {};
+                                    w.print("{d}", .{hashagg_build_ns}) catch {};
+                                    w.writeAll(",\"hashagg_emit_ns\":") catch {};
+                                    w.print("{d}", .{hashagg_emit_ns}) catch {};
+                                    w.writeAll(",\"hashagg_build_bytes_alloc\":") catch {};
+                                    w.print("{d}", .{hashagg_build_bytes}) catch {};
+                                    w.writeAll(",\"hashagg_emit_bytes_alloc\":") catch {};
+                                    w.print("{d}", .{hashagg_emit_bytes}) catch {};
                                     // WAL skip ratio placeholder (storage layer not yet threaded into server state)
-                                    w.writeAll(",\"wal_skip_ratio\":0.0") catch {};
+                                    // WAL skip ratio (if WAL integrated into server state)
+                                    var wal_skip_ratio: f64 = 0.0;
+                                    if (state.wal_ptr) |wp| {
+                                        // Cast opaque pointer back to Wal and read skipRatio.
+                                        const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
+                                        wal_skip_ratio = wptr.skipRatio();
+                                        // Also expose committed_txns metric
+                                        const committed = wptr.committedTxnTotal();
+                                        w.writeAll(",\"committed_txns\":") catch {};
+                                        w.print("{d}", .{committed}) catch {};
+                                    }
+                                    var wal_buf: [32]u8 = undefined;
+                                    const wal_str = std.fmt.bufPrint(&wal_buf, "{d:.4}", .{wal_skip_ratio}) catch "0.0";
+                                    w.writeAll(",\"wal_skip_ratio\":") catch {};
+                                    w.writeAll(wal_str) catch {};
                                     w.writeAll("}") catch {};
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};
@@ -2305,5 +2480,10 @@ pub fn main() !void {
                 writeBindingsAdaptive(stdout_file, state.last_ordered, state.last_order_keys, json_rows, is_final, include_final, computeBaseFlags(state.last_ordered, state.last_distinct));
             },
         }
+    }
+    // Graceful shutdown: flush WAL if present before exiting.
+    if (state.wal_ptr) |wp_flush| {
+        const wflush: *wal_mod.Wal = @ptrCast(@alignCast(wp_flush));
+        wflush.fsync() catch {};
     }
 }

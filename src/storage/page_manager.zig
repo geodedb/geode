@@ -148,14 +148,14 @@ pub const PageManager = struct {
     base_path: ?[]const u8 = null, // optional directory for persistence
 
     pub fn init(ally: std.mem.Allocator, page_size: usize) PageManager {
-        return .{ .allocator = ally, .pages = std.ArrayList([]u8).init(ally), .page_size = page_size, .base_path = null };
+        return .{ .allocator = ally, .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), .page_size = page_size, .base_path = null };
     }
     pub fn initPersistent(ally: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
-        return .{ .allocator = ally, .pages = std.ArrayList([]u8).init(ally), .page_size = page_size, .base_path = base_path };
+        return .{ .allocator = ally, .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), .page_size = page_size, .base_path = base_path };
     }
     pub fn deinit(self: *PageManager) void {
         for (self.pages.items) |p| self.allocator.free(p);
-        self.pages.deinit();
+        self.pages.deinit(self.allocator);
     }
     fn ensurePage(self: *PageManager) !usize {
         if (self.pages.items.len == 0) try self.newPage();
@@ -163,8 +163,8 @@ pub const PageManager = struct {
     }
     fn newPage(self: *PageManager) !void {
         const mem = try self.allocator.alloc(u8, self.page_size);
-        _ = Page.init(mem); // layout initialized
-        try self.pages.append(mem);
+        _ = Page.init(mem);
+        try self.pages.append(self.allocator, mem);
         if (self.base_path) |p| try self.writePage(p, self.pages.items.len - 1);
     }
     fn asPage(self: *PageManager, idx: usize) Page {
@@ -236,7 +236,7 @@ pub const PageManager = struct {
             // Higher layer should translate error.PageChecksumMismatch to diagnostics.StoragePageChecksum.
             return error.PageChecksumMismatch;
         }
-        try self.pages.append(mem);
+        try self.pages.append(self.allocator, mem);
     }
 };
 

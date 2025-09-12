@@ -4,6 +4,9 @@ const geode = @import("geode");
 
 // Import individual test modules (relative to this directory)
 const _div_zero = @import("eval_div_zero_unit.zig");
+// E2E protocol tests (manually imported so they run under `zig build test`)
+const _e2e_profile_committed = @import("e2e_protocol_profile_committed_txns.zig");
+const _e2e_recovery_checksum_committed = @import("e2e_protocol_recovery_checksum_committed.zig");
 
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
