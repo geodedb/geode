@@ -1,5 +1,22 @@
 const std = @import("std");
 
+fn readLineAlloc(ally: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    while (true) {
+        var one: [1]u8 = undefined;
+        const n = try file.read(&one);
+        if (n == 0) { // EOF
+            if (buf.items.len == 0) return error.EndOfStream; // surface empty EOF
+            break;
+        }
+        if (one[0] == '\n') break;
+        buf.append(ally, one[0]) catch return error.OutOfMemory;
+        if (buf.items.len >= max) break;
+    }
+    return buf.toOwnedSlice(ally) catch error.OutOfMemory;
+}
+
 pub fn main() !void {
     const build_options = @import("build_options");
     const sentinel = @import("sentinel");
@@ -64,20 +81,18 @@ pub fn main() !void {
     // Inherit stderr so large error outputs don't block the child process
     child.stderr_behavior = .Inherit;
     try child.spawn();
-    const child_stdin = child.stdin.?.deprecatedWriter();
-    const child_stdout = child.stdout.?.deprecatedReader();
+    const child_stdin_file = child.stdin.?; // use direct file writes (simpler API under Zig 0.15)
 
     // Send HELLO
-    try child_stdin.writeAll("{\"type\":\"HELLO\",\"client_name\":\"geodec\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
+    try child_stdin_file.writeAll("{\"type\":\"HELLO\",\"client_name\":\"geodec\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
     if (do_begin) {
-        try child_stdin.writeAll("{\"type\":\"BEGIN\"}\n");
-        const ack = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+        try child_stdin_file.writeAll("{\"type\":\"BEGIN\"}\n");
+        const ack = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(ack);
         if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
             const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-            const stderr_writer = stderr_file.deprecatedWriter();
-            try stderr_writer.writeAll(ack);
-            try stderr_writer.writeAll("\n");
+            try stderr_file.writeAll(ack);
+            try stderr_file.writeAll("\n");
             if (child.stdin) |s| {
                 s.close();
                 child.stdin = null;
@@ -89,26 +104,25 @@ pub fn main() !void {
     // RUN_GQL
     if (param_name) |pn| {
         const pj = param_json orelse "{}";
-        try child_stdin.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-        try child_stdin.print("{s}", .{text});
-        try child_stdin.writeAll("\",\"params\":{\"");
-        try child_stdin.print("{s}", .{pn});
-        try child_stdin.writeAll("\":");
-        try child_stdin.writeAll(pj);
-        try child_stdin.writeAll("}}\n");
+        try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
+        try child_stdin_file.writeAll(text);
+        try child_stdin_file.writeAll("\",\"params\":{\"");
+        try child_stdin_file.writeAll(pn);
+        try child_stdin_file.writeAll("\":");
+        try child_stdin_file.writeAll(pj);
+        try child_stdin_file.writeAll("}}\n");
     } else {
-        try child_stdin.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-        try child_stdin.print("{s}", .{text});
-        try child_stdin.writeAll("\"}\n");
+        try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
+        try child_stdin_file.writeAll(text);
+        try child_stdin_file.writeAll("\"}\n");
     }
 
     // Read first response; if ERROR, surface and exit 2
-    const line1 = child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16) catch |e| {
+    const line1 = readLineAlloc(gpa, child.stdout.?, 1 << 16) catch |e| {
         if (e == error.EndOfStream) {
             // Server closed before emitting any response (treat as error)
             const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-            const stderr_writer = stderr_file.deprecatedWriter();
-            stderr_writer.writeAll("no response from server\n") catch {};
+            stderr_file.writeAll("no response from server\n") catch {};
             std.process.exit(2);
         }
         return e;
@@ -116,9 +130,8 @@ pub fn main() !void {
     defer gpa.free(line1);
     if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
         const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-        const stderr_writer = stderr_file.deprecatedWriter();
-        try stderr_writer.writeAll(line1);
-        try stderr_writer.writeAll("\n");
+        try stderr_file.writeAll(line1);
+        try stderr_file.writeAll("\n");
         if (child.stdin) |s| {
             s.close();
             child.stdin = null;
@@ -131,13 +144,13 @@ pub fn main() !void {
     var schema_columns: [][]const u8 = &.{};
     if (!fmt_txt) {
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const outw = out_file.deprecatedWriter();
-        try outw.writeAll(line1);
-        try outw.writeAll("\n");
+        try out_file.writeAll(line1);
+        try out_file.writeAll("\n");
     } else {
         const parsed = std.json.parseFromSlice(std.json.Value, gpa, line1, .{}) catch {
             const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-            try stderr_file.deprecatedWriter().writeAll("schema parse error\n");
+            try stderr_file.writeAll("schema parse error\n");
+            try stderr_file.writeAll("schema parse error\n");
             std.process.exit(2);
         };
         defer parsed.deinit();
@@ -158,28 +171,29 @@ pub fn main() !void {
             schema_columns[ci] = try gpa.dupe(u8, name_v.string);
         }
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const outw = out_file.deprecatedWriter();
         var hi: usize = 0;
         while (hi < schema_columns.len) : (hi += 1) {
-            if (hi > 0) try outw.writeAll("\t");
-            try outw.writeAll(schema_columns[hi]);
+            if (hi > 0) try out_file.writeAll("\t");
+            try out_file.writeAll(schema_columns[hi]);
         }
-        try outw.writeAll("\n");
+        try out_file.writeAll("\n");
     }
-    try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
-    try child_stdin.print("{d}", .{page_size});
-    try child_stdin.writeAll("}\n");
-    const line2 = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+    try child_stdin_file.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
+    var ps_buf: [32]u8 = undefined;
+    const ps = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
+    try child_stdin_file.writeAll(ps);
+    try child_stdin_file.writeAll("}\n");
+    const line2 = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
     defer gpa.free(line2);
     if (!fmt_txt) {
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const outw = out_file.deprecatedWriter();
-        try outw.writeAll(line2);
-        try outw.writeAll("\n");
+        try out_file.writeAll(line2);
+        try out_file.writeAll("\n");
     } else {
         const parsedB = std.json.parseFromSlice(std.json.Value, gpa, line2, .{}) catch {
             const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-            try stderr_file.deprecatedWriter().writeAll("bindings parse error\n");
+            try stderr_file.writeAll("bindings parse error\n");
+            try stderr_file.writeAll("bindings parse error\n");
             std.process.exit(2);
         };
         defer parsedB.deinit();
@@ -191,25 +205,28 @@ pub fn main() !void {
         if (rows_v != .array) std.process.exit(2);
         const rows_arr = rows_v.array.items;
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const outw = out_file.deprecatedWriter();
         var ri: usize = 0;
         while (ri < rows_arr.len) : (ri += 1) {
             const rv = rows_arr[ri];
             if (rv != .object) continue;
             var cj: usize = 0;
             while (cj < schema_columns.len) : (cj += 1) {
-                if (cj > 0) try outw.writeAll("\t");
+                if (cj > 0) try out_file.writeAll("\t");
                 const key = schema_columns[cj];
                 const val = rv.object.get(key) orelse std.json.Value{ .null = {} };
                 switch (val) {
-                    .string => |s| try outw.writeAll(s),
-                    .integer => |iv| try outw.print("{d}", .{iv}),
-                    .bool => |bv| try outw.writeAll(if (bv) "true" else "false"),
-                    .null => try outw.writeAll("null"),
-                    else => try outw.writeAll("null"),
+                    .string => |s| try out_file.writeAll(s),
+                    .integer => |iv| {
+                        var num_buf: [64]u8 = undefined;
+                        const ns = std.fmt.bufPrint(&num_buf, "{d}", .{iv}) catch "0";
+                        try out_file.writeAll(ns);
+                    },
+                    .bool => |bv| try out_file.writeAll(if (bv) "true" else "false"),
+                    .null => try out_file.writeAll("null"),
+                    else => try out_file.writeAll("null"),
                 }
             }
-            try outw.writeAll("\n");
+            try out_file.writeAll("\n");
         }
     }
 
@@ -217,43 +234,42 @@ pub fn main() !void {
         // Continue pulling while final:false appears
         var keep = std.mem.indexOf(u8, line2, "\"final\":false") != null;
         while (keep) {
-            try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
-            try child_stdin.print("{d}", .{page_size});
-            try child_stdin.writeAll("}\n");
-            const more = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+            try child_stdin_file.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
+            const ps_more = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
+            try child_stdin_file.writeAll(ps_more);
+            try child_stdin_file.writeAll("}\n");
+            const more = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
             defer gpa.free(more);
             const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            const outw = out_file.deprecatedWriter();
-            try outw.writeAll(more);
-            try outw.writeAll("\n");
+            try out_file.writeAll(more);
+            try out_file.writeAll("\n");
             keep = std.mem.indexOf(u8, more, "\"final\":false") != null;
         }
     }
 
     var ep: usize = 0;
     while (ep < extra_pulls and !fmt_txt) : (ep += 1) {
-        try child_stdin.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
-        try child_stdin.print("{d}", .{page_size});
-        try child_stdin.writeAll("}\n");
-        const extra = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+        try child_stdin_file.writeAll("{\"type\":\"PULL\",\"request_id\":1,\"page_size\":");
+        const ps_extra = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
+        try child_stdin_file.writeAll(ps_extra);
+        try child_stdin_file.writeAll("}\n");
+        const extra = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(extra);
         const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const outw = out_file.deprecatedWriter();
-        try outw.writeAll(extra);
-        try outw.writeAll("\n");
+        try out_file.writeAll(extra);
+        try out_file.writeAll("\n");
     }
 
     // Flush buffered writes before waiting on further responses
     // no buffered writer now
     if (do_commit) {
-        try child_stdin.writeAll("{\"type\":\"COMMIT\"}\n");
-        const ackc = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+        try child_stdin_file.writeAll("{\"type\":\"COMMIT\"}\n");
+        const ackc = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(ackc);
         if (std.mem.indexOf(u8, ackc, "\"type\":\"ERROR\"") != null) {
             const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-            const stderr_writer = stderr_file.deprecatedWriter();
-            try stderr_writer.writeAll(ackc);
-            try stderr_writer.writeAll("\n");
+            try stderr_file.writeAll(ackc);
+            try stderr_file.writeAll("\n");
             if (child.stdin) |s| {
                 s.close();
                 child.stdin = null;
@@ -262,14 +278,13 @@ pub fn main() !void {
             std.process.exit(2);
         }
     } else if (do_rollback) {
-        try child_stdin.writeAll("{\"type\":\"ROLLBACK\"}\n");
-        const ackr = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+        try child_stdin_file.writeAll("{\"type\":\"ROLLBACK\"}\n");
+        const ackr = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(ackr);
         if (std.mem.indexOf(u8, ackr, "\"type\":\"ERROR\"") != null) {
             const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-            const stderr_writer = stderr_file.deprecatedWriter();
-            try stderr_writer.writeAll(ackr);
-            try stderr_writer.writeAll("\n");
+            try stderr_file.writeAll(ackr);
+            try stderr_file.writeAll("\n");
             if (child.stdin) |s| {
                 s.close();
                 child.stdin = null;

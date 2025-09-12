@@ -99,7 +99,7 @@ Additive JSON payload describing per-operator performance & memory. Clients SHOU
 - `memory`: { `net_bytes`, `peak_bytes`, `total_alloc_bytes` } (S)
 - `planner_estimates`: summary statistics when estimates enabled:
   - `sum_estimate_bytes`, `sum_actual_bytes`, `count_estimated_ops`
-  - `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`, `median_error_abs_pct`
+  - `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`, `median_error_abs_pct`, `stddev_error_abs_pct`
   - `adjusted_estimate_factor`: factor to scale future estimates (prototype calibration)
 
 Flags remain on the outer frame (`flagger_findings`). Typical flags: `I:IllegalOrderKeyPolicy=ident-only`, `U:NullsFirstPolicy`, `U:OrderTiebreak=LexJSON`, `U:DistinctOutputUnordered`, `U:UnionPhaseTimings`.

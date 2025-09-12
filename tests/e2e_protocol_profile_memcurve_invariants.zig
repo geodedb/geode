@@ -51,7 +51,7 @@ fn parseMemCurve(profile_line: []const u8) !struct { indices: []usize, nets: []u
     return .{ .indices = indices_slice, .nets = nets_slice };
 }
 
-test "protocol: PROFILE mem_curve invariants monotonic indices" {
+test "protocol: PROFILE mem_curve invariants monotonic indices & nets" {
     const exe = "zig-out/bin/geoded";
     const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[1,1,2,3,5,8]" });
     defer testing.allocator.free(out);
@@ -66,6 +66,30 @@ test "protocol: PROFILE mem_curve invariants monotonic indices" {
         var i: usize = 1;
         while (i < parsed.indices.len) : (i += 1) {
             try testing.expect(parsed.indices[i] > parsed.indices[i - 1]);
+            // nets must be monotonic non-decreasing (no negative freed_bytes effect)
+            try testing.expect(parsed.nets[i] >= parsed.nets[i - 1]);
         }
+        // Final net must equal memory.net_bytes summary
+        const mem_tag = "\"memory\":{";
+        const mem_pos_opt = std.mem.indexOf(u8, profile_line, mem_tag) orelse return error.MissingMemory;
+        var mpos = mem_pos_opt + mem_tag.len;
+        const nb_tag = "\"net_bytes\":";
+        if (!std.mem.startsWith(u8, profile_line[mpos..], nb_tag)) return error.BadMemoryBlock;
+        mpos += nb_tag.len;
+        const nb_begin = mpos;
+        while (mpos < profile_line.len and profile_line[mpos] >= '0' and profile_line[mpos] <= '9') mpos += 1;
+        const nb_slice = profile_line[nb_begin..mpos];
+        const net_bytes_summary = try std.fmt.parseInt(usize, nb_slice, 10);
+        try testing.expectEqual(parsed.nets[parsed.nets.len - 1], net_bytes_summary);
+        // Invariant: mem_curve length equals number of ops
+        var op_count: usize = 0;
+        var search_idx: usize = 0;
+        const op_pat = "\"op\":\"";
+        while (true) {
+            const pos = std.mem.indexOfPos(u8, profile_line, search_idx, op_pat) orelse break;
+            op_count += 1;
+            search_idx = pos + op_pat.len;
+        }
+        try testing.expectEqual(op_count, parsed.indices.len);
     }
 }

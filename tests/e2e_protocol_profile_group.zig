@@ -38,8 +38,15 @@ test "protocol: PROFILE grouped query includes aggregate ops" {
     try std.testing.expect(contains(res.out, "AggregateEmit"));
     // Project should still appear
     try std.testing.expect(contains(res.out, "Project"));
+    // profile_version 1 expectation
+    try std.testing.expect(contains(res.out, "\"profile_version\":1"));
     // bytes_out metric should be present
     try std.testing.expect(contains(res.out, "bytes_out"));
     try std.testing.expect(contains(res.out, "input_rows"));
     try std.testing.expect(contains(res.out, "bytes_alloc"));
+    // Basic op ordering subset: AggregateBuild -> AggregateEmit -> Project
+    const pos_build = std.mem.indexOf(u8, res.out, "\"op\":\"AggregateBuild\"") orelse return error.NoAggregateBuild;
+    const pos_emit = std.mem.indexOf(u8, res.out, "\"op\":\"AggregateEmit\"") orelse return error.NoAggregateEmit;
+    const pos_project = std.mem.indexOf(u8, res.out, "\"op\":\"Project\"") orelse return error.NoProject;
+    try std.testing.expect(pos_build < pos_emit and pos_emit < pos_project);
 }

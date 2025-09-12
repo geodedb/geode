@@ -44,4 +44,5 @@ test "protocol: PROFILE schema guard (op_index, error stats)" {
     // Planner aggregate stats
     try testing.expect(std.mem.indexOf(u8, profile_line, "planner_estimates") != null);
     try testing.expect(std.mem.indexOf(u8, profile_line, "mean_error_abs_pct") != null);
+    try testing.expect(std.mem.indexOf(u8, profile_line, "stddev_error_abs_pct") != null);
 }

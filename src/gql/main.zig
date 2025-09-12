@@ -263,7 +263,8 @@ pub fn main() !void {
                         try out.writer(ally).print("  {d} -> {s}\n", .{ r.id, s });
                     }
                     // Write once
-                    try (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter().writeAll(out.items);
+                    const outf = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    _ = try outf.write(out.items);
                 },
                 else => {
                     std.debug.print("demo-sort: first statement is not a Query\n", .{});

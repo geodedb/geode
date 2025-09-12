@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const util = @import("profile_test_util.zig");
 
 fn runWithEnv(args: []const []const u8, env_map: *std.process.EnvMap) ![]u8 {
     var child = std.process.Child.init(args, testing.allocator);
@@ -26,7 +27,8 @@ test "protocol: forced spill reason appears when env forces spill" {
     const q = "PROFILE RETURN a AS x ORDER BY x LIMIT 5";
     const out = try runWithEnv(&.{ exe, q, "--json-param", "a", "[5,4,3,2,1]" }, &env_map);
     defer testing.allocator.free(out);
+    const pl = util.findProfileLine(out) orelse return error.MissingProfile;
     // We expect spill_reason forced and sort_spills >=1
-    try testing.expect(std.mem.indexOf(u8, out, "\"spill_reason\":\"forced\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "\"sort_spills\":1") != null or std.mem.indexOf(u8, out, "\"sort_spills\":2") != null);
+    try testing.expect(std.mem.indexOf(u8, pl, "\"spill_reason\":\"forced\"") != null);
+    try testing.expect(std.mem.indexOf(u8, pl, "\"sort_spills\":1") != null or std.mem.indexOf(u8, pl, "\"sort_spills\":2") != null);
 }

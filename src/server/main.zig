@@ -64,14 +64,17 @@ const F_NULLS_LAST = "U:NullsLastPolicy";
 const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
 const F_DISTINCT_UNORDERED = "U:DistinctOutputUnordered";
 const F_UNION_PHASES = "U:UnionPhaseTimings";
+const F_ADAPT_EST = "U:AdaptiveEstimatesPlanned"; // groundwork flag (no behavior change yet)
 
 // Helper returns correct null policy flag pointer.
 inline fn nullsFlag() []const u8 {
     return if (g_nulls_last) F_NULLS_LAST else F_NULLS_FIRST;
 }
 
-var flags_buf_base: [4][]const u8 = undefined; // reused sequentially (single-threaded server)
-var flags_buf_ext: [5][]const u8 = undefined;
+var flags_buf_base: [5][]const u8 = undefined; // room for adaptive flag
+var flags_buf_ext: [6][]const u8 = undefined; // room for adaptive + union phases
+var g_adapt_estimates: bool = false; // env or future CLI toggled
+var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
 
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
     var n: usize = 0;
@@ -85,6 +88,10 @@ fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
     }
     if (!ordered and distinct) {
         flags_buf_base[n] = F_DISTINCT_UNORDERED;
+        n += 1;
+    }
+    if (g_adapt_estimates) {
+        flags_buf_base[n] = F_ADAPT_EST;
         n += 1;
     }
     return flags_buf_base[0..n];
@@ -395,6 +402,12 @@ const StageTimings = struct {
     agg_build_bytes_alloc: usize = 0,
     agg_emit_bytes_alloc: usize = 0,
     expand_bytes_alloc: usize = 0,
+    // Net allocator snapshots (used to derive per-stage allocation deltas)
+    net_after_project: usize = 0,
+    net_after_distinct: usize = 0,
+    net_after_sort: usize = 0,
+    net_after_offset: usize = 0,
+    net_after_limit: usize = 0,
 };
 // TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
 
@@ -660,7 +673,9 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         var tb: usize = 0;
         for (rows_json.items) |s| tb += s.len;
         tptr.project_bytes_out = tb;
-        tptr.project_bytes_alloc = if (alloc_tracker) |tr| tr.getFn(tr.ctx) else tb;
+        const net_now = if (alloc_tracker) |tr| tr.getFn(tr.ctx) else tb;
+        tptr.project_bytes_alloc = net_now; // delta since start
+        tptr.net_after_project = net_now;
         tptr.expand_bytes_out = 0;
         tptr.expand_bytes_alloc = 0;
     }
@@ -675,7 +690,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     }
 
     // DISTINCT delta attribution baseline captured after project
-    var alloc_after_project: usize = if (alloc_tracker) |trp| trp.getFn(trp.ctx) else 0;
+    // alloc_after_project no longer needed (per-stage deltas captured via net_after_* fields)
     if (q.ret.distinct and rows_json.items.len > 1) {
         const t_d_start = if (timings) |_| std.time.nanoTimestamp() else 0;
         distinctDedup(ally, need_row_values, q.ret.items.len, &rows_json, &rows_values, null);
@@ -688,9 +703,12 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             tptr.distinct_bytes_out = tb2;
             if (alloc_tracker) |tr| {
                 const after = tr.getFn(tr.ctx);
-                tptr.distinct_bytes_alloc = after - alloc_after_project;
-                alloc_after_project = after;
-            } else tptr.distinct_bytes_alloc = tb2;
+                tptr.distinct_bytes_alloc = after - tptr.net_after_project;
+                tptr.net_after_distinct = after;
+            } else {
+                tptr.distinct_bytes_alloc = tb2;
+                tptr.net_after_distinct = tptr.net_after_project + tptr.distinct_bytes_alloc;
+            }
         }
     }
 
@@ -848,9 +866,13 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 tptr.sort_bytes_out = tbs;
                 if (alloc_tracker) |tr| {
                     const after = tr.getFn(tr.ctx);
-                    tptr.sort_bytes_alloc = after - alloc_after_project;
-                    alloc_after_project = after;
-                } else tptr.sort_bytes_alloc = tbs;
+                    const base = if (tptr.net_after_distinct != 0) tptr.net_after_distinct else tptr.net_after_project;
+                    tptr.sort_bytes_alloc = if (after > base) after - base else 0;
+                    tptr.net_after_sort = after;
+                } else {
+                    tptr.sort_bytes_alloc = tbs;
+                    tptr.net_after_sort = (if (tptr.net_after_distinct != 0) tptr.net_after_distinct else tptr.net_after_project) + tptr.sort_bytes_alloc;
+                }
             }
         }
     }
@@ -877,9 +899,14 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             tptr.offset_bytes_out = tbo;
             if (alloc_tracker) |tr| {
                 const after = tr.getFn(tr.ctx);
-                tptr.offset_bytes_alloc = after - alloc_after_project;
-                alloc_after_project = after;
-            } else tptr.offset_bytes_alloc = tbo;
+                const base = if (tptr.net_after_sort != 0) tptr.net_after_sort else if (tptr.net_after_distinct != 0) tptr.net_after_distinct else tptr.net_after_project;
+                tptr.offset_bytes_alloc = if (after > base) after - base else 0;
+                tptr.net_after_offset = after;
+            } else {
+                tptr.offset_bytes_alloc = tbo;
+                const base = if (tptr.net_after_sort != 0) tptr.net_after_sort else if (tptr.net_after_distinct != 0) tptr.net_after_distinct else tptr.net_after_project;
+                tptr.net_after_offset = base + tptr.offset_bytes_alloc;
+            }
         }
     }
     var end: usize = rows_json.items.len;
@@ -899,9 +926,14 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             tptr.limit_bytes_out = tbl;
             if (alloc_tracker) |tr| {
                 const after = tr.getFn(tr.ctx);
-                tptr.limit_bytes_alloc = after - alloc_after_project;
-                alloc_after_project = after;
-            } else tptr.limit_bytes_alloc = tbl;
+                const base = if (tptr.net_after_offset != 0) tptr.net_after_offset else if (tptr.net_after_sort != 0) tptr.net_after_sort else if (tptr.net_after_distinct != 0) tptr.net_after_distinct else tptr.net_after_project;
+                tptr.limit_bytes_alloc = if (after > base) after - base else 0;
+                tptr.net_after_limit = after;
+            } else {
+                tptr.limit_bytes_alloc = tbl;
+                const base = if (tptr.net_after_offset != 0) tptr.net_after_offset else if (tptr.net_after_sort != 0) tptr.net_after_sort else if (tptr.net_after_distinct != 0) tptr.net_after_distinct else tptr.net_after_project;
+                tptr.net_after_limit = base + tptr.limit_bytes_alloc;
+            }
         }
     }
     if (start != 0 or end != rows_json.items.len) {
@@ -933,11 +965,11 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         if (tptr.sort_bytes_out == 0) tptr.sort_bytes_out = tptr.distinct_bytes_out;
         if (tptr.offset_bytes_out == 0) tptr.offset_bytes_out = tptr.sort_bytes_out;
         if (tptr.limit_bytes_out == 0) tptr.limit_bytes_out = if (q.limit != null) tptr.limit_bytes_out else tptr.offset_bytes_out;
-        if (tptr.distinct_bytes_alloc == 0) tptr.distinct_bytes_alloc = tptr.project_bytes_alloc;
+        if (tptr.distinct_bytes_alloc == 0) tptr.distinct_bytes_alloc = if (tptr.net_after_distinct != 0 and tptr.net_after_project != 0 and tptr.net_after_distinct >= tptr.net_after_project) tptr.net_after_distinct - tptr.net_after_project else tptr.project_bytes_alloc;
         if (tptr.expand_bytes_alloc == 0) tptr.expand_bytes_alloc = 0;
-        if (tptr.sort_bytes_alloc == 0) tptr.sort_bytes_alloc = tptr.distinct_bytes_alloc;
-        if (tptr.offset_bytes_alloc == 0) tptr.offset_bytes_alloc = tptr.sort_bytes_alloc;
-        if (tptr.limit_bytes_alloc == 0) tptr.limit_bytes_alloc = if (q.limit != null) tptr.limit_bytes_alloc else tptr.offset_bytes_alloc;
+        if (tptr.sort_bytes_alloc == 0) tptr.sort_bytes_alloc = if (tptr.net_after_sort != 0) (if (tptr.net_after_distinct != 0) tptr.net_after_sort - tptr.net_after_distinct else tptr.net_after_sort - tptr.net_after_project) else tptr.distinct_bytes_alloc;
+        if (tptr.offset_bytes_alloc == 0) tptr.offset_bytes_alloc = if (tptr.net_after_offset != 0) (if (tptr.net_after_sort != 0) tptr.net_after_offset - tptr.net_after_sort else tptr.net_after_offset - tptr.net_after_project) else tptr.sort_bytes_alloc;
+        if (tptr.limit_bytes_alloc == 0) tptr.limit_bytes_alloc = if (q.limit != null and tptr.net_after_limit != 0) (if (tptr.net_after_offset != 0) tptr.net_after_limit - tptr.net_after_offset else tptr.net_after_limit - (if (tptr.net_after_sort != 0) tptr.net_after_sort else tptr.net_after_project)) else tptr.offset_bytes_alloc;
     }
 
     cols_out.* = cols;
@@ -1030,9 +1062,12 @@ pub fn main() !void {
         if (env.get("GEODE_PROFILE_MEMCURVE")) |_| {
             memcurve_profile = true;
         }
+        if (env.get("GEODE_ADAPT_ESTIMATES")) |_| {
+            g_adapt_estimates = true; // currently only surfaces flag; no behavior change
+        }
     } else |_| {}
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    var stdin_buf: [8192]u8 = undefined;
+    var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
     const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     // (Removed buffered writer; direct file writes used.)
@@ -1340,10 +1375,7 @@ pub fn main() !void {
                                         if (timings.project_bytes_alloc == 0) timings.project_bytes_alloc = alloc_after_project; // baseline
                                         // Heuristic attribution: since we free nothing yet, additional growth after each stage boundary approximated by bytes_out delta.
                                         // For now treat all later stage alloc equal to net usage (will refine once stage-level alloc hooks added).
-                                        timings.distinct_bytes_alloc = timings.distinct_bytes_out;
-                                        timings.sort_bytes_alloc = timings.sort_bytes_out;
-                                        timings.offset_bytes_alloc = timings.offset_bytes_out;
-                                        timings.limit_bytes_alloc = timings.limit_bytes_out;
+                                        // Per-stage allocation deltas already derived inside evaluateSimpleQuery; no heuristic override.
                                     }
                                     const total_ns: i128 = std.time.nanoTimestamp() - start_time;
                                     // net_alloc skipped (counting allocator not active)
@@ -1389,6 +1421,7 @@ pub fn main() !void {
                                             error_min_pct: *usize,
                                             error_max_pct: *usize,
                                             error_sum_pct: *usize,
+                                            error_sum_sq_pct: *usize,
                                             error_count: *usize,
                                             name: []const u8,
                                             in_rows: usize,
@@ -1479,6 +1512,7 @@ pub fn main() !void {
                                                 if (error_count.* == 0 or err_pct < error_min_pct.*) error_min_pct.* = err_pct;
                                                 if (err_pct > error_max_pct.*) error_max_pct.* = err_pct;
                                                 error_sum_pct.* += err_pct;
+                                                error_sum_sq_pct.* += err_pct * err_pct;
                                                 error_count.* += 1;
                                             } else {
                                                 if (!compact) wr.writeAll(",\"error_bytes\":0,\"error_abs_pct\":0") catch {};
@@ -1498,6 +1532,7 @@ pub fn main() !void {
                                     var err_min_pct: usize = 0;
                                     var err_max_pct: usize = 0;
                                     var err_sum_pct: usize = 0;
+                                    var err_sum_sq_pct: usize = 0; // for stddev_error_abs_pct
                                     var err_count: usize = 0;
                                     var op_index_distinct: ?usize = null;
                                     var op_index_sort: ?usize = null;
@@ -1525,11 +1560,11 @@ pub fn main() !void {
                                         const est_build = if (disable_estimates) 0 else timings.agg_rows_in * 32;
                                         const est_emit = if (disable_estimates) 0 else timings.agg_rows_out * 16;
                                         const agg_build_idx = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "AggregateBuild", timings.agg_rows_in, timings.agg_rows_out, timings.agg_build_ns, timings.project_bytes_out, timings.agg_build_bytes_alloc, est_build, peak_bytes, net_now, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, agg_build_idx, net_now);
                                         if (est_build > 0) sum_actual_estimated += timings.agg_build_bytes_alloc;
                                         const agg_emit_idx = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "AggregateEmit", timings.agg_rows_out, timings.agg_rows_out, timings.agg_emit_ns, timings.project_bytes_out, timings.agg_emit_bytes_alloc, est_emit, peak_bytes, net_now, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, agg_emit_idx, net_now);
                                         if (est_emit > 0) sum_actual_estimated += timings.agg_emit_bytes_alloc;
                                     }
@@ -1539,25 +1574,25 @@ pub fn main() !void {
                                         const est_nodescan = if (disable_estimates) 0 else timings.project_rows_out * 4; // small per-row placeholder
                                         const nodescan_idx = op_index_counter;
                                         const net_nodescan = track.net();
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "NodeScan", timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "NodeScan", timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, nodescan_idx, net_nodescan);
                                         if (est_nodescan > 0) sum_actual_estimated += 0;
                                         const est_expand = if (disable_estimates) 0 else timings.expand_rows_out * 8;
                                         const expand_idx = op_index_counter;
                                         const net_expand = track.net();
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Expand", timings.expand_rows_in, timings.expand_rows_out, timings.expand_ns, timings.expand_bytes_out, timings.expand_bytes_alloc, est_expand, peak_bytes, net_expand, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "Expand", timings.expand_rows_in, timings.expand_rows_out, timings.expand_ns, timings.expand_bytes_out, timings.expand_bytes_alloc, est_expand, peak_bytes, net_expand, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, expand_idx, net_expand);
                                         if (est_expand > 0) sum_actual_estimated += timings.expand_bytes_alloc;
                                     }
                                     const est_project = if (disable_estimates) 0 else timings.project_rows_out * 8;
                                     const project_idx = op_index_counter;
-                                    emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc, est_project, peak_bytes, net_post_group, compact_profile);
+                                    emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc, est_project, peak_bytes, net_post_group, compact_profile);
                                     if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, project_idx, net_post_group);
                                     if (est_project > 0) sum_actual_estimated += timings.project_bytes_alloc;
                                     if (q.ret.distinct) {
                                         const est_distinct = if (disable_estimates) 0 else timings.distinct_rows_in * 24;
                                         op_index_distinct = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out, est_distinct, peak_bytes, net_post_group, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out, est_distinct, peak_bytes, net_post_group, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, op_index_distinct.?, net_post_group);
                                         if (est_distinct > 0) sum_actual_estimated += if (timings.distinct_bytes_alloc != 0) timings.distinct_bytes_alloc else timings.distinct_bytes_out;
                                     }
@@ -1569,18 +1604,18 @@ pub fn main() !void {
                                         }
                                         const est_sort = if (disable_estimates) 0 else timings.sort_rows_in * 16;
                                         op_index_sort = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out, est_sort, peak_bytes, net_post_group, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out, est_sort, peak_bytes, net_post_group, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, op_index_sort.?, net_post_group);
                                         if (est_sort > 0) sum_actual_estimated += if (timings.sort_bytes_alloc != 0) timings.sort_bytes_alloc else timings.sort_bytes_out;
                                     }
                                     if (q.offset != null) {
                                         const offset_idx = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, if (timings.offset_bytes_alloc != 0) timings.offset_bytes_alloc else timings.offset_bytes_out, 0, peak_bytes, net_post_group, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, if (timings.offset_bytes_alloc != 0) timings.offset_bytes_alloc else timings.offset_bytes_out, 0, peak_bytes, net_post_group, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, offset_idx, net_post_group);
                                     }
                                     if (q.limit != null) {
                                         const limit_idx = op_index_counter;
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_count, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, if (timings.limit_bytes_alloc != 0) timings.limit_bytes_alloc else timings.limit_bytes_out, 0, peak_bytes, net_post_group, compact_profile);
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, if (timings.limit_bytes_alloc != 0) timings.limit_bytes_alloc else timings.limit_bytes_out, 0, peak_bytes, net_post_group, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, limit_idx, net_post_group);
                                     }
                                     // If scratch not freed due to no sort stage, free now (freed_bytes will not appear in that case).
@@ -1681,8 +1716,20 @@ pub fn main() !void {
                                         w.print("\"count_estimated_ops\":{d}", .{err_count}) catch {};
                                         if (err_count > 0) {
                                             const mean_err: usize = err_sum_pct / err_count;
+                                            // population stddev (we can refine to sample if needed later)
+                                            var stddev_err: usize = 0;
+                                            if (err_count > 1) {
+                                                const mean_sq = mean_err * mean_err;
+                                                const avg_sq = err_sum_sq_pct / err_count;
+                                                if (avg_sq > mean_sq) {
+                                                    const variance = avg_sq - mean_sq;
+                                                    const stddev_f = std.math.sqrt(@as(f64, @floatFromInt(variance)));
+                                                    stddev_err = @intFromFloat(stddev_f);
+                                                }
+                                                if (stddev_err > 100) stddev_err = 100; // cap within schema bounds
+                                            }
                                             w.writeAll(",") catch {};
-                                            w.print("\"min_error_abs_pct\":{d},\"max_error_abs_pct\":{d},\"mean_error_abs_pct\":{d},\"median_error_abs_pct\":{d}", .{ err_min_pct, err_max_pct, mean_err, median_err }) catch {};
+                                            w.print("\"min_error_abs_pct\":{d},\"max_error_abs_pct\":{d},\"mean_error_abs_pct\":{d},\"median_error_abs_pct\":{d},\"stddev_error_abs_pct\":{d}", .{ err_min_pct, err_max_pct, mean_err, median_err, stddev_err }) catch {};
                                             // Print factor with limited precision
                                             var buf: [32]u8 = undefined;
                                             const fac_str = std.fmt.bufPrint(&buf, "{d:.4}", .{adjusted_estimate_factor}) catch "1.0000";

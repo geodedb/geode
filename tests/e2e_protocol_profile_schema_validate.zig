@@ -1,25 +1,14 @@
 const std = @import("std");
 const testing = std.testing;
+const util = @import("profile_test_util.zig");
 
-fn run(args: []const []const u8) ![]u8 {
-    var child = std.process.Child.init(args, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 20);
-    _ = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 20);
-    const term = try child.wait();
-    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
-    return out;
-}
+// use shared util.runCli
 
 test "protocol: PROFILE conforms to schema v1 minimal" {
     const exe = "zig-out/bin/geoded";
-    const out = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
+    const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
-    var it = std.mem.splitScalar(u8, out, '\n');
-    _ = it.next(); // schema line
-    const profile_line = it.next() orelse return error.MissingProfile;
+    const profile_line = util.findProfileLine(out) orelse return error.MissingProfile;
     try testing.expect(std.mem.indexOf(u8, profile_line, "\"profile_version\":1") != null);
     // Basic required top-level keys
     for ([_][]const u8{ "ops", "memory", "total_time_ns" }) |key| {

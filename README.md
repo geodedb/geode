@@ -74,6 +74,46 @@ Yields PROFILE JSON (abridged):
 
 Metrics are stable for automation; additions bump `profile_version`.
 
+### Snapshot & Test Workflow
+
+Snapshot tests assert structural stability of PROFILE output while tolerating numeric variance.
+
+Implemented snapshot layers:
+
+- Baseline structural signature (`e2e_protocol_profile_snapshot.zig`)
+- mem_curve presence/prefix (`e2e_protocol_profile_memcurve_snapshot.zig`)
+- Estimates suppression (`e2e_protocol_profile_no_estimates_snapshot.zig`)
+- Spill reasons (forced & threshold) tests
+- Allocation delta & op ordering invariants (`e2e_protocol_profile_alloc_deltas.zig`)
+
+Signature Generation / Update:
+
+1. Run `zig build test` after intentional PROFILE schema change.
+2. Failing snapshot test prints `SNAPSHOT_SIGNATURE=...`.
+3. Replace the `EXPECTED_SIGNATURE` constant in the snapshot test with the printed value.
+4. Commit new snapshot along with schema change; bump `profile_version` if shape changed.
+
+Normalization Rules:
+
+- All digit sequences (including decimals) collapsed to '0'.
+- Whitespace removed.
+- Order of keys preserved; new keys require version bump.
+
+Allocation Deltas:
+
+- Per-stage `bytes_alloc` derived from net allocator snapshots at each stage boundary (delta from previous boundary).
+- `percent_peak` / `percent_net` computed from these deltas, not cumulative sums.
+
+Spill Reason Semantics:
+
+- `forced` when an explicit `GEODE_FORCE_*` env var triggers spill counters.
+- `threshold` when `GEODE_SPILL_THRESHOLD_BYTES` <= peak_bytes and no explicit force provided.
+
+Updating Tests for New Ops:
+
+- Add new op to ordering validation allowlist in `e2e_protocol_profile_alloc_deltas.zig` (maintain monotonic order).
+- Update snapshot signature after confirming stable normalized output.
+
 ## Diagnostics (policy and ISO anchors)
 
 | Code            | Meaning                                                    | ISO anchor  | Example                        |

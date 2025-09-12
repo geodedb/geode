@@ -21,5 +21,6 @@ test "protocol: PROFILE includes calibration metrics" {
     _ = it.next();
     const profile_line = it.next() orelse return error.MissingProfile;
     try testing.expect(std.mem.indexOf(u8, profile_line, "median_error_abs_pct") != null);
+    try testing.expect(std.mem.indexOf(u8, profile_line, "stddev_error_abs_pct") != null);
     try testing.expect(std.mem.indexOf(u8, profile_line, "adjusted_estimate_factor") != null);
 }

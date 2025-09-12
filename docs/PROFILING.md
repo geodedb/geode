@@ -14,7 +14,7 @@
   - `sum_estimate_bytes`
   - `sum_actual_bytes`
   - `count_estimated_ops`
-  - `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`
+  - `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`, `median_error_abs_pct`, `stddev_error_abs_pct`
 
 ## Per-Op Fields (ops[])
 

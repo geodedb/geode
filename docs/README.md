@@ -51,6 +51,7 @@ The `PROFILE` prefix produces a JSON PROFILE line (after the SCHEMA line) descri
 - memory: net_bytes (live after last op), peak_bytes, total_alloc_bytes (cumulative alloc traffic) from profiling allocator.
 - planner_estimates: Summary of estimation accuracy and adjusted_estimate_factor for future adaptive tuning.
 - mem_curve (optional): Present when `--profile-memcurve` flag supplied. Array of `{op_index, net_after_op}` capturing allocator net bytes immediately after each operator emission. Indices strictly increase.
+- Adaptive estimates groundwork: set `GEODE_ADAPT_ESTIMATES=1` to surface flag `U:AdaptiveEstimatesPlanned` (no behavioral change yet).
 
 ### Enabling mem_curve
 

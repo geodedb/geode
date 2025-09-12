@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const util = @import("profile_test_util.zig");
 
 fn run(args: []const []const u8) ![]u8 {
     var child = std.process.Child.init(args, testing.allocator);
@@ -17,5 +18,6 @@ test "protocol: PROFILE mem_curve present when flag enabled" {
     const exe = "zig-out/bin/geoded";
     const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
-    try testing.expect(std.mem.indexOf(u8, out, "\"mem_curve\":[") != null);
+    const pl = util.findProfileLine(out) orelse return error.MissingProfile;
+    try testing.expect(std.mem.indexOf(u8, pl, "\"mem_curve\":[") != null);
 }
