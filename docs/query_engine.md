@@ -728,37 +728,62 @@ test "offset pushdown requires explicit order" {
 
 _End of report._
 
-[1]: https://dl.acm.org/doi/10.1145/3180143?utm_source=chatgpt.com "Worst-case Optimal Join Algorithms | Journal of the ACM"
-[2]: https://www.openproceedings.org/2014/conf/icdt/Veldhuizen14.pdf?utm_source=chatgpt.com "Leapfrog Triejoin: A Simple, Worst-Case Optimal Join ..."
-[3]: https://www.cidrdb.org/cidr2023/papers/p48-jin.pdf "KÙZU^* Graph Database Management System"
-[4]: https://northeastern-datalab.github.io/anyk/download/vldb2020-optimal-ranked-enumeration.pdf?utm_source=chatgpt.com "Optimal Algorithms for Ranked Enumeration of Answers to Full ..."
-[5]: https://www.ccs.neu.edu/home/mirek/papers/2020-SIGMOD-AnyK-tutorial.pdf?utm_source=chatgpt.com "Optimal Join Algorithms Meet Top-k"
-[6]: https://ppl.stanford.edu/papers/emptyheaded.pdf?utm_source=chatgpt.com "EmptyHeaded: A Relational Engine for Graph Processing"
-[7]: https://dl.acm.org/doi/10.1145/2463676.2465315?utm_source=chatgpt.com "Fast exact shortest-path distance queries on large networks by ..."
-[8]: https://homepages.inf.ed.ac.uk/libkin/papers/icdt12b.pdf?utm_source=chatgpt.com "Regular Path Queries on Graphs with Data∗"
-[9]: https://dl.acm.org/doi/abs/10.1007/978-3-319-58961-9_12?utm_source=chatgpt.com "Introducing VF3: A New Algorithm for Subgraph Isomorphism"
-[10]: https://pmc.ncbi.nlm.nih.gov/articles/PMC7314700/?utm_source=chatgpt.com "The Glasgow Subgraph Solver: Using Constraint ..."
-[11]: https://arxiv.org/abs/2205.05649?utm_source=chatgpt.com "Any-k Algorithms for Enumerating Ranked Answers to Conjunctive Queries"
-[12]: https://research.google.com/pubs/archive/40671.pdf?utm_source=chatgpt.com "HyperLogLog in Practice: Algorithmic Engineering of a ..."
-[13]: https://dl.acm.org/doi/10.1145/2452376.2452456?utm_source=chatgpt.com "HyperLogLog in practice: algorithmic engineering of a state of ..."
-[14]: https://cse.buffalo.edu/~zzhao35/files/papers/xdbsigmodrecord.pdf?utm_source=chatgpt.com "Wander Join and XDB: Online Aggregation via Random ..."
-[15]: https://www.cs.ox.ac.uk/people/boris.motik/pubs/hm24-accurate-sampling.pdf?utm_source=chatgpt.com "Accurate Sampling-Based Cardinality Estimation for ..."
-[16]: https://dl.acm.org/doi/pdf/10.1145/3180143?utm_source=chatgpt.com "Worst-case Optimal Join Algorithms"
-[17]: https://pages.cs.wisc.edu/~paris/cs838-s16/lecture-notes/lecture6.pdf?utm_source=chatgpt.com "Lecture 6: Size Bounds for Joins 6.1 The AGM Bound"
-[18]: https://www.vldb.org/pvldb/vol13/p884-funke.pdf?utm_source=chatgpt.com "Data-Parallel Query Processing on Non-Uniform Data"
-[19]: https://dl.acm.org/doi/10.1145/3108140?utm_source=chatgpt.com "Gunrock: GPU Graph Analytics - ACM Digital Library"
-[20]: https://drkp.net/papers/ssi-vldb12.pdf?utm_source=chatgpt.com "Serializable Snapshot Isolation in PostgreSQL"
-[21]: https://15721.courses.cs.cmu.edu/spring2020/papers/20-optimizer2/p539-moerkotte.pdf?utm_source=chatgpt.com "Dynamic Programming Strikes Back"
-[22]: https://arxiv.org/pdf/2409.08013?utm_source=chatgpt.com "DPconv: Super-Polynomially Faster Join Ordering"
-[23]: https://db.in.tum.de/~birler/papers/adaptivelindp.pdf?utm_source=chatgpt.com "Optimizing Linearized Join Enumeration by Adapting to the ..."
-[24]: https://www.vldb.org/pvldb/vol16/p1466-zhu.pdf?utm_source=chatgpt.com "Lero: A Learning-to-Rank Query Optimizer"
-[25]: https://ipads.se.sjtu.edu.cn/_media/publications/powerlyra-eurosys15.pdf?utm_source=chatgpt.com "PowerLyra: Differentiated Graph Computation and ..."
-[26]: https://math.cmu.edu/~ctsourak/fennel-wsdm.pdf?utm_source=chatgpt.com "FENNEL: Streaming Graph Partitioning for Massive Scale ..."
-[27]: https://dl.acm.org/doi/10.1145/2588555.2610511?utm_source=chatgpt.com "TriAD: a distributed shared-nothing RDF engine based on ..."
-[28]: https://dl.acm.org/doi/abs/10.1007/s00778-015-0415-0?utm_source=chatgpt.com "Processing SPARQL queries over distributed RDF graphs"
-[29]: https://itu.dk/~joqu/assets/publications/sigmod21a.pdf?utm_source=chatgpt.com "Compliant Geo-distributed Query Processing"
-[30]: https://www.vldb.org/pvldb/vol15/p752-zhu.pdf?utm_source=chatgpt.com "Cardinality Estimation in DBMS: A Comprehensive ..."
-[31]: https://www.vldb.org/pvldb/vol16/p2805-wang.pdf?utm_source=chatgpt.com "ADOPT: Adaptively Optimizing Attribute Orders for Worst- ..."
-[32]: https://pmc.ncbi.nlm.nih.gov/articles/PMC7955775/?utm_source=chatgpt.com "Optimal Algorithms for Ranked Enumeration of Answers to Full ..."
-[33]: https://www.vldb.org/pvldb/vol17/p1697-park.pdf?utm_source=chatgpt.com "Cardinality Estimation of Subgraph Matching: A Filtering- ..."
-[34]: https://readingxtra.github.io/docs/cpu-graph/ChenTOPC2019.pdf?utm_source=chatgpt.com "PowerLyra: Differentiated Graph Computation and Partitioning ..."
+## 10) GQL→Engine Crosswalk (Milestone v0.15 Core)
+
+| GQL Clause / Construct | ISO Clause(s) | AST Node(s) / Fields  | Logical Operator(s) | Physical Operator(s) | Storage / Index Access | Txn / WAL Action | Protocol Frame(s) | Diagnostics (Primary -> Additional) | Impl-defined / Dependent (I:/U:) |
+| ---------------------- | ------------- | --------------------- | ------------------- | -------------------- | ---------------------- | ---------------- | ----------------- | ----------------------------------- | -------------------------------- |
+| Linear composition     | 14.3          | LinearStmt sequence   | Pipeline            | Operator pipeline    | —                      | snapshot ref     | SCHEMA/BINDINGS   | (parse) -> (planner) precedence     | —                                |
+| MATCH (node)           | 14.4          | MatchPattern(label)   | NodeScan            | NodeIndexScan / CSR  | label/property heap    | read visibility  | BINDINGS          | TypeMismatch (expr)                 | I:Collation                      |
+| MATCH expand edge      | 14.4          | PatternEdge(dir,τ)    | Expand              | CSR Expand           | adjacency list (CSR)   | read visibility  | BINDINGS          | US001 (if followed by page)         | U:UA005/UA006 (tie-break)        |
+| OPTIONAL MATCH         | 14.4          | OptionalPattern       | LeftOuterJoin       | HashJoin(LOJ)        | as above               | read visibility  | BINDINGS          | GroupByIllegal (later)              | —                                |
+| RETURN projection      | 14.10         | ReturnItem list       | Project             | ProjectVec           | —                      | —                | SCHEMA/BINDINGS   | IllegalOrderKey (ordering phase)    | I:NumericPromotion               |
+| GROUP BY               | 14.10 / 16.15 | GroupSpec             | Group               | HashAgg (planned)    | temp agg hash area     | —                | BINDINGS/PROFILE  | GroupByIllegal                      | —                                |
+| ORDER BY               | 14.10/16.16   | SortKey list          | Order               | Sort / TopK          | temp sort buffers      | —                | BINDINGS          | IllegalOrderKey -> US001            | I:Collation; U:US001             |
+| LIMIT/OFFSET           | 16.18–16.19   | Limit, Offset         | Limit / Offset      | StopAfter / Offset   | —                      | —                | BINDINGS          | US001                               | U:US001                          |
+| Set Ops (UNION etc.)   | 14.12         | UnionQuery            | SetOp               | HashSet / Merge      | temp hash / sort area  | —                | BINDINGS          | TypeMismatch (row coercion)         | I:DistinctOrdering               |
+| CASE / expressions     | 16.x / 20.x   | Expr(Case,Predicates) | Filter/Project expr | Eval scalar          | —                      | —                | BINDINGS          | TypeMismatch                        | —                                |
+| Parameters             | 7 / 14.10     | ParamRef              | ParamBind           | Param expansion      | —                      | —                | SCHEMA/BINDINGS   | (missing param) TypeMismatch        | I:DefaultSession(ID049)          |
+| PROFILE / EXPLAIN      | 14.10 / 23.2  | ProfileStmt           | (instrumentation)   | Timed ops wrapper    | metrics snapshot       | —                | EXPLAIN/PROFILE   | (profiling) additional_statuses     | I:ProfileSchema v2               |
+| Transactions (stubs)   | 8             | Begin/Commit AST      | TxnBoundary         | Txn state apply      | WAL append (planned)   | LSN assign       | status only       | (conflict) -> status subclass       | I:AccessMode(IE002)              |
+| Path patterns (future) | 22.4          | PathPattern           | PathExpand          | BFS / BiBFS          | adjacency list         | read visibility  | BINDINGS          | (path length) additional flag       | U:UA005/UA006                    |
+
+Notes:
+
+- Diagnostics precedence follows foldCodes: earliest parse IllegalOrderKey precludes later US001; otherwise planner may emit US001 for unordered pagination.
+- Implementation-defined: Collation (byte), NumericPromotion (int→decimal), DistinctOrdering (lexicographic JSON row order), ProfileSchema=2.
+- Implementation-dependent: US001 (reject unordered pagination rather than implicit order), UA005/UA006 path tie-break (planned deterministic (length,id)).
+
+[1]: https://dl.acm.org/doi/10.1145/3180143?utm_source=chatgpt.com 'Worst-case Optimal Join Algorithms | Journal of the ACM'
+[2]: https://www.openproceedings.org/2014/conf/icdt/Veldhuizen14.pdf?utm_source=chatgpt.com 'Leapfrog Triejoin: A Simple, Worst-Case Optimal Join ...'
+[3]: https://www.cidrdb.org/cidr2023/papers/p48-jin.pdf 'KÙZU^* Graph Database Management System'
+[4]: https://northeastern-datalab.github.io/anyk/download/vldb2020-optimal-ranked-enumeration.pdf?utm_source=chatgpt.com 'Optimal Algorithms for Ranked Enumeration of Answers to Full ...'
+[5]: https://www.ccs.neu.edu/home/mirek/papers/2020-SIGMOD-AnyK-tutorial.pdf?utm_source=chatgpt.com 'Optimal Join Algorithms Meet Top-k'
+[6]: https://ppl.stanford.edu/papers/emptyheaded.pdf?utm_source=chatgpt.com 'EmptyHeaded: A Relational Engine for Graph Processing'
+[7]: https://dl.acm.org/doi/10.1145/2463676.2465315?utm_source=chatgpt.com 'Fast exact shortest-path distance queries on large networks by ...'
+[8]: https://homepages.inf.ed.ac.uk/libkin/papers/icdt12b.pdf?utm_source=chatgpt.com 'Regular Path Queries on Graphs with Data∗'
+[9]: https://dl.acm.org/doi/abs/10.1007/978-3-319-58961-9_12?utm_source=chatgpt.com 'Introducing VF3: A New Algorithm for Subgraph Isomorphism'
+[10]: https://pmc.ncbi.nlm.nih.gov/articles/PMC7314700/?utm_source=chatgpt.com 'The Glasgow Subgraph Solver: Using Constraint ...'
+[11]: https://arxiv.org/abs/2205.05649?utm_source=chatgpt.com 'Any-k Algorithms for Enumerating Ranked Answers to Conjunctive Queries'
+[12]: https://research.google.com/pubs/archive/40671.pdf?utm_source=chatgpt.com 'HyperLogLog in Practice: Algorithmic Engineering of a ...'
+[13]: https://dl.acm.org/doi/10.1145/2452376.2452456?utm_source=chatgpt.com 'HyperLogLog in practice: algorithmic engineering of a state of ...'
+[14]: https://cse.buffalo.edu/~zzhao35/files/papers/xdbsigmodrecord.pdf?utm_source=chatgpt.com 'Wander Join and XDB: Online Aggregation via Random ...'
+[15]: https://www.cs.ox.ac.uk/people/boris.motik/pubs/hm24-accurate-sampling.pdf?utm_source=chatgpt.com 'Accurate Sampling-Based Cardinality Estimation for ...'
+[16]: https://dl.acm.org/doi/pdf/10.1145/3180143?utm_source=chatgpt.com 'Worst-case Optimal Join Algorithms'
+[17]: https://pages.cs.wisc.edu/~paris/cs838-s16/lecture-notes/lecture6.pdf?utm_source=chatgpt.com 'Lecture 6: Size Bounds for Joins 6.1 The AGM Bound'
+[18]: https://www.vldb.org/pvldb/vol13/p884-funke.pdf?utm_source=chatgpt.com 'Data-Parallel Query Processing on Non-Uniform Data'
+[19]: https://dl.acm.org/doi/10.1145/3108140?utm_source=chatgpt.com 'Gunrock: GPU Graph Analytics - ACM Digital Library'
+[20]: https://drkp.net/papers/ssi-vldb12.pdf?utm_source=chatgpt.com 'Serializable Snapshot Isolation in PostgreSQL'
+[21]: https://15721.courses.cs.cmu.edu/spring2020/papers/20-optimizer2/p539-moerkotte.pdf?utm_source=chatgpt.com 'Dynamic Programming Strikes Back'
+[22]: https://arxiv.org/pdf/2409.08013?utm_source=chatgpt.com 'DPconv: Super-Polynomially Faster Join Ordering'
+[23]: https://db.in.tum.de/~birler/papers/adaptivelindp.pdf?utm_source=chatgpt.com 'Optimizing Linearized Join Enumeration by Adapting to the ...'
+[24]: https://www.vldb.org/pvldb/vol16/p1466-zhu.pdf?utm_source=chatgpt.com 'Lero: A Learning-to-Rank Query Optimizer'
+[25]: https://ipads.se.sjtu.edu.cn/_media/publications/powerlyra-eurosys15.pdf?utm_source=chatgpt.com 'PowerLyra: Differentiated Graph Computation and ...'
+[26]: https://math.cmu.edu/~ctsourak/fennel-wsdm.pdf?utm_source=chatgpt.com 'FENNEL: Streaming Graph Partitioning for Massive Scale ...'
+[27]: https://dl.acm.org/doi/10.1145/2588555.2610511?utm_source=chatgpt.com 'TriAD: a distributed shared-nothing RDF engine based on ...'
+[28]: https://dl.acm.org/doi/abs/10.1007/s00778-015-0415-0?utm_source=chatgpt.com 'Processing SPARQL queries over distributed RDF graphs'
+[29]: https://itu.dk/~joqu/assets/publications/sigmod21a.pdf?utm_source=chatgpt.com 'Compliant Geo-distributed Query Processing'
+[30]: https://www.vldb.org/pvldb/vol15/p752-zhu.pdf?utm_source=chatgpt.com 'Cardinality Estimation in DBMS: A Comprehensive ...'
+[31]: https://www.vldb.org/pvldb/vol16/p2805-wang.pdf?utm_source=chatgpt.com 'ADOPT: Adaptively Optimizing Attribute Orders for Worst- ...'
+[32]: https://pmc.ncbi.nlm.nih.gov/articles/PMC7955775/?utm_source=chatgpt.com 'Optimal Algorithms for Ranked Enumeration of Answers to Full ...'
+[33]: https://www.vldb.org/pvldb/vol17/p1697-park.pdf?utm_source=chatgpt.com 'Cardinality Estimation of Subgraph Matching: A Filtering- ...'
+[34]: https://readingxtra.github.io/docs/cpu-graph/ChenTOPC2019.pdf?utm_source=chatgpt.com 'PowerLyra: Differentiated Graph Computation and Partitioning ...'

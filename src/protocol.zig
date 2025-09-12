@@ -175,7 +175,7 @@ pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags
     if (total < prefix.len or total < json_payload.len) return error.OutOfMemory; // overflow guard
     if (total > 1_000_000 and json_payload.len < 10_000) {
         if (PROTOCOL_DEBUG) std.debug.print("[warn] buildProfileLine suspicious total={d} payload={d} flags={d}; using fallback minimal profile frame\n", .{ total, json_payload.len, flags.len });
-    const fallback = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":{\"profile_version\":2,\"ops\":[],\"totals\":{}}}}\n";
+        const fallback = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":{\"profile_version\":2,\"ops\":[],\"totals\":{}}}}\n";
         if (ally.dupe(u8, fallback)) |dup| return dup else |_| {
             const buf = try ally.alloc(u8, fallback.len);
             @memcpy(buf, fallback);

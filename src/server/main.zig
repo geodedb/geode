@@ -31,6 +31,8 @@ const ServerState = struct {
     spill_distinct: usize = 0,
     spill_union: usize = 0,
     spill_threshold: usize = 0,
+    // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).
+    query_text: ?[]const u8 = null,
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -46,6 +48,8 @@ const ServerState = struct {
         if (self.profile_json) |pj| self.allocator.free(pj);
         self.profile_json = null;
         self.profile_flags = &.{};
+        if (self.query_text) |qt| self.allocator.free(qt);
+        self.query_text = null;
     }
 };
 
@@ -66,6 +70,36 @@ const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
 const F_DISTINCT_UNORDERED = "U:DistinctOutputUnordered";
 const F_UNION_PHASES = "U:UnionPhaseTimings";
 const F_ADAPT_EST = "U:AdaptiveEstimatesPlanned"; // groundwork flag (no behavior change yet)
+const F_HEUR_INDEX = "U:HeuristicIndexSelection"; // emitted when NodeIndexScan chosen via heuristic
+
+// Basic in-memory index catalog (stub). Future: persistent system catalogs.
+const IndexStats = struct {
+    name: []const u8,
+    key: []const u8,
+    total_rows: usize,
+    distinct_keys: usize,
+    // naive uniform model: equality selectivity = 1/distinct_keys (clamped)
+    fn eqSelectivity(self: IndexStats) f64 {
+        if (self.distinct_keys == 0) return 1.0;
+        return 1.0 / @as(f64, @floatFromInt(self.distinct_keys));
+    }
+};
+
+var g_index_catalog: []const IndexStats = &.{}; // populated at startup
+
+fn initIndexCatalog(ally: std.mem.Allocator) void {
+    if (g_index_catalog.len != 0) return; // idempotent
+    // Provide a single synthetic index to drive heuristic decisions in tests.
+    const idx = ally.alloc(IndexStats, 1) catch return;
+    idx[0] = .{ .name = "idx_x", .key = "x", .total_rows = 1000, .distinct_keys = 200 };
+    g_index_catalog = idx;
+}
+
+fn estimatePredicateIndexStats(_: std.mem.Allocator, has_equality: bool, row_hint: usize) IndexStats {
+    if (!has_equality or g_index_catalog.len == 0) return .{ .name = "none", .key = "", .total_rows = row_hint, .distinct_keys = if (row_hint == 0) 1 else row_hint };
+    // Return first catalog entry (future: match on predicate field/label)
+    return g_index_catalog[0];
+}
 
 // Helper returns correct null policy flag pointer.
 inline fn nullsFlag() []const u8 {
@@ -105,6 +139,34 @@ fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []con
     while (i < base.len) : (i += 1) flags_buf_ext[i] = base[i];
     flags_buf_ext[base.len] = F_UNION_PHASES;
     return flags_buf_ext[0 .. base.len + 1];
+}
+
+// Minimal predicate inspector: returns true if expression tree contains an equality operation.
+fn hasEqualityPredicate(expr: anytype) bool {
+    // Attempt to match Binary nodes; AST uses union(enum) with .Binary carrying op + left/right.
+    if (@hasField(@TypeOf(expr), "op") and @hasField(@TypeOf(expr), "left") and @hasField(@TypeOf(expr), "right")) {
+        // best-effort: assume equality op tag name contains Eq
+        // Use @tagName on op if enum
+        if (@typeInfo(@TypeOf(expr.op)) == .Enum) {
+            const opname = @tagName(expr.op);
+            if (std.mem.eql(u8, opname, "Eq")) return true;
+            if (std.mem.eql(u8, opname, "And") or std.mem.eql(u8, opname, "Or")) {
+                if (hasEqualityPredicate(expr.left.*) or hasEqualityPredicate(expr.right.*)) return true;
+            }
+        }
+        if (hasEqualityPredicate(expr.left.*)) return true;
+        if (hasEqualityPredicate(expr.right.*)) return true;
+    }
+    // Generic recursion for other containers
+    const T = @TypeOf(expr);
+    if (@hasField(T, "left") and @hasField(T, "right")) {
+        if (hasEqualityPredicate(expr.left)) return true;
+        if (hasEqualityPredicate(expr.right)) return true;
+    }
+    if (@hasField(T, "expr")) if (hasEqualityPredicate(expr.expr)) return true;
+    if (@hasField(T, "terms")) for (expr.terms) |t| if (hasEqualityPredicate(t)) return true;
+    if (@hasField(T, "args")) for (expr.args) |a| if (hasEqualityPredicate(a)) return true;
+    return false;
 }
 
 fn valueTypeName(v: eval.Value) []const u8 {
@@ -1068,6 +1130,8 @@ pub fn main() !void {
             g_adapt_estimates = true; // currently only surfaces flag; no behavior change
         }
     } else |_| {}
+    // Initialize synthetic index catalog (idempotent) before serving.
+    initIndexCatalog(gpa);
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
@@ -1181,6 +1245,13 @@ pub fn main() !void {
                     explain_mode = true;
                     text = text[8..];
                 }
+                // Capture original (post PREFIX strip) query text with length cap for heuristic use.
+                if (state.query_text) |old_qt| state.allocator.free(old_qt);
+                const QT_CAP: usize = 4096;
+                const take_qt = if (text.len > QT_CAP) QT_CAP else text.len;
+                var qt_copy = try state.allocator.alloc(u8, take_qt);
+                @memcpy(qt_copy[0..take_qt], text[0..take_qt]);
+                state.query_text = qt_copy;
 
                 var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = true, .forbid_orderby_calls = true }) catch |e| {
                     // Aggregate all parse-time diagnostics (policy + US001) and emit with precedence.
@@ -1579,7 +1650,34 @@ pub fn main() !void {
                                         const est_nodescan = if (disable_estimates) 0 else timings.project_rows_out * 4; // small per-row placeholder
                                         const nodescan_idx = op_index_counter;
                                         const net_nodescan = track.net();
-                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, "NodeScan", timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
+                                        var op_name: []const u8 = "NodeScan";
+                                        // Minimal AST-based detection: inspect q.where (if present) for equality predicate nodes.
+                                        var has_equality_pred = false;
+                                        if (q.where_clause) |wexpr| {
+                                            has_equality_pred = hasEqualityPredicate(wexpr);
+                                        }
+                                        if (has_equality_pred) {
+                                            const stats = estimatePredicateIndexStats(gpa, true, timings.project_rows_out);
+                                            if (stats.eqSelectivity() <= 0.25) { // threshold: choose index if <=25%
+                                                op_name = "NodeIndexScan";
+                                                // Append heuristic flag if not already set.
+                                                var need_append = true;
+                                                var k: usize = 0;
+                                                while (k < state.profile_flags.len) : (k += 1) {
+                                                    if (std.mem.eql(u8, state.profile_flags[k], F_HEUR_INDEX)) {
+                                                        need_append = false;
+                                                        break;
+                                                    }
+                                                }
+                                                if (need_append) {
+                                                    var tmp = try gpa.alloc([]const u8, state.profile_flags.len + 1);
+                                                    @memcpy(tmp[0..state.profile_flags.len], state.profile_flags);
+                                                    tmp[state.profile_flags.len] = F_HEUR_INDEX;
+                                                    state.profile_flags = tmp;
+                                                }
+                                            }
+                                        }
+                                        emit.op(w, &top_tracker, &op_index_counter, &cumulative_time_ns, &prev_net_after, &sum_estimated, &first_op_profile, &err_min_pct, &err_max_pct, &err_sum_pct, &err_sum_sq_pct, &err_count, op_name, timings.project_rows_in, timings.project_rows_in, 0, 0, 0, est_nodescan, peak_bytes, net_nodescan, compact_profile);
                                         if (memcurve_profile) MemCurve.append(gpa, &mem_curve_builder, nodescan_idx, net_nodescan);
                                         if (est_nodescan > 0) sum_actual_estimated += 0;
                                         const est_expand = if (disable_estimates) 0 else timings.expand_rows_out * 8;

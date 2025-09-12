@@ -194,6 +194,8 @@ pub fn build(b: *std.Build) void {
         .name = "bench",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/bench/main.zig"), .target = target, .optimize = optimize }),
     });
+    bench_exe.root_module.addImport("geode", root_mod);
+    bench_exe.root_module.addImport("gql", gql_mod);
     b.installArtifact(bench_exe);
     const bench_run = b.addRunArtifact(bench_exe);
     const bench_step = b.step("bench", "Run micro benchmarks (placeholder)");
