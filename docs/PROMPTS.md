@@ -1,3 +1,5 @@
+<!-- auditor-prompt-version: v1.1 -->
+
 # ISO‑GQL Auditor — System Prompt (v1.1)
 
 Goal

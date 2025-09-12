@@ -103,7 +103,16 @@ pub fn main() !void {
     }
 
     // Read first response; if ERROR, surface and exit 2
-    const line1 = try child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16);
+    const line1 = child_stdout.readUntilDelimiterAlloc(gpa, '\n', 1 << 16) catch |e| {
+        if (e == error.EndOfStream) {
+            // Server closed before emitting any response (treat as error)
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_writer = stderr_file.deprecatedWriter();
+            stderr_writer.writeAll("no response from server\n") catch {};
+            std.process.exit(2);
+        }
+        return e;
+    };
     defer gpa.free(line1);
     if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
         const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };

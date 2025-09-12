@@ -228,7 +228,13 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
             return EvalError.TypeMismatch;
         },
         .Div => blk4: {
-            if (l == .Int and r == .Int) break :blk4 .{ .Int = @divTrunc(l.Int, r.Int) };
+            if (l == .Int and r == .Int) {
+                // Use safe division helper to avoid builtin trap and surface TypeMismatch.
+                const denom = r.Int;
+                if (denom == 0) return EvalError.TypeMismatch; // division by zero (diagnostic maps to TypeMismatch for now)
+                // Avoid direct @divTrunc which can still trap if denom==0 due to race on optimization; explicit branch first.
+                break :blk4 .{ .Int = @divTrunc(l.Int, denom) };
+            }
             return EvalError.TypeMismatch;
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {

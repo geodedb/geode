@@ -105,21 +105,29 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
+    lib_unit_tests.root_module.addImport("geode", root_mod);
     lib_unit_tests.root_module.addOptions("build_options", build_opts);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
+    exe_unit_tests.root_module.addImport("geode", root_mod);
     exe_unit_tests.root_module.addOptions("build_options", build_opts);
 
     // add the types unit tests to the executable test
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
+    gql_unit_tests.root_module.addImport("geode", root_mod);
     gql_unit_tests.root_module.addOptions("build_options", build_opts);
     // Allow tests to import gql submodule path too
     gql_unit_tests.root_module.addImport("gql", gql_mod);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_gql_unit_tests = b.addRunArtifact(gql_unit_tests);
+
+    // Aggregated custom tests under tests/ (e.g., evaluator unit tests not covered by source-root modules)
+    const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
+    custom_tests.root_module.addImport("geode", root_mod);
+    const run_custom_tests = b.addRunArtifact(custom_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
@@ -128,6 +136,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_gql_unit_tests.step);
+    test_step.dependOn(&run_custom_tests.step);
 
     // Add geoded (server) and geodec (client) executables for protocol tests
     const geoded_exe = b.addExecutable(.{

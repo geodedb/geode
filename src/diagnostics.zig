@@ -61,7 +61,7 @@ pub fn precedence(a: Code, b: Code) Code {
 }
 
 pub fn sortByPrecedence(codes: []Code) void {
-    // Simple insertion sort using precedence() comparator
+    // Simple insertion sort using precedence() comparator (small N)
     var i: usize = 1;
     while (i < codes.len) : (i += 1) {
         const key = codes[i];
@@ -120,6 +120,16 @@ test "diagnostics: foldCodes dedup + precedence" {
     try std.testing.expect(arr[0] == .US001);
     try std.testing.expect(arr[1] == .IllegalOrderKey);
     try std.testing.expect(arr[2] == .TypeMismatch);
+}
+
+test "diagnostics: foldCodes already sorted idempotent" {
+    var arr: [4]Code = .{ .US001, .IllegalOrderKey, .GroupByIllegal, .TypeMismatch };
+    const n = foldCodes(arr[0..]);
+    try std.testing.expect(n == 4);
+    try std.testing.expect(arr[0] == .US001);
+    try std.testing.expect(arr[1] == .IllegalOrderKey);
+    try std.testing.expect(arr[2] == .GroupByIllegal);
+    try std.testing.expect(arr[3] == .TypeMismatch);
 }
 
 pub fn mapPlannerError(e: anytype) ?Code {

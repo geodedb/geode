@@ -2,9 +2,9 @@
 
 ## Status & Conformance Summary
 
-- Requirements Ledger and evidence: docs/GAP_ANALYSIS.md
-- GQL Conformance Profile (initial): docs/GAP_ANALYSIS.md (GQL Conformance Profile section)
-- Execution-ready backlog: docs/NEXT.md
+- Requirements Ledger and evidence: [`docs/GAP_ANALYSIS.md#1-requirements-ledger`](GAP_ANALYSIS.md#1-requirements-ledger)
+- GQL Conformance Profile (initial): [`docs/GAP_ANALYSIS.md#2-gql-conformance-profile-initial`](GAP_ANALYSIS.md#2-gql-conformance-profile-initial)
+- Execution-ready backlog: [`docs/NEXT.md`](NEXT.md)
 
 ## Troubleshooting (diagnostics quick reference)
 

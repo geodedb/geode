@@ -94,9 +94,9 @@ fn valueTypeName(v: eval.Value) []const u8 {
     };
 }
 
-fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, is_us001: bool) void {
+fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
     var flags_buf: [2][]const u8 = .{ "I:IllegalOrderKeyPolicy=ident-only", "U:US001/enforced" };
-    const flag_slice = if (is_us001) flags_buf[0..2] else flags_buf[0..1];
+    const flag_slice = if (has_us001_any) flags_buf[0..2] else flags_buf[0..1];
     if (protocol.buildErrorLineWithFlags(ally, diagnostics.codeName(code), message, anchor, additional, flag_slice)) |line| {
         defer ally.free(line);
         _ = out_file.write(line) catch {};
@@ -109,42 +109,41 @@ fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: dia
 //  - IllegalOrderKey: parser policy violation captured via parse error message
 // Returns number of collected codes placed into out_codes (deduplicated) sorted by precedence.
 fn collectTextDiagnostics(text: []const u8, parse_err_msg: ?[]const u8, out_codes: *[4]diagnostics.Code) usize {
-    var count: usize = 0;
+    var tmp: [4]diagnostics.Code = undefined;
+    var n: usize = 0;
     const has_limit = std.mem.indexOf(u8, text, "LIMIT") != null;
     const has_offset = std.mem.indexOf(u8, text, "OFFSET") != null;
     const has_order_kw = std.mem.indexOf(u8, text, "ORDER BY") != null;
-    var parsed_illegal: bool = false;
+    var parsed_illegal = false;
     if (parse_err_msg) |msg| {
-        if (diagnostics.mapParserMessage(msg)) |_| parsed_illegal = true;
-    }
-    // Treat invalid ORDER BY (IllegalOrderKey) as absent for unordered pagination legality.
-    if ((has_limit or has_offset) and (!has_order_kw or parsed_illegal)) {
-        out_codes.*[count] = .US001;
-        count += 1;
-    }
-    if (parsed_illegal) {
-        // Append IllegalOrderKey if not already primary
-        if (count == 0 or out_codes.*[0] != .IllegalOrderKey) {
-            out_codes.*[count] = .IllegalOrderKey;
-            count += 1;
+        if (diagnostics.mapParserMessage(msg)) |_| {
+            parsed_illegal = true;
         }
     }
-    if (count > 1) diagnostics.sortByPrecedence(out_codes.*[0..count]);
-    return count;
+    if ((has_limit or has_offset) and (!has_order_kw or parsed_illegal)) {
+        tmp[n] = .US001;
+        n += 1;
+    }
+    if (parsed_illegal) {
+        tmp[n] = .IllegalOrderKey;
+        n += 1;
+    }
+    // Dedup + precedence
+    var i: usize = 0;
+    while (i < n) : (i += 1) out_codes.*[i] = tmp[i];
+    return diagnostics.foldCodes(out_codes.*[0..n]);
 }
 
 // Planner diagnostics aggregation: include primary planner code plus US001 if unordered pagination also applies.
 fn collectPlannerDiagnostics(q: geode.ast.Query, primary: diagnostics.Code, out_codes: *[4]diagnostics.Code) usize {
-    var count: usize = 0;
-    out_codes.*[count] = primary;
-    count += 1;
+    out_codes.*[0] = primary;
+    var n: usize = 1;
     const unordered_pagination = (q.limit != null or q.offset != null) and q.order_by == null;
     if (unordered_pagination and primary != .US001) {
-        out_codes.*[count] = .US001;
-        count += 1;
+        out_codes.*[n] = .US001;
+        n += 1;
     }
-    if (count > 1) diagnostics.sortByPrecedence(out_codes.*[0..count]);
-    return count;
+    return diagnostics.foldCodes(out_codes.*[0..n]);
 }
 
 fn writeJsonValue(w: anytype, v: eval.Value) !void {
@@ -234,32 +233,48 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
 }
 
 fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool }) []const u8 {
+    // Canonical pipeline order with monotonic id: Project(0), Distinct(1), Sort(2), Offset(3), Limit(4), SetOpUnion(5)
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return "{\"logical\":[]}";
     const w = buf.writer(ally);
-    w.writeAll("{\"logical\":[") catch {};
-    var first_op = true;
-    // Base projection
-    w.writeAll("{\"op\":\"Project\"}") catch {};
-    first_op = false;
+    w.writeAll("{\"profile_version\":1,\"logical\":[") catch {};
+    var id: usize = 0;
+    // Project always present first
+    // Project
+    w.writeAll("{\"op\":\"Project\",\"id\":") catch {};
+    w.print("{d}", .{id}) catch {};
+    w.writeAll("}") catch {};
+    id += 1;
     if (params.distinct) {
-        w.writeAll(",{") catch {};
-        w.writeAll("\"op\":\"Distinct\"") catch {};
+        w.writeAll(",{\"op\":\"Distinct\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
         w.writeAll("}") catch {};
+        id += 1;
     }
     if (params.ordered) {
-        w.writeAll(",{\"op\":\"Sort\"}") catch {};
+        w.writeAll(",{\"op\":\"Sort\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
     }
     if (params.offset) |_| {
-        w.writeAll(",{\"op\":\"Offset\"}") catch {};
+        w.writeAll(",{\"op\":\"Offset\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
     }
     if (params.limit) |_| {
-        w.writeAll(",{\"op\":\"Limit\"}") catch {};
+        w.writeAll(",{\"op\":\"Limit\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
     }
     if (params.union_mode) |um| {
-        w.writeAll(",{") catch {};
-        w.writeAll("\"op\":\"SetOpUnion\",\"mode\":\"") catch {};
+        w.writeAll(",{\"op\":\"SetOpUnion\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll(",\"mode\":\"") catch {};
         w.writeAll(um) catch {};
         w.writeAll("\"}") catch {};
+        id += 1;
     }
     w.writeAll("],\"properties\":{") catch {};
     var first = true;
@@ -1002,24 +1017,53 @@ pub fn main() !void {
     // (Removed buffered writer; direct file writes used.)
     var line_storage: [65536]u8 = undefined;
 
+    // Robust line loop: handle EOF with partial line, ignore blank lines, no spin.
     while (true) {
         var read_len: usize = 0;
-        while (true) {
+        var got_newline = false;
+        while (!got_newline and read_len < line_storage.len) {
             var one: [1]u8 = undefined;
             const amt = stdin.read(&one) catch |e| switch (e) {
                 error.EndOfStream => 0,
                 else => 0,
             };
-            if (amt == 0) break;
-            if (one[0] == '\n') break;
-            if (read_len < line_storage.len) {
-                line_storage[read_len] = one[0];
-                read_len += 1;
-            } else break;
+            if (amt == 0) break; // EOF or error
+            const b = one[0];
+            if (b == '\n') {
+                got_newline = true;
+                break;
+            }
+            line_storage[read_len] = b;
+            read_len += 1;
         }
-        if (read_len == 0) continue;
+        if (read_len == 0) {
+            // No bytes collected. If we didn't get a newline and next read is EOF, terminate.
+            // Attempt a single probe read to distinguish between blank line and EOF.
+            var probe: [1]u8 = undefined;
+            const probe_amt = stdin.read(&probe) catch |e| switch (e) {
+                error.EndOfStream => 0,
+                else => 0,
+            };
+            if (probe_amt == 0) break; // real EOF
+            if (probe[0] == '\n') continue; // blank line
+            // Start new line with probe byte.
+            line_storage[0] = probe[0];
+            read_len = 1;
+            // Continue filling remainder of line until newline/EOF.
+            while (read_len < line_storage.len) {
+                var nxt: [1]u8 = undefined;
+                const na = stdin.read(&nxt) catch |e| switch (e) {
+                    error.EndOfStream => 0,
+                    else => 0,
+                };
+                if (na == 0) break;
+                if (nxt[0] == '\n') break;
+                line_storage[read_len] = nxt[0];
+                read_len += 1;
+            }
+        }
         const raw = line_storage[0..read_len];
-        if (raw.len == 0) continue;
+        if (raw.len == 0) continue; // ignore
         // Parse client message
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
@@ -1231,10 +1275,20 @@ pub fn main() !void {
                                                 len_codes += 1;
                                             }
                                             const slice_codes = buf_codes[0..len_codes];
-                                            if (slice_codes.len > 1) diagnostics.sortByPrecedence(slice_codes);
+                                            const folded_len = diagnostics.foldCodes(slice_codes);
                                             const primary_eval = slice_codes[0];
-                                            const add_eval = buildAdditionalStatusesAlloc(gpa, slice_codes, primary_eval);
-                                            writeErrorWithFlags(gpa, stdout_file, primary_eval, diagnostics.defaultMessage(primary_eval), diagnostics.anchorFor(primary_eval), add_eval, primary_eval == .US001);
+                                            const add_eval = buildAdditionalStatusesAlloc(gpa, slice_codes[0..folded_len], primary_eval);
+                                            var has_us001_any = primary_eval == .US001;
+                                            if (!has_us001_any) {
+                                                var ci: usize = 1;
+                                                while (ci < folded_len) : (ci += 1) {
+                                                    if (slice_codes[ci] == .US001) {
+                                                        has_us001_any = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            writeErrorWithFlags(gpa, stdout_file, primary_eval, diagnostics.defaultMessage(primary_eval), diagnostics.anchorFor(primary_eval), add_eval, has_us001_any);
                                             var fre: usize = 0;
                                             while (fre < rows_prof.len) : (fre += 1) gpa.free(rows_prof[fre]);
                                             continue;
@@ -1329,7 +1383,10 @@ pub fn main() !void {
                                             const phase = if (std.mem.eql(u8, name, "NodeScan")) "SCAN" else if (std.mem.eql(u8, name, "Expand")) "EXPAND" else if (std.mem.eql(u8, name, "AggregateBuild") or std.mem.eql(u8, name, "AggregateEmit")) "AGGREGATE" else if (std.mem.eql(u8, name, "Project")) "PROJECT" else if (std.mem.eql(u8, name, "Distinct")) "DISTINCT" else if (std.mem.eql(u8, name, "Sort")) "ORDER" else if (std.mem.eql(u8, name, "Offset") or std.mem.eql(u8, name, "Limit")) "PAGE" else "OTHER";
                                             wr.writeAll("\",\"phase\":\"") catch {};
                                             wr.writeAll(phase) catch {};
-                                            wr.writeAll(",\"op_index\":") catch {};
+                                            // Emit stable id field (alias op_index for v1)
+                                            wr.writeAll(",\"id\":") catch {};
+                                            wr.print("{d}", .{op_index.*}) catch {};
+                                            wr.writeAll(",\"op_index\":") catch {}; // legacy field retained
                                             wr.print("{d}", .{op_index.*}) catch {};
                                             wr.writeAll("\",\"input_rows\":") catch {};
                                             wr.print("{d}", .{in_rows}) catch {};
@@ -1529,6 +1586,13 @@ pub fn main() !void {
                                         w.writeAll("}") catch {};
                                     }
                                     w.writeAll("]") catch {};
+                                    // Totals section (time + peak)
+                                    w.writeAll(",\"totals\":{") catch {};
+                                    w.writeAll("\"time_ns\":") catch {};
+                                    w.print("{d}", .{total_ns}) catch {};
+                                    w.writeAll(",\"peak_bytes\":") catch {};
+                                    w.print("{d}", .{track.peakBytes()}) catch {};
+                                    w.writeAll("}") catch {};
                                     w.writeAll(",\"total_time_ns\":") catch {};
                                     w.print("{d}", .{total_ns}) catch {};
                                     // Capture first spill op index & peak-at-spill if any (derive from previously recorded top tracker order / env flags)

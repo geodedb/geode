@@ -35,4 +35,5 @@ test "protocol: multi-diagnostic IllegalOrderKey + US001 additional" {
     try std.testing.expect(contains(res.err, "IllegalOrderKey"));
     try std.testing.expect(contains(res.err, "additional_statuses"));
     try std.testing.expect(contains(res.err, "US001"));
+    try std.testing.expect(contains(res.err, "US001/enforced"));
 }
