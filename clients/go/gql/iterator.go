@@ -58,3 +58,6 @@ func (it *RowIterator) Next() (map[string]Value, error) {
 }
 
 func (it *RowIterator) Columns() []Column { return it.cols }
+
+// CurrentPageSize returns the page size the iterator will request next.
+func (it *RowIterator) CurrentPageSize() int { return it.pageSize }

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Value is a native representation of Geode values, including DECIMAL and NULL.
@@ -135,7 +136,15 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 }
 
 func (c *Conn) Close() error {
-	if c.nc != nil { _ = c.nc.Close(); return nil }
+	if c.nc != nil {
+		// Attempt a small read-ahead with short deadline to ensure server flushed
+		_ = c.nc.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+		buf := make([]byte, 256)
+		for i := 0; i < 2; i++ { // bounded retries
+			if c.nc == nil { break }
+			if _, err := c.nc.Read(buf); err != nil { break }
+		}
+		_ = c.nc.Close(); return nil }
 	_ = c.inW.Close(); _ = c.outR.Close(); return c.cmd.Wait()
 }
 

@@ -351,21 +351,20 @@ fn writeJsonValue(w: anytype, v: eval.Value) !void {
         },
         .Null => try w.writeAll("null"),
         .Decimal => |d| blkdec: {
-            var buf: [64]u8 = undefined;
-            var coeff = d.coeff;
-            var scale = d.scale;
-            if (scale > 0) {
-                while (scale > 0) {
-                    if (@mod(coeff, 10) != 0) break;
-                    coeff = @divTrunc(coeff, 10);
-                    scale -= 1;
-                }
+            // If original literal representation preserved, emit it directly for fidelity.
+            if (d.orig_repr) |orig| {
+                try w.writeAll(orig);
+                break :blkdec;
             }
+            var buf: [64]u8 = undefined;
+            const coeff = d.coeff;
+            const scale = d.scale;
             if (scale == 0) {
                 const s = std.fmt.bufPrint(&buf, "{d}", .{coeff}) catch "0";
                 try w.writeAll(s);
                 break :blkdec;
             }
+            // Use exact scale (no trimming) because orig_repr absent (computed value); show full precision.
             var pow: i128 = 1;
             var i: u8 = 0;
             while (i < scale) : (i += 1) pow *= 10;
@@ -374,6 +373,7 @@ fn writeJsonValue(w: anytype, v: eval.Value) !void {
             const frac: i128 = @mod(abs_coeff, pow);
             var fracbuf: [32]u8 = undefined;
             const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch "0";
+            // Pad leading zeros in fractional part to required scale
             if (ftmp.len < scale) {
                 const missing = scale - @as(u8, @intCast(ftmp.len));
                 var pad: [32]u8 = undefined;
@@ -1269,11 +1269,11 @@ pub fn main() !void {
         var address: std.net.Address = undefined;
         if (colon) |ci| {
             const h = host[0..ci];
-            const p = host[ci+1..];
+            const p = host[ci + 1 ..];
             const port = std.fmt.parseUnsigned(u16, p, 10) catch 7567;
-            address = std.net.Address.parseIp(h, port) catch std.net.Address.initIp4(.{127,0,0,1}, port);
+            address = std.net.Address.parseIp(h, port) catch std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
         } else {
-            address = std.net.Address.initIp4(.{127,0,0,1}, 7567);
+            address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 7567);
         }
         var server = try address.listen(.{ .reuse_address = true });
         defer server.deinit();
@@ -1302,7 +1302,8 @@ pub fn main() !void {
                     const amt = rdr.read(&b) catch 0;
                     if (amt == 0) break;
                     if (b[0] == '\n') break;
-                    line[n] = b[0]; n += 1;
+                    line[n] = b[0];
+                    n += 1;
                 }
                 if (n == 0) break;
                 _ = cin.writeAll(line[0..n]) catch break;
@@ -1322,7 +1323,8 @@ pub fn main() !void {
                     const ra = cr.read(&b2) catch 0;
                     if (ra == 0) break;
                     if (b2[0] == '\n') break;
-                    line[rn] = b2[0]; rn += 1;
+                    line[rn] = b2[0];
+                    rn += 1;
                 }
                 if (rn == 0) break;
                 _ = sock_file.writeAll(line[0..rn]) catch break;
@@ -1425,6 +1427,19 @@ pub fn main() !void {
                     state.txn_id = t.id;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
+            },
+            .SAVEPOINT => |sp| {
+                _ = sp; // prototype: no actual stack; future store sp.name
+                // ACK
+                writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+            },
+            .ROLLBACK_TO => |sp| {
+                _ = sp; // prototype: ignore
+                writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+            },
+            .PING => |_| {
+                // Simple health check
+                writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
             },
             .COMMIT => |_| {
                 if (state.active_txn == null) {

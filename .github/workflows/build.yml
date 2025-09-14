@@ -211,3 +211,41 @@ jobs:
           prerelease: true
           files: quic-dev.tar.gz
           fail_on_unmatched_files: true
+
+  tcp-go-client:
+    name: Go client TCP tests (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Build server
+        run: zig build -Drelease-safe=false
+      - name: Start geoded (tcp)
+        run: |
+          ./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567 > server.out 2> server.err &
+          echo $! > geoded.pid
+          for i in $(seq 1 40); do
+            if nc -z 127.0.0.1 7567 2>/dev/null; then echo "server up"; break; fi; sleep 0.1; done
+      - name: Go TCP tests
+        run: go -C clients/go/gql test -race -count=1 -run TCP
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo 'Listing processes'; ps aux | grep geoded || true
+          echo '--- server stdout ---'; cat server.out || true
+          echo '--- server stderr ---'; cat server.err || true
+      - name: Upload server logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tcp-server-logs
+          path: |
+            server.out
+            server.err
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f geoded.pid ]; then kill $(cat geoded.pid) || true; fi

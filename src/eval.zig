@@ -12,8 +12,15 @@ pub const Value = union(enum) {
     Int: i64,
     Bool: bool,
     Str: []const u8,
-    // Fixed-point decimal: coeff * 10^-scale
-    Decimal: struct { coeff: i128, scale: u8 },
+    // Fixed-point decimal: coeff * 10^-scale. Preserve original scale & literal for round-trip fidelity.
+    Decimal: struct {
+        coeff: i128,
+        scale: u8,
+        // Original scale digits count (post decimal point) before any canonical trimming; may exceed scale if trailing zeros trimmed.
+        orig_scale: u8 = 0,
+        // Original literal bytes (without surrounding quotes) if preservation required; optional to avoid extra alloc for computed decimals.
+        orig_repr: ?[]const u8 = null,
+    },
 };
 
 const Dec = struct { coeff: i128, scale: u8 };

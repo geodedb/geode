@@ -957,6 +957,7 @@ pub const Parser = struct {
                 try buf.appendSlice(self.arena.allocator(), int_part);
                 try buf.appendSlice(self.arena.allocator(), frac_part);
                 const coeff = try std.fmt.parseInt(i128, buf.items, 10);
+                // ast.Decimal currently only stores coeff/scale; original literal tracking handled later when converting to eval.Value.
                 break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = scale } };
             },
             .TRUE => {

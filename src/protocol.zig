@@ -4,7 +4,7 @@ const std = @import("std");
 // Set true locally when investigating length arithmetic or corruption.
 const PROTOCOL_DEBUG = false;
 
-pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK };
+pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING };
 
 pub const Hello = struct {
     client_name: []const u8,
@@ -29,6 +29,9 @@ pub const ClientMessage = union(MessageType) {
     BEGIN: void,
     COMMIT: void,
     ROLLBACK: void,
+    SAVEPOINT: struct { name: []const u8 },
+    ROLLBACK_TO: struct { name: []const u8 },
+    PING: void,
 };
 
 pub const ResultType = enum { SCHEMA, BINDINGS, ERROR, EXPLAIN, PROFILE };
@@ -320,6 +323,18 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         return .{ .COMMIT = {} };
     } else if (std.mem.eql(u8, typ, "ROLLBACK")) {
         return .{ .ROLLBACK = {} };
+    } else if (std.mem.eql(u8, typ, "SAVEPOINT")) {
+        const nv = obj.get("name") orelse return error.Invalid;
+        if (nv != .string) return error.Invalid;
+        const name = try ally.dupe(u8, nv.string);
+        return .{ .SAVEPOINT = .{ .name = name } };
+    } else if (std.mem.eql(u8, typ, "ROLLBACK_TO")) {
+        const nv = obj.get("name") orelse return error.Invalid;
+        if (nv != .string) return error.Invalid;
+        const name = try ally.dupe(u8, nv.string);
+        return .{ .ROLLBACK_TO = .{ .name = name } };
+    } else if (std.mem.eql(u8, typ, "PING")) {
+        return .{ .PING = {} };
     }
     return error.Invalid;
 }

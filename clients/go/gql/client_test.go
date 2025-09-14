@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,28 @@ func ensureServer(t *testing.T) string {
 	}
 	if _, err := os.Stat(path); err != nil { t.Fatalf("geoded not found after build: %v", err) }
 	return path
+}
+
+// startTCP launches a geoded in TCP mode on the default port (127.0.0.1:7567) for the duration of the test.
+// It waits until the port is accepting connections or fails the test after timeout.
+func startTCP(t *testing.T) string {
+	t.Helper()
+	ensureServer(t)
+	// If already listening, reuse.
+	if c, err := net.DialTimeout("tcp", "127.0.0.1:7567", 100*time.Millisecond); err == nil {
+		_ = c.Close()
+		return "127.0.0.1:7567"
+	}
+	cmd := exec.Command("../../../zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7567")
+	if err := cmd.Start(); err != nil { t.Fatalf("start tcp server: %v", err) }
+	// Wait readiness
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if c2, err := net.DialTimeout("tcp", "127.0.0.1:7567", 100*time.Millisecond); err == nil { _ = c2.Close(); break }
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Cleanup(func(){ _ = cmd.Process.Kill() })
+	return "127.0.0.1:7567"
 }
 
 func withConn(t *testing.T) *Conn {
