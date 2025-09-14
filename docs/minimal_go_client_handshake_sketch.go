@@ -1,5 +1,5 @@
 package main
-import ("net"; "encoding/binary"; "fmt")
+import ("net"; "fmt")
 func main() {
   c, _ := net.Dial("tcp", "127.0.0.1:7567")
   defer c.Close()

@@ -10,8 +10,15 @@ all: ci
 build:
 	$(ZIG) build $(ZIG_FLAGS)
 
+# Run Zig tests and Go client tests
+.PHONY: go-test
+
+go-test:
+	cd clients/go/gql && go test -v
+
 test:
 	$(ZIG) build test $(ZIG_FLAGS)
+	$(MAKE) go-test
 
 fuzz:
 	$(ZIG) build fuzz $(ZIG_FLAGS)

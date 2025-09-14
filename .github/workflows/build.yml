@@ -29,6 +29,8 @@ jobs:
         run: zig version
       - name: Build and Test
         run: make build test
+      - name: Go GQL tests (race)
+        run: go -C clients/go/gql test -race -count=1
       - name: Upload artifacts
         if: success()
         uses: actions/upload-artifact@v4

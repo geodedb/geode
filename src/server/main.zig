@@ -1195,7 +1195,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
-    // Parse server CLI args for optional result format.
+    // Parse server CLI args for optional result format and TCP listener.
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     var result_format_txt = false;
@@ -1204,6 +1204,7 @@ pub fn main() !void {
     var memcurve_profile = false;
     var ai: usize = 1;
     var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
+    var listen_tcp: ?[]const u8 = null;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
             const f = args[ai + 1];
@@ -1219,60 +1220,139 @@ pub fn main() !void {
             const v = std.fmt.parseFloat(f64, args[ai + 1]) catch -1.0;
             if (v >= 0.0) test_wal_skip_ratio = v;
             ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--listen-tcp") and ai + 1 < args.len) {
+            listen_tcp = args[ai + 1];
+            ai += 1;
         }
     }
-    var state = ServerState{ .allocator = gpa };
-    state.txn_manager.init(gpa);
-    state.inserted_values = .{};
     // Initialize WAL (test / prototype). For now use a temp path under /tmp; future: data_dir option.
     var wal = wal_mod.Wal.init(gpa);
     defer wal.deinit();
-    // Open ephemeral WAL file (no persistence guarantee for now). Errors ignored.
     wal.openFile("/tmp/geode_ephemeral_wal") catch {};
     if (test_wal_skip_ratio) |ov| {
         wal.test_skip_ratio_override = ov;
     }
-    state.wal_ptr = @ptrCast(&wal);
-    // Read environment once for spill simulation flags.
+    // Initialize synthetic index catalog (idempotent) before serving.
+    initIndexCatalog(gpa);
+
+    // Prepare environment-derived flags once
+    var env_spill_sort: usize = 0;
+    var env_spill_distinct: usize = 0;
+    var env_spill_union: usize = 0;
+    var env_spill_threshold: usize = 0;
+    var env_storage_checksum_error = false;
     if (std.process.getEnvMap(gpa)) |*env_ptr| {
-        var env = env_ptr.*; // make mutable copy handle
+        var env = env_ptr.*;
         defer env.deinit();
-        if (env.get("GEODE_FORCE_SORT_SPILL")) |_| state.spill_sort = 1;
-        if (env.get("GEODE_FORCE_DISTINCT_SPILL")) |_| state.spill_distinct = 1;
-        if (env.get("GEODE_FORCE_UNION_SPILL")) |_| state.spill_union = 1;
-        if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
-            state.spill_threshold = std.fmt.parseInt(usize, th, 10) catch 0;
-        }
-        if (env.get("GEODE_NULLS_LAST")) |_| {
-            g_nulls_last = true;
-        }
-        if (env.get("GEODE_PROFILE_MEMCURVE")) |_| {
-            memcurve_profile = true;
-        }
-        if (env.get("GEODE_ADAPT_ESTIMATES")) |_| {
-            g_adapt_estimates = true; // currently only surfaces flag; no behavior change
-        }
-        if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| {
-            g_disable_catalog = true;
-        }
+        if (env.get("GEODE_FORCE_SORT_SPILL")) |_| env_spill_sort = 1;
+        if (env.get("GEODE_FORCE_DISTINCT_SPILL")) |_| env_spill_distinct = 1;
+        if (env.get("GEODE_FORCE_UNION_SPILL")) |_| env_spill_union = 1;
+        if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch 0;
+        if (env.get("GEODE_NULLS_LAST")) |_| g_nulls_last = true;
+        if (env.get("GEODE_PROFILE_MEMCURVE")) |_| memcurve_profile = true;
+        if (env.get("GEODE_ADAPT_ESTIMATES")) |_| g_adapt_estimates = true;
+        if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| g_disable_catalog = true;
         if (env.get("GEODE_CHECKSUM_TEST_PATH")) |p| {
-            // Attempt to load first persisted page to surface checksum mismatch diagnostic later.
             var pm = storage_pm.PageManager.initPersistent(gpa, 4096, p);
             defer pm.deinit();
-            // Try load page_0.bin; if checksum mismatch mark flag.
             pm.loadPage(p, 0) catch |e| switch (e) {
-                error.PageChecksumMismatch => state.storage_checksum_error = true,
+                error.PageChecksumMismatch => env_storage_checksum_error = true,
                 else => {},
             };
         }
     } else |_| {}
-    // Initialize synthetic index catalog (idempotent) before serving.
-    initIndexCatalog(gpa);
+
+    // TCP mode: optional
+    if (listen_tcp) |addr_str| {
+        var host = addr_str;
+        const colon = std.mem.lastIndexOfScalar(u8, host, ':');
+        var address: std.net.Address = undefined;
+        if (colon) |ci| {
+            const h = host[0..ci];
+            const p = host[ci+1..];
+            const port = std.fmt.parseUnsigned(u16, p, 10) catch 7567;
+            address = std.net.Address.parseIp(h, port) catch std.net.Address.initIp4(.{127,0,0,1}, port);
+        } else {
+            address = std.net.Address.initIp4(.{127,0,0,1}, 7567);
+        }
+        var server = try address.listen(.{ .reuse_address = true });
+        defer server.deinit();
+        while (true) {
+            const conn = server.accept() catch break;
+            const sock_file = std.fs.File{ .handle = conn.stream.handle };
+            // Proxy: spawn a child geoded in stdio mode and forward lines
+            const exe = std.fs.selfExePathAlloc(gpa) catch "geoded";
+            defer gpa.free(exe);
+            var child = std.process.Child.init(&.{exe}, gpa);
+            child.stdin_behavior = .Pipe;
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Inherit;
+            try child.spawn();
+            const cin = child.stdin.?;
+            const cout = child.stdout.?;
+            var in_buf: [65536]u8 = undefined;
+            var rdr = sock_file.reader(&in_buf);
+            var out_buf: [65536]u8 = undefined;
+            var cr = cout.reader(&out_buf);
+            var line: [65536]u8 = undefined;
+            while (true) {
+                var n: usize = 0;
+                while (n < line.len) {
+                    var b: [1]u8 = undefined;
+                    const amt = rdr.read(&b) catch 0;
+                    if (amt == 0) break;
+                    if (b[0] == '\n') break;
+                    line[n] = b[0]; n += 1;
+                }
+                if (n == 0) break;
+                _ = cin.writeAll(line[0..n]) catch break;
+                _ = cin.writeAll("\n") catch break;
+                const is_hello = std.mem.indexOf(u8, line[0..n], "\"type\":\"HELLO\"") != null;
+                if (is_hello) {
+                    // Small guard interval after HELLO to avoid immediate close races
+                    // Use a small busy-wait on monotonic clock (bounded)
+                    const start = std.time.nanoTimestamp();
+                    while (std.time.nanoTimestamp() - start < 5 * std.time.ns_per_ms) {}
+                    continue;
+                }
+                // Read exactly one response line and forward
+                var rn: usize = 0;
+                while (rn < line.len) {
+                    var b2: [1]u8 = undefined;
+                    const ra = cr.read(&b2) catch 0;
+                    if (ra == 0) break;
+                    if (b2[0] == '\n') break;
+                    line[rn] = b2[0]; rn += 1;
+                }
+                if (rn == 0) break;
+                _ = sock_file.writeAll(line[0..rn]) catch break;
+                _ = sock_file.writeAll("\n") catch break;
+                // Give the child a chance to flush any immediate follow-up (e.g., PROFILE staging)
+                const start2 = std.time.nanoTimestamp();
+                while (std.time.nanoTimestamp() - start2 < 1 * std.time.ns_per_ms) {}
+            }
+            if (child.stdin) |s| s.close();
+            if (child.stdout) |so| so.close();
+            _ = child.wait() catch {};
+            conn.stream.close();
+        }
+        return;
+    }
+
+    var state = ServerState{ .allocator = gpa };
+    state.txn_manager.init(gpa);
+    state.inserted_values = .{};
+    state.wal_ptr = @ptrCast(&wal);
+    state.spill_sort = env_spill_sort;
+    state.spill_distinct = env_spill_distinct;
+    state.spill_union = env_spill_union;
+    state.spill_threshold = env_spill_threshold;
+    state.storage_checksum_error = env_storage_checksum_error;
+
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
     const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    // (Removed buffered writer; direct file writes used.)
     var line_storage: [65536]u8 = undefined;
 
     // Robust line loop: handle EOF with partial line, ignore blank lines, no spin.
