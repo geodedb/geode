@@ -3,6 +3,7 @@
 ZIG ?= zig
 ZIG_FLAGS ?=
 
+.PHONY: all build test fuzz bench tools doccheck regen-conformance ci
 .PHONY: all build test fuzz bench tools doccheck ci
 
 all: ci

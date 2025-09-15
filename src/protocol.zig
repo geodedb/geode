@@ -279,6 +279,48 @@ pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, messag
     return buf.toOwnedSlice(ally);
 }
 
+pub fn buildErrorLineWithFlagsCustomStatus(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8, status_override: ?[]const u8) ![]u8 {
+    const status_class = status_override orelse "02000";
+    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
+    try w.writeAll("{\"status_class\":\"");
+    try w.writeAll(status_class);
+    try w.writeAll("\",\"status_subclass\":\"");
+    try w.writeAll(code);
+    try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
+    try w.writeAll(code);
+    try w.writeAll("\",\"message\":\"");
+    try w.writeAll(message);
+    try w.writeAll("\",\"anchor\":\"");
+    try w.writeAll(anchor);
+    try w.writeAll("\"");
+    if (additional.len > 0) {
+        try w.writeAll(",\"additional_statuses\":[");
+        var ai: usize = 0;
+        while (ai < additional.len) : (ai += 1) {
+            if (ai > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(additional[ai]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
+    if (flags.len > 0) {
+        try w.writeAll(",\"flagger_findings\":[");
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) try w.writeAll(",");
+            try w.writeAll("\"");
+            try w.writeAll(flags[fi]);
+            try w.writeAll("\"");
+        }
+        try w.writeAll("]");
+    }
+    try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
+}
+
 pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMessage {
     const parsed = try std.json.parseFromSlice(std.json.Value, ally, line, .{});
     defer parsed.deinit();

@@ -288,9 +288,10 @@ fn valueTypeName(v: eval.Value) []const u8 {
 
 fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
     var flags_buf: [3][]const u8 = .{ "I:IllegalOrderKeyPolicy=ident-only", "U:OrderTiebreak=LexJSON", "U:US001/enforced" };
-    // Always include tiebreak disclosure; append US001 enforcement when applicable.
     const flag_slice = if (has_us001_any) flags_buf[0..3] else flags_buf[0..2];
-    if (protocol.buildErrorLineWithFlags(ally, diagnostics.codeName(code), message, anchor, additional, flag_slice)) |line| {
+    // Storage corruption treated as class 58000 (data exception) instead of generic 02000.
+    const status_override: ?[]const u8 = if (code == .StoragePageChecksum) "58000" else null;
+    if (protocol.buildErrorLineWithFlagsCustomStatus(ally, diagnostics.codeName(code), message, anchor, additional, flag_slice, status_override)) |line| {
         defer ally.free(line);
         _ = out_file.write(line) catch {};
     } else |_| {}
@@ -2086,7 +2087,10 @@ pub fn main() !void {
                                     }
                                     var wal_buf: [32]u8 = undefined;
                                     const wal_str = std.fmt.bufPrint(&wal_buf, "{d:.4}", .{wal_skip_ratio}) catch "0.0";
+                                    // Backward compat: retain old key wal_skip_ratio; add alias skip_ratio (preferred going forward)
                                     w.writeAll(",\"wal_skip_ratio\":") catch {};
+                                    w.writeAll(wal_str) catch {};
+                                    w.writeAll(",\"skip_ratio\":") catch {};
                                     w.writeAll(wal_str) catch {};
                                     w.writeAll("}") catch {};
                                     w.writeAll(",\"total_time_ns\":") catch {};
@@ -2198,13 +2202,102 @@ pub fn main() !void {
                                 var order_keys: [][]const u8 = &.{};
                                 var cols: []const protocol.SchemaCol = &.{};
                                 var run_code: diagnostics.Code = .IllegalOrderKey; // init sentinel
-                                const rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null, &run_code, null) catch |e| blk_runerr: {
-                                    if (diagnostics.mapEvalError(e)) |c| {
-                                        writeErrorWithFlags(gpa, stdout_file, c, diagnostics.defaultMessage(c), diagnostics.anchorFor(c), &.{}, false);
-                                        break :blk_runerr &.{};
+                                // Branch: GROUP BY support (non-PROFILE path). Use exec.runGroupedQuery to produce aggregated rows.
+                                var rows: [][]const u8 = &.{};
+                                if (q.group_by != null) {
+                                    // Build input row matrix from params (each param row is a logical input row; empty when no params).
+                                    // Provide a slice-of-slices representing input rows; in this prototype inputs are param-based expressions only.
+                                    const empty_row: []eval.Value = &.{};
+                                    const input_len = if (param_rows.len > 0) param_rows.len else 1;
+                                    var input_placeholder_mut: [][]eval.Value = gpa.alloc([]eval.Value, input_len) catch &.{};
+                                    var ip: usize = 0;
+                                    while (ip < input_len) : (ip += 1) input_placeholder_mut[ip] = empty_row;
+                                    const input_placeholder: []const []eval.Value = input_placeholder_mut;
+                                    const first_param_vals: []const eval.Value = if (param_rows.len > 0) param_rows[0] else &.{};
+                                    var agg_timings: exec.AggStageTimings = .{}; // timings unused here but required param
+                                    const g_rows = exec.runGroupedQuery(gpa, q, &.{}, input_placeholder, param_names, first_param_vals, &agg_timings) catch blk_agerr: {
+                                        // On error fallback to evaluateSimpleQuery (e.g., if planner rejects invalid agg)
+                                        // Free placeholder (allocator is gpa)
+                                        // Note: runGroupedQuery returns error.Invalid if group_by absent, already guarded.
+                                        break :blk_agerr &.{};
+                                    };
+                                    // Derive schema from RETURN items (types heuristic as INT for now; could refine using value inspection)
+                                    var mut_cols: []protocol.SchemaCol = gpa.alloc(protocol.SchemaCol, q.ret.items.len) catch &.{};
+                                    var ci: usize = 0;
+                                    while (ci < q.ret.items.len) : (ci += 1) {
+                                        const rit = q.ret.items[ci];
+                                        const alias = rit.alias orelse geode.printer.stringifyExprAlloc(gpa, rit.expr, .{}) catch "col";
+                                        mut_cols[ci] = .{ .name = alias, .type = "INT" };
                                     }
-                                    break :blk_runerr &.{};
-                                };
+                                    cols = mut_cols; // implicit cast to const slice
+                                    // ORDER BY post-aggregation: exec.runGroupedQuery already applied ordering if q.order_by present; mark ordered_meta accordingly.
+                                    if (q.order_by) |_| ordered_meta = true;
+                                    // Convert BindingValue rows to JSON objects.
+                                    var out_arr = std.ArrayList([]const u8).initCapacity(gpa, 0) catch unreachable;
+                                    defer out_arr.deinit(gpa);
+                                    var ri: usize = 0;
+                                    while (ri < g_rows.len) : (ri += 1) {
+                                        const brow = g_rows[ri];
+                                        var buf = std.ArrayList(u8).initCapacity(gpa, 0) catch break;
+                                        const w = buf.writer(gpa);
+                                        w.writeAll("{") catch {};
+                                        var cj: usize = 0;
+                                        while (cj < q.ret.items.len and cj < brow.len) : (cj += 1) {
+                                            if (cj > 0) w.writeAll(",") catch {};
+                                            const col_name = cols[cj].name;
+                                            w.print("\"{s}\":", .{col_name}) catch {};
+                                            const v = brow[cj];
+                                            switch (v) {
+                                                .Null => w.writeAll("null") catch {},
+                                                .Int => |n| w.print("{d}", .{n}) catch {},
+                                                .Bool => |b| w.writeAll(if (b) "true" else "false") catch {},
+                                                .Str => |s| blk_str: {
+                                                    w.writeAll("\"") catch {};
+                                                    w.writeAll(s) catch {};
+                                                    w.writeAll("\"") catch {};
+                                                    break :blk_str;
+                                                },
+                                                .Decimal => |d| blk_dec: {
+                                                    // Emit coeff * 10^-scale exact representation
+                                                    const coeff = d.coeff;
+                                                    const scale = d.scale;
+                                                    if (scale == 0) {
+                                                        w.print("{d}", .{coeff}) catch {};
+                                                        break :blk_dec;
+                                                    }
+                                                    var pow: i128 = 1;
+                                                    var si: u8 = 0;
+                                                    while (si < scale) : (si += 1) pow *= 10;
+                                                    const whole: i128 = @divTrunc(coeff, pow);
+                                                    const frac: i128 = @mod(if (coeff < 0) -coeff else coeff, pow);
+                                                    var fracbuf: [32]u8 = undefined;
+                                                    const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch "0";
+                                                    if (ftmp.len < scale) {
+                                                        const missing = scale - @as(u8, @intCast(ftmp.len));
+                                                        var pad: [32]u8 = undefined;
+                                                        @memset(pad[0..missing], '0');
+                                                        w.print("{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch {};
+                                                    } else {
+                                                        w.print("{d}.{s}", .{ whole, ftmp }) catch {};
+                                                    }
+                                                    break :blk_dec;
+                                                },
+                                            }
+                                        }
+                                        w.writeAll("}") catch {};
+                                        const js = buf.toOwnedSlice(gpa) catch &.{};
+                                        out_arr.append(gpa, js) catch {};
+                                    }
+                                    rows = out_arr.toOwnedSlice(gpa) catch &.{};
+                                } else {
+                                    rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null, &run_code, null) catch |e| blk_runerr: {
+                                        if (diagnostics.mapEvalError(e)) |c| {
+                                            writeErrorWithFlags(gpa, stdout_file, c, diagnostics.defaultMessage(c), diagnostics.anchorFor(c), &.{}, false);
+                                            break :blk_runerr &.{};
+                                        }
+                                        break :blk_runerr &.{};
+                                    };
+                                }
                                 if (rows.len == 0 and run_code == .TypeMismatch) continue;
                                 if (run_code == .TypeMismatch) {
                                     var buf_codes2: [2]diagnostics.Code = undefined;

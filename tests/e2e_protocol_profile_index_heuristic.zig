@@ -26,4 +26,7 @@ test "profile heuristic emits NodeIndexScan" {
     const res = try run(&.{ exe, q });
     try testing.expectEqual(@as(i32, 0), res.code);
     try testing.expect(std.mem.indexOf(u8, res.out, "NodeIndexScan") != null);
+    // Metadata fields should be present
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"index_name\":\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res.out, "selectivity_est") != null);
 }

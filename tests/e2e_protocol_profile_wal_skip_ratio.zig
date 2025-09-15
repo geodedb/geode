@@ -34,8 +34,8 @@ test "protocol PROFILE wal_skip_ratio override" {
     }
     _ = child.wait() catch {};
     const out_str = stdout_buf.items;
-    // Expect wal_skip_ratio to appear with 0.7500
-    if (std.mem.indexOf(u8, out_str, "\"wal_skip_ratio\":0.7500") == null) {
+    // Expect wal_skip_ratio and alias skip_ratio to appear with 0.7500
+    if (std.mem.indexOf(u8, out_str, "\"wal_skip_ratio\":0.7500") == null or std.mem.indexOf(u8, out_str, "\"skip_ratio\":0.7500") == null) {
         std.debug.print("OUTPUT=\n{s}\n", .{out_str});
         return error.MissingWalSkipRatio;
     }
