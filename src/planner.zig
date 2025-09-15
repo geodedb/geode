@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("gql/ast.zig");
+const mem = std.mem;
 const temporal = @import("temporal.zig");
 const printer = @import("gql/print.zig");
 
@@ -14,6 +15,14 @@ pub const Plan = struct {
 
 pub const PlanError = error{ OffsetPushdownRequiresOrder, GroupByIllegal };
 
+fn hasEqPred(e: ast.Expr) bool {
+    return switch (e) {
+        .Binary => |b| (b.op == .Eq) or hasEqPred(b.left.*) or hasEqPred(b.right.*),
+        .Unary => |u| hasEqPred(u.expr.*),
+        else => false,
+    };
+}
+
 pub fn planQuery(q: ast.Query, opts: PlannerOptions) PlanError!Plan {
     const ordered = q.order_by != null;
     // Policy: do not allow OFFSET pushdown without an explicit order (US001)
@@ -21,8 +30,11 @@ pub fn planQuery(q: ast.Query, opts: PlannerOptions) PlanError!Plan {
         return PlanError.OffsetPushdownRequiresOrder;
     }
     // Validate GROUP BY legality (phase 1)
+    // Adaptive planner: simple selectivity heuristic for index vs scan
+    const use_index = if (q.where_clause) |wc| hasEqPred(wc) else false;
+    const note = if (use_index) "INDEX" else "";
     try validateGroupBy(q);
-    return .{ .ordered = ordered };
+    return .{ .ordered = ordered, .note = note };
 }
 
 // Session context used for temporal comparison policies (e.g., how to interpret local datetimes)
@@ -197,6 +209,52 @@ test "planner: time compare invalid across zone mismatch" {
     const t1 = .{ .Time = .{ .raw = "10:15Z", .parsed = try temporal.parseTime("10:15Z", true) } };
     const t2 = .{ .Time = .{ .raw = "10:15", .parsed = try temporal.parseTime("10:15", true) } };
     try std.testing.expectError(CompareError.Invalid, compareTemporalForOrder(t1, t2, ctx));
+}
+
+// Adaptive planner heuristic tests
+test "planner: heuristic index on equality predicate" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &ast.Expr{ .Ident = "a" }, .right = &ast.Expr{ .Int = 1 } } };
+    q.with_clause = null;
+    q.group_by = null;
+    q.ret = .{ .items = &.{}, .distinct = false };
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    const plan = try planQuery(q, .{});
+    try std.testing.expect(std.mem.eql(u8, plan.note, "INDEX"));
+}
+
+test "planner: no index without equality predicate" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = ast.Expr{ .Binary = .{ .op = .Gt, .left = &ast.Expr{ .Ident = "a" }, .right = &ast.Expr{ .Int = 1 } } };
+    q.with_clause = null;
+    q.group_by = null;
+    q.ret = .{ .items = &.{}, .distinct = false };
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    const plan = try planQuery(q, .{});
+    try std.testing.expect(std.mem.eql(u8, plan.note, ""));
+}
+
+test "planner: no index without where clause" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = null;
+    q.with_clause = null;
+    q.group_by = null;
+    q.ret = .{ .items = &.{}, .distinct = false };
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    const plan = try planQuery(q, .{});
+    try std.testing.expect(std.mem.eql(u8, plan.note, ""));
 }
 
 test "planner: offset pushdown rejected without order" {

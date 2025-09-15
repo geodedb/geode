@@ -4,15 +4,13 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
-    dev-env.url = "git+https://github.com/spyderorg/dev-env";
-    zigpkgs.url = "github:NixOS/nixpkgs/nixos-unstable"; # to source newer zig (0.15.x)
+    dev-env.url = "github:spyderorg/dev-env";
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      zigpkgs,
       dev-env,
       flake-utils,
       ...
@@ -21,17 +19,27 @@
       flakeForSystem =
         nixpkgs: system:
         let
-          # Import nixpkgs with unfree enabled so the forenix package (unfree license) evaluates cleanly
           pkgs = import nixpkgs {
             inherit system;
             config = { allowUnfree = true; };
           };
-          unstable = import zigpkgs {
-            inherit system;
-            config = { allowUnfree = true; };
+
+          zigPkg = dev-env.packages.${system}.zigPackages;
+
+          # Build zcap packages - use dev-env zig (0.15.1)
+          zcapPkg = pkgs.callPackage ./nix/zcap.nix {
+            zig = zigPkg;
+            optimize = "ReleaseFast";
+            enableXdp = false;
           };
-          # Use zig 0.15.x from unstable (fallback to stable zig if attribute missing)
-          zigPkg = unstable.zig_0_15 or unstable.zig or pkgs.zig;
+          
+          zcapStaticPkg = pkgs.callPackage ./nix/zcap.nix {
+            zig = zigPkg;
+            optimize = "ReleaseFast";
+            enableXdp = false;
+            # For static builds, we might want different flags
+          };
+          
           # Single source of truth for the development environment packages
           devShellPackages = with pkgs; [
             zigPkg
@@ -40,10 +48,25 @@
           ];
         in
         {
+          packages = {
+            zcap = zcapPkg;
+            zcap-static = zcapStaticPkg;
+            default = zcapPkg;
+          };
           devShell = pkgs.mkShell {
             shellHook = '''';
             env = { };
-            packages = devShellPackages;
+            packages =
+              (with dev-env.packages.${system}; [
+                zigPackages
+                goPackages
+                commonPackages
+              ])
+              ++ (with pkgs; [
+                tcpdump
+                tshark
+                file
+              ]);
           };
         };
     in

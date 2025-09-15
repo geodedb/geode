@@ -8,17 +8,17 @@
         "unstable": "unstable"
       },
       "locked": {
-        "lastModified": 1756756343,
-        "narHash": "sha256-fbZGZ9WB9RZLSzCiBulZZgUFQCpuqX84uI/ErJ91eL0=",
-        "ref": "refs/heads/main",
-        "rev": "0d380a8ff338468385d5aa11b9b3eaa5acf8c469",
-        "revCount": 82,
-        "type": "git",
-        "url": "https://github.com/spyderorg/dev-env"
+        "lastModified": 1757885492,
+        "narHash": "sha256-DV3TgML/dJ2wkLGk06ZkixIQ1v0Wy5EvqicHeckMpkE=",
+        "owner": "spyderorg",
+        "repo": "dev-env",
+        "rev": "787f0b800f01c4c557cb32e4c72330d11e4e5e9b",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "https://github.com/spyderorg/dev-env"
+        "owner": "spyderorg",
+        "repo": "dev-env",
+        "type": "github"
       }
     },
     "flake-utils": {
@@ -115,11 +115,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1756617294,
-        "narHash": "sha256-aGnd4AHIYCWQKChAkHPpX+YYCt7pA6y2LFFA/s8q0wQ=",
+        "lastModified": 1757810152,
+        "narHash": "sha256-Vp9K5ol6h0J90jG7Rm4RWZsCB3x7v5VPx588TQ1dkfs=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "b4c2c57c31e68544982226d07e4719a2d86302a8",
+        "rev": "9a094440e02a699be5c57453a092a8baf569bdad",
         "type": "github"
       },
       "original": {
@@ -133,8 +133,7 @@
       "inputs": {
         "dev-env": "dev-env",
         "flake-utils": "flake-utils_3",
-        "nixpkgs": "nixpkgs_2",
-        "zigpkgs": "zigpkgs"
+        "nixpkgs": "nixpkgs_2"
       }
     },
     "systems": {
@@ -184,27 +183,11 @@
     },
     "unstable": {
       "locked": {
-        "lastModified": 1755186698,
-        "narHash": "sha256-wNO3+Ks2jZJ4nTHMuks+cxAiVBGNuEBXsT29Bz6HASo=",
+        "lastModified": 1757745802,
+        "narHash": "sha256-hLEO2TPj55KcUFUU1vgtHE9UEIOjRcH/4QbmfHNF820=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "fbcf476f790d8a217c3eab4e12033dc4a0f6d23c",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "zigpkgs": {
-      "locked": {
-        "lastModified": 1757068644,
-        "narHash": "sha256-NOrUtIhTkIIumj1E/Rsv1J37Yi3xGStISEo8tZm3KW4=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "8eb28adfa3dc4de28e792e3bf49fcf9007ca8ac9",
+        "rev": "c23193b943c6c689d70ee98ce3128239ed9e32d1",
         "type": "github"
       },
       "original": {

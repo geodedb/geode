@@ -6,6 +6,30 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Now (P0)
 
+0. Finalize memory governance
+   - Why: Enforce per-query soft memory limits to avoid OOMs
+   - What: Add `soft_mem_limit_bytes` to SessionContext; read `GEODE_QUERY_MEM_LIMIT_BYTES` in server; wrap allocators to track bytes and trigger spill instead of OOM
+   - Acceptance: `PROFILE RETURN` with very low `GEODE_QUERY_MEM_LIMIT_BYTES` sets `sort_spills` or `hashagg_spills` without crashing
+
+1. Fix planner errant tests
+   - Why: Ensure `planner.zig` tests compile and validate heuristic flag
+   - What: Correct AST literal Expr syntax and use `std.mem.eql` for string compares
+   - Acceptance: `zig test src/planner.zig` passes all tests
+
+2. Document MVCC phantom gap
+   - Why: Clarify SI allows phantoms, SSI needed for full phantom prevention
+   - What: Add note in `tests/e2e_protocol_mvcc_phantom.zig` and gap doc
+   - Acceptance: Tests still pass, documentation updated
+
+3. Commit and polish
+   - Why: Final cleanup, formatting, typechecks
+   - What: Run `zig fmt .`, `zig build`, update CRUSH.md
+   - Acceptance: All code is formatted, typechecked, and ready for commit
+
+> Note: Planner tests and full enforcement in `evaluateSimpleQuery`/`runGroupedQuery` require larger refactors and will be tackled in a follow-up session.
+
+## Now (P0)
+
 <!-- NOTE: Former AUTOGEN marker removed; list is now manual. -->
 
 1. NodeIndexScan inline metadata (REQ-GQL-039)

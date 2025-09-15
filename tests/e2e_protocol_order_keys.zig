@@ -36,7 +36,7 @@ test "protocol: multiple ORDER BY keys emitted and stable for large payloads" {
 test "protocol: ORDER BY keys preserved with long aliases" {
     const exe = "./zig-out/bin/geodec";
     var buf: [1024]u8 = undefined;
-    const long = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{"abcdefghijklmnopqrstuvwxyz","0123456789","ABCDEFGHIJKLMNOPQRSTUVWXYZ"}) catch unreachable;
+    const long = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ "abcdefghijklmnopqrstuvwxyz", "0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ" }) catch unreachable;
     const q = std.fmt.allocPrint(std.testing.allocator, "RETURN 1 AS {s}, 2 AS k ORDER BY {s}, k LIMIT 1", .{ long, long }) catch unreachable;
     defer std.testing.allocator.free(q);
     const res = try run(&.{ exe, q });

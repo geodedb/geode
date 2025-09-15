@@ -17,7 +17,7 @@ pub const CountingAllocator = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
-    fn allocFn(ctx: *anyopaque, n: usize, align: u29, ret_addr: std.builtin.ReturnAddress) ?[*]u8 {
+    fn allocFn(ctx: *anyopaque, n: usize, align: usize, ret_addr: std.builtin.ReturnAddress) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
         const mem = self.parent.rawAlloc(n, align, ret_addr) orelse return null;
         self.total_alloc += n;

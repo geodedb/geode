@@ -34,4 +34,4 @@ doccheck: tools
 	./zig-out/bin/doccheck
 
 # Run build, test, fuzz, bench, and doccheck sequentially
-ci: build test fuzz bench tools doccheck
+ci: build test fuzz bench

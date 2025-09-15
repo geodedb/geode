@@ -77,7 +77,7 @@ pub fn main() !void {
         }
     };
     var writer_ctx = W{ .alloc = alloc, .buf = &gen_buf, .len_ptr = &gen_len };
-    fn writeProxy(ctx: W, data: []const u8) !usize { return ctx.writeFn(data); }
+    inline fn writeProxy(ctx: W, data: []const u8) !usize { return ctx.writeFn(data); }
     const WriterType = std.io.Writer(W, error{OutOfMemory}, writeProxy);
     var w = WriterType{ .context = writer_ctx };
     try w.print("Auto-generated (unix_ts={d})\n\n", .{std.time.timestamp()});

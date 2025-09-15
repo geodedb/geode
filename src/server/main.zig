@@ -14,7 +14,11 @@ const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_
 // Focus: RETURN queries, UNION (ALL/DISTINCT), GROUP BY aggregation via exec.runGroupedQuery,
 // ORDER/LIMIT/OFFSET legality (US001), EXPLAIN/PROFILE, pagination, txn demarcation.
 
+const ServerStateInsertedValue = struct { value: []const u8, creator_txn: u64, commit_ts: ?u64 = null, aborted: bool = false };
+
 const ServerState = struct {
+    // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
+    query_mem_limit_bytes: usize = 0,
     last_columns: []const protocol.SchemaCol = &.{},
     last_ordered: bool = false,
     last_order_keys: []const []const u8 = &.{},
@@ -33,7 +37,8 @@ const ServerState = struct {
     spill_sort: usize = 0,
     spill_distinct: usize = 0,
     spill_union: usize = 0,
-    spill_threshold: usize = 0,
+    spill_hashagg: usize = 0,
+    
     // WAL integration (phase: skip ratio exposure) — optional pointer injected during server bootstrap.
     wal_ptr: ?*anyopaque = null,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
@@ -42,8 +47,13 @@ const ServerState = struct {
     query_text: ?[]const u8 = null,
     txn_manager: txn_mgr.Manager = undefined,
     active_txn: ?txn_mgr.Txn = null,
-    // Simple heap of inserted values (strings) for prototype DML; each entry becomes a row {v:<value>}.
-    inserted_values: std.ArrayList([]const u8) = undefined,
+    // MVCC-aware heap of inserted values. commit_ts null => uncommitted.
+    inserted_values: std.ArrayList(ServerStateInsertedValue) = undefined,
+    global_commit_ts: u64 = 0, // monotonically increasing commit timestamp
+    session_snapshot_ts: u64 = 0, // snapshot timestamp captured at BEGIN
+    // Aggregation memory metrics (non-PROFILE path instrumentation)
+    agg_build_bytes_last: usize = 0,
+    agg_emit_bytes_last: usize = 0,
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -154,7 +164,7 @@ inline fn nullsFlag() []const u8 {
 }
 
 var flags_buf_base: [5][]const u8 = undefined; // room for adaptive flag
-var flags_buf_ext: [6][]const u8 = undefined; // room for adaptive + union phases
+var flags_buf_ext: [7][]const u8 = undefined; // room for adaptive + union phases + deprecation
 var g_adapt_estimates: bool = false; // env or future CLI toggled
 var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
 
@@ -180,12 +190,18 @@ fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
 }
 
 fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
-    if (!union_phases) return computeBaseFlags(ordered, distinct);
     const base = computeBaseFlags(ordered, distinct);
     var i: usize = 0;
     while (i < base.len) : (i += 1) flags_buf_ext[i] = base[i];
-    flags_buf_ext[base.len] = F_UNION_PHASES;
-    return flags_buf_ext[0 .. base.len + 1];
+    var end: usize = base.len;
+    if (union_phases) {
+        flags_buf_ext[end] = F_UNION_PHASES;
+        end += 1;
+    }
+    // Deprecation flag for wal_skip_ratio legacy key always appended (profile context check later could refine)
+    flags_buf_ext[end] = "U:WalSkipRatioDeprecated";
+    end += 1;
+    return flags_buf_ext[0..end];
 }
 
 fn execInsertValue(state: *ServerState, expr_val: eval.Value) !void {
@@ -203,7 +219,15 @@ fn execInsertValue(state: *ServerState, expr_val: eval.Value) !void {
         else => list.appendSlice(fba.allocator(), "null") catch {},
     }
     const stored = try state.allocator.dupe(u8, list.items);
-    state.inserted_values.append(state.allocator, stored) catch {};
+    const creator = if (state.active_txn) |tx| tx.id else 0; // autocommit txn id 0
+    state.inserted_values.append(state.allocator, .{ .value = stored, .creator_txn = creator, .commit_ts = if (creator == 0) state.global_commit_ts else null }) catch {};
+    // WAL logical insert record (best-effort) for transactional inserts (creator != 0)
+    if (creator != 0) {
+        if (state.wal_ptr) |wp| {
+            const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
+            _ = wptr.append(creator, .Insert, stored, stored.len) catch {};
+        }
+    }
 }
 
 fn buildScanValuesResult(state: *ServerState) !void {
@@ -213,9 +237,16 @@ fn buildScanValuesResult(state: *ServerState) !void {
     state.last_order_keys = &.{};
     // Build row fragments
     var rows = std.ArrayList([]const u8).initCapacity(state.allocator, state.inserted_values.items.len) catch return;
+    const snapshot = if (state.active_txn != null) state.session_snapshot_ts else state.global_commit_ts;
+    const reader_txn = if (state.active_txn) |tx| tx.id else 0;
     var idx: usize = 0;
     while (idx < state.inserted_values.items.len) : (idx += 1) {
-        const val = state.inserted_values.items[idx];
+        const rec = state.inserted_values.items[idx];
+        const own_uncommitted = rec.creator_txn == reader_txn and rec.commit_ts == null and !rec.aborted;
+        const committed_visible = if (rec.commit_ts) |cts| cts <= snapshot else false;
+        const visible = own_uncommitted or committed_visible;
+        if (!visible) continue;
+        const val = rec.value;
         // Build row JSON manually to avoid fmt brace issues with Zig 0.15
         const row = state.allocator.alloc(u8, 5 + val.len) catch continue; // {"v": + value + }
         // Write {"v":
@@ -284,6 +315,67 @@ fn valueTypeName(v: eval.Value) []const u8 {
         .Null => "NULL",
         .Decimal => "DECIMAL",
     };
+}
+
+// Map aggregation BindingValue (exec module) to schema type string.
+inline fn bindingValueTypeName(v: anytype) []const u8 {
+    return switch (v) {
+        .Int => "INT",
+        .Bool => "BOOL",
+        .Str => "STRING",
+        .Null => "NULL",
+        .Decimal => "DECIMAL",
+    };
+}
+
+// Serialize a single aggregation BindingValue row to JSON using provided column metadata (names only used; types informational).
+fn bindingValueRowToJson(ally: std.mem.Allocator, cols: []const protocol.SchemaCol, brow: []const exec.BindingValue) []const u8 {
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return &.{};
+    const w = buf.writer(ally);
+    w.writeAll("{") catch {};
+    var i: usize = 0;
+    while (i < cols.len and i < brow.len) : (i += 1) {
+        if (i > 0) w.writeAll(",") catch {};
+        const name = cols[i].name;
+        w.print("\"{s}\":", .{name}) catch {};
+        const v = brow[i];
+        switch (v) {
+            .Null => w.writeAll("null") catch {},
+            .Int => |n| w.print("{d}", .{n}) catch {},
+            .Bool => |b| w.writeAll(if (b) "true" else "false") catch {},
+            .Str => |s| blk: {
+                w.writeAll("\"") catch {};
+                w.writeAll(s) catch {};
+                w.writeAll("\"") catch {};
+                break :blk;
+            },
+            .Decimal => |d| blkdec: {
+                const coeff = d.coeff;
+                const scale = d.scale;
+                if (scale == 0) {
+                    w.print("{d}", .{coeff}) catch {};
+                    break :blkdec;
+                }
+                var pow: i128 = 1;
+                var si: u8 = 0;
+                while (si < scale) : (si += 1) pow *= 10;
+                const whole: i128 = @divTrunc(coeff, pow);
+                const frac: i128 = @mod(if (coeff < 0) -coeff else coeff, pow);
+                var fracbuf: [32]u8 = undefined;
+                const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch "0";
+                if (ftmp.len < scale) {
+                    const missing = scale - @as(u8, @intCast(ftmp.len));
+                    var pad: [32]u8 = undefined;
+                    @memset(pad[0..missing], '0');
+                    w.print("{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch {};
+                } else {
+                    w.print("{d}.{s}", .{ whole, ftmp }) catch {};
+                }
+            },
+        }
+    }
+    w.writeAll("}") catch {};
+    return buf.toOwnedSlice(ally) catch &.{};
 }
 
 fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
@@ -744,6 +836,8 @@ fn distinctDedup(ally: std.mem.Allocator, have_values: bool, value_arity: usize,
     defer seen.deinit();
     var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return;
     defer out_rows.deinit(ally);
+    var out_values = if (have_values) std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return else std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return;
+    defer out_values.deinit(ally);
     var alloc_keys = std.ArrayList([]const u8).initCapacity(ally, 0) catch return;
     defer {
         for (alloc_keys.items) |k| ally.free(k);
@@ -756,6 +850,7 @@ fn distinctDedup(ally: std.mem.Allocator, have_values: bool, value_arity: usize,
         if (!seen.contains(key)) {
             seen.put(key, {}) catch {};
             out_rows.append(ally, row) catch {};
+            if (have_values and idx < rows_values.items.len) out_values.append(ally, rows_values.items[idx]) catch {};
             if (key.ptr != row.ptr) alloc_keys.append(ally, key) catch {};
         } else {
             ally.free(row);
@@ -768,10 +863,10 @@ fn distinctDedup(ally: std.mem.Allocator, have_values: bool, value_arity: usize,
     for (out_rows.items) |r| rows_json.append(ally, r) catch {};
     if (out_hash_size) |p| p.* = unique;
     if (have_values) {
-        var vi: usize = 0;
-        while (vi < rows_values.items.len) : (vi += 1) {
-            if (vi < out_rows.items.len) ally.free(rows_values.items[vi]);
-        }
+        // Replace original rows_values with compacted out_values (ownership of slices moves as-is)
+        for (rows_values.items) |v| ally.free(v);
+        rows_values.clearRetainingCapacity();
+        for (out_values.items) |v| rows_values.append(ally, v) catch {};
     }
 }
 
@@ -976,59 +1071,85 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     return 0;
                 }
             };
-            std.sort.block([]const u8, rows_json.items, Ctx{ .rows = rows_json.items, .ob = &ob, .keys = key_matrix, .key_count = key_count }, struct {
-                fn less(c: Ctx, a: []const u8, b: []const u8) bool {
-                    var ai: usize = 0;
-                    var bi: usize = 0;
-                    while (ai < c.rows.len and !std.mem.eql(u8, c.rows[ai], a)) : (ai += 1) {}
-                    while (bi < c.rows.len and !std.mem.eql(u8, c.rows[bi], b)) : (bi += 1) {}
-                    var ki: usize = 0;
-                    while (ki < c.ob.keys.len) : (ki += 1) {
-                        const key_expr = c.ob.keys[ki];
-                        const av = c.keys[ai * c.key_count + ki];
-                        const bv = c.keys[bi * c.key_count + ki];
-                        if (av.kind == .Null and bv.kind != .Null) {
-                            if (g_nulls_last) {
-                                // Nulls last: treat av > bv
-                                if (key_expr.desc) return true; // descending: larger first -> null considered largest
-                                return false; // ascending: null goes after non-null
-                            } else {
-                                // Nulls first (default)
-                                return !key_expr.desc;
-                            }
-                        }
-                        if (bv.kind == .Null and av.kind != .Null) {
-                            if (g_nulls_last) {
-                                // Nulls last: bv is null so av < bv
-                                if (key_expr.desc) return false; // descending: larger first, null last so av < bv -> false
-                                return true; // ascending: av < bv -> true
-                            } else {
-                                return key_expr.desc;
-                            }
-                        }
-                        var ord: i2 = 0;
-                        switch (av.kind) {
-                            .Null => ord = 0,
-                            .Str => ord = blk: {
-                                if (bv.kind == .Str) {
-                                    if (std.mem.lessThan(u8, av.str, bv.str)) break :blk -1;
-                                    if (std.mem.lessThan(u8, bv.str, av.str)) break :blk 1;
-                                    break :blk 0;
-                                } else break :blk 1; // strings after numbers
-                            },
-                            .Int, .Dec => ord = blk: {
-                                switch (bv.kind) {
-                                    .Int, .Dec => break :blk Ctx.cmpNumeric(av, bv),
-                                    .Str => break :blk -1,
-                                    .Null => break :blk 1,
+            // Optimized ORDER BY: instead of sorting the JSON row slices directly (which required
+            // an O(n) scan to map slice->row index for every comparator call), sort a parallel
+            // index array referencing precomputed key values. This drops comparator cost from
+            // O(k * (n scan)) to O(k) where k = number of ORDER BY keys.
+            const maybe_indices = ally.alloc(usize, rows_json.items.len) catch null; // on OOM skip ordering optimization
+            if (maybe_indices) |indices| {
+                var fi: usize = 0;
+                while (fi < indices.len) : (fi += 1) indices[fi] = fi;
+                const ICtx = struct {
+                    rows: [][]const u8,
+                    ob: *const @TypeOf(ob),
+                    keys: []KeyVal,
+                    key_count: usize,
+                };
+                std.sort.block(usize, indices, ICtx{ .rows = rows_json.items, .ob = &ob, .keys = key_matrix, .key_count = key_count }, struct {
+                    fn less(c: ICtx, a: usize, b: usize) bool {
+                        var ki: usize = 0;
+                        while (ki < c.ob.keys.len) : (ki += 1) {
+                            const key_expr = c.ob.keys[ki];
+                            const av = c.keys[a * c.key_count + ki];
+                            const bv = c.keys[b * c.key_count + ki];
+                            if (av.kind == .Null and bv.kind != .Null) {
+                                if (g_nulls_last) {
+                                    if (key_expr.desc) return true; // desc: null considered largest
+                                    return false; // asc: null after non-null
+                                } else {
+                                    return !key_expr.desc; // nulls first
                                 }
-                            },
+                            }
+                            if (bv.kind == .Null and av.kind != .Null) {
+                                if (g_nulls_last) {
+                                    if (key_expr.desc) return false;
+                                    return true;
+                                } else {
+                                    return key_expr.desc;
+                                }
+                            }
+                            var ord: i2 = 0;
+                            switch (av.kind) {
+                                .Null => ord = 0,
+                                .Str => ord = blk: {
+                                    if (bv.kind == .Str) {
+                                        if (std.mem.lessThan(u8, av.str, bv.str)) break :blk -1;
+                                        if (std.mem.lessThan(u8, bv.str, av.str)) break :blk 1;
+                                        break :blk 0;
+                                    } else break :blk 1; // strings after numbers
+                                },
+                                .Int, .Dec => ord = blk: {
+                                    switch (bv.kind) {
+                                        .Int, .Dec => break :blk Ctx.cmpNumeric(av, bv),
+                                        .Str => break :blk -1,
+                                        .Null => break :blk 1,
+                                    }
+                                },
+                            }
+                            if (ord != 0) return if (key_expr.desc) ord > 0 else ord < 0;
                         }
-                        if (ord != 0) return if (key_expr.desc) ord > 0 else ord < 0;
+                        // Stable deterministic tie-break: compare JSON row bytes.
+                        const ra = c.rows[a];
+                        const rb = c.rows[b];
+                        if (std.mem.lessThan(u8, ra, rb)) return true;
+                        return false;
                     }
-                    return std.mem.lessThan(u8, a, b);
+                }.less);
+                // Apply permutation to rows_json in new order.
+                var new_rows_opt: ?std.ArrayList([]const u8) = std.ArrayList([]const u8).initCapacity(ally, rows_json.items.len) catch null;
+                if (new_rows_opt) |*new_rows| {
+                    var oi: usize = 0;
+                    while (oi < indices.len) : (oi += 1) new_rows.append(ally, rows_json.items[indices[oi]]) catch {};
+                    // Free old backing store but not individual row slices (still referenced).
+                    ally.free(rows_json.items);
+                    rows_json.items = new_rows.items;
+                    rows_json.capacity = new_rows.capacity;
+                    // Prevent double free by disarming new_rows (we transferred ownership).
+                    new_rows.items = &[_][]const u8{};
+                    new_rows.capacity = 0;
                 }
-            }.less);
+                ally.free(indices);
+            }
             if (timings) |tptr| {
                 tptr.sort_ns = std.time.nanoTimestamp() - t_sort_start;
                 tptr.sort_rows_in = if (tptr.distinct_rows_out != 0) tptr.distinct_rows_out else tptr.project_rows_out;
@@ -1248,7 +1369,11 @@ pub fn main() !void {
         if (env.get("GEODE_FORCE_SORT_SPILL")) |_| env_spill_sort = 1;
         if (env.get("GEODE_FORCE_DISTINCT_SPILL")) |_| env_spill_distinct = 1;
         if (env.get("GEODE_FORCE_UNION_SPILL")) |_| env_spill_union = 1;
-        if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch 0;
+        if (env.get("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
+            env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
+        } else if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
+            env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
+        }    
         if (env.get("GEODE_NULLS_LAST")) |_| g_nulls_last = true;
         if (env.get("GEODE_PROFILE_MEMCURVE")) |_| memcurve_profile = true;
         if (env.get("GEODE_ADAPT_ESTIMATES")) |_| g_adapt_estimates = true;
@@ -1349,7 +1474,7 @@ pub fn main() !void {
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
     state.spill_union = env_spill_union;
-    state.spill_threshold = env_spill_threshold;
+    state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
 
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
@@ -1426,6 +1551,8 @@ pub fn main() !void {
                     state.active_txn = t;
                     state.in_txn = true;
                     state.txn_id = t.id;
+                    // Capture snapshot timestamp (current global commit ts)
+                    state.session_snapshot_ts = state.global_commit_ts;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
                 }
             },
@@ -1451,6 +1578,15 @@ pub fn main() !void {
                 } else {
                     var tx = state.active_txn.?;
                     state.txn_manager.commit(&tx);
+                    // Assign commit timestamp to newly committed records from this txn
+                    state.global_commit_ts += 1;
+                    const cts = state.global_commit_ts;
+                    var i_mvcc: usize = 0;
+                    while (i_mvcc < state.inserted_values.items.len) : (i_mvcc += 1) {
+                        if (state.inserted_values.items[i_mvcc].creator_txn == tx.id and state.inserted_values.items[i_mvcc].commit_ts == null) {
+                            state.inserted_values.items[i_mvcc].commit_ts = cts;
+                        }
+                    }
                     // Append WAL commit record (empty payload) if WAL configured.
                     if (state.wal_ptr) |wp| {
                         const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
@@ -1459,9 +1595,20 @@ pub fn main() !void {
                         _ = wptr.append(tx.id, .Commit, &.{}, 0) catch {};
                         wptr.fsync() catch {};
                     }
+                    // Periodic WAL checkpoint + compaction after commit
+                    const do_checkpoint = (state.global_commit_ts % 5) == 0; // heuristic interval
                     state.active_txn = null;
                     state.in_txn = false;
                     writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+                    if (do_checkpoint) {
+                        if (state.wal_ptr) |wp_ck| {
+                            const wck: *wal_mod.Wal = @ptrCast(@alignCast(wp_ck));
+                            _ = wck.writeCheckpoint() catch {};
+                            // Use next_lsn as conservative durable horizon for compaction.
+                            const durable = wck.next_lsn;
+                            wck.compact(durable) catch {};
+                        }
+                    }
                 }
             },
             .ROLLBACK => |_| {
@@ -1472,6 +1619,13 @@ pub fn main() !void {
                     } else |_| {}
                 } else {
                     var tx2 = state.active_txn.?;
+                    // Mark uncommitted inserts for this txn as aborted
+                    var ia: usize = 0;
+                    while (ia < state.inserted_values.items.len) : (ia += 1) {
+                        if (state.inserted_values.items[ia].creator_txn == tx2.id and state.inserted_values.items[ia].commit_ts == null) {
+                            state.inserted_values.items[ia].aborted = true;
+                        }
+                    }
                     state.txn_manager.rollback(&tx2);
                     state.active_txn = null;
                     state.in_txn = false;
@@ -1551,7 +1705,14 @@ pub fn main() !void {
                         const st = ok.program.statements[0];
                         switch (st) {
                             .InsertValue => |iv| {
-                                // Evaluate expression (restrict to simple literal for prototype)
+                                // Implicit autocommit: if not in explicit transaction, wrap this DML in begin/commit.
+                                var started_auto = false;
+                                if (state.active_txn == null) {
+                                    const t = state.txn_manager.begin();
+                                    state.active_txn = t;
+                                    state.session_snapshot_ts = state.global_commit_ts; // snapshot at start
+                                    started_auto = true;
+                                }
                                 const val = switch (iv.expr) {
                                     .Int => |n| eval.Value{ .Int = n },
                                     .String => |s| eval.Value{ .Str = s },
@@ -1559,6 +1720,35 @@ pub fn main() !void {
                                     else => eval.Value{ .Null = {} },
                                 };
                                 execInsertValue(&state, val) catch {};
+                                // If autocommit, immediately commit the txn.
+                                if (started_auto) {
+                                    if (state.active_txn) |*txc| {
+                                        state.txn_manager.commit(txc);
+                                        state.global_commit_ts += 1;
+                                        const cts_auto = state.global_commit_ts;
+                                        var mi: usize = 0;
+                                        while (mi < state.inserted_values.items.len) : (mi += 1) {
+                                            if (state.inserted_values.items[mi].creator_txn == txc.id and state.inserted_values.items[mi].commit_ts == null) {
+                                                state.inserted_values.items[mi].commit_ts = cts_auto;
+                                            }
+                                        }
+                                        if (state.wal_ptr) |wpac| {
+                                            const wptr_auto: *wal_mod.Wal = @ptrCast(@alignCast(wpac));
+                                            _ = wptr_auto.append(txc.id, .Commit, &.{}, 0) catch {};
+                                        }
+                                        // Periodic checkpoint after autocommit too
+                                        const do_checkpoint_auto = (state.global_commit_ts % 5) == 0;
+                                        state.active_txn = null;
+                                        if (do_checkpoint_auto) {
+                                            if (state.wal_ptr) |wp_auto| {
+                                                const wauto: *wal_mod.Wal = @ptrCast(@alignCast(wp_auto));
+                                                _ = wauto.writeCheckpoint() catch {};
+                                                const durable2 = wauto.next_lsn;
+                                                wauto.compact(durable2) catch {};
+                                            }
+                                        }
+                                    }
+                                }
                                 // Return ACK schema with zero rows
                                 if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| {
                                     defer gpa.free(line);
@@ -1638,13 +1828,43 @@ pub fn main() !void {
                                         timings.project_rows_out = row_count;
                                         timings.agg_build_ns = agg_timings.build_ns;
                                         timings.agg_emit_ns = agg_timings.emit_ns;
-                                        // Build synthetic columns from RETURN items
+                                        // Build columns with inferred types from aggregation output rows.
                                         var mut_cols_slice: []protocol.SchemaCol = prof_ally.alloc(protocol.SchemaCol, q.ret.items.len) catch &.{};
                                         var idx_fill: usize = 0;
                                         while (idx_fill < q.ret.items.len) : (idx_fill += 1) {
                                             const it2 = q.ret.items[idx_fill];
                                             const alias2 = it2.alias orelse geode.printer.stringifyExprAlloc(prof_ally, it2.expr, .{}) catch "col";
-                                            mut_cols_slice[idx_fill] = .{ .name = alias2, .type = "INT" };
+                                            // Specialized aggregate type mapping overrides value-derived inference for stability.
+                                            // COUNT()/COUNT(*) => INT; AVG() => DECIMAL; others still scan rows for first non-null value.
+                                            var forced_type: ?[]const u8 = null;
+                                            if (it2.expr == .Call) {
+                                                const callee = it2.expr.Call.callee.*;
+                                                if (callee == .Ident) {
+                                                    const nm = callee.Ident;
+                                                    if (std.ascii.eqlIgnoreCase(nm, "count")) {
+                                                        forced_type = "INT";
+                                                    } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {
+                                                        forced_type = "DECIMAL";
+                                                    }
+                                                }
+                                            }
+                                            var inferred: []const u8 = forced_type orelse "NULL";
+                                            if (forced_type == null) {
+                                                var gi: usize = 0;
+                                                while (gi < g_out.len) : (gi += 1) {
+                                                    if (idx_fill < g_out[gi].len) {
+                                                        const bv = g_out[gi][idx_fill];
+                                                        switch (bv) {
+                                                            .Null => {},
+                                                            else => {
+                                                                inferred = bindingValueTypeName(bv);
+                                                                gi = g_out.len; // break outer
+                                                            },
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            mut_cols_slice[idx_fill] = .{ .name = alias2, .type = inferred };
                                         }
                                         // Approximate bytes_out for aggregate/project by creating minimal JSON row strings
                                         // (We don't retain them; only measure.)
@@ -1739,7 +1959,7 @@ pub fn main() !void {
                                     w.writeAll("{\"profile_version\":2,\"ops\":[") catch {};
                                     var first_op_profile = true;
                                     const peak_bytes: usize = track.peakBytes();
-                                    if (state.spill_threshold > 0 and peak_bytes >= state.spill_threshold) {
+                                    if (state.query_mem_limit_bytes > 0 and peak_bytes >= state.query_mem_limit_bytes) {
                                         if (ordered_meta) state.spill_sort = 1;
                                         if (q.ret.distinct) state.spill_distinct = 1;
                                     }
@@ -2073,6 +2293,20 @@ pub fn main() !void {
                                     w.print("{d}", .{hashagg_build_bytes}) catch {};
                                     w.writeAll(",\"hashagg_emit_bytes_alloc\":") catch {};
                                     w.print("{d}", .{hashagg_emit_bytes}) catch {};
+                                    // HashAgg spill metrics (prototype): mark spill when threshold crossed.
+                                    const hashagg_spills: usize = state.spill_hashagg;
+                                    w.writeAll(",\"hashagg_spills\":") catch {};
+                                    w.print("{d}", .{hashagg_spills}) catch {};
+                                    if (hashagg_spills > 0) {
+                                        w.writeAll(",\"hashagg_spill_reason\":\"") catch {};
+                                        // Reason: threshold or forced via env (future). Currently only threshold based.
+                                        if (state.query_mem_limit_bytes > 0) {
+                                            w.writeAll("threshold") catch {};
+                                        } else {
+                                            w.writeAll("unknown") catch {};
+                                        }
+                                        w.writeAll("\")") catch {};
+                                    }
                                     // WAL skip ratio placeholder (storage layer not yet threaded into server state)
                                     // WAL skip ratio (if WAL integrated into server state)
                                     var wal_skip_ratio: f64 = 0.0;
@@ -2109,7 +2343,7 @@ pub fn main() !void {
                                     // spill_reason if any
                                     if (state.spill_sort + state.spill_distinct + state.spill_union > 0) {
                                         var spill_reason: []const u8 = "forced";
-                                        if (state.spill_threshold > 0 and peak_bytes >= state.spill_threshold) spill_reason = "threshold";
+                                        if (state.query_mem_limit_bytes > 0 and peak_bytes >= state.query_mem_limit_bytes) spill_reason = "threshold";
                                         w.writeAll(",\"spill_reason\":\"") catch {};
                                         w.writeAll(spill_reason) catch {};
                                         w.writeAll("\"") catch {};
@@ -2209,13 +2443,17 @@ pub fn main() !void {
                                     // Provide a slice-of-slices representing input rows; in this prototype inputs are param-based expressions only.
                                     const empty_row: []eval.Value = &.{};
                                     const input_len = if (param_rows.len > 0) param_rows.len else 1;
-                                    var input_placeholder_mut: [][]eval.Value = gpa.alloc([]eval.Value, input_len) catch &.{};
+                                    // Tracking allocator to capture HashAgg memory usage (build + emit) in non-PROFILE path.
+                                    var track_agg = TrackingAllocator{ .inner = gpa };
+                                    track_agg.init(gpa);
+                                    const agg_ally = track_agg.allocator;
+                                    var input_placeholder_mut: [][]eval.Value = agg_ally.alloc([]eval.Value, input_len) catch &.{};
                                     var ip: usize = 0;
                                     while (ip < input_len) : (ip += 1) input_placeholder_mut[ip] = empty_row;
                                     const input_placeholder: []const []eval.Value = input_placeholder_mut;
                                     const first_param_vals: []const eval.Value = if (param_rows.len > 0) param_rows[0] else &.{};
                                     var agg_timings: exec.AggStageTimings = .{}; // timings unused here but required param
-                                    const g_rows = exec.runGroupedQuery(gpa, q, &.{}, input_placeholder, param_names, first_param_vals, &agg_timings) catch blk_agerr: {
+                                    const g_rows = exec.runGroupedQuery(agg_ally, q, &.{}, input_placeholder, param_names, first_param_vals, &agg_timings) catch blk_agerr: {
                                         // On error fallback to evaluateSimpleQuery (e.g., if planner rejects invalid agg)
                                         // Free placeholder (allocator is gpa)
                                         // Note: runGroupedQuery returns error.Invalid if group_by absent, already guarded.
@@ -2227,68 +2465,42 @@ pub fn main() !void {
                                     while (ci < q.ret.items.len) : (ci += 1) {
                                         const rit = q.ret.items[ci];
                                         const alias = rit.alias orelse geode.printer.stringifyExprAlloc(gpa, rit.expr, .{}) catch "col";
-                                        mut_cols[ci] = .{ .name = alias, .type = "INT" };
+                                        // Infer aggregate column type by scanning result rows for first non-null value.
+                                        var inferred: []const u8 = "NULL";
+                                        var ri: usize = 0;
+                                        while (ri < g_rows.len) : (ri += 1) {
+                                            if (ci < g_rows[ri].len) {
+                                                const bv = g_rows[ri][ci];
+                                                switch (bv) {
+                                                    .Null => {},
+                                                    else => {
+                                                        inferred = bindingValueTypeName(bv);
+                                                        ri = g_rows.len; // break outer
+                                                    },
+                                                }
+                                            }
+                                        }
+                                        mut_cols[ci] = .{ .name = alias, .type = inferred };
                                     }
                                     cols = mut_cols; // implicit cast to const slice
                                     // ORDER BY post-aggregation: exec.runGroupedQuery already applied ordering if q.order_by present; mark ordered_meta accordingly.
                                     if (q.order_by) |_| ordered_meta = true;
-                                    // Convert BindingValue rows to JSON objects.
+                                    // Convert BindingValue rows to JSON objects using shared helper.
                                     var out_arr = std.ArrayList([]const u8).initCapacity(gpa, 0) catch unreachable;
                                     defer out_arr.deinit(gpa);
                                     var ri: usize = 0;
                                     while (ri < g_rows.len) : (ri += 1) {
                                         const brow = g_rows[ri];
-                                        var buf = std.ArrayList(u8).initCapacity(gpa, 0) catch break;
-                                        const w = buf.writer(gpa);
-                                        w.writeAll("{") catch {};
-                                        var cj: usize = 0;
-                                        while (cj < q.ret.items.len and cj < brow.len) : (cj += 1) {
-                                            if (cj > 0) w.writeAll(",") catch {};
-                                            const col_name = cols[cj].name;
-                                            w.print("\"{s}\":", .{col_name}) catch {};
-                                            const v = brow[cj];
-                                            switch (v) {
-                                                .Null => w.writeAll("null") catch {},
-                                                .Int => |n| w.print("{d}", .{n}) catch {},
-                                                .Bool => |b| w.writeAll(if (b) "true" else "false") catch {},
-                                                .Str => |s| blk_str: {
-                                                    w.writeAll("\"") catch {};
-                                                    w.writeAll(s) catch {};
-                                                    w.writeAll("\"") catch {};
-                                                    break :blk_str;
-                                                },
-                                                .Decimal => |d| blk_dec: {
-                                                    // Emit coeff * 10^-scale exact representation
-                                                    const coeff = d.coeff;
-                                                    const scale = d.scale;
-                                                    if (scale == 0) {
-                                                        w.print("{d}", .{coeff}) catch {};
-                                                        break :blk_dec;
-                                                    }
-                                                    var pow: i128 = 1;
-                                                    var si: u8 = 0;
-                                                    while (si < scale) : (si += 1) pow *= 10;
-                                                    const whole: i128 = @divTrunc(coeff, pow);
-                                                    const frac: i128 = @mod(if (coeff < 0) -coeff else coeff, pow);
-                                                    var fracbuf: [32]u8 = undefined;
-                                                    const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch "0";
-                                                    if (ftmp.len < scale) {
-                                                        const missing = scale - @as(u8, @intCast(ftmp.len));
-                                                        var pad: [32]u8 = undefined;
-                                                        @memset(pad[0..missing], '0');
-                                                        w.print("{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch {};
-                                                    } else {
-                                                        w.print("{d}.{s}", .{ whole, ftmp }) catch {};
-                                                    }
-                                                    break :blk_dec;
-                                                },
-                                            }
-                                        }
-                                        w.writeAll("}") catch {};
-                                        const js = buf.toOwnedSlice(gpa) catch &.{};
+                                        const js = bindingValueRowToJson(gpa, @constCast(cols), brow);
                                         out_arr.append(gpa, js) catch {};
                                     }
                                     rows = out_arr.toOwnedSlice(gpa) catch &.{};
+                                    // Record memory metrics for HashAgg (approx: treat peak as build, delta after emit as emit bytes if any growth).
+                                    const peak_bytes = track_agg.peakBytes();
+                                    const net_after = track_agg.net();
+                                    state.agg_build_bytes_last = peak_bytes; // coarse attribution
+                                    state.agg_emit_bytes_last = if (net_after > peak_bytes) net_after - peak_bytes else 0;
+                                    if (state.query_mem_limit_bytes > 0 and peak_bytes >= state.query_mem_limit_bytes) state.spill_hashagg = 1;
                                 } else {
                                     rows = evaluateSimpleQuery(gpa, q, param_names, param_rows, &ordered_meta, &order_keys, &cols, null, &run_code, null) catch |e| blk_runerr: {
                                         if (diagnostics.mapEvalError(e)) |c| {
@@ -2453,7 +2665,7 @@ pub fn main() !void {
                                     const w = pb.writer(gpa);
                                     w.writeAll("{\"ops\":[") catch {};
                                     const peak_u = track_u.peakBytes();
-                                    if (state.spill_threshold > 0 and peak_u >= state.spill_threshold and std.mem.eql(u8, union_mode, "DISTINCT")) {
+                                    if (state.query_mem_limit_bytes > 0 and peak_u >= state.query_mem_limit_bytes and std.mem.eql(u8, union_mode, "DISTINCT")) {
                                         state.spill_union = 1;
                                     }
                                     // UnionLeft
