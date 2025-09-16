@@ -7,6 +7,8 @@ const exec = geode.exec;
 const wal_mod = @import("wal");
 const storage_pm = @import("storage_page_manager");
 const txn_mgr = @import("txn");
+const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
+const TextFormatter = @import("text_formatter").TextFormatter;
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
@@ -108,13 +110,27 @@ const IndexStats = struct {
 var g_index_catalog_map: std.StringHashMap(IndexStats) = undefined; // key -> stats
 var g_index_catalog_inited = false;
 var g_disable_catalog = false; // env toggle
+var g_selectivity_estimator: ?*SelectivityEstimator = null;
 
 fn initIndexCatalog(ally: std.mem.Allocator) void {
     if (g_index_catalog_inited) return;
     g_index_catalog_map = std.StringHashMap(IndexStats).init(ally);
+    
+    // Initialize selectivity estimator
+    const estimator = ally.create(SelectivityEstimator) catch return;
+    estimator.* = SelectivityEstimator.init(ally);
+    g_selectivity_estimator = estimator;
+    
     // Seed with synthetic stats for x,y columns
     g_index_catalog_map.put("x", IndexStats{ .name = "idx_x", .key = "x", .total_rows = 1000, .distinct_keys = 200 }) catch {};
     g_index_catalog_map.put("y", IndexStats{ .name = "idx_y", .key = "y", .total_rows = 1000, .distinct_keys = 500 }) catch {};
+    
+    // Update selectivity estimator with same stats
+    if (g_selectivity_estimator) |est| {
+        est.updateStats("x", 1000, 200, 10) catch {};
+        est.updateStats("y", 1000, 500, 5) catch {};
+    }
+    
     g_index_catalog_inited = true;
 }
 
@@ -122,7 +138,25 @@ fn chooseIndexForPredicate(ally: std.mem.Allocator, predicate_expr: ?*const anyo
     _ = ally; // currently unused for phase 2 stub
     _ = predicate_expr; // future: inspect to derive property name
     if (g_disable_catalog or !has_equality) return null;
-    // For prototype: iterate catalog and pick lowest selectivity.
+    
+    // Use SelectivityEstimator if available for more sophisticated cost-based decision
+    if (g_selectivity_estimator) |estimator| {
+        var best: ?IndexStats = null;
+        var best_cost: f64 = @as(f64, @floatFromInt(est_rows)); // table scan cost
+        
+        var it = g_index_catalog_map.iterator();
+        while (it.next()) |entry| {
+            const st = entry.value_ptr.*;
+            const index_cost = estimator.estimateIndexCost(st.key, .Equality, est_rows);
+            if (index_cost < best_cost * 0.9) { // require at least 10% benefit
+                best = st;
+                best_cost = index_cost;
+            }
+        }
+        return best;
+    }
+    
+    // Fallback to original simple heuristic
     var best: ?IndexStats = null;
     var it = g_index_catalog_map.iterator();
     while (it.next()) |entry| {
@@ -148,6 +182,11 @@ fn indexStatsOnInsert(key: []const u8) void {
         st.total_rows += 1;
         // naive: assume new distinct every 5 inserts
         if ((st.total_rows % 5) == 0) st.distinct_keys += 1;
+        
+        // Update selectivity estimator
+        if (g_selectivity_estimator) |est| {
+            est.updateStats(key, st.total_rows, st.distinct_keys, 0) catch {};
+        }
     }
 }
 fn indexStatsOnDelete(key: []const u8) void {
@@ -155,6 +194,11 @@ fn indexStatsOnDelete(key: []const u8) void {
     if (g_index_catalog_map.getPtr(key)) |st| {
         if (st.total_rows > 0) st.total_rows -= 1;
         // naive: distinct unaffected for prototype
+        
+        // Update selectivity estimator
+        if (g_selectivity_estimator) |est| {
+            est.updateStats(key, st.total_rows, st.distinct_keys, 0) catch {};
+        }
     }
 }
 
@@ -1809,11 +1853,22 @@ pub fn main() !void {
                                 }
                                 if (explain_mode) {
                                     const json = buildExplainJson(gpa, .{ .ordered = plan.ordered, .limit = q.limit, .offset = q.offset, .union_mode = null, .distinct = q.ret.distinct });
-                                    const flags_ex2 = computeBaseFlags(plan.ordered, q.ret.distinct);
-                                    if (protocol.buildExplainLine(gpa, json, flags_ex2)) |l| {
-                                        defer gpa.free(l);
-                                        _ = stdout_file.write(l) catch {};
-                                    } else |_| {}
+                                    
+                                    if (result_format_txt) {
+                                        // Text format output
+                                        var formatter = TextFormatter.init(gpa);
+                                        const txt = formatter.formatExplain(json) catch json;
+                                        defer if (txt.ptr != json.ptr) gpa.free(txt);
+                                        _ = stdout_file.write(txt) catch {};
+                                        _ = stdout_file.write("\n") catch {};
+                                    } else {
+                                        // JSON format output
+                                        const flags_ex2 = computeBaseFlags(plan.ordered, q.ret.distinct);
+                                        if (protocol.buildExplainLine(gpa, json, flags_ex2)) |l| {
+                                            defer gpa.free(l);
+                                            _ = stdout_file.write(l) catch {};
+                                        } else |_| {}
+                                    }
                                     continue;
                                 }
                                 if (profile_mode) {
@@ -2873,13 +2928,25 @@ pub fn main() !void {
                         const pprev = if (dup_pj.len < 48) dup_pj.len else 48;
                         std.debug.print("[debug] pj preview '{s}'\n", .{dup_pj[0..pprev]});
                     }
-                    const pline = protocol.buildProfileLine(gpa, dup_pj, state.profile_flags) catch null;
-                    if (pline) |plj| {
-                        defer gpa.free(plj);
-                        _ = stdout_file.write(plj) catch {};
-                        std.debug.print("[debug] wrote PROFILE frame len={d}\n", .{plj.len});
+                    
+                    if (result_format_txt) {
+                        // Text format output for PROFILE
+                        var formatter = TextFormatter.init(gpa);
+                        const txt = formatter.formatProfile(dup_pj) catch dup_pj;
+                        defer if (txt.ptr != dup_pj.ptr) gpa.free(txt);
+                        _ = stdout_file.write(txt) catch {};
+                        _ = stdout_file.write("\n") catch {};
+                    } else {
+                        // JSON format output
+                        const pline = protocol.buildProfileLine(gpa, dup_pj, state.profile_flags) catch null;
+                        if (pline) |plj| {
+                            defer gpa.free(plj);
+                            _ = stdout_file.write(plj) catch {};
+                            std.debug.print("[debug] wrote PROFILE frame len={d}\n", .{plj.len});
+                        }
+                        if (pline == null) std.debug.print("[debug] buildProfileLine returned null (error)\n", .{});
                     }
-                    if (pline == null) std.debug.print("[debug] buildProfileLine returned null (error)\n", .{});
+                    
                     // PROFILE complete; clear state and mark no active result
                     state.allocator.free(pj);
                     state.profile_json = null;

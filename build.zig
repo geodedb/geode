@@ -168,6 +168,12 @@ pub fn build(b: *std.Build) void {
     // util: memory governor module
     const util_memory_gov_mod = b.createModule(.{ .root_source_file = b.path("src/util/memory_governor.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("memory_governor", util_memory_gov_mod);
+    // index: selectivity estimator module
+    const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("index_selectivity", index_selectivity_mod);
+    // util: text formatter module
+    const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("text_formatter", util_text_formatter_mod);
     b.installArtifact(geoded_exe);
 
     const geodec_exe = b.addExecutable(.{

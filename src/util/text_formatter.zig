@@ -205,14 +205,16 @@ pub const TextFormatter = struct {
                 if (logical == .array) {
                     for (logical.array.items, 0..) |op, i| {
                         try writer.print("{d}. ", .{i + 1});
-                        if (op == .object and op.object.get("op")) |op_name| {
-                            if (op_name == .string) {
-                                try writer.print("{s}", .{op_name.string});
-                                
-                                // Add additional details if available
-                                if (op.object.get("mode")) |mode| {
-                                    if (mode == .string) {
-                                        try writer.print(" ({s})", .{mode.string});
+                        if (op == .object) {
+                            if (op.object.get("op")) |op_name| {
+                                if (op_name == .string) {
+                                    try writer.print("{s}", .{op_name.string});
+                                    
+                                    // Add additional details if available
+                                    if (op.object.get("mode")) |mode| {
+                                        if (mode == .string) {
+                                            try writer.print(" ({s})", .{mode.string});
+                                        }
                                     }
                                 }
                             }
@@ -238,6 +240,186 @@ pub const TextFormatter = struct {
         }
         
         return buf.toOwnedSlice(self.allocator);
+    }
+    
+    pub fn formatProfile(self: *TextFormatter, json_payload: []const u8) ![]u8 {
+        var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
+        defer buf.deinit(self.allocator);
+        
+        const writer = buf.writer(self.allocator);
+        
+        try writer.writeAll("Query Profile:\n");
+        try writer.writeAll("==============\n\n");
+        
+        // Parse the profile JSON
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, json_payload, .{}) catch {
+            try writer.writeAll("Error parsing profile data\n");
+            return buf.toOwnedSlice(self.allocator);
+        };
+        defer parsed.deinit();
+        
+        if (parsed.value != .object) {
+            try writer.writeAll("Invalid profile format\n");
+            return buf.toOwnedSlice(self.allocator);
+        }
+        
+        const root = parsed.value.object;
+        
+        // Profile version
+        if (root.get("profile_version")) |ver| {
+            if (ver == .integer) {
+                try writer.print("Profile Version: {d}\n", .{ver.integer});
+            }
+        }
+        
+        // Timing information
+        if (root.get("total_time_ns")) |time| {
+            if (time == .integer) {
+                const ms = @as(f64, @floatFromInt(time.integer)) / 1_000_000.0;
+                try writer.print("Total Time: {d:.2} ms\n", .{ms});
+            }
+        }
+        
+        // Memory information
+        if (root.get("peak_memory_bytes")) |mem| {
+            if (mem == .integer) {
+                const mb = @as(f64, @floatFromInt(mem.integer)) / (1024.0 * 1024.0);
+                try writer.print("Peak Memory: {d:.2} MB\n", .{mb});
+            }
+        }
+        
+        // Spill information
+        var has_spills = false;
+        if (root.get("sort_spills")) |spills| {
+            if (spills == .integer and spills.integer > 0) {
+                try writer.print("Sort Spills: {d}\n", .{spills.integer});
+                has_spills = true;
+            }
+        }
+        if (root.get("hashagg_spills")) |spills| {
+            if (spills == .integer and spills.integer > 0) {
+                try writer.print("HashAgg Spills: {d}\n", .{spills.integer});
+                has_spills = true;
+            }
+        }
+        
+        if (!has_spills) {
+            try writer.writeAll("No Spills\n");
+        }
+        
+        try writer.writeAll("\nOperator Tree:\n");
+        try writer.writeAll("--------------\n");
+        
+        // Process operators
+        if (root.get("ops")) |ops| {
+            if (ops == .array) {
+                for (ops.array.items) |op| {
+                    if (op == .object) {
+                        try self.formatOperator(&writer, op.object, 0);
+                    }
+                }
+            }
+        }
+        
+        // Peak memory contributors
+        if (root.get("peak_memory_contributors")) |contributors| {
+            if (contributors == .array and contributors.array.items.len > 0) {
+                try writer.writeAll("\nPeak Memory Contributors:\n");
+                try writer.writeAll("------------------------\n");
+                for (contributors.array.items, 0..) |contrib, i| {
+                    if (contrib == .object) {
+                        if (contrib.object.get("name")) |name| {
+                            if (name == .string) {
+                                try writer.print("{d}. {s}", .{ i + 1, name.string });
+                                if (contrib.object.get("bytes")) |bytes| {
+                                    if (bytes == .integer) {
+                                        const kb = @as(f64, @floatFromInt(bytes.integer)) / 1024.0;
+                                        try writer.print(" ({d:.1} KB)", .{kb});
+                                    }
+                                }
+                                try writer.writeAll("\n");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return buf.toOwnedSlice(self.allocator);
+    }
+    
+    fn formatOperator(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap, indent: usize) !void {
+        _ = self;
+        
+        // Indentation
+        var i: usize = 0;
+        while (i < indent) : (i += 1) {
+            try writer.writeAll("  ");
+        }
+        
+        // Operator name
+        if (op.get("op")) |op_name| {
+            if (op_name == .string) {
+                try writer.print("→ {s}", .{op_name.string});
+                
+                // Special handling for index operations
+                if (std.mem.eql(u8, op_name.string, "NodeIndexScan") or std.mem.eql(u8, op_name.string, "NodeScan")) {
+                    if (op.get("index_name")) |idx_name| {
+                        if (idx_name == .string) {
+                            try writer.print(" [index: {s}", .{idx_name.string});
+                            if (op.get("selectivity_est")) |sel| {
+                                if (sel == .float) {
+                                    try writer.print(", selectivity: {d:.4}", .{sel.float});
+                                } else if (sel == .number_string) {
+                                    try writer.print(", selectivity: {s}", .{sel.number_string});
+                                }
+                            }
+                            try writer.writeAll("]");
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Row counts
+        var has_rows = false;
+        if (op.get("input_rows")) |in_rows| {
+            if (in_rows == .integer) {
+                try writer.print(" (in: {d}", .{in_rows.integer});
+                has_rows = true;
+            }
+        }
+        if (op.get("rows")) |out_rows| {
+            if (out_rows == .integer) {
+                if (has_rows) {
+                    try writer.print(", out: {d})", .{out_rows.integer});
+                } else {
+                    try writer.print(" (rows: {d})", .{out_rows.integer});
+                }
+            } else if (has_rows) {
+                try writer.writeAll(")");
+            }
+        } else if (has_rows) {
+            try writer.writeAll(")");
+        }
+        
+        // Time
+        if (op.get("time_ns")) |time| {
+            if (time == .integer and time.integer > 0) {
+                const ms = @as(f64, @floatFromInt(time.integer)) / 1_000_000.0;
+                try writer.print(" [{d:.2} ms]", .{ms});
+            }
+        }
+        
+        // Memory
+        if (op.get("bytes_alloc")) |bytes| {
+            if (bytes == .integer and bytes.integer > 0) {
+                const kb = @as(f64, @floatFromInt(bytes.integer)) / 1024.0;
+                try writer.print(" [mem: {d:.1} KB]", .{kb});
+            }
+        }
+        
+        try writer.writeAll("\n");
     }
     
     fn jsonValueToString(self: *TextFormatter, value: std.json.Value) ![]u8 {
