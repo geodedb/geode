@@ -109,8 +109,10 @@ pub fn main() !void {
         try client.connect(server_address, server_port);
         const stream = try client.getStream();
 
-        // Send HELLO
+        // Send HELLO and consume server capabilities response
         try stream.writeAll("{{\"type\":\"HELLO\",\"client_name\":\"geodec\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}}\n");
+        const _hello_ack = try stream.readLine(1 << 16);
+        defer gpa.free(_hello_ack);
 
         if (do_begin) {
             try stream.writeAll("{{\"type\":\"BEGIN\"}}\n");
