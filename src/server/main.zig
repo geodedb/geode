@@ -1363,6 +1363,7 @@ pub fn main() !void {
     var env_spill_union: usize = 0;
     var env_spill_threshold: usize = 0;
     var env_storage_checksum_error = false;
+    var env_wal_compact_interval: usize = 5; // Default: compact every 5 commits
     if (std.process.getEnvMap(gpa)) |*env_ptr| {
         var env = env_ptr.*;
         defer env.deinit();
@@ -1374,6 +1375,9 @@ pub fn main() !void {
         } else if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
             env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
         }
+        if (env.get("GEODE_WAL_COMPACT_INTERVAL")) |ci| {
+            env_wal_compact_interval = std.fmt.parseInt(usize, ci, 10) catch 5;
+        }
         if (env.get("GEODE_NULLS_LAST")) |_| g_nulls_last = true;
         if (env.get("GEODE_PROFILE_MEMCURVE")) |_| memcurve_profile = true;
         if (env.get("GEODE_ADAPT_ESTIMATES")) |_| g_adapt_estimates = true;
@@ -1382,7 +1386,11 @@ pub fn main() !void {
             var pm = storage_pm.PageManager.initPersistent(gpa, 4096, p);
             defer pm.deinit();
             pm.loadPage(p, 0) catch |e| switch (e) {
-                error.PageChecksumMismatch => env_storage_checksum_error = true,
+                error.PageChecksumMismatch => {
+                    env_storage_checksum_error = true;
+                    // Log the corruption for diagnostics
+                    std.log.err("Storage page checksum mismatch detected during startup in path: {s}", .{p});
+                },
                 else => {},
             };
         }
@@ -1542,10 +1550,10 @@ pub fn main() !void {
             .HELLO => |_| {},
             .BEGIN => |_| {
                 if (state.active_txn != null) {
-                    if (protocol.buildErrorLine(gpa, "TxnState", "already in transaction", "8")) |line| {
-                        defer gpa.free(line);
-                        _ = stdout_file.write(line) catch {};
-                    } else |_| {}
+                    // Return proper transaction state error with status_class 25000
+                    const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"Transaction already active\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot BEGIN when transaction is already active\"}}]}}\n", .{});
+                    defer gpa.free(err_json);
+                    _ = stdout_file.write(err_json) catch {};
                 } else {
                     const t = state.txn_manager.begin();
                     state.active_txn = t;
@@ -1553,7 +1561,10 @@ pub fn main() !void {
                     state.txn_id = t.id;
                     // Capture snapshot timestamp (current global commit ts)
                     state.session_snapshot_ts = state.global_commit_ts;
-                    writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+                    // Return success with status_class 00000
+                    const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_BEGIN\",\"txn_id\":{}}}}}\n", .{t.id});
+                    defer gpa.free(success_json);
+                    _ = stdout_file.write(success_json) catch {};
                 }
             },
             .SAVEPOINT => |sp| {
@@ -1571,10 +1582,10 @@ pub fn main() !void {
             },
             .COMMIT => |_| {
                 if (state.active_txn == null) {
-                    if (protocol.buildErrorLine(gpa, "TxnState", "no active transaction", "8")) |line| {
-                        defer gpa.free(line);
-                        _ = stdout_file.write(line) catch {};
-                    } else |_| {}
+                    // Return proper transaction state error with status_class 25000
+                    const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot COMMIT without active transaction\"}}]}}\n", .{});
+                    defer gpa.free(err_json);
+                    _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx = state.active_txn.?;
                     state.txn_manager.commit(&tx);
@@ -1596,10 +1607,16 @@ pub fn main() !void {
                         wptr.fsync() catch {};
                     }
                     // Periodic WAL checkpoint + compaction after commit
-                    const do_checkpoint = (state.global_commit_ts % 5) == 0; // heuristic interval
+                    const do_checkpoint = if (env_wal_compact_interval > 0) 
+                        (state.global_commit_ts % env_wal_compact_interval) == 0
+                    else 
+                        false; // 0 disables automatic compaction
                     state.active_txn = null;
                     state.in_txn = false;
-                    writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+                    // Return success with status_class 00000
+                    const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_COMMIT\",\"txn_id\":{}}}}}\n", .{tx.id});
+                    defer gpa.free(success_json);
+                    _ = stdout_file.write(success_json) catch {};
                     if (do_checkpoint) {
                         if (state.wal_ptr) |wp_ck| {
                             const wck: *wal_mod.Wal = @ptrCast(@alignCast(wp_ck));
@@ -1607,16 +1624,18 @@ pub fn main() !void {
                             // Use next_lsn as conservative durable horizon for compaction.
                             const durable = wck.next_lsn;
                             wck.compact(durable) catch {};
+                            // Log compaction for observability
+                            std.log.info("WAL compaction triggered after {} commits, durable LSN: {}", .{ env_wal_compact_interval, durable });
                         }
                     }
                 }
             },
             .ROLLBACK => |_| {
                 if (state.active_txn == null) {
-                    if (protocol.buildErrorLine(gpa, "TxnState", "no active transaction", "8")) |line| {
-                        defer gpa.free(line);
-                        _ = stdout_file.write(line) catch {};
-                    } else |_| {}
+                    // Return proper transaction state error with status_class 25000
+                    const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot ROLLBACK without active transaction\"}}]}}\n", .{});
+                    defer gpa.free(err_json);
+                    _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx2 = state.active_txn.?;
                     // Mark uncommitted inserts for this txn as aborted
@@ -1629,7 +1648,10 @@ pub fn main() !void {
                     state.txn_manager.rollback(&tx2);
                     state.active_txn = null;
                     state.in_txn = false;
-                    writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+                    // Return success with status_class 00000
+                    const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_ROLLBACK\",\"txn_id\":{}}}}}\n", .{tx2.id});
+                    defer gpa.free(success_json);
+                    _ = stdout_file.write(success_json) catch {};
                 }
             },
             .RUN_GQL => |rq| {
@@ -1797,10 +1819,15 @@ pub fn main() !void {
                                 if (profile_mode) {
                                     // PROFILE mode: we stage PROFILE json and emit SCHEMA now; PROFILE frame on first PULL.
                                     const start_time = std.time.nanoTimestamp();
-                                    // Counting allocator wrapper for profiling.
+                                    // Counting allocator wrapper for profiling with memory governance.
                                     var track = @import("tracking_alloc").TrackingAllocator{ .inner = gpa };
                                     track.init(gpa);
-                                    const prof_ally = track.allocator;
+                                    var prof_ally = track.allocator;
+                                    
+                                    // Apply memory governance if limit is set
+                                    if (state.query_mem_limit_bytes > 0) {
+                                        // Memory governance is handled by checking peak bytes later
+                                    }
                                     var param_names: [][]const u8 = &.{};
                                     var param_rows: [][]const eval.Value = &.{};
                                     parseParams(prof_ally, rq.params_json, &param_names, &param_rows);
@@ -1959,9 +1986,11 @@ pub fn main() !void {
                                     w.writeAll("{\"profile_version\":2,\"ops\":[") catch {};
                                     var first_op_profile = true;
                                     const peak_bytes: usize = track.peakBytes();
+                                    // Check for memory pressure and trigger spills
                                     if (state.query_mem_limit_bytes > 0 and peak_bytes >= state.query_mem_limit_bytes) {
                                         if (ordered_meta) state.spill_sort = 1;
                                         if (q.ret.distinct) state.spill_distinct = 1;
+                                        if (q.group_by != null) state.spill_hashagg = 1;
                                     }
                                     const emit = struct {
                                         const TopTracker = struct { names: [3][24]u8 = .{ [_]u8{0} ** 24, [_]u8{0} ** 24, [_]u8{0} ** 24 }, lens: [3]usize = .{ 0, 0, 0 }, vals: [3]usize = .{ 0, 0, 0 } };

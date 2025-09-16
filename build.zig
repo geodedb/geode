@@ -165,6 +165,9 @@ pub fn build(b: *std.Build) void {
     // util: tracking allocator module
     const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("tracking_alloc", util_tracking_mod);
+    // util: memory governor module
+    const util_memory_gov_mod = b.createModule(.{ .root_source_file = b.path("src/util/memory_governor.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("memory_governor", util_memory_gov_mod);
     b.installArtifact(geoded_exe);
 
     const geodec_exe = b.addExecutable(.{

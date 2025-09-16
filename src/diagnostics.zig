@@ -179,6 +179,16 @@ pub fn mapEvalError(e: anytype) ?Code {
     return null;
 }
 
+pub fn mapStorageError(e: anytype) ?Code {
+    const name = @errorName(e);
+    if (std.mem.eql(u8, name, "PageChecksumMismatch")) return .StoragePageChecksum;
+    return null;
+}
+
 test "diagnostics: map eval errors" {
     try std.testing.expect(mapEvalError(error.TypeMismatch).? == .TypeMismatch);
+}
+
+test "diagnostics: map storage errors" {
+    try std.testing.expect(mapStorageError(error.PageChecksumMismatch).? == .StoragePageChecksum);
 }

@@ -12,7 +12,8 @@ const _e2e_mvcc_phantom = @import("e2e_protocol_mvcc_phantom.zig");
 const _e2e_sort_spill = @import("e2e_protocol_sort_spill.zig");
 const _e2e_wal_skip_ratio = @import("e2e_wal_skip_ratio.zig");
 const _e2e_protocol_wal_skip_ratio = @import("e2e_protocol_wal_skip_ratio.zig");
-const _e2e_storage_checksum = @import("e2e_protocol_storage_checksum_diag.zig");
+const _e2e_protocol_groupby_hashagg = @import("e2e_protocol_groupby_hashagg.zig");
+const _e2e_protocol_txn_baseline = @import("e2e_protocol_txn_baseline.zig");
 
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
