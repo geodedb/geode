@@ -3,6 +3,7 @@ const ast = @import("gql/ast.zig");
 
 pub const EvalError = error{
     TypeMismatch,
+    DivisionByZero,
     Unsupported,
     RegexCompile,
 };
@@ -238,7 +239,7 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
             if (l == .Int and r == .Int) {
                 // Use safe division helper to avoid builtin trap and surface TypeMismatch.
                 const denom = r.Int;
-                if (denom == 0) return EvalError.TypeMismatch; // division by zero (diagnostic maps to TypeMismatch for now)
+                if (denom == 0) return EvalError.DivisionByZero; // division by zero (maps to TypeMismatch.DivZero diagnostic)
                 // Avoid direct @divTrunc which can still trap if denom==0 due to race on optimization; explicit branch first.
                 break :blk4 .{ .Int = @divTrunc(l.Int, denom) };
             }

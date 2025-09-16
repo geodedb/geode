@@ -5,8 +5,9 @@ pub const Code = enum(u16) {
     GroupByIllegal = 2,
     IllegalOrderKey = 3,
     TypeMismatch = 4,
-    TxnState = 5,
-    StoragePageChecksum = 6,
+    TypeMismatchDivZero = 5, // Division by zero subclass
+    TxnState = 6,
+    StoragePageChecksum = 7,
 };
 
 pub fn codeName(c: Code) []const u8 {
@@ -15,6 +16,7 @@ pub fn codeName(c: Code) []const u8 {
         .GroupByIllegal => "GroupByIllegal",
         .IllegalOrderKey => "IllegalOrderKey",
         .TypeMismatch => "TypeMismatch",
+        .TypeMismatchDivZero => "TypeMismatch.DivZero",
         .TxnState => "TxnState",
         .StoragePageChecksum => "StoragePageChecksum",
     };
@@ -24,7 +26,7 @@ pub fn anchorFor(c: Code) []const u8 {
     return switch (c) {
         .US001 => "16.18–16.19",
         .IllegalOrderKey, .GroupByIllegal => "14.10",
-        .TypeMismatch => "",
+        .TypeMismatch, .TypeMismatchDivZero => "16.x",
         .TxnState => "8",
         .StoragePageChecksum => "4",
     };
@@ -36,6 +38,7 @@ pub fn defaultMessage(c: Code) []const u8 {
         .IllegalOrderKey => "ORDER BY key must be identifier",
         .GroupByIllegal => "group by illegal",
         .TypeMismatch => "type mismatch",
+        .TypeMismatchDivZero => "division by zero",
         .TxnState => "transaction state error",
         .StoragePageChecksum => "page checksum mismatch detected during load",
     };
@@ -50,8 +53,8 @@ pub const Diagnostic = struct {
 };
 
 pub fn precedence(a: Code, b: Code) Code {
-    // Explicit precedence ordering table (lower index wins): US001, IllegalOrderKey, GroupByIllegal, TypeMismatch
-    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch, Code.TxnState }) |ord| {
+    // Explicit precedence ordering table (lower index wins): US001, IllegalOrderKey, GroupByIllegal, TypeMismatch, TypeMismatchDivZero
+    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch, Code.TypeMismatchDivZero, Code.TxnState }) |ord| {
         // extend precedence sequence with StoragePageChecksum lowest priority (surface separately)
         if (a == ord and b == ord) return a;
     }
@@ -63,8 +66,9 @@ pub fn precedence(a: Code, b: Code) Code {
                 .IllegalOrderKey => 1,
                 .GroupByIllegal => 2,
                 .TypeMismatch => 3,
-                .TxnState => 4,
-                .StoragePageChecksum => 5,
+                .TypeMismatchDivZero => 4,
+                .TxnState => 5,
+                .StoragePageChecksum => 6,
             };
         }
     };
@@ -176,6 +180,7 @@ test "diagnostics: map parser messages to IllegalOrderKey" {
 pub fn mapEvalError(e: anytype) ?Code {
     const name = @errorName(e);
     if (std.mem.eql(u8, name, "TypeMismatch")) return .TypeMismatch;
+    if (std.mem.eql(u8, name, "DivisionByZero")) return .TypeMismatchDivZero;
     return null;
 }
 

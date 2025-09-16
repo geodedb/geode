@@ -41,9 +41,10 @@ pub const Manager = struct {
     }
 
     pub fn deinit(self: *Manager) void {
-        // Clean up lock lists
+        // Clean up lock lists and keys
         var lock_iter = self.locks.iterator();
         while (lock_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
             entry.value_ptr.deinit(self.allocator);
         }
         self.locks.deinit();
@@ -121,7 +122,7 @@ pub const Manager = struct {
         const entry = try self.locks.getOrPut(key);
         if (!entry.found_existing) {
             entry.key_ptr.* = try ally.dupe(u8, key);
-            entry.value_ptr.* = std.ArrayList(LockEntry).initCapacity(ally, 0) catch @panic("OOM");
+            entry.value_ptr.* = std.ArrayList(LockEntry).initCapacity(self.allocator, 0) catch @panic("OOM");
         }
 
         const lock_list = entry.value_ptr;
@@ -311,6 +312,14 @@ test "mvcc visibility with delete_ts and rollback" {
     mvccRollback(&chain, 7);
     // now b is self-invalidated for any snapshot >=7; visibility at 10 still 5
     try std.testing.expect(visible(&chain, 10).?.create_ts == 5);
+    
+    // Cleanup
+    var v = chain.head;
+    while (v) |cur| {
+        const next = cur.prev;
+        ally.destroy(cur);
+        v = next;
+    }
 }
 
 test "txn manager: enhanced lock conflict detection" {
