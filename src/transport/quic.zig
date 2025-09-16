@@ -71,25 +71,22 @@ pub const QuicTransport = struct {
         self.server = try address.listen(.{
             .reuse_address = true,
         });
-        
-        std.debug.print("QUIC-compatible server listening on {s}:{d}\n", .{ 
-            self.config.address, 
-            self.config.port 
-        });
+
+        std.debug.print("QUIC-compatible server listening on {s}:{d}\n", .{ self.config.address, self.config.port });
         std.debug.print("Note: Using TCP transport with QUIC-like semantics\n", .{});
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
         if (self.server) |*server| {
             const conn_info = try server.accept();
-            
+
             const conn = try self.allocator.create(QuicConnection);
             conn.* = QuicConnection{
                 .allocator = self.allocator,
                 .stream = conn_info.stream,
                 .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
             };
-            
+
             try self.connections.append(self.allocator, conn);
             return conn;
         }
@@ -158,13 +155,13 @@ pub const QuicStream = struct {
         var buf = try self.allocator.alloc(u8, max_size);
         var pos: usize = 0;
         while (pos < max_size) {
-            const n = try self.stream.read(buf[pos..pos + 1]);
+            const n = try self.stream.read(buf[pos .. pos + 1]);
             if (n == 0) {
                 if (pos == 0) return error.EndOfStream;
                 break;
             }
             if (buf[pos] == '\n') {
-                return self.allocator.realloc(buf, pos + 1) catch buf[0..pos + 1];
+                return self.allocator.realloc(buf, pos + 1) catch buf[0 .. pos + 1];
             }
             pos += 1;
         }
@@ -223,10 +220,10 @@ pub const QuicClientStream = struct {
         var buf = try self.allocator.alloc(u8, max_size);
         var pos: usize = 0;
         while (pos < max_size) {
-            const n = try self.stream.read(buf[pos..pos + 1]);
+            const n = try self.stream.read(buf[pos .. pos + 1]);
             if (n == 0) break;
             if (buf[pos] == '\n') {
-                return self.allocator.realloc(buf, pos + 1) catch buf[0..pos + 1];
+                return self.allocator.realloc(buf, pos + 1) catch buf[0 .. pos + 1];
             }
             pos += 1;
         }

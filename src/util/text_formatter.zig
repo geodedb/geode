@@ -267,67 +267,67 @@ pub const TextFormatter = struct {
 
         // Profile version and metadata
         try self.formatProfileHeader(&writer, root);
-        
+
         // Timing and performance metrics
         try self.formatProfileMetrics(&writer, root);
-        
+
         // Memory information with detailed breakdown
         try self.formatProfileMemory(&writer, root);
-        
+
         // Spill information
         try self.formatProfileSpills(&writer, root);
-        
+
         // Operator tree with enhanced details
         try self.formatProfileOperators(&writer, root);
-        
+
         // Peak memory contributors
         try self.formatProfileMemoryContributors(&writer, root);
-        
+
         // Estimates vs actuals (if available)
         try self.formatProfileEstimates(&writer, root);
-        
+
         // WAL and storage metrics
         try self.formatProfileStorage(&writer, root);
-        
+
         // Transaction information
         try self.formatProfileTransactions(&writer, root);
 
         return buf.toOwnedSlice(self.allocator);
     }
-    
+
     fn formatProfileHeader(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         // Profile version
         if (root.get("profile_version")) |ver| {
             if (ver == .integer) {
                 try writer.print("Profile Version: {d}\n", .{ver.integer});
             }
         }
-        
+
         // Query text (if available)
         if (root.get("query_text")) |query| {
             if (query == .string) {
                 try writer.print("Query: {s}\n", .{query.string});
             }
         }
-        
+
         // Execution timestamp
         if (root.get("execution_timestamp")) |ts| {
             if (ts == .integer) {
                 try writer.print("Executed: {d}\n", .{ts.integer});
             }
         }
-        
+
         try writer.writeAll("\n");
     }
-    
+
     fn formatProfileMetrics(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         try writer.writeAll("Performance Metrics:\n");
         try writer.writeAll("-------------------\n");
-        
+
         // Timing information
         if (root.get("total_time_ns")) |time| {
             if (time == .integer) {
@@ -335,7 +335,7 @@ pub const TextFormatter = struct {
                 try writer.print("Total Time: {d:.2} ms\n", .{ms});
             }
         }
-        
+
         // CPU time breakdown
         if (root.get("cpu_time_ns")) |cpu_time| {
             if (cpu_time == .integer) {
@@ -343,7 +343,7 @@ pub const TextFormatter = struct {
                 try writer.print("CPU Time: {d:.2} ms\n", .{ms});
             }
         }
-        
+
         // I/O wait time
         if (root.get("io_wait_ns")) |io_time| {
             if (io_time == .integer) {
@@ -351,14 +351,14 @@ pub const TextFormatter = struct {
                 try writer.print("I/O Wait: {d:.2} ms\n", .{ms});
             }
         }
-        
+
         // Rows processed
         if (root.get("rows_processed")) |rows| {
             if (rows == .integer) {
                 try writer.print("Rows Processed: {d}\n", .{rows.integer});
             }
         }
-        
+
         // Throughput
         if (root.get("total_time_ns")) |time| {
             if (root.get("rows_processed")) |rows| {
@@ -369,16 +369,16 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         try writer.writeAll("\n");
     }
-    
+
     fn formatProfileMemory(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         try writer.writeAll("Memory Usage:\n");
         try writer.writeAll("-------------\n");
-        
+
         // Peak memory
         if (root.get("peak_memory_bytes")) |mem| {
             if (mem == .integer) {
@@ -386,7 +386,7 @@ pub const TextFormatter = struct {
                 try writer.print("Peak Memory: {d:.2} MB\n", .{mb});
             }
         }
-        
+
         // Current memory
         if (root.get("current_memory_bytes")) |mem| {
             if (mem == .integer) {
@@ -394,32 +394,32 @@ pub const TextFormatter = struct {
                 try writer.print("Current Memory: {d:.2} MB\n", .{mb});
             }
         }
-        
+
         // Memory efficiency
         if (root.get("memory_efficiency")) |eff| {
             if (eff == .float) {
                 try writer.print("Memory Efficiency: {d:.1}%\n", .{eff.float * 100.0});
             }
         }
-        
+
         // Fragmentation
         if (root.get("memory_fragmentation")) |frag| {
             if (frag == .float) {
                 try writer.print("Memory Fragmentation: {d:.1}%\n", .{frag.float * 100.0});
             }
         }
-        
+
         try writer.writeAll("\n");
     }
-    
+
     fn formatProfileSpills(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         var has_spills = false;
-        
+
         // Check for any spill information
         const spill_types = [_][]const u8{ "sort_spills", "hashagg_spills", "join_spills", "index_spills" };
-        
+
         for (spill_types) |spill_type| {
             if (root.get(spill_type)) |spills| {
                 if (spills == .integer and spills.integer > 0) {
@@ -428,18 +428,14 @@ pub const TextFormatter = struct {
                         try writer.writeAll("-----------------\n");
                         has_spills = true;
                     }
-                    
-                    const display_name = if (std.mem.eql(u8, spill_type, "sort_spills")) "Sort Spills"
-                        else if (std.mem.eql(u8, spill_type, "hashagg_spills")) "HashAgg Spills"
-                        else if (std.mem.eql(u8, spill_type, "join_spills")) "Join Spills"
-                        else if (std.mem.eql(u8, spill_type, "index_spills")) "Index Spills"
-                        else spill_type;
-                    
+
+                    const display_name = if (std.mem.eql(u8, spill_type, "sort_spills")) "Sort Spills" else if (std.mem.eql(u8, spill_type, "hashagg_spills")) "HashAgg Spills" else if (std.mem.eql(u8, spill_type, "join_spills")) "Join Spills" else if (std.mem.eql(u8, spill_type, "index_spills")) "Index Spills" else spill_type;
+
                     try writer.print("{s}: {d}\n", .{ display_name, spills.integer });
                 }
             }
         }
-        
+
         // Spill bytes
         if (root.get("total_spill_bytes")) |bytes| {
             if (bytes == .integer and bytes.integer > 0) {
@@ -452,14 +448,14 @@ pub const TextFormatter = struct {
                 try writer.print("Total Spill Size: {d:.2} MB\n", .{mb});
             }
         }
-        
+
         if (!has_spills) {
             try writer.writeAll("Spill Information: None\n");
         }
-        
+
         try writer.writeAll("\n");
     }
-    
+
     fn formatProfileOperators(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         try writer.writeAll("Operator Tree:\n");
         try writer.writeAll("--------------\n");
@@ -474,13 +470,13 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         try writer.writeAll("\n");
     }
-    
+
     fn formatProfileMemoryContributors(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         // Peak memory contributors
         if (root.get("peak_memory_contributors")) |contributors| {
             if (contributors == .array and contributors.array.items.len > 0) {
@@ -511,43 +507,43 @@ pub const TextFormatter = struct {
             }
         }
     }
-    
+
     fn formatProfileEstimates(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (root.get("estimate_accuracy")) |accuracy| {
             try writer.writeAll("Estimate Accuracy:\n");
             try writer.writeAll("------------------\n");
-            
+
             if (accuracy == .object) {
                 if (accuracy.object.get("row_count_accuracy")) |row_acc| {
                     if (row_acc == .float) {
                         try writer.print("Row Count Estimates: {d:.1}% accurate\n", .{row_acc.float * 100.0});
                     }
                 }
-                
+
                 if (accuracy.object.get("selectivity_accuracy")) |sel_acc| {
                     if (sel_acc == .float) {
                         try writer.print("Selectivity Estimates: {d:.1}% accurate\n", .{sel_acc.float * 100.0});
                     }
                 }
-                
+
                 if (accuracy.object.get("cost_accuracy")) |cost_acc| {
                     if (cost_acc == .float) {
                         try writer.print("Cost Estimates: {d:.1}% accurate\n", .{cost_acc.float * 100.0});
                     }
                 }
             }
-            
+
             try writer.writeAll("\n");
         }
     }
-    
+
     fn formatProfileStorage(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         var has_storage_info = false;
-        
+
         // WAL information
         if (root.get("wal_writes")) |wal_writes| {
             if (wal_writes == .integer and wal_writes.integer > 0) {
@@ -559,7 +555,7 @@ pub const TextFormatter = struct {
                 try writer.print("WAL Writes: {d}\n", .{wal_writes.integer});
             }
         }
-        
+
         if (root.get("wal_bytes")) |wal_bytes| {
             if (wal_bytes == .integer and wal_bytes.integer > 0) {
                 if (!has_storage_info) {
@@ -571,7 +567,7 @@ pub const TextFormatter = struct {
                 try writer.print("WAL Bytes Written: {d:.1} KB\n", .{kb});
             }
         }
-        
+
         // Page I/O
         if (root.get("pages_read")) |pages_read| {
             if (pages_read == .integer and pages_read.integer > 0) {
@@ -583,7 +579,7 @@ pub const TextFormatter = struct {
                 try writer.print("Pages Read: {d}\n", .{pages_read.integer});
             }
         }
-        
+
         if (root.get("pages_written")) |pages_written| {
             if (pages_written == .integer and pages_written.integer > 0) {
                 if (!has_storage_info) {
@@ -594,17 +590,17 @@ pub const TextFormatter = struct {
                 try writer.print("Pages Written: {d}\n", .{pages_written.integer});
             }
         }
-        
+
         if (has_storage_info) {
             try writer.writeAll("\n");
         }
     }
-    
+
     fn formatProfileTransactions(self: *TextFormatter, writer: anytype, root: std.json.ObjectMap) !void {
         _ = self;
-        
+
         var has_txn_info = false;
-        
+
         if (root.get("transaction_id")) |txn_id| {
             if (txn_id == .integer) {
                 if (!has_txn_info) {
@@ -615,7 +611,7 @@ pub const TextFormatter = struct {
                 try writer.print("Transaction ID: {d}\n", .{txn_id.integer});
             }
         }
-        
+
         if (root.get("isolation_level")) |iso_level| {
             if (iso_level == .string) {
                 if (!has_txn_info) {
@@ -626,7 +622,7 @@ pub const TextFormatter = struct {
                 try writer.print("Isolation Level: {s}\n", .{iso_level.string});
             }
         }
-        
+
         if (root.get("locks_acquired")) |locks| {
             if (locks == .integer and locks.integer > 0) {
                 if (!has_txn_info) {
@@ -637,7 +633,7 @@ pub const TextFormatter = struct {
                 try writer.print("Locks Acquired: {d}\n", .{locks.integer});
             }
         }
-        
+
         if (has_txn_info) {
             try writer.writeAll("\n");
         }
@@ -676,20 +672,20 @@ pub const TextFormatter = struct {
 
         // Memory usage
         try self.formatOperatorMemory(writer, op);
-        
+
         // Cost information
         try self.formatOperatorCost(writer, op);
 
         try writer.writeAll("\n");
     }
-    
+
     fn formatScanOperator(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("index_name")) |idx_name| {
             if (idx_name == .string) {
                 try writer.print(" [index: {s}", .{idx_name.string});
-                
+
                 if (op.get("selectivity_est")) |sel| {
                     if (sel == .float) {
                         try writer.print(", selectivity: {d:.4}", .{sel.float});
@@ -697,49 +693,49 @@ pub const TextFormatter = struct {
                         try writer.print(", selectivity: {s}", .{sel.number_string});
                     }
                 }
-                
+
                 if (op.get("index_condition")) |cond| {
                     if (cond == .string) {
                         try writer.print(", condition: {s}", .{cond.string});
                     }
                 }
-                
+
                 try writer.writeAll("]");
             }
         }
-        
+
         if (op.get("table_name")) |table| {
             if (table == .string) {
                 try writer.print(" [table: {s}]", .{table.string});
             }
         }
     }
-    
+
     fn formatJoinOperator(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("join_type")) |join_type| {
             if (join_type == .string) {
                 try writer.print(" [{s}]", .{join_type.string});
             }
         }
-        
+
         if (op.get("join_condition")) |condition| {
             if (condition == .string) {
                 try writer.print(" [on: {s}]", .{condition.string});
             }
         }
-        
+
         if (op.get("build_side")) |build| {
             if (build == .string) {
                 try writer.print(" [build: {s}]", .{build.string});
             }
         }
     }
-    
+
     fn formatSortOperator(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("sort_keys")) |keys| {
             if (keys == .array) {
                 try writer.writeAll(" [keys: ");
@@ -752,17 +748,17 @@ pub const TextFormatter = struct {
                 try writer.writeAll("]");
             }
         }
-        
+
         if (op.get("spilled")) |spilled| {
             if (spilled == .bool and spilled.bool) {
                 try writer.writeAll(" [SPILLED]");
             }
         }
     }
-    
+
     fn formatAggregateOperator(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("group_keys")) |keys| {
             if (keys == .array) {
                 try writer.writeAll(" [group by: ");
@@ -775,7 +771,7 @@ pub const TextFormatter = struct {
                 try writer.writeAll("]");
             }
         }
-        
+
         if (op.get("aggregate_functions")) |funcs| {
             if (funcs == .array) {
                 try writer.writeAll(" [aggs: ");
@@ -788,24 +784,24 @@ pub const TextFormatter = struct {
                 try writer.writeAll("]");
             }
         }
-        
+
         if (op.get("hash_buckets")) |buckets| {
             if (buckets == .integer) {
                 try writer.print(" [buckets: {d}]", .{buckets.integer});
             }
         }
     }
-    
+
     fn formatRowCounts(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         var has_rows = false;
-        
+
         if (op.get("input_rows")) |in_rows| {
             if (in_rows == .integer) {
                 try writer.print(" (in: {d}", .{in_rows.integer});
                 has_rows = true;
-                
+
                 // Show estimate vs actual for input
                 if (op.get("input_rows_est")) |in_est| {
                     if (in_est == .integer and in_est.integer != in_rows.integer) {
@@ -815,7 +811,7 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         if (op.get("rows")) |out_rows| {
             if (out_rows == .integer) {
                 if (has_rows) {
@@ -824,7 +820,7 @@ pub const TextFormatter = struct {
                     try writer.print(" (rows: {d}", .{out_rows.integer});
                     has_rows = true;
                 }
-                
+
                 // Show estimate vs actual for output
                 if (op.get("rows_est")) |out_est| {
                     if (out_est == .integer and out_est.integer != out_rows.integer) {
@@ -834,40 +830,40 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         if (has_rows) {
             try writer.writeAll(")");
         }
     }
-    
+
     fn formatOperatorTiming(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("time_ns")) |time| {
             if (time == .integer and time.integer > 0) {
                 const ms = @as(f64, @floatFromInt(time.integer)) / 1_000_000.0;
                 try writer.print(" [{d:.2}ms", .{ms});
-                
+
                 // Show percentage of total time if available
                 if (op.get("time_percent")) |pct| {
                     if (pct == .float) {
                         try writer.print(" {d:.1}%", .{pct.float * 100.0});
                     }
                 }
-                
+
                 try writer.writeAll("]");
             }
         }
     }
-    
+
     fn formatOperatorMemory(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("bytes_alloc")) |bytes| {
             if (bytes == .integer and bytes.integer > 0) {
                 const kb = @as(f64, @floatFromInt(bytes.integer)) / 1024.0;
                 try writer.print(" [mem: {d:.1}KB", .{kb});
-                
+
                 // Show peak memory if different
                 if (op.get("bytes_peak")) |peak| {
                     if (peak == .integer and peak.integer != bytes.integer) {
@@ -875,26 +871,26 @@ pub const TextFormatter = struct {
                         try writer.print(", peak: {d:.1}KB", .{peak_kb});
                     }
                 }
-                
+
                 try writer.writeAll("]");
             }
         }
     }
-    
+
     fn formatOperatorCost(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap) !void {
         _ = self;
-        
+
         if (op.get("cost_estimate")) |cost| {
             if (cost == .float) {
                 try writer.print(" [cost: {d:.1}", .{cost.float});
-                
+
                 if (op.get("cost_actual")) |actual| {
                     if (actual == .float and actual.float != cost.float) {
                         const accuracy = cost.float / actual.float * 100.0;
                         try writer.print(", actual: {d:.1} {d:.0}%", .{ actual.float, accuracy });
                     }
                 }
-                
+
                 try writer.writeAll("]");
             }
         }

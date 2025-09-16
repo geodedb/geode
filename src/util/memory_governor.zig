@@ -7,7 +7,7 @@ pub const MemoryPressure = enum {
     medium,
     high,
     critical,
-    
+
     pub fn fromUtilization(utilization: f64) MemoryPressure {
         if (utilization < 0.5) return .none;
         if (utilization < 0.7) return .low;
@@ -23,13 +23,13 @@ const AllocationTracker = struct {
     total_allocations: usize,
     total_deallocations: usize,
     peak_usage: usize,
-    
+
     const AllocationInfo = struct {
         size: usize,
         timestamp: i64,
         tag: []const u8,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) AllocationTracker {
         return .{
             .allocations = std.AutoHashMap(usize, AllocationInfo).init(allocator),
@@ -38,11 +38,11 @@ const AllocationTracker = struct {
             .peak_usage = 0,
         };
     }
-    
+
     pub fn deinit(self: *AllocationTracker) void {
         self.allocations.deinit();
     }
-    
+
     pub fn trackAllocation(self: *AllocationTracker, ptr: usize, size: usize, tag: []const u8) !void {
         try self.allocations.put(ptr, .{
             .size = size,
@@ -50,18 +50,18 @@ const AllocationTracker = struct {
             .tag = tag,
         });
         self.total_allocations += 1;
-        
+
         const current_usage = self.getCurrentUsage();
         if (current_usage > self.peak_usage) {
             self.peak_usage = current_usage;
         }
     }
-    
+
     pub fn trackDeallocation(self: *AllocationTracker, ptr: usize) void {
         _ = self.allocations.remove(ptr);
         self.total_deallocations += 1;
     }
-    
+
     pub fn getCurrentUsage(self: *const AllocationTracker) usize {
         var total: usize = 0;
         var iter = self.allocations.iterator();
@@ -70,11 +70,11 @@ const AllocationTracker = struct {
         }
         return total;
     }
-    
+
     pub fn getLargestAllocations(self: *const AllocationTracker, allocator: std.mem.Allocator, count: usize) ![]AllocationInfo {
         var allocations = try allocator.alloc(AllocationInfo, @min(count, self.allocations.count()));
         var i: usize = 0;
-        
+
         var iter = self.allocations.iterator();
         while (iter.next()) |entry| {
             if (i < allocations.len) {
@@ -82,14 +82,14 @@ const AllocationTracker = struct {
                 i += 1;
             }
         }
-        
+
         // Sort by size (descending)
         std.mem.sort(AllocationInfo, allocations, {}, struct {
             fn lessThan(_: void, a: AllocationInfo, b: AllocationInfo) bool {
                 return a.size > b.size;
             }
         }.lessThan);
-        
+
         return allocations;
     }
 };
@@ -114,7 +114,7 @@ pub const MemoryGovernor = struct {
         name: []const u8,
         priority: u8, // 0 = highest priority
     };
-    
+
     const PressureCallback = struct {
         context: *anyopaque,
         pressure_fn: *const fn (*anyopaque, MemoryPressure) void,
@@ -136,7 +136,7 @@ pub const MemoryGovernor = struct {
             .fragmentation_threshold = 0.3, // 30% fragmentation triggers concern
         };
     }
-    
+
     pub fn initWithTracking(allocator: std.mem.Allocator, soft_limit: usize, hard_limit: usize, enable_tracking: bool) MemoryGovernor {
         var governor = MemoryGovernor.init(allocator, soft_limit, hard_limit);
         governor.enable_detailed_tracking = enable_tracking;
@@ -157,7 +157,7 @@ pub const MemoryGovernor = struct {
     pub fn registerSpillCallback(self: *MemoryGovernor, context: *anyopaque, trigger_fn: *const fn (*anyopaque) void, name: []const u8) !void {
         try self.registerSpillCallbackWithPriority(context, trigger_fn, name, 128); // Default priority
     }
-    
+
     pub fn registerSpillCallbackWithPriority(self: *MemoryGovernor, context: *anyopaque, trigger_fn: *const fn (*anyopaque) void, name: []const u8, priority: u8) !void {
         try self.spill_callbacks.append(self.allocator, .{
             .context = context,
@@ -165,7 +165,7 @@ pub const MemoryGovernor = struct {
             .name = name,
             .priority = priority,
         });
-        
+
         // Sort callbacks by priority (lower number = higher priority)
         std.mem.sort(SpillCallback, self.spill_callbacks.items, {}, struct {
             fn lessThan(_: void, a: SpillCallback, b: SpillCallback) bool {
@@ -173,7 +173,7 @@ pub const MemoryGovernor = struct {
             }
         }.lessThan);
     }
-    
+
     pub fn registerPressureCallback(self: *MemoryGovernor, context: *anyopaque, pressure_fn: *const fn (*anyopaque, MemoryPressure) void, name: []const u8) !void {
         try self.pressure_callbacks.append(self.allocator, .{
             .context = context,
@@ -185,7 +185,7 @@ pub const MemoryGovernor = struct {
     pub fn allocate(self: *MemoryGovernor, size: usize) ![]u8 {
         return self.allocateWithTag(size, "untagged");
     }
-    
+
     pub fn allocateWithTag(self: *MemoryGovernor, size: usize, tag: []const u8) ![]u8 {
         const current = self.current_usage.load(.monotonic);
         const new_usage = current + size;
@@ -200,12 +200,12 @@ pub const MemoryGovernor = struct {
 
         const memory = try self.allocator.alloc(u8, size);
         _ = self.current_usage.fetchAdd(size, .monotonic);
-        
+
         // Track allocation if detailed tracking is enabled
         if (self.allocation_tracker) |*tracker| {
             tracker.trackAllocation(@intFromPtr(memory.ptr), size, tag) catch {};
         }
-        
+
         return memory;
     }
 
@@ -214,7 +214,7 @@ pub const MemoryGovernor = struct {
         if (self.allocation_tracker) |*tracker| {
             tracker.trackDeallocation(@intFromPtr(memory.ptr));
         }
-        
+
         self.allocator.free(memory);
         _ = self.current_usage.fetchSub(memory.len, .monotonic);
     }
@@ -231,13 +231,13 @@ pub const MemoryGovernor = struct {
     pub fn shouldSpill(self: *const MemoryGovernor) bool {
         return self.currentUsage() > self.soft_limit_bytes;
     }
-    
+
     /// Check current memory pressure level
     pub fn getMemoryPressure(self: *const MemoryGovernor) MemoryPressure {
         const utilization = self.utilizationPercent() / 100.0;
         return MemoryPressure.fromUtilization(utilization);
     }
-    
+
     /// Check memory pressure with rate limiting
     fn checkMemoryPressure(self: *MemoryGovernor, projected_usage: usize) MemoryPressure {
         const now = std.time.milliTimestamp();
@@ -245,19 +245,19 @@ pub const MemoryGovernor = struct {
             // Use cached pressure level to avoid excessive computation
             return self.getMemoryPressure();
         }
-        
+
         self.last_pressure_check = now;
         const utilization = @as(f64, @floatFromInt(projected_usage)) / @as(f64, @floatFromInt(self.soft_limit_bytes));
         return MemoryPressure.fromUtilization(utilization);
     }
-    
+
     /// Handle memory pressure by triggering appropriate callbacks
     fn handleMemoryPressure(self: *MemoryGovernor, pressure: MemoryPressure) void {
         // Notify pressure callbacks
         for (self.pressure_callbacks.items) |callback| {
             callback.pressure_fn(callback.context, pressure);
         }
-        
+
         // Trigger spill callbacks based on pressure level
         switch (pressure) {
             .none, .low => {}, // No action needed
@@ -285,7 +285,7 @@ pub const MemoryGovernor = struct {
             },
         }
     }
-    
+
     /// Get detailed memory statistics
     pub fn getMemoryStats(self: *const MemoryGovernor) struct {
         current_usage: usize,
@@ -304,7 +304,7 @@ pub const MemoryGovernor = struct {
             peak_usage: usize,
             active_allocations: usize,
         };
-        
+
         const tracker_stats: StatsType = if (self.allocation_tracker) |tracker| StatsType{
             .total_allocations = tracker.total_allocations,
             .total_deallocations = tracker.total_deallocations,
@@ -316,7 +316,7 @@ pub const MemoryGovernor = struct {
             .peak_usage = 0,
             .active_allocations = 0,
         };
-        
+
         return .{
             .current_usage = self.currentUsage(),
             .soft_limit = self.soft_limit_bytes,
@@ -329,7 +329,7 @@ pub const MemoryGovernor = struct {
             .active_allocations = tracker_stats.active_allocations,
         };
     }
-    
+
     /// Get the largest memory allocations for debugging
     pub fn getLargestAllocations(self: *const MemoryGovernor, allocator: std.mem.Allocator, count: usize) ![]AllocationTracker.AllocationInfo {
         if (self.allocation_tracker) |tracker| {
@@ -373,16 +373,16 @@ test "memory governor hard limit enforcement" {
 test "memory pressure detection" {
     var governor = MemoryGovernor.init(std.testing.allocator, 1000, 2000);
     defer governor.deinit();
-    
+
     // Test pressure levels
     try std.testing.expect(governor.getMemoryPressure() == .none);
-    
+
     const mem1 = try governor.allocate(600); // 60% utilization
     try std.testing.expect(governor.getMemoryPressure() == .medium);
-    
+
     const mem2 = try governor.allocate(300); // 90% utilization
     try std.testing.expect(governor.getMemoryPressure() == .high);
-    
+
     governor.deallocate(mem1);
     governor.deallocate(mem2);
 }
@@ -390,32 +390,32 @@ test "memory pressure detection" {
 test "memory governor with detailed tracking" {
     var governor = MemoryGovernor.initWithTracking(std.testing.allocator, 1024, 2048, true);
     defer governor.deinit();
-    
+
     const mem1 = try governor.allocateWithTag(512, "test_allocation");
     const mem2 = try governor.allocateWithTag(256, "another_allocation");
-    
+
     const stats = governor.getMemoryStats();
     try std.testing.expect(stats.current_usage == 768);
     try std.testing.expect(stats.total_allocations == 2);
     try std.testing.expect(stats.active_allocations == 2);
-    
+
     governor.deallocate(mem1);
-    
+
     const stats2 = governor.getMemoryStats();
     try std.testing.expect(stats2.current_usage == 256);
     try std.testing.expect(stats2.total_deallocations == 1);
     try std.testing.expect(stats2.active_allocations == 1);
-    
+
     governor.deallocate(mem2);
 }
 
 test "priority-based spill callbacks" {
     var governor = MemoryGovernor.init(std.testing.allocator, 500, 1000);
     defer governor.deinit();
-    
+
     var high_priority_called = false;
     var low_priority_called = false;
-    
+
     const HighPriorityContext = struct {
         called: *bool,
         fn callback(ctx: *anyopaque) void {
@@ -423,7 +423,7 @@ test "priority-based spill callbacks" {
             self.called.* = true;
         }
     };
-    
+
     const LowPriorityContext = struct {
         called: *bool,
         fn callback(ctx: *anyopaque) void {
@@ -431,41 +431,41 @@ test "priority-based spill callbacks" {
             self.called.* = true;
         }
     };
-    
+
     var high_ctx = HighPriorityContext{ .called = &high_priority_called };
     var low_ctx = LowPriorityContext{ .called = &low_priority_called };
-    
+
     try governor.registerSpillCallbackWithPriority(&high_ctx, HighPriorityContext.callback, "high_priority", 50);
     try governor.registerSpillCallbackWithPriority(&low_ctx, LowPriorityContext.callback, "low_priority", 200);
-    
+
     // Allocate enough to trigger medium pressure (should only trigger low priority)
     const mem = try governor.allocate(400); // 80% of soft limit
-    
+
     // In a real scenario, pressure would be detected during allocation
     // For testing, we manually trigger pressure handling
     governor.handleMemoryPressure(.medium);
-    
+
     try std.testing.expect(!high_priority_called);
     try std.testing.expect(low_priority_called);
-    
+
     governor.deallocate(mem);
 }
 
 test "allocation tracker largest allocations" {
     var governor = MemoryGovernor.initWithTracking(std.testing.allocator, 2048, 4096, true);
     defer governor.deinit();
-    
+
     const mem1 = try governor.allocateWithTag(1000, "large_allocation");
     const mem2 = try governor.allocateWithTag(500, "medium_allocation");
     const mem3 = try governor.allocateWithTag(100, "small_allocation");
-    
+
     const largest = try governor.getLargestAllocations(std.testing.allocator, 2);
     defer std.testing.allocator.free(largest);
-    
+
     try std.testing.expect(largest.len == 2);
     try std.testing.expect(largest[0].size == 1000); // Largest first
-    try std.testing.expect(largest[1].size == 500);  // Second largest
-    
+    try std.testing.expect(largest[1].size == 500); // Second largest
+
     governor.deallocate(mem1);
     governor.deallocate(mem2);
     governor.deallocate(mem3);

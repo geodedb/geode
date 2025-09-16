@@ -2,24 +2,16 @@ const std = @import("std");
 const raft = @import("raft.zig");
 const twophase = @import("twophase.zig");
 
-/// Distributed system configuration
 pub const DistributedConfig = struct {
     node_id: []const u8,
     peers: []const []const u8,
-    
-    // Raft configuration
     raft_config: raft.RaftConfig,
-    
-    // 2PC configuration
     coordinator_config: twophase.CoordinatorConfig,
-    
-    // Feature flags for gradual rollout
     enable_raft: bool = false,
     enable_2pc: bool = false,
     enable_sharding: bool = false,
 };
 
-/// Shard map entry (placeholder for future implementation)
 pub const ShardInfo = struct {
     shard_id: u32,
     start_key: []const u8,
@@ -28,24 +20,15 @@ pub const ShardInfo = struct {
     primary: []const u8,
 };
 
-/// Distributed database coordinator
 pub const DistributedCoordinator = struct {
     allocator: std.mem.Allocator,
     config: DistributedConfig,
-    
-    // Consensus layer
     raft_node: ?raft.RaftNode,
-    
-    // Transaction coordination
     twophase_coordinator: ?twophase.TwoPCCoordinator,
-    
-    // Shard management (placeholder)
     shard_map: std.ArrayList(ShardInfo),
-    
-    // Network callbacks
     send_raft_message_callback: ?*const fn ([]const u8, raft.MessageType, []const u8) void,
     send_2pc_message_callback: ?*const fn ([]const u8, twophase.MessageType, []const u8) void,
-    
+
     pub fn init(allocator: std.mem.Allocator, config: DistributedConfig) !DistributedCoordinator {
         var coordinator = DistributedCoordinator{
             .allocator = allocator,
@@ -56,20 +39,218 @@ pub const DistributedCoordinator = struct {
             .send_raft_message_callback = null,
             .send_2pc_message_callback = null,
         };
-        
-        // Initialize Raft if enabled
         if (config.enable_raft) {
             coordinator.raft_node = try raft.RaftNode.init(allocator, config.raft_config);
-            coordinator.raft_node.?.enableFeatures(true, true); // Enable all Raft features
+            coordinator.raft_node.?.enableFeatures(true, true);
         }
-        
-        // Initialize 2PC if enabled
         if (config.enable_2pc) {
             coordinator.twophase_coordinator = twophase.TwoPCCoordinator.init(allocator, config.coordinator_config);
-            coordinator.twophase_coordinator.?.enableFeatures(true, true); // Enable all 2PC features
+            coordinator.twophase_coordinator.?.enableFeatures(true, true);
         }
-        
         return coordinator;
     }
-    
-    pub fn deinit(self: *DistributedCoordinator) void {\n        if (self.raft_node) |*node| {\n            node.deinit();\n        }\n        \n        if (self.twophase_coordinator) |*coordinator| {\n            coordinator.deinit();\n        }\n        \n        for (self.shard_map.items) |shard| {\n            self.allocator.free(shard.start_key);\n            self.allocator.free(shard.end_key);\n            self.allocator.free(shard.replicas);\n            self.allocator.free(shard.primary);\n        }\n        self.shard_map.deinit();\n    }\n    \n    /// Set network callback for Raft messages\n    pub fn setRaftMessageCallback(self: *DistributedCoordinator, callback: *const fn ([]const u8, raft.MessageType, []const u8) void) void {\n        self.send_raft_message_callback = callback;\n        if (self.raft_node) |*node| {\n            node.setSendMessageCallback(callback);\n        }\n    }\n    \n    /// Set network callback for 2PC messages\n    pub fn set2PCMessageCallback(self: *DistributedCoordinator, callback: *const fn ([]const u8, twophase.MessageType, []const u8) void) void {\n        self.send_2pc_message_callback = callback;\n        if (self.twophase_coordinator) |*coordinator| {\n            coordinator.setSendMessageCallback(callback);\n        }\n    }\n    \n    /// Start the distributed coordinator\n    pub fn start(self: *DistributedCoordinator) !void {\n        if (self.raft_node) |*node| {\n            try node.start();\n        }\n    }\n    \n    /// Process periodic tasks\n    pub fn tick(self: *DistributedCoordinator) !void {\n        if (self.raft_node) |*node| {\n            try node.tick();\n        }\n        \n        if (self.twophase_coordinator) |*coordinator| {\n            try coordinator.tick();\n        }\n    }\n    \n    /// Handle incoming Raft messages\n    pub fn handleRaftMessage(self: *DistributedCoordinator, from: []const u8, message_type: raft.MessageType, payload: []const u8) !void {\n        if (self.raft_node) |*node| {\n            try node.handleMessage(from, message_type, payload);\n        }\n    }\n    \n    /// Handle incoming 2PC messages\n    pub fn handle2PCMessage(self: *DistributedCoordinator, from: []const u8, message_type: twophase.MessageType, payload: []const u8) !void {\n        if (self.twophase_coordinator) |*coordinator| {\n            try coordinator.handleMessage(from, message_type, payload);\n        }\n    }\n    \n    /// Propose a command through Raft consensus\n    pub fn proposeCommand(self: *DistributedCoordinator, command: []const u8) !bool {\n        if (self.raft_node) |*node| {\n            return try node.propose(command);\n        }\n        return false;\n    }\n    \n    /// Begin a distributed transaction\n    pub fn beginDistributedTransaction(self: *DistributedCoordinator, transaction_id: []const u8, participants: []const []const u8) !bool {\n        if (self.twophase_coordinator) |*coordinator| {\n            return try coordinator.beginTransaction(transaction_id, participants);\n        }\n        return false;\n    }\n    \n    /// Commit a distributed transaction\n    pub fn commitDistributedTransaction(self: *DistributedCoordinator, transaction_id: []const u8) !bool {\n        if (self.twophase_coordinator) |*coordinator| {\n            return try coordinator.commitTransaction(transaction_id);\n        }\n        return false;\n    }\n    \n    /// Abort a distributed transaction\n    pub fn abortDistributedTransaction(self: *DistributedCoordinator, transaction_id: []const u8) !bool {\n        if (self.twophase_coordinator) |*coordinator| {\n            return try coordinator.abortTransaction(transaction_id);\n        }\n        return false;\n    }\n    \n    /// Get cluster status\n    pub fn getClusterStatus(self: *const DistributedCoordinator) struct {\n        is_leader: bool,\n        current_term: u64,\n        active_transactions: usize,\n        shard_count: usize,\n        raft_enabled: bool,\n        twophase_enabled: bool,\n        sharding_enabled: bool,\n    } {\n        var is_leader = false;\n        var current_term: u64 = 0;\n        \n        if (self.raft_node) |node| {\n            const leader_info = node.getLeaderInfo();\n            is_leader = leader_info.is_leader;\n            current_term = leader_info.current_term;\n        }\n        \n        var active_transactions: usize = 0;\n        if (self.twophase_coordinator) |coordinator| {\n            const stats = coordinator.getStats();\n            active_transactions = stats.active_transactions;\n        }\n        \n        return .{\n            .is_leader = is_leader,\n            .current_term = current_term,\n            .active_transactions = active_transactions,\n            .shard_count = self.shard_map.items.len,\n            .raft_enabled = self.config.enable_raft,\n            .twophase_enabled = self.config.enable_2pc,\n            .sharding_enabled = self.config.enable_sharding,\n        };\n    }\n    \n    /// Add a shard to the shard map (placeholder implementation)\n    pub fn addShard(self: *DistributedCoordinator, shard_id: u32, start_key: []const u8, end_key: []const u8, replicas: []const []const u8, primary: []const u8) !void {\n        if (!self.config.enable_sharding) {\n            return error.ShardingDisabled;\n        }\n        \n        const shard = ShardInfo{\n            .shard_id = shard_id,\n            .start_key = try self.allocator.dupe(u8, start_key),\n            .end_key = try self.allocator.dupe(u8, end_key),\n            .replicas = try self.allocator.dupe([]const u8, replicas),\n            .primary = try self.allocator.dupe(u8, primary),\n        };\n        \n        try self.shard_map.append(shard);\n    }\n    \n    /// Find the shard responsible for a given key (placeholder implementation)\n    pub fn findShard(self: *const DistributedCoordinator, key: []const u8) ?*const ShardInfo {\n        if (!self.config.enable_sharding) {\n            return null;\n        }\n        \n        for (self.shard_map.items) |*shard| {\n            // Simple string comparison for key range\n            if (std.mem.order(u8, key, shard.start_key) != .lt and\n                std.mem.order(u8, key, shard.end_key) == .lt) {\n                return shard;\n            }\n        }\n        \n        return null;\n    }\n    \n    /// Check if this node is the primary for a given shard\n    pub fn isPrimaryForShard(self: *const DistributedCoordinator, shard_id: u32) bool {\n        for (self.shard_map.items) |shard| {\n            if (shard.shard_id == shard_id) {\n                return std.mem.eql(u8, shard.primary, self.config.node_id);\n            }\n        }\n        return false;\n    }\n    \n    /// Get detailed distributed system metrics\n    pub fn getDistributedMetrics(self: *const DistributedCoordinator) struct {\n        raft_metrics: ?struct {\n            is_leader: bool,\n            current_term: u64,\n            commit_index: u64,\n            log_length: usize,\n        },\n        twophase_metrics: ?struct {\n            active_transactions: usize,\n            total_transactions: usize,\n            committed_transactions: usize,\n            aborted_transactions: usize,\n        },\n        shard_metrics: struct {\n            total_shards: usize,\n            primary_shards: usize,\n        },\n    } {\n        var raft_metrics: ?struct {\n            is_leader: bool,\n            current_term: u64,\n            commit_index: u64,\n            log_length: usize,\n        } = null;\n        \n        if (self.raft_node) |node| {\n            const info = node.getLeaderInfo();\n            raft_metrics = .{\n                .is_leader = info.is_leader,\n                .current_term = info.current_term,\n                .commit_index = info.commit_index,\n                .log_length = info.log_length,\n            };\n        }\n        \n        var twophase_metrics: ?struct {\n            active_transactions: usize,\n            total_transactions: usize,\n            committed_transactions: usize,\n            aborted_transactions: usize,\n        } = null;\n        \n        if (self.twophase_coordinator) |coordinator| {\n            const stats = coordinator.getStats();\n            twophase_metrics = .{\n                .active_transactions = stats.active_transactions,\n                .total_transactions = stats.total_transactions,\n                .committed_transactions = stats.committed_transactions,\n                .aborted_transactions = stats.aborted_transactions,\n            };\n        }\n        \n        var primary_shards: usize = 0;\n        for (self.shard_map.items) |shard| {\n            if (std.mem.eql(u8, shard.primary, self.config.node_id)) {\n                primary_shards += 1;\n            }\n        }\n        \n        return .{\n            .raft_metrics = raft_metrics,\n            .twophase_metrics = twophase_metrics,\n            .shard_metrics = .{\n                .total_shards = self.shard_map.items.len,\n                .primary_shards = primary_shards,\n            },\n        };\n    }\n};\n\n// Re-export types for convenience\npub const RaftNode = raft.RaftNode;\npub const RaftConfig = raft.RaftConfig;\npub const TwoPCCoordinator = twophase.TwoPCCoordinator;\npub const CoordinatorConfig = twophase.CoordinatorConfig;\npub const TransactionState = twophase.TransactionState;\n\n// Tests\ntest \"distributed coordinator initialization\" {\n    const raft_config = raft.RaftConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{ \"node2\", \"node3\" },\n    };\n    \n    const coordinator_config = twophase.CoordinatorConfig{\n        .coordinator_id = \"coord1\",\n    };\n    \n    const config = DistributedConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{ \"node2\", \"node3\" },\n        .raft_config = raft_config,\n        .coordinator_config = coordinator_config,\n        .enable_raft = false,\n        .enable_2pc = false,\n        .enable_sharding = false,\n    };\n    \n    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);\n    defer coordinator.deinit();\n    \n    const status = coordinator.getClusterStatus();\n    try std.testing.expect(!status.raft_enabled);\n    try std.testing.expect(!status.twophase_enabled);\n    try std.testing.expect(!status.sharding_enabled);\n}\n\ntest \"distributed coordinator with raft enabled\" {\n    const raft_config = raft.RaftConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{}, // Single node for testing\n    };\n    \n    const coordinator_config = twophase.CoordinatorConfig{\n        .coordinator_id = \"coord1\",\n    };\n    \n    const config = DistributedConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{},\n        .raft_config = raft_config,\n        .coordinator_config = coordinator_config,\n        .enable_raft = true,\n        .enable_2pc = false,\n        .enable_sharding = false,\n    };\n    \n    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);\n    defer coordinator.deinit();\n    \n    try coordinator.start();\n    \n    const status = coordinator.getClusterStatus();\n    try std.testing.expect(status.raft_enabled);\n    try std.testing.expect(status.is_leader); // Single node should become leader\n}\n\ntest \"distributed coordinator with 2pc enabled\" {\n    const raft_config = raft.RaftConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{},\n    };\n    \n    const coordinator_config = twophase.CoordinatorConfig{\n        .coordinator_id = \"coord1\",\n    };\n    \n    const config = DistributedConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{},\n        .raft_config = raft_config,\n        .coordinator_config = coordinator_config,\n        .enable_raft = false,\n        .enable_2pc = true,\n        .enable_sharding = false,\n    };\n    \n    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);\n    defer coordinator.deinit();\n    \n    const success = try coordinator.beginDistributedTransaction(\"txn1\", &[_][]const u8{});\n    try std.testing.expect(success);\n    \n    const status = coordinator.getClusterStatus();\n    try std.testing.expect(status.twophase_enabled);\n    try std.testing.expect(status.active_transactions == 1);\n}\n\ntest \"shard management\" {\n    const raft_config = raft.RaftConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{},\n    };\n    \n    const coordinator_config = twophase.CoordinatorConfig{\n        .coordinator_id = \"coord1\",\n    };\n    \n    const config = DistributedConfig{\n        .node_id = \"node1\",\n        .peers = &[_][]const u8{},\n        .raft_config = raft_config,\n        .coordinator_config = coordinator_config,\n        .enable_raft = false,\n        .enable_2pc = false,\n        .enable_sharding = true,\n    };\n    \n    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);\n    defer coordinator.deinit();\n    \n    // Add a shard\n    try coordinator.addShard(1, \"a\", \"m\", &[_][]const u8{\"node1\"}, \"node1\");\n    \n    // Find shard for key\n    const shard = coordinator.findShard(\"hello\");\n    try std.testing.expect(shard != null);\n    try std.testing.expect(shard.?.shard_id == 1);\n    \n    // Check if primary\n    const is_primary = coordinator.isPrimaryForShard(1);\n    try std.testing.expect(is_primary);\n    \n    const status = coordinator.getClusterStatus();\n    try std.testing.expect(status.sharding_enabled);\n    try std.testing.expect(status.shard_count == 1);\n}
+
+    pub fn deinit(self: *DistributedCoordinator) void {
+        if (self.raft_node) |*node| node.deinit();
+        if (self.twophase_coordinator) |*c| c.deinit();
+        for (self.shard_map.items) |shard| {
+            self.allocator.free(shard.start_key);
+            self.allocator.free(shard.end_key);
+            self.allocator.free(shard.replicas);
+            self.allocator.free(shard.primary);
+        }
+        self.shard_map.deinit();
+    }
+
+    pub fn setRaftMessageCallback(self: *DistributedCoordinator, callback: *const fn ([]const u8, raft.MessageType, []const u8) void) void {
+        self.send_raft_message_callback = callback;
+        if (self.raft_node) |*node| node.setSendMessageCallback(callback);
+    }
+
+    pub fn set2PCMessageCallback(self: *DistributedCoordinator, callback: *const fn ([]const u8, twophase.MessageType, []const u8) void) void {
+        self.send_2pc_message_callback = callback;
+        if (self.twophase_coordinator) |*c| c.setSendMessageCallback(callback);
+    }
+
+    pub fn start(self: *DistributedCoordinator) !void {
+        if (self.raft_node) |*node| try node.start();
+    }
+
+    pub fn tick(self: *DistributedCoordinator) !void {
+        if (self.raft_node) |*node| try node.tick();
+        if (self.twophase_coordinator) |*c| try c.tick();
+    }
+
+    pub fn handleRaftMessage(self: *DistributedCoordinator, from: []const u8, message_type: raft.MessageType, payload: []const u8) !void {
+        if (self.raft_node) |*node| try node.handleMessage(from, message_type, payload);
+    }
+
+    pub fn handle2PCMessage(self: *DistributedCoordinator, from: []const u8, message_type: twophase.MessageType, payload: []const u8) !void {
+        if (self.twophase_coordinator) |*c| try c.handleMessage(from, message_type, payload);
+    }
+
+    pub fn proposeCommand(self: *DistributedCoordinator, command: []const u8) !bool {
+        if (self.raft_node) |*node| return try node.propose(command);
+        return false;
+    }
+
+    pub fn beginDistributedTransaction(self: *DistributedCoordinator, transaction_id: []const u8, participants: []const []const u8) !bool {
+        if (self.twophase_coordinator) |*c| return try c.beginTransaction(transaction_id, participants);
+        return false;
+    }
+
+    pub fn commitDistributedTransaction(self: *DistributedCoordinator, transaction_id: []const u8) !bool {
+        if (self.twophase_coordinator) |*c| return try c.commitTransaction(transaction_id);
+        return false;
+    }
+
+    pub fn abortDistributedTransaction(self: *DistributedCoordinator, transaction_id: []const u8) !bool {
+        if (self.twophase_coordinator) |*c| return try c.abortTransaction(transaction_id);
+        return false;
+    }
+
+    pub fn getClusterStatus(self: *const DistributedCoordinator) struct {
+        is_leader: bool,
+        current_term: u64,
+        active_transactions: usize,
+        shard_count: usize,
+        raft_enabled: bool,
+        twophase_enabled: bool,
+        sharding_enabled: bool,
+    } {
+        var is_leader = false;
+        var current_term: u64 = 0;
+        if (self.raft_node) |node| {
+            const info = node.getLeaderInfo();
+            is_leader = info.is_leader;
+            current_term = info.current_term;
+        }
+        var active_transactions: usize = 0;
+        if (self.twophase_coordinator) |c| {
+            const stats = c.getStats();
+            active_transactions = stats.active_transactions;
+        }
+        return .{
+            .is_leader = is_leader,
+            .current_term = current_term,
+            .active_transactions = active_transactions,
+            .shard_count = self.shard_map.items.len,
+            .raft_enabled = self.config.enable_raft,
+            .twophase_enabled = self.config.enable_2pc,
+            .sharding_enabled = self.config.enable_sharding,
+        };
+    }
+
+    pub fn addShard(self: *DistributedCoordinator, shard_id: u32, start_key: []const u8, end_key: []const u8, replicas: []const []const u8, primary: []const u8) !void {
+        if (!self.config.enable_sharding) return error.ShardingDisabled;
+        const shard = ShardInfo{
+            .shard_id = shard_id,
+            .start_key = try self.allocator.dupe(u8, start_key),
+            .end_key = try self.allocator.dupe(u8, end_key),
+            .replicas = try self.allocator.dupe([]const u8, replicas),
+            .primary = try self.allocator.dupe(u8, primary),
+        };
+        try self.shard_map.append(shard);
+    }
+
+    pub fn findShard(self: *const DistributedCoordinator, key: []const u8) ?*const ShardInfo {
+        if (!self.config.enable_sharding) return null;
+        for (self.shard_map.items) |*shard| {
+            if (std.mem.order(u8, key, shard.start_key) != .lt and std.mem.order(u8, key, shard.end_key) == .lt) {
+                return shard;
+            }
+        }
+        return null;
+    }
+
+    pub fn isPrimaryForShard(self: *const DistributedCoordinator, shard_id: u32) bool {
+        for (self.shard_map.items) |shard| {
+            if (shard.shard_id == shard_id) return std.mem.eql(u8, shard.primary, self.config.node_id);
+        }
+        return false;
+    }
+
+    pub fn getDistributedMetrics(self: *const DistributedCoordinator) struct {
+        raft_metrics: ?struct { is_leader: bool, current_term: u64, commit_index: u64, log_length: usize },
+        twophase_metrics: ?struct { active_transactions: usize, total_transactions: usize, committed_transactions: usize, aborted_transactions: usize },
+        shard_metrics: struct { total_shards: usize, primary_shards: usize },
+    } {
+        var rm: ?struct { is_leader: bool, current_term: u64, commit_index: u64, log_length: usize } = null;
+        if (self.raft_node) |node| {
+            const info = node.getLeaderInfo();
+            rm = .{ .is_leader = info.is_leader, .current_term = info.current_term, .commit_index = info.commit_index, .log_length = info.log_length };
+        }
+        var tm: ?struct { active_transactions: usize, total_transactions: usize, committed_transactions: usize, aborted_transactions: usize } = null;
+        if (self.twophase_coordinator) |c| {
+            const s = c.getStats();
+            tm = .{ .active_transactions = s.active_transactions, .total_transactions = s.total_transactions, .committed_transactions = s.committed_transactions, .aborted_transactions = s.aborted_transactions };
+        }
+        var primary_shards: usize = 0;
+        for (self.shard_map.items) |shard| if (std.mem.eql(u8, shard.primary, self.config.node_id)) primary_shards += 1;
+        return .{
+            .raft_metrics = rm,
+            .twophase_metrics = tm,
+            .shard_metrics = .{ .total_shards = self.shard_map.items.len, .primary_shards = primary_shards },
+        };
+    }
+};
+
+pub const RaftNode = raft.RaftNode;
+pub const RaftConfig = raft.RaftConfig;
+pub const TwoPCCoordinator = twophase.TwoPCCoordinator;
+pub const CoordinatorConfig = twophase.CoordinatorConfig;
+pub const TransactionState = twophase.TransactionState;
+
+test "distributed coordinator initialization" {
+    const raft_config = raft.RaftConfig{ .node_id = "node1", .peers = &[_][]const u8{ "node2", "node3" } };
+    const coordinator_config = twophase.CoordinatorConfig{ .coordinator_id = "coord1" };
+    const config = DistributedConfig{ .node_id = "node1", .peers = &[_][]const u8{ "node2", "node3" }, .raft_config = raft_config, .coordinator_config = coordinator_config, .enable_raft = false, .enable_2pc = false, .enable_sharding = false };
+    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);
+    defer coordinator.deinit();
+    const status = coordinator.getClusterStatus();
+    try std.testing.expect(!status.raft_enabled);
+    try std.testing.expect(!status.twophase_enabled);
+    try std.testing.expect(!status.sharding_enabled);
+}
+
+test "distributed coordinator with raft enabled" {
+    const raft_config = raft.RaftConfig{ .node_id = "node1", .peers = &[_][]const u8{} };
+    const coordinator_config = twophase.CoordinatorConfig{ .coordinator_id = "coord1" };
+    const config = DistributedConfig{ .node_id = "node1", .peers = &[_][]const u8{}, .raft_config = raft_config, .coordinator_config = coordinator_config, .enable_raft = true, .enable_2pc = false, .enable_sharding = false };
+    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);
+    defer coordinator.deinit();
+    try coordinator.start();
+    const status = coordinator.getClusterStatus();
+    try std.testing.expect(status.raft_enabled);
+    try std.testing.expect(status.is_leader);
+}
+
+test "distributed coordinator with 2pc enabled" {
+    const raft_config = raft.RaftConfig{ .node_id = "node1", .peers = &[_][]const u8{} };
+    const coordinator_config = twophase.CoordinatorConfig{ .coordinator_id = "coord1" };
+    const config = DistributedConfig{ .node_id = "node1", .peers = &[_][]const u8{}, .raft_config = raft_config, .coordinator_config = coordinator_config, .enable_raft = false, .enable_2pc = true, .enable_sharding = false };
+    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);
+    defer coordinator.deinit();
+    const success = try coordinator.beginDistributedTransaction("txn1", &[_][]const u8{});
+    try std.testing.expect(success);
+    const status = coordinator.getClusterStatus();
+    try std.testing.expect(status.twophase_enabled);
+    try std.testing.expect(status.active_transactions == 1);
+}
+
+test "shard management" {
+    const raft_config = raft.RaftConfig{ .node_id = "node1", .peers = &[_][]const u8{} };
+    const coordinator_config = twophase.CoordinatorConfig{ .coordinator_id = "coord1" };
+    const config = DistributedConfig{ .node_id = "node1", .peers = &[_][]const u8{}, .raft_config = raft_config, .coordinator_config = coordinator_config, .enable_raft = false, .enable_2pc = false, .enable_sharding = true };
+    var coordinator = try DistributedCoordinator.init(std.testing.allocator, config);
+    defer coordinator.deinit();
+    try coordinator.addShard(1, "a", "m", &[_][]const u8{"node1"}, "node1");
+    const shard = coordinator.findShard("hello");
+    try std.testing.expect(shard != null);
+    try std.testing.expect(shard.?.shard_id == 1);
+    const is_primary = coordinator.isPrimaryForShard(1);
+    try std.testing.expect(is_primary);
+    const status = coordinator.getClusterStatus();
+    try std.testing.expect(status.sharding_enabled);
+    try std.testing.expect(status.shard_count == 1);
+}

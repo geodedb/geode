@@ -100,87 +100,87 @@ pub const StorageCatalog = struct {
             try self.createCatalog();
             return;
         }
-        
+
         // Load catalog from page 0 (reserved for catalog)
         self.catalog_page_id = 0;
         const catalog_page = try self.page_manager.getPage(0);
         try self.deserializeCatalog(catalog_page);
     }
-    
+
     /// Save catalog to persistent storage
     pub fn save(self: *StorageCatalog) !void {
         if (self.catalog_page_id == null) {
             // Allocate catalog page
             self.catalog_page_id = try self.page_manager.allocatePage();
         }
-        
+
         const catalog_page = try self.page_manager.getPage(self.catalog_page_id.?);
         try self.serializeCatalog(catalog_page);
         try self.page_manager.flushPage(self.catalog_page_id.?);
     }
-    
+
     fn createCatalog(self: *StorageCatalog) !void {
         // Create initial catalog page
         self.catalog_page_id = try self.page_manager.allocatePage();
         try self.save();
     }
-    
+
     fn serializeCatalog(self: *StorageCatalog, page: []u8) !void {
         // Simple serialization format for catalog metadata
         // Format: [table_count:u32][table_entries...][index_count:u32][index_entries...]
         var offset: usize = 0;
-        
+
         // Write table count
         const table_count: u32 = @intCast(self.tables.count());
-        std.mem.writeInt(u32, page[offset..offset+4], table_count, .little);
+        std.mem.writeInt(u32, page[offset .. offset + 4], table_count, .little);
         offset += 4;
-        
+
         // Write table entries (simplified - just names and page IDs for now)
         var table_iter = self.tables.iterator();
         while (table_iter.next()) |entry| {
             const name = entry.value_ptr.name;
             const name_len: u32 = @intCast(name.len);
-            
+
             // Write name length and name
-            std.mem.writeInt(u32, page[offset..offset+4], name_len, .little);
+            std.mem.writeInt(u32, page[offset .. offset + 4], name_len, .little);
             offset += 4;
-            @memcpy(page[offset..offset+name.len], name);
+            @memcpy(page[offset .. offset + name.len], name);
             offset += name.len;
-            
+
             // Write root page ID
-            std.mem.writeInt(u32, page[offset..offset+4], entry.value_ptr.root_page_id, .little);
+            std.mem.writeInt(u32, page[offset .. offset + 4], entry.value_ptr.root_page_id, .little);
             offset += 4;
         }
-        
+
         // Write index count (placeholder)
         const index_count: u32 = @intCast(self.indexes.count());
-        std.mem.writeInt(u32, page[offset..offset+4], index_count, .little);
+        std.mem.writeInt(u32, page[offset .. offset + 4], index_count, .little);
         offset += 4;
-        
+
         // Mark remaining space as unused
         @memset(page[offset..], 0);
     }
-    
+
     fn deserializeCatalog(self: *StorageCatalog, page: []const u8) !void {
         var offset: usize = 0;
-        
+
         // Read table count
-        const table_count = std.mem.readInt(u32, page[offset..offset+4], .little);
+        const table_count = std.mem.readInt(u32, page[offset .. offset + 4], .little);
         offset += 4;
-        
+
         // Read table entries
         for (0..table_count) |_| {
             // Read name length and name
-            const name_len = std.mem.readInt(u32, page[offset..offset+4], .little);
+            const name_len = std.mem.readInt(u32, page[offset .. offset + 4], .little);
             offset += 4;
-            
-            const name = try self.allocator.dupe(u8, page[offset..offset+name_len]);
+
+            const name = try self.allocator.dupe(u8, page[offset .. offset + name_len]);
             offset += name_len;
-            
+
             // Read root page ID
-            const root_page_id = std.mem.readInt(u32, page[offset..offset+4], .little);
+            const root_page_id = std.mem.readInt(u32, page[offset .. offset + 4], .little);
             offset += 4;
-            
+
             // Create minimal table metadata
             const table_meta = TableMetadata{
                 .name = name,
@@ -191,25 +191,25 @@ pub const StorageCatalog = struct {
                 .created_at = 0,
                 .modified_at = 0,
             };
-            
+
             try self.tables.put(name, table_meta);
         }
-        
+
         // Read index count (placeholder)
-        const index_count = std.mem.readInt(u32, page[offset..offset+4], .little);
+        const index_count = std.mem.readInt(u32, page[offset .. offset + 4], .little);
         _ = index_count; // Unused for now
     }
-    
+
     /// Create a new table in the catalog
     pub fn createTable(self: *StorageCatalog, name: []const u8, columns: []const TableMetadata.ColumnMetadata) !void {
         if (self.tables.contains(name)) {
             return error.TableAlreadyExists;
         }
-        
+
         const root_page_id = try self.page_manager.allocatePage();
         const table_name = try self.allocator.dupe(u8, name);
         const table_columns = try self.allocator.dupe(TableMetadata.ColumnMetadata, columns);
-        
+
         // Duplicate column metadata strings
         for (table_columns) |*col| {
             col.name = try self.allocator.dupe(u8, col.name);
@@ -218,7 +218,7 @@ pub const StorageCatalog = struct {
                 col.default_value = try self.allocator.dupe(u8, default);
             }
         }
-        
+
         const table_meta = TableMetadata{
             .name = table_name,
             .columns = table_columns,
@@ -228,53 +228,53 @@ pub const StorageCatalog = struct {
             .created_at = std.time.timestamp(),
             .modified_at = std.time.timestamp(),
         };
-        
+
         try self.tables.put(table_name, table_meta);
         try self.save();
     }
-    
+
     /// Drop a table from the catalog
     pub fn dropTable(self: *StorageCatalog, name: []const u8) !void {
         if (!self.tables.contains(name)) {
             return error.TableNotFound;
         }
-        
+
         // Get table metadata to free resources
         const table_meta = self.tables.get(name).?;
-        
+
         // Free the table's root page
         try self.page_manager.freePage(table_meta.root_page_id);
-        
+
         // Remove from catalog
         _ = self.tables.remove(name);
         try self.save();
     }
-    
+
     /// Get table metadata
     pub fn getTable(self: *StorageCatalog, name: []const u8) ?TableMetadata {
         return self.tables.get(name);
     }
-    
+
     /// Create an index
     pub fn createIndex(self: *StorageCatalog, name: []const u8, table_name: []const u8, columns: []const []const u8, unique: bool) !void {
         if (self.indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
-        
+
         if (!self.tables.contains(table_name)) {
             return error.TableNotFound;
         }
-        
+
         const root_page_id = try self.page_manager.allocatePage();
         const index_name = try self.allocator.dupe(u8, name);
         const index_table_name = try self.allocator.dupe(u8, table_name);
         const index_columns = try self.allocator.dupe([]const u8, columns);
-        
+
         // Duplicate column name strings
         for (index_columns) |*col| {
             col.* = try self.allocator.dupe(u8, col.*);
         }
-        
+
         const index_meta = IndexMetadata{
             .name = index_name,
             .table_name = index_table_name,
@@ -283,11 +283,11 @@ pub const StorageCatalog = struct {
             .root_page_id = root_page_id,
             .created_at = std.time.timestamp(),
         };
-        
+
         try self.indexes.put(index_name, index_meta);
         try self.save();
     }
-    
+
     /// Get index metadata
     pub fn getIndex(self: *StorageCatalog, name: []const u8) ?IndexMetadata {
         return self.indexes.get(name);

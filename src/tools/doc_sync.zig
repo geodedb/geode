@@ -26,11 +26,11 @@ const ReqSet = struct {
 fn scanReqIds(ally: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
-    
+
     // Read entire file into memory for simplicity
     const content = try file.readToEndAlloc(ally, 1024 * 1024); // 1MB max
     defer ally.free(content);
-    
+
     var lines = std.mem.splitSequence(u8, content, "\n");
     while (lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "REQ-GQL-") != null) {

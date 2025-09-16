@@ -160,8 +160,8 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("txn", txn_mod);
     const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("wal", wal_mod);
-    const dist_mod = b.createModule(.{ .root_source_file = b.path("src/dist/scaffold.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("dist", dist_mod);
+    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("distributed", distributed_mod);
     // util: tracking allocator module
     const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("tracking_alloc", util_tracking_mod);
@@ -175,18 +175,10 @@ pub fn build(b: *std.Build) void {
     const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("text_formatter", util_text_formatter_mod);
     // Vendored QUIC library module
-    const vendor_quic_mod = b.createModule(.{ 
-        .root_source_file = b.path("vendor/quic/lib.zig"), 
-        .target = target, 
-        .optimize = optimize 
-    });
-    
+    const vendor_quic_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
+
     // transport: QUIC module with vendored library dependency
-    const transport_quic_mod = b.createModule(.{ 
-        .root_source_file = b.path("src/transport/quic.zig"), 
-        .target = target, 
-        .optimize = optimize 
-    });
+    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("vendor_quic", vendor_quic_mod);
     geoded_exe.root_module.addImport("transport/quic.zig", transport_quic_mod);
     geoded_exe.root_module.addImport("vendor_quic", vendor_quic_mod);

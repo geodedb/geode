@@ -133,10 +133,10 @@ pub const Manager = struct {
 
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
-        
+
         // Remove from conflict matrix
         self.conflict_matrix.removeConflicts(txn.id);
-        
+
         _ = self.active_txns.remove(txn.id);
     }
 
@@ -145,10 +145,10 @@ pub const Manager = struct {
 
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
-        
+
         // Remove from conflict matrix
         self.conflict_matrix.removeConflicts(txn.id);
-        
+
         _ = self.active_txns.remove(txn.id);
     }
 
@@ -157,7 +157,7 @@ pub const Manager = struct {
         while (iter.next()) |entry| {
             const key = entry.key_ptr.*;
             const conflict_type = entry.value_ptr.*;
-            
+
             if ((key[0] == txn_id or key[1] == txn_id) and conflict_type == .WriteWrite) {
                 // Check if the conflicting transaction is still active
                 const other_txn = if (key[0] == txn_id) key[1] else key[0];
@@ -403,7 +403,7 @@ test "mvcc visibility with delete_ts and rollback" {
     mvccRollback(&chain, 7);
     // now b is self-invalidated for any snapshot >=7; visibility at 10 still 5
     try std.testing.expect(visible(&chain, 10).?.create_ts == 5);
-    
+
     // Cleanup
     var v = chain.head;
     while (v) |cur| {
@@ -501,7 +501,7 @@ test "txn manager: serialization failure on commit" {
 
     // After T2 commits, conflicts should be cleaned up
     try mgr.commit(&t2);
-    
+
     // Now T1 should be able to commit (if it were still active)
     // But since T1 already failed, we'll test with a new transaction
     var t3 = mgr.begin();

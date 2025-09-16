@@ -5,64 +5,64 @@ const HLLSketch = struct {
     buckets: []u8,
     precision: u8,
     alpha: f64,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, precision: u8) !Self {
         const num_buckets = @as(usize, 1) << @intCast(precision);
         const buckets = try allocator.alloc(u8, num_buckets);
         @memset(buckets, 0);
-        
+
         const alpha = switch (precision) {
             4 => 0.673,
             5 => 0.697,
             6 => 0.709,
             else => 0.7213 / (1.0 + 1.079 / @as(f64, @floatFromInt(num_buckets))),
         };
-        
+
         return Self{
             .buckets = buckets,
             .precision = precision,
             .alpha = alpha,
         };
     }
-    
+
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         allocator.free(self.buckets);
     }
-    
+
     pub fn add(self: *Self, value: []const u8) void {
         const hash = std.hash_map.hashString(value);
         const bucket_idx = hash >> @intCast(64 - self.precision);
         const w = hash << @intCast(self.precision);
         const leading_zeros = @clz(w | 1) + 1;
-        
+
         if (leading_zeros > self.buckets[bucket_idx]) {
             self.buckets[bucket_idx] = @intCast(leading_zeros);
         }
     }
-    
+
     pub fn estimate(self: *const Self) f64 {
         const m = @as(f64, @floatFromInt(self.buckets.len));
         var raw_estimate: f64 = 0.0;
         var zero_count: usize = 0;
-        
+
         for (self.buckets) |bucket| {
             if (bucket == 0) {
                 zero_count += 1;
             }
             raw_estimate += std.math.pow(f64, 2.0, -@as(f64, @floatFromInt(bucket)));
         }
-        
+
         raw_estimate = self.alpha * m * m / raw_estimate;
-        
+
         // Small range correction
         if (raw_estimate <= 2.5 * m) {
             if (zero_count != 0) {
                 return m * std.math.log(f64, std.math.e, m / @as(f64, @floatFromInt(zero_count)));
             }
         }
-        
+
         // Large range correction
         if (raw_estimate <= (1.0 / 30.0) * std.math.pow(f64, 2.0, 32.0)) {
             return raw_estimate;
@@ -70,7 +70,7 @@ const HLLSketch = struct {
             return -std.math.pow(f64, 2.0, 32.0) * std.math.log(f64, std.math.e, 1.0 - raw_estimate / std.math.pow(f64, 2.0, 32.0));
         }
     }
-    
+
     pub fn merge(self: *Self, other: *const Self) void {
         for (self.buckets, 0..) |*bucket, i| {
             bucket.* = @max(bucket.*, other.buckets[i]);
@@ -85,9 +85,9 @@ const AdaptiveSampler = struct {
     max_sample_size: usize,
     current_sample_size: usize,
     total_seen: usize,
-    
+
     const Self = @This();
-    
+
     pub fn init(min_size: usize, max_size: usize) Self {
         return Self{
             .sample_rate = 1.0,
@@ -97,15 +97,15 @@ const AdaptiveSampler = struct {
             .total_seen = 0,
         };
     }
-    
+
     pub fn shouldSample(self: *Self) bool {
         self.total_seen += 1;
-        
+
         if (self.current_sample_size < self.min_sample_size) {
             self.current_sample_size += 1;
             return true;
         }
-        
+
         if (self.current_sample_size >= self.max_sample_size) {
             // Reservoir sampling
             const rand = std.crypto.random.float(f64);
@@ -114,20 +114,20 @@ const AdaptiveSampler = struct {
             }
             return false;
         }
-        
+
         // Adaptive rate adjustment
         const target_rate = @as(f64, @floatFromInt(self.max_sample_size)) / @as(f64, @floatFromInt(self.total_seen));
         self.sample_rate = @min(1.0, target_rate * 1.1); // 10% buffer
-        
+
         const rand = std.crypto.random.float(f64);
         if (rand < self.sample_rate) {
             self.current_sample_size += 1;
             return true;
         }
-        
+
         return false;
     }
-    
+
     pub fn getScaleFactor(self: *const Self) f64 {
         if (self.current_sample_size == 0) return 1.0;
         return @as(f64, @floatFromInt(self.total_seen)) / @as(f64, @floatFromInt(self.current_sample_size));
@@ -171,7 +171,7 @@ pub const SelectivityEstimator = struct {
                     return 1.0 / hll_distinct;
                 }
             }
-            
+
             if (self.distinct_values == 0) return 1.0;
             return 1.0 / @as(f64, @floatFromInt(self.distinct_values));
         }
@@ -181,10 +181,10 @@ pub const SelectivityEstimator = struct {
             if (self.histogram) |hist| {
                 return self.histogramRangeSelectivity(hist, lower, upper);
             }
-            
+
             // Fallback to uniform distribution assumption
             if (self.total_rows == 0) return 0.0;
-            
+
             // If we have min/max bounds, estimate based on range
             if (self.min_value != null and self.max_value != null and lower != null and upper != null) {
                 // Simple string-based range estimation (could be improved with proper type handling)
@@ -194,18 +194,18 @@ pub const SelectivityEstimator = struct {
                     return @min(1.0, @as(f64, @floatFromInt(query_range)) / @as(f64, @floatFromInt(total_range)));
                 }
             }
-            
+
             // Conservative default
             return 0.1;
         }
-        
+
         fn histogramRangeSelectivity(self: ColumnStats, hist: Histogram, lower: ?[]const u8, upper: ?[]const u8) f64 {
             _ = self;
             var selectivity: f64 = 0.0;
-            
+
             for (hist.buckets) |bucket| {
                 var bucket_selectivity: f64 = 0.0;
-                
+
                 // Check if bucket overlaps with query range
                 const bucket_overlaps = blk: {
                     if (lower != null and std.mem.order(u8, bucket.upper_bound, lower.?) == .lt) {
@@ -216,15 +216,15 @@ pub const SelectivityEstimator = struct {
                     }
                     break :blk true;
                 };
-                
+
                 if (bucket_overlaps) {
                     // Simplified: assume uniform distribution within bucket
                     bucket_selectivity = @as(f64, @floatFromInt(bucket.frequency));
                 }
-                
+
                 selectivity += bucket_selectivity;
             }
-            
+
             return selectivity;
         }
 
@@ -242,7 +242,7 @@ pub const SelectivityEstimator = struct {
             .enable_adaptive_sampling = true,
         };
     }
-    
+
     pub fn initWithOptions(allocator: std.mem.Allocator, enable_hll: bool, enable_adaptive_sampling: bool) SelectivityEstimator {
         return .{
             .allocator = allocator,
@@ -283,12 +283,12 @@ pub const SelectivityEstimator = struct {
             .sampler = null,
             .last_update_time = std.time.timestamp(),
         };
-        
+
         // Initialize HLL sketch if enabled
         if (self.enable_hll) {
             stats.hll_sketch = HLLSketch.init(self.allocator, 12) catch null; // 2^12 = 4096 buckets
         }
-        
+
         // Initialize adaptive sampler if enabled
         if (self.enable_adaptive_sampling) {
             stats.sampler = AdaptiveSampler.init(1000, 10000); // min 1K, max 10K samples
@@ -296,11 +296,11 @@ pub const SelectivityEstimator = struct {
 
         try self.column_stats.put(column, stats);
     }
-    
+
     /// Add a value to the column statistics for incremental updates
     pub fn addValue(self: *SelectivityEstimator, column: []const u8, value: []const u8) !void {
         var stats = self.column_stats.getPtr(column) orelse return;
-        
+
         // Update HLL sketch if available
         if (stats.hll_sketch) |*sketch| {
             // Check if we should sample this value
@@ -308,30 +308,30 @@ pub const SelectivityEstimator = struct {
             if (stats.sampler) |*sampler| {
                 should_add = sampler.shouldSample();
             }
-            
+
             if (should_add) {
                 sketch.add(value);
             }
         }
-        
+
         stats.last_update_time = std.time.timestamp();
     }
-    
+
     /// Get the estimated distinct count using HLL if available
     pub fn getDistinctCount(self: *const SelectivityEstimator, column: []const u8) f64 {
         const stats = self.column_stats.get(column) orelse return 0.0;
-        
+
         if (stats.hll_sketch) |sketch| {
             var estimate = sketch.estimate();
-            
+
             // Apply sampling scale factor if using adaptive sampling
             if (stats.sampler) |sampler| {
                 estimate *= sampler.getScaleFactor();
             }
-            
+
             return estimate;
         }
-        
+
         return @as(f64, @floatFromInt(stats.distinct_values));
     }
 
@@ -442,13 +442,13 @@ test "selectivity estimator adaptive learning" {
 test "HLL sketch cardinality estimation" {
     var sketch = try HLLSketch.init(std.testing.allocator, 12);
     defer sketch.deinit(std.testing.allocator);
-    
+
     // Add some values
     const values = [_][]const u8{ "a", "b", "c", "d", "e", "a", "b" }; // 5 distinct
     for (values) |value| {
         sketch.add(value);
     }
-    
+
     const estimate = sketch.estimate();
     // Should be close to 5, allowing for HLL error
     try std.testing.expect(estimate >= 3.0 and estimate <= 7.0);
@@ -456,7 +456,7 @@ test "HLL sketch cardinality estimation" {
 
 test "adaptive sampler" {
     var sampler = AdaptiveSampler.init(5, 10);
-    
+
     // First 5 should always be sampled
     var sampled_count: usize = 0;
     var i: usize = 0;
@@ -464,12 +464,12 @@ test "adaptive sampler" {
         if (sampler.shouldSample()) sampled_count += 1;
     }
     try std.testing.expect(sampled_count == 5);
-    
+
     // After that, sampling should be probabilistic
     while (i < 20) : (i += 1) {
         _ = sampler.shouldSample();
     }
-    
+
     const scale_factor = sampler.getScaleFactor();
     try std.testing.expect(scale_factor >= 1.0);
 }
@@ -477,14 +477,14 @@ test "adaptive sampler" {
 test "selectivity estimator with HLL" {
     var estimator = SelectivityEstimator.initWithOptions(std.testing.allocator, true, true);
     defer estimator.deinit();
-    
+
     try estimator.updateStats("test_col", 1000, 100, 0);
-    
+
     // Add some values to HLL
     try estimator.addValue("test_col", "value1");
     try estimator.addValue("test_col", "value2");
     try estimator.addValue("test_col", "value1"); // duplicate
-    
+
     const distinct_count = estimator.getDistinctCount("test_col");
     try std.testing.expect(distinct_count > 0.0);
 }
