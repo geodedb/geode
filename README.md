@@ -2,14 +2,14 @@
 
 ## Description
 
-Geode is a Zig-based graph database project exploring an ISO/IEC 39075:2024 (GQL) front end with
-structured temporals, ORDER BY policy checks, and developer-friendly printers and CLI tooling.
+Geode is a Zig-based graph database project implementing ISO/IEC 39075:2024 (GQL) with
+structured temporals, ORDER BY policy checks, and developer-friendly tooling.
 
 **NEW: QUIC/TLS 1.3 Support** - Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication between client and server.
 
 ## Status & Conformance Summary
 
-**Current Implementation Status**: 32 requirements implemented, 8 partial, 6 missing (see detailed breakdown below)
+**Current Implementation Status**: 36 requirements implemented, 3 partial, 6 missing (see detailed breakdown below)
 
 **Key Links**:
 - **Requirements Ledger**: [docs/GAP_ANALYSIS.md#1-requirements-ledger](docs/GAP_ANALYSIS.md#1-requirements-ledger) — Authoritative status of all REQ-GQL-### requirements with evidence
@@ -18,38 +18,40 @@ structured temporals, ORDER BY policy checks, and developer-friendly printers an
 - **GQL→Engine Crosswalk**: [docs/query_engine.md#10-gqlengine-crosswalk-milestone-v015-core](docs/query_engine.md#10-gqlengine-crosswalk-milestone-v015-core) — Mapping from GQL constructs to implementation
 
 **Implementation Highlights**:
-- ✅ **Core GQL Language**: MATCH/OPTIONAL patterns, ORDER BY with US001 policy, LIMIT/OFFSET, GROUP BY legality
+- ✅ **Core GQL Language**: MATCH/OPTIONAL patterns, ORDER BY with US001 policy, LIMIT/OFFSET, GROUP BY execution
 - ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics and deterministic ordering
-- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals, mixed-type arithmetic
-- ✅ **Binary Protocol**: SCHEMA/BINDINGS frames with ordered metadata, status codes, diagnostics precedence
-- ✅ **Profiling & Metrics**: PROFILE/EXPLAIN with stable JSON schema (profile_version=2)
-- 🔄 **Storage Layer**: Slotted pages and WAL/ARIES (partial - missing catalog and adjacency structures)
-- 🔄 **Transactions**: MVCC timestamps and basic lifecycle (partial - missing conflict detection)
+- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals, mixed-type arithmetic with decimal coercion
+- ✅ **Binary Protocol**: SCHEMA/BINDINGS frames with ordered metadata, status codes, diagnostics precedence (ISO 23.2)
+- ✅ **Profiling & Metrics**: PROFILE/EXPLAIN with stable JSON schema (profile_version=2) and text formatting
+- ✅ **WAL/ARIES**: Write-ahead logging with STEAL/NO-FORCE, recovery, compaction, checksum validation
+- ✅ **Transactions**: MVCC timestamps, BEGIN/COMMIT/ROLLBACK lifecycle with proper status responses
+- 🔄 **Storage Layer**: Slotted pages implemented (partial - missing catalog persistence and CSR adjacency)
+- 🔄 **MVCC**: Basic snapshot isolation (partial - missing conflict detection and lock management)
 - ❌ **Distributed**: Raft/2PC scaffold (missing - single-node only)
 
 **High-Risk Areas**:
-1. **Durability** (REQ-GQL-026): WAL/ARIES needs fuzz scaling and automated compaction
-2. **Transactions** (REQ-GQL-027): MVCC lacks full conflict detection and lock management  
-3. **Storage** (REQ-GQL-025): Missing persistent catalog and CSR adjacency structures
-4. **Distribution** (REQ-GQL-028/042): No distributed scaffold limits scalability
-5. **Indexing** (REQ-GQL-039): Only stub statistics, no real selectivity estimation
+1. **Doc Sync Tool** (REQ-GQL-018): Compatibility issue with Zig 0.15.1 API changes blocks requirement validation
+2. **MVCC Conflicts** (REQ-GQL-027): Missing write-write conflict detection risks data consistency anomalies
+3. **Storage Catalog** (REQ-GQL-025): No persistent catalog or CSR adjacency structures limits production readiness
+4. **Distribution** (REQ-GQL-028/042): No distributed scaffold limits scalability path
+5. **Path Execution** (REQ-GQL-017): Missing PathExpand operator limits query expressiveness
 
 **Conformance Notes**:
-- Implements ISO/IEC 39075:2024 minimum conformance plus selected optional features
+- Implements ISO/IEC 39075:2024 minimum conformance plus selected optional features (GQ12/GQ13 OFFSET/LIMIT, set operations)
 - Implementation-defined policies: US001 (unordered pagination rejection), binary collation, int→decimal promotion
-- Implementation-dependent behaviors: UA005/UA006 path tie-breaking (planned), null ordering policy
-- All diagnostics follow ISO 23.2 precedence rules with proper status_class/subclass mapping
+- Implementation-dependent behaviors: UA005/UA006 path tie-breaking (planned), null ordering policy (configurable)
+- All diagnostics follow ISO 23.2 precedence rules with proper status_class/subclass mapping and flagger output
 
-Highlights
+## Core Features
 
-- Parser/AST/printers for MATCH/OPTIONAL, ORDER BY, LIMIT/OFFSET, GROUP BY (parse-only),
-  UNION/INTERSECT/EXCEPT (parse), pattern comprehensions, string predicates, CASE, and
-  structured temporal literals (DATE/TIME/DATETIME/LOCAL DATETIME) with normalization.
-- Runtime set-ops semantics (UNION/INTERSECT/EXCEPT) over binding tables with deterministic ordering:
-  DISTINCT variants return sorted results; ALL variants preserve stable-left order.
-- Planner policies: disallow OFFSET pushdown without explicit ORDER (US001), temporal-aware
-  comparator for ORDER BY with session-local attachment.
-- CLI: normalization/clamping for temporals; AST JSON with verbose temporals.
+- **Parser/AST/Printers**: MATCH/OPTIONAL patterns, ORDER BY with legality checks, LIMIT/OFFSET with US001 enforcement,
+  GROUP BY execution, UNION/INTERSECT/EXCEPT with deterministic semantics, pattern comprehensions, string predicates,
+  CASE expressions, and structured temporal literals (DATE/TIME/DATETIME/LOCAL DATETIME) with normalization.
+- **Runtime Semantics**: Set operations over binding tables with deterministic ordering (DISTINCT variants return sorted results;
+  ALL variants preserve stable-left order), temporal-aware comparator for ORDER BY, parameter array expansion.
+- **Planner Policies**: Disallow OFFSET pushdown without explicit ORDER (US001), ORDER BY key legality (identifier-only by default),
+  GROUP BY legality validation, mixed-type arithmetic with TypeMismatch diagnostics.
+- **CLI Tools**: Normalization/clamping for temporals, AST JSON with verbose temporals, PROFILE/EXPLAIN with text formatting.
 
 See USAGE.md for commands and flags.
 
@@ -72,6 +74,7 @@ Use the `PROFILE` prefix before a GQL query (via server line protocol or `geodec
 | `GEODE_FORCE_DISTINCT_SPILL`  | Force `distinct_spills` = 1 (spill_reason=forced).                     |
 | `GEODE_FORCE_UNION_SPILL`     | Force `union_spills` = 1 (spill_reason=forced).                        |
 | `GEODE_PROFILE_MEMCURVE`      | Enable `mem_curve` emission (alternative to CLI `--profile-memcurve`). |
+| `GEODE_WAL_COMPACT_INTERVAL`  | Trigger WAL compaction every N commits (default: 5).                   |
 
 ### WAL Compaction Tool
 
@@ -177,15 +180,19 @@ Updating Tests for New Ops:
 | IllegalOrderKey | ORDER BY key must be identifier (policy: ident-only)       | 14.10       | RETURN a ORDER BY f(a)         |
 | GroupByIllegal  | Invalid GROUP BY legality (e.g., non-aggregated columns)   | 14.10       | RETURN a, SUM(b) GROUP BY a, b |
 | TypeMismatch    | Illegal cross-type comparison/ordering                     | 16.x        | RETURN 1 < "2"                 |
+| TxnState        | Transaction state error (invalid lifecycle transition)     | 8           | COMMIT without BEGIN           |
+| StoragePageChecksum | Page checksum mismatch during storage operations       | 4           | Corrupted page detected        |
 
-The CLI and server surface diagnostics with status_class/subclass. Tests assert codes/anchors via stderr.
+The CLI and server surface diagnostics with status_class/subclass per ISO 23.2. Tests assert codes/anchors via stderr.
 
 ## Documentation Sync Utility
 
 Maintain alignment between implemented requirement codes (REQ-GQL-###) and the ledger in `docs/GAP_ANALYSIS.md` using the doc sync script:
 
 ```bash
-zig run scripts/doc_sync.zig
+zig run src/tools/doc_sync.zig
 ```
+
+**Note**: Currently requires Zig API compatibility fix for bufferedReader (see REQ-GQL-018 in NEXT.md).
 
 The script prints any MISSING (referenced in code but absent from GAP_ANALYSIS) or EXTRA (present in GAP_ANALYSIS but not found in source) requirement IDs. Resolve discrepancies by editing `docs/GAP_ANALYSIS.md` until the script outputs no differences. Integrate this check in CI to prevent drift.
