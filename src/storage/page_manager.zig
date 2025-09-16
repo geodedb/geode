@@ -43,12 +43,15 @@ pub const Page = struct {
     }
     fn writeSlot(self: *Page, idx: u16, off: u16, sz: u16) void {
         const base = slotOffset(idx);
-        std.mem.writeInt(u16, self.buf[base .. base + 2], off, .little);
-        std.mem.writeInt(u16, self.buf[base + 2 .. base + 4], sz, .little);
+        std.mem.writeInt(u16, self.buf[base..base + 2][0..2], off, .little);
+        std.mem.writeInt(u16, self.buf[base + 2..base + 4][0..2], sz, .little);
     }
     fn readSlot(self: *const Page, idx: u16) struct { off: u16, sz: u16 } {
         const base = slotOffset(idx);
-        return .{ .off = std.mem.readInt(u16, self.buf[base .. base + 2], .little), .sz = std.mem.readInt(u16, self.buf[base + 2 .. base + 4], .little) };
+        return .{ 
+            .off = std.mem.readInt(u16, self.buf[base..base + 2][0..2], .little), 
+            .sz = std.mem.readInt(u16, self.buf[base + 2..base + 4][0..2], .little) 
+        };
     }
 
     fn adler32(data: []const u8) u32 {
@@ -172,7 +175,7 @@ pub const PageManager = struct {
         if (self.pages.items.len == 0) try self.newPage();
         return self.pages.items.len - 1;
     }
-    fn newPage(self: *PageManager) !void {
+    pub fn newPage(self: *PageManager) !void {
         const mem = try self.allocator.alloc(u8, self.page_size);
         _ = Page.init(mem);
         try self.pages.append(self.allocator, mem);
