@@ -4,18 +4,22 @@ ZIG ?= zig
 ZIG_FLAGS ?=
 ZIG_RELEASE_FLAGS ?= -Drelease-safe
 
-.PHONY: all build release test go-test fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
+.PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 
-# Default target
-all: build
+# Default target - build everything
+all: build go-build
 
 # Help target
 help:
 	@echo "Geode Makefile targets:"
-	@echo "  make build       - Build debug version"
-	@echo "  make release     - Build release version"
+	@echo "  make build       - Build debug version (Zig + Go)"
+	@echo "  make release     - Build release version (Zig + Go)"
 	@echo "  make test        - Run all tests (Zig + Go)"
+	@echo "  make integration-test - Run comprehensive integration tests"
+	@echo "  make go-build    - Build Go client library only"
 	@echo "  make go-test     - Run Go client tests only"
+	@echo "  make go-example  - Run Go client example program"
+	@echo "  make go-clean    - Clean Go client artifacts"
 	@echo "  make fuzz        - Run fuzz tests"
 	@echo "  make bench       - Run benchmarks"
 	@echo "  make tools       - Build all tools"
@@ -28,22 +32,62 @@ help:
 
 build:
 	$(ZIG) build $(ZIG_FLAGS)
+	$(MAKE) go-build
 
 release:
 	$(ZIG) build $(ZIG_RELEASE_FLAGS)
+	$(MAKE) go-build
 
 # Run Zig tests
 test:
 	$(ZIG) build test $(ZIG_FLAGS)
 	$(MAKE) go-test
 
+# Build Go client library
+go-build:
+	@if [ -d "clients/go/gql" ]; then \
+		echo "Building Go client library..."; \
+		cd clients/go/gql && go build ./...; \
+		if [ -d "example" ]; then \
+			echo "Building Go example program..."; \
+			cd example && go build -o ../../../zig-out/bin/gql-example . || echo "Failed to build example"; \
+		fi; \
+		echo "Go client library built successfully"; \
+	else \
+		echo "Go client directory not found, skipping Go build"; \
+	fi
+
 # Run Go client tests
-go-test:
+go-test: go-build
 	@if [ -d "clients/go/gql" ]; then \
 		echo "Running Go client tests..."; \
-		cd clients/go/gql && go test -v; \
+		cd clients/go/gql && go test -v -timeout 30s; \
 	else \
 		echo "Go client directory not found, skipping Go tests"; \
+	fi
+
+# Clean Go client artifacts
+go-clean:
+	@if [ -d "clients/go/gql" ]; then \
+		echo "Cleaning Go client artifacts..."; \
+		cd clients/go/gql && go clean || true; \
+	fi
+
+# Run Go client example
+go-example: build go-build
+	@if [ -f "./zig-out/bin/gql-example" ]; then \
+		echo "Running Go client example (process mode)..."; \
+		./zig-out/bin/gql-example -mode process -v; \
+	else \
+		echo "Go example not found, run 'make go-build' first"; \
+	fi
+
+# Run comprehensive integration tests
+integration-test: build
+	@if [ -f "scripts/integration_test.sh" ]; then \
+		./scripts/integration_test.sh; \
+	else \
+		echo "Integration test script not found"; \
 	fi
 
 fuzz:
@@ -102,9 +146,7 @@ clean:
 	rm -rf zig-out
 	rm -rf .zig-cache
 	rm -rf zig-cache
-	@if [ -d "clients/go/gql" ]; then \
-		cd clients/go/gql && go clean; \
-	fi
+	$(MAKE) go-clean
 
 # Run build, test, fuzz, bench sequentially for CI
 ci: clean build test fuzz bench
