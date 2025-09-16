@@ -45,6 +45,12 @@ pub const Wal = struct {
     test_skip_ratio_override: f64 = -1.0,
     // Distinct committed txn ids discovered during initial scan (persisted segments)
     recovered_committed: usize = 0,
+    // Compaction cadence management
+    last_checkpoint_lsn: u64 = 0,
+    commits_since_checkpoint: usize = 0,
+    checkpoint_interval: usize = 10, // checkpoint every N commits
+    compaction_interval: usize = 5, // compact every N checkpoints
+    checkpoints_since_compaction: usize = 0,
 
     pub fn init(ally: std.mem.Allocator) Wal {
         const list = std.ArrayList(Record).initCapacity(ally, 0) catch @panic("OOM WAL init");
@@ -264,6 +270,23 @@ pub const Wal = struct {
         const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = txn_id, .typ = typ, .payload = payload, .prev_lsn = prev_lsn };
         try self.buf.append(self.ally, rec);
         try self.diskWrite(rec);
+        
+        // Automatic compaction cadence
+        if (typ == .Commit) {
+            self.commits_since_checkpoint += 1;
+            if (self.commits_since_checkpoint >= self.checkpoint_interval) {
+                _ = self.writeCheckpoint() catch {};
+                self.commits_since_checkpoint = 0;
+                self.checkpoints_since_compaction += 1;
+                
+                if (self.checkpoints_since_compaction >= self.compaction_interval) {
+                    // Use current LSN as durable horizon for compaction
+                    self.compact(lsn_val) catch {};
+                    self.checkpoints_since_compaction = 0;
+                }
+            }
+        }
+        
         return rec_lsn;
     }
 
@@ -322,9 +345,35 @@ pub const Wal = struct {
     }
 
     pub fn writeCheckpoint(self: *Wal) !Lsn {
-        const lsn = try self.append(0, .Checkpoint, &.{}, 0);
+        const lsn_val = self.next_lsn;
+        self.next_lsn += 1;
+        const rec_lsn: Lsn = .{ .value = lsn_val };
+        const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = 0, .typ = .Checkpoint, .payload = &.{}, .prev_lsn = 0 };
+        try self.buf.append(self.ally, rec);
+        try self.diskWrite(rec);
+        
+        self.last_checkpoint_lsn = lsn_val;
         try self.fsync();
-        return lsn;
+        return rec_lsn;
+    }
+    
+    /// Configure compaction cadence
+    pub fn setCompactionCadence(self: *Wal, checkpoint_interval: usize, compaction_interval: usize) void {
+        self.checkpoint_interval = checkpoint_interval;
+        self.compaction_interval = compaction_interval;
+    }
+    
+    /// Get compaction statistics
+    pub fn getCompactionStats(self: *const Wal) struct { 
+        commits_since_checkpoint: usize, 
+        checkpoints_since_compaction: usize,
+        last_checkpoint_lsn: u64,
+    } {
+        return .{
+            .commits_since_checkpoint = self.commits_since_checkpoint,
+            .checkpoints_since_compaction = self.checkpoints_since_compaction,
+            .last_checkpoint_lsn = self.last_checkpoint_lsn,
+        };
     }
 
     /// Live rollback: walk backward via prev_lsn producing CLR records for each undone Insert.

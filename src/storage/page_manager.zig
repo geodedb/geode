@@ -84,6 +84,17 @@ pub const Page = struct {
         std.mem.writeInt(u32, mut.buf[ChecksumOffset .. ChecksumOffset + 4], saved, .little);
         return calc == saved;
     }
+    
+    fn calculateChecksum(self: *const Page) u32 {
+        // Create temporary buffer to avoid modifying original
+        var temp_buf: [4096]u8 = undefined; // Assume max page size
+        const len = @min(self.buf.len, temp_buf.len);
+        @memcpy(temp_buf[0..len], self.buf[0..len]);
+        
+        // Zero checksum field
+        std.mem.writeInt(u32, temp_buf[ChecksumOffset .. ChecksumOffset + 4], 0, .little);
+        return adler32(temp_buf[0..len]);
+    }
 
     pub fn init(buf: []u8) Page {
         std.debug.assert(buf.len >= 512); // minimal sanity
@@ -233,10 +244,42 @@ pub const PageManager = struct {
         // verify checksum
         var p = Page{ .buf = mem };
         if (!p.verifyChecksum()) {
+            // Enhanced diagnostics: log corruption details
+            const stored_checksum = p.storedChecksum();
+            const calculated_checksum = p.calculateChecksum();
+            
+            std.log.err("Page checksum mismatch in {s}: stored=0x{X:0>8}, calculated=0x{X:0>8}, page_size={d}", .{
+                path, stored_checksum, calculated_checksum, self.page_size
+            });
+            
+            // Additional corruption analysis
+            const corruption_ratio = self.analyzeCorruption(&p);
+            std.log.err("Corruption analysis: {d:.2}% of page appears corrupted", .{corruption_ratio * 100.0});
+            
             // Higher layer should translate error.PageChecksumMismatch to diagnostics.StoragePageChecksum.
             return error.PageChecksumMismatch;
         }
         try self.pages.append(self.allocator, mem);
+    }
+    
+    fn analyzeCorruption(self: *PageManager, page: *const Page) f64 {
+        _ = self;
+        
+        // Simple corruption analysis: count zero bytes vs non-zero bytes
+        var zero_count: usize = 0;
+        var total_count: usize = 0;
+        
+        // Skip header for analysis
+        const data_start = Page.HeaderSize;
+        for (page.buf[data_start..]) |byte| {
+            if (byte == 0) zero_count += 1;
+            total_count += 1;
+        }
+        
+        // If more than 90% zeros, likely corruption
+        if (total_count == 0) return 0.0;
+        const zero_ratio = @as(f64, @floatFromInt(zero_count)) / @as(f64, @floatFromInt(total_count));
+        return if (zero_ratio > 0.9) zero_ratio else 0.0;
     }
 };
 

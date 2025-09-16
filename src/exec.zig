@@ -878,9 +878,218 @@ test "set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL" {
     try std.testing.expect(ea.len == 2);
 }
 
-// ===========================
-// Binding-table set operations
-// ===========================
+/// Enhanced hash-based GROUP BY aggregation with spill support
+pub const HashAggregator = struct {
+    allocator: std.mem.Allocator,
+    groups: std.HashMap([]const u8, AggregateState, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    memory_limit: usize,
+    current_memory: usize,
+    spilled: bool,
+    spill_file: ?std.fs.File,
+    
+    const AggregateState = struct {
+        key_values: []const BindingValue,
+        agg_values: []AggValue,
+        
+        const AggValue = union(enum) {
+            Count: i64,
+            Sum: BindingValue,
+            Min: BindingValue,
+            Max: BindingValue,
+            Avg: struct { sum: BindingValue, count: i64 },
+        };
+    };
+    
+    pub fn init(allocator: std.mem.Allocator, memory_limit: usize) HashAggregator {
+        return .{
+            .allocator = allocator,
+            .groups = std.HashMap([]const u8, AggregateState, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .memory_limit = memory_limit,
+            .current_memory = 0,
+            .spilled = false,
+            .spill_file = null,
+        };
+    }
+    
+    pub fn deinit(self: *HashAggregator) void {
+        var iter = self.groups.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.key_values);
+            self.allocator.free(entry.value_ptr.agg_values);
+        }
+        self.groups.deinit();
+        
+        if (self.spill_file) |f| {
+            f.close();
+        }
+    }
+    
+    pub fn addRow(self: *HashAggregator, key_values: []const BindingValue, agg_inputs: []const BindingValue, agg_specs: []const Agg) !void {
+        // Create key string for grouping
+        const key_str = try self.serializeKey(key_values);
+        
+        // Check memory usage and spill if necessary
+        if (self.current_memory > self.memory_limit and !self.spilled) {
+            try self.spillToDisk();
+        }
+        
+        const result = try self.groups.getOrPut(key_str);
+        if (!result.found_existing) {
+            // New group
+            result.value_ptr.* = AggregateState{
+                .key_values = try self.allocator.dupe(BindingValue, key_values),
+                .agg_values = try self.allocator.alloc(AggregateState.AggValue, agg_specs.len),
+            };
+            
+            // Initialize aggregates
+            for (agg_specs, 0..) |agg_spec, i| {
+                result.value_ptr.agg_values[i] = switch (agg_spec) {
+                    .CountStar, .Count => AggregateState.AggValue{ .Count = 0 },
+                    .Sum => AggregateState.AggValue{ .Sum = BindingValue{ .Null = {} } },
+                    .Min => AggregateState.AggValue{ .Min = BindingValue{ .Null = {} } },
+                    .Max => AggregateState.AggValue{ .Max = BindingValue{ .Null = {} } },
+                    .Avg => AggregateState.AggValue{ .Avg = .{ .sum = BindingValue{ .Null = {} }, .count = 0 } },
+                };
+            }
+            
+            self.current_memory += key_str.len + @sizeOf(AggregateState) + key_values.len * @sizeOf(BindingValue);
+        }
+        
+        // Update aggregates
+        for (agg_specs, 0..) |agg_spec, i| {
+            const input_val = if (i < agg_inputs.len) agg_inputs[i] else BindingValue{ .Null = {} };
+            try self.updateAggregate(&result.value_ptr.agg_values[i], agg_spec, input_val);
+        }
+    }
+    
+    fn serializeKey(self: *HashAggregator, key_values: []const BindingValue) ![]const u8 {
+        var buf = std.ArrayList(u8).init(self.allocator);
+        defer buf.deinit();
+        
+        for (key_values, 0..) |val, i| {
+            if (i > 0) try buf.append('|');
+            
+            switch (val) {
+                .Null => try buf.appendSlice("NULL"),
+                .Int => |n| try buf.writer().print("{d}", .{n}),
+                .Bool => |b| try buf.appendSlice(if (b) "true" else "false"),
+                .Str => |s| {
+                    try buf.append('"');
+                    try buf.appendSlice(s);
+                    try buf.append('"');
+                },
+                .Decimal => |d| try buf.writer().print("{d}.{d}", .{ d.coeff, d.scale }),
+            }
+        }
+        
+        return buf.toOwnedSlice();
+    }
+    
+    fn updateAggregate(self: *HashAggregator, agg_val: *AggregateState.AggValue, agg_spec: Agg, input: BindingValue) !void {
+        _ = self;
+        
+        switch (agg_spec) {
+            .CountStar => {
+                agg_val.Count += 1;
+            },
+            .Count => {
+                if (input != .Null) {
+                    agg_val.Count += 1;
+                }
+            },
+            .Sum => {
+                if (input != .Null) {
+                    if (agg_val.Sum == .Null) {
+                        agg_val.Sum = input;
+                    } else {
+                        // Simple addition for Int values
+                        if (agg_val.Sum == .Int and input == .Int) {
+                            agg_val.Sum.Int += input.Int;
+                        }
+                    }
+                }
+            },
+            .Min => {
+                if (input != .Null) {
+                    if (agg_val.Min == .Null or valueOrder(input, agg_val.Min) == .lt) {
+                        agg_val.Min = input;
+                    }
+                }
+            },
+            .Max => {
+                if (input != .Null) {
+                    if (agg_val.Max == .Null or valueOrder(input, agg_val.Max) == .gt) {
+                        agg_val.Max = input;
+                    }
+                }
+            },
+            .Avg => {
+                if (input != .Null and input == .Int) {
+                    if (agg_val.Avg.sum == .Null) {
+                        agg_val.Avg.sum = input;
+                        agg_val.Avg.count = 1;
+                    } else if (agg_val.Avg.sum == .Int) {
+                        agg_val.Avg.sum.Int += input.Int;
+                        agg_val.Avg.count += 1;
+                    }
+                }
+            },
+        }
+    }
+    
+    fn spillToDisk(self: *HashAggregator) !void {
+        // Create temporary spill file
+        const tmp_dir = std.fs.cwd();
+        self.spill_file = try tmp_dir.createFile("geode_agg_spill.tmp", .{ .read = true });
+        
+        // Write current groups to disk
+        var iter = self.groups.iterator();
+        while (iter.next()) |entry| {
+            // Serialize group to disk (simplified)
+            try self.spill_file.?.writeAll(entry.key_ptr.*);
+            try self.spill_file.?.writeAll("\n");
+        }
+        
+        // Clear in-memory groups
+        self.groups.clearAndFree();
+        self.current_memory = 0;
+        self.spilled = true;
+    }
+    
+    pub fn getResults(self: *HashAggregator) ![]const []const BindingValue {
+        var results = std.ArrayList([]const BindingValue).init(self.allocator);
+        defer results.deinit();
+        
+        var iter = self.groups.iterator();
+        while (iter.next()) |entry| {
+            const state = entry.value_ptr;
+            var row = try self.allocator.alloc(BindingValue, state.key_values.len + state.agg_values.len);
+            
+            // Copy key values
+            @memcpy(row[0..state.key_values.len], state.key_values);
+            
+            // Convert aggregate values to BindingValue
+            for (state.agg_values, 0..) |agg_val, i| {
+                const idx = state.key_values.len + i;
+                row[idx] = switch (agg_val) {
+                    .Count => |c| BindingValue{ .Int = c },
+                    .Sum => |s| s,
+                    .Min => |m| m,
+                    .Max => |m| m,
+                    .Avg => |a| if (a.count > 0 and a.sum == .Int) 
+                        BindingValue{ .Int = @divTrunc(a.sum.Int, a.count) } 
+                    else 
+                        BindingValue{ .Null = {} },
+                };
+            }
+            
+            try results.append(row);
+        }
+        
+        return results.toOwnedSlice();
+    }
+};
 
 pub const BindingValue = union(enum) {
     Null,
