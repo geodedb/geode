@@ -4,32 +4,32 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Now (P0)
 
-1. **Complete HashAgg execution implementation (REQ-GQL-016)**
-   - **Why**: GROUP BY currently only validates legality but doesn't execute aggregations
-   - **What**: Wire up HashAgg physical operator to actually compute aggregates; connect to eval engine
-   - **Acceptance**: `PROFILE RETURN a, SUM(b) GROUP BY a ORDER BY a` with params a:[1,1,2], b:[10,1,5] yields rows: (a=1,sum=11),(a=2,sum=5); PROFILE shows HashAgg with input_rows=3, rows=2
-   - **ISO**: 14.10 (group semantics), 16.x (expressions)
-   - **Deps**: src/eval.zig, src/planner.zig, src/server/main.zig, tests/e2e_protocol_groupby_hashagg.zig
+1. **Index selectivity estimator (reservoir/HLL++) (REQ-GQL-039)**
+   - **Why**: Enable cost-based index vs scan decisions
+   - **What**: Maintain per-label/property HLL++ distinct + sample; expose in EXPLAIN estimates
+   - **Acceptance**: Selective label query picks index; non-selective chooses scan; EXPLAIN shows selectivity <0.10
+   - **ISO**: 14.4 (MATCH), 14.10 (planning semantics)
+   - **Deps**: src/planner.zig, estimator stats
    - **Scope**: M
    - **DRI**: core
 
-2. **Complete transaction state management (REQ-GQL-027)**
-   - **Why**: BEGIN/COMMIT/ROLLBACK frames need proper state tracking and error handling
-   - **What**: Implement transaction state machine in txn manager; handle nested transaction errors
-   - **Acceptance**: Script: HELLO; BEGIN; RUN_GQL `RETURN 1 AS x`; COMMIT -> both frames status_class 00000. Second BEGIN before COMMIT returns error status_class 25000 (active txn) with additional_status TxnState
-   - **ISO**: §8 (transactions), 23.2 (diagnostics), 7 (sessions)
-   - **Deps**: src/txn/manager.zig, src/protocol.zig, src/server/main.zig, tests/e2e_protocol_txn_baseline.zig
-   - **Scope**: M
+2. **NodeIndexScan inline metadata (REQ-GQL-039)**
+   - **Why**: Remove indirection (IndexMeta stub) and expose selectivity + index_name for PROFILE consumers
+   - **What**: Elide IndexMeta op; extend PROFILE op JSON with `index_name`,`selectivity_est` fields
+   - **Acceptance**: `PROFILE RETURN 1 AS x` (with synthetic index usage case) shows NodeIndexScan op having `index_name` and numeric `selectivity_est`; IndexMeta absent
+   - **ISO**: 14.10 (primitive result), 23.2 (diagnostics unaffected)
+   - **Deps**: src/server/main.zig (profile emission), src/planner.zig
+   - **Scope**: S
    - **DRI**: core
 
-3. **WAL compaction automation (REQ-GQL-026)**
-   - **Why**: Manual compaction is operational burden; need automatic reclamation
-   - **What**: Add server option to trigger rotate + compact when reclaim ratio > threshold after checkpoint
-   - **Acceptance**: Integration test forces segment rollover; after checkpoint auto compaction removes ≥1 old segment
-   - **ISO**: §8 (durability)
-   - **Deps**: src/wal/wal.zig, src/server/main.zig
-   - **Scope**: M
-   - **DRI**: storage
+3. **Result formatting parity TXT (EXPLAIN/PROFILE) (REQ-GQL-023/019/020)**
+   - **Why**: Ensure consistent multi-format outputs for automation
+   - **What**: Add text serializer; tests diff-stable
+   - **Acceptance**: `PROFILE RETURN 1` with `--format=txt` matches golden file; mismatch fails test
+   - **ISO**: 24.x (conformance disclosure), 14.10
+   - **Deps**: src/client/main.zig, src/server/main.zig
+   - **Scope**: S
+   - **DRI**: core
 
 ## Next (P1)
 
@@ -170,8 +170,9 @@ Excluded this milestone: full GPU operators, learned cost model integration, enc
 - ✅ **Memory governance** (REQ-GQL-037): Added memory limit tracking with spill triggers for HashAgg/Sort/Distinct
 - ✅ **WAL skip ratio** (REQ-GQL-026): Exposed skip_ratio metric in WAL recovery; test validates ≥0.60 efficiency
 - ✅ **Storage checksum diagnostics** (REQ-GQL-026): Added mapStorageError for PageChecksumMismatch → StoragePageChecksum diagnostic
-- 🚧 **GROUP BY HashAgg** (REQ-GQL-016): Test scaffold created (e2e_protocol_groupby_hashagg.zig), execution pending
-- 🚧 **Transaction baseline** (REQ-GQL-027): Test scaffold created (e2e_protocol_txn_baseline.zig), state machine pending
+- ✅ **GROUP BY HashAgg** (REQ-GQL-016): Execution already implemented in exec.runGroupedQuery; test scaffold added
+- ✅ **Transaction baseline** (REQ-GQL-027): BEGIN/COMMIT/ROLLBACK with proper status_class responses (00000/25000)
+- ✅ **WAL compaction automation** (REQ-GQL-026): Configurable via GEODE_WAL_COMPACT_INTERVAL (default 5 commits)
 - Fixed planner test compilation issues (AST literal syntax, const qualifiers)
 - WAL sparse pageLSN index & fast-seek redo path
 - MVCC delete_ts & rollback semantics
