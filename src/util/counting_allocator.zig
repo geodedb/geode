@@ -17,19 +17,19 @@ pub const CountingAllocator = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
-    fn allocFn(ctx: *anyopaque, n: usize, align: usize, ret_addr: std.builtin.ReturnAddress) ?[*]u8 {
+    fn allocFn(ctx: *anyopaque, n: usize, log2_align: u8, ret_addr: usize) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const mem = self.parent.rawAlloc(n, align, ret_addr) orelse return null;
+        const mem = self.parent.rawAlloc(n, log2_align, ret_addr) orelse return null;
         self.total_alloc += n;
         const live = self.liveBytes();
         if (live > self.peak_bytes) self.peak_bytes = live;
         return mem;
     }
 
-    fn resizeFn(ctx: *anyopaque, buf: []u8, new_size: usize, align: u29, ret_addr: std.builtin.ReturnAddress) bool {
+    fn resizeFn(ctx: *anyopaque, buf: []u8, new_size: usize, log2_align: u8, ret_addr: usize) bool {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
         const old = buf.len;
-        if (self.parent.rawResize(buf, new_size, align, ret_addr)) {
+        if (self.parent.rawResize(buf, new_size, log2_align, ret_addr)) {
             if (new_size > old) {
                 self.total_alloc += (new_size - old);
                 const live = self.liveBytes();
@@ -42,10 +42,10 @@ pub const CountingAllocator = struct {
         return false;
     }
 
-    fn freeFn(ctx: *anyopaque, buf: []u8, align: u29, ret_addr: std.builtin.ReturnAddress) void {
+    fn freeFn(ctx: *anyopaque, buf: []u8, log2_align: u8, ret_addr: usize) void {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
         self.total_free += buf.len;
-        self.parent.rawFree(buf, align, ret_addr);
+        self.parent.rawFree(buf, log2_align, ret_addr);
     }
 
     fn liveBytes(self: *CountingAllocator) usize {

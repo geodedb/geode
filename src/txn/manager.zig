@@ -30,16 +30,16 @@ pub const Manager = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(self: *Manager, ally: std.mem.Allocator) void {
-        self.* = .{ 
-            .next_id = 1, 
-            .next_ts = 1, 
+        self.* = .{
+            .next_id = 1,
+            .next_ts = 1,
             .locks = std.StringHashMap(std.ArrayList(LockEntry)).init(ally),
             .active_txns = std.AutoHashMap(TxnId, Txn).init(ally),
             .wait_for_graph = std.AutoHashMap(TxnId, std.ArrayList(TxnId)).init(ally),
             .allocator = ally,
         };
     }
-    
+
     pub fn deinit(self: *Manager) void {
         // Clean up lock lists
         var lock_iter = self.locks.iterator();
@@ -47,14 +47,14 @@ pub const Manager = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.locks.deinit();
-        
+
         // Clean up wait-for graph
         var wait_iter = self.wait_for_graph.iterator();
         while (wait_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
         self.wait_for_graph.deinit();
-        
+
         self.active_txns.deinit();
     }
 
@@ -72,7 +72,7 @@ pub const Manager = struct {
         txn.state = .Committed;
         txn.commit_ts = self.next_ts;
         self.next_ts += 1;
-        
+
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
         _ = self.active_txns.remove(txn.id);
@@ -80,12 +80,12 @@ pub const Manager = struct {
 
     pub fn rollback(self: *Manager, txn: *Txn) void {
         txn.state = .Aborted;
-        
+
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
         _ = self.active_txns.remove(txn.id);
     }
-    
+
     fn releaseAllLocks(self: *Manager, txn_id: TxnId) void {
         var lock_iter = self.locks.iterator();
         while (lock_iter.next()) |entry| {
@@ -99,7 +99,7 @@ pub const Manager = struct {
                 }
             }
         }
-        
+
         // Remove from wait-for graph
         _ = self.wait_for_graph.remove(txn_id);
         var wait_iter = self.wait_for_graph.iterator();
@@ -123,9 +123,9 @@ pub const Manager = struct {
             entry.key_ptr.* = try ally.dupe(u8, key);
             entry.value_ptr.* = std.ArrayList(LockEntry).initCapacity(ally, 0) catch @panic("OOM");
         }
-        
+
         const lock_list = entry.value_ptr;
-        
+
         // Check if transaction already holds a lock on this resource
         for (lock_list.items) |*lock_entry| {
             if (lock_entry.txn_id == txn.id) {
@@ -148,7 +148,7 @@ pub const Manager = struct {
                 return;
             }
         }
-        
+
         // Check for conflicts with existing locks
         for (lock_list.items) |existing_lock| {
             if (existing_lock.txn_id != txn.id) {
@@ -156,57 +156,57 @@ pub const Manager = struct {
                 if (existing_lock.mode == .Exclusive or mode == .Exclusive) {
                     // Add to wait-for graph for deadlock detection
                     try self.addWaitFor(txn.id, existing_lock.txn_id);
-                    
+
                     // Check for deadlock
                     if (try self.detectDeadlock(txn.id)) {
                         return error.Deadlock;
                     }
-                    
+
                     return error.LockConflict;
                 }
             }
         }
-        
+
         // Grant the lock
         try lock_list.append(self.allocator, LockEntry{ .txn_id = txn.id, .mode = mode });
     }
-    
+
     fn addWaitFor(self: *Manager, waiter: TxnId, holder: TxnId) !void {
         const entry = try self.wait_for_graph.getOrPut(waiter);
         if (!entry.found_existing) {
             entry.value_ptr.* = std.ArrayList(TxnId).initCapacity(self.allocator, 0) catch @panic("OOM");
         }
-        
+
         // Avoid duplicates
         for (entry.value_ptr.items) |existing| {
             if (existing == holder) return;
         }
-        
+
         try entry.value_ptr.append(self.allocator, holder);
     }
-    
+
     fn detectDeadlock(self: *Manager, start_txn: TxnId) !bool {
         var visited = std.AutoHashMap(TxnId, void).init(self.allocator);
         defer visited.deinit();
-        
+
         var path = std.AutoHashMap(TxnId, void).init(self.allocator);
         defer path.deinit();
-        
+
         return self.dfsDeadlock(start_txn, start_txn, &visited, &path);
     }
-    
+
     fn dfsDeadlock(self: *Manager, current: TxnId, target: TxnId, visited: *std.AutoHashMap(TxnId, void), path: *std.AutoHashMap(TxnId, void)) bool {
         if (path.contains(current)) {
             return current == target; // Found cycle back to target
         }
-        
+
         if (visited.contains(current)) {
             return false;
         }
-        
+
         visited.put(current, {}) catch return false;
         path.put(current, {}) catch return false;
-        
+
         if (self.wait_for_graph.get(current)) |wait_list| {
             for (wait_list.items) |next_txn| {
                 if (self.dfsDeadlock(next_txn, target, visited, path)) {
@@ -214,7 +214,7 @@ pub const Manager = struct {
                 }
             }
         }
-        
+
         _ = path.remove(current);
         return false;
     }
@@ -223,7 +223,7 @@ pub const Manager = struct {
     pub fn acquireWrite(self: *Manager, key: []const u8, txn: *Txn, ally: std.mem.Allocator) !void {
         return self.acquireLock(key, txn, .Exclusive, ally);
     }
-    
+
     // Acquire shared read lock
     pub fn acquireRead(self: *Manager, key: []const u8, txn: *Txn, ally: std.mem.Allocator) !void {
         return self.acquireLock(key, txn, .Shared, ally);
@@ -232,11 +232,11 @@ pub const Manager = struct {
     pub fn releaseWrite(self: *Manager, key: []const u8, txn: *Txn) void {
         self.releaseLock(key, txn.id);
     }
-    
+
     pub fn releaseRead(self: *Manager, key: []const u8, txn: *Txn) void {
         self.releaseLock(key, txn.id);
     }
-    
+
     fn releaseLock(self: *Manager, key: []const u8, txn_id: TxnId) void {
         if (self.locks.getPtr(key)) |lock_list| {
             var i: usize = 0;
@@ -317,24 +317,24 @@ test "txn manager: enhanced lock conflict detection" {
     var mgr: Manager = undefined;
     mgr.init(std.testing.allocator);
     defer mgr.deinit();
-    
+
     var t1 = mgr.begin();
     var t2 = mgr.begin();
-    
+
     // T1 acquires shared lock
     try mgr.acquireRead("row:1", &t1, std.testing.allocator);
-    
+
     // T2 can also acquire shared lock
     try mgr.acquireRead("row:1", &t2, std.testing.allocator);
-    
+
     // T1 tries to upgrade to exclusive - should conflict
     try std.testing.expectError(error.LockConflict, mgr.acquireWrite("row:1", &t1, std.testing.allocator));
-    
+
     mgr.releaseRead("row:1", &t2);
-    
+
     // Now T1 should be able to upgrade
     try mgr.acquireWrite("row:1", &t1, std.testing.allocator);
-    
+
     mgr.releaseWrite("row:1", &t1);
 }
 
@@ -342,19 +342,19 @@ test "txn manager: deadlock detection" {
     var mgr: Manager = undefined;
     mgr.init(std.testing.allocator);
     defer mgr.deinit();
-    
+
     var t1 = mgr.begin();
     var t2 = mgr.begin();
-    
+
     // T1 locks resource A
     try mgr.acquireWrite("A", &t1, std.testing.allocator);
-    
-    // T2 locks resource B  
+
+    // T2 locks resource B
     try mgr.acquireWrite("B", &t2, std.testing.allocator);
-    
+
     // T1 tries to lock B (will wait for T2)
     try std.testing.expectError(error.LockConflict, mgr.acquireWrite("B", &t1, std.testing.allocator));
-    
+
     // T2 tries to lock A (would create deadlock)
     try std.testing.expectError(error.Deadlock, mgr.acquireWrite("A", &t2, std.testing.allocator));
 }

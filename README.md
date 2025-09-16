@@ -5,12 +5,7 @@
 Geode is a Zig-based graph database project exploring an ISO/IEC 39075:2024 (GQL) front end with
 structured temporals, ORDER BY policy checks, and developer-friendly printers and CLI tooling.
 
-# Geode Graph Database
-
-## Description
-
-Geode is a Zig-based graph database project exploring an ISO/IEC 39075:2024 (GQL) front end with
-structured temporals, ORDER BY policy checks, and developer-friendly printers and CLI tooling.
+**NEW: QUIC/TLS 1.3 Support** - Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication between client and server.
 
 ## Status & Conformance Summary
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const quic_transport = @import("../transport/quic.zig");
 
 fn readLineAlloc(ally: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
@@ -25,11 +26,12 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     if (argv.len < 2) {
-        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server ./zig-out/bin/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback]\n", .{});
+        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback] [--use-quic]\n", .{});
         return;
     }
     const text: []const u8 = argv[1];
-    var server_path: []const u8 = "./zig-out/bin/geoded";
+    var server_address: []const u8 = "127.0.0.1";
+    var server_port: u16 = 7567;
     var param_name: ?[]const u8 = null;
     var param_json: ?[]const u8 = null;
     var do_begin = false;
@@ -40,6 +42,9 @@ pub fn main() !void {
     var i: usize = 2;
     var extra_pulls: usize = 0;
     var fmt_txt = false;
+    var use_quic = true; // Default to QUIC
+    var use_stdio = false;
+
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--test-wal-skip-ratio")) {
             if (i + 1 < argv.len) {
@@ -48,8 +53,24 @@ pub fn main() !void {
             }
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) break;
-            server_path = argv[i + 1];
+            const server_str = argv[i + 1];
+            // Check if it's a path (for stdio mode)
+            if (std.mem.startsWith(u8, server_str, "./") or std.mem.startsWith(u8, server_str, "/")) {
+                use_stdio = true;
+                use_quic = false;
+            } else {
+                // Parse host:port
+                if (std.mem.lastIndexOfScalar(u8, server_str, ':')) |colon| {
+                    server_address = server_str[0..colon];
+                    server_port = std.fmt.parseInt(u16, server_str[colon + 1 ..], 10) catch 7567;
+                } else {
+                    server_address = server_str;
+                }
+            }
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--no-quic")) {
+            use_quic = false;
+            use_stdio = true;
         } else if (std.mem.eql(u8, argv[i], "--json-param")) {
             if (i + 2 >= argv.len) break;
             param_name = argv[i + 1];
@@ -77,6 +98,106 @@ pub fn main() !void {
             if (i + 1 >= argv.len) break;
             extra_pulls = std.fmt.parseInt(usize, argv[i + 1], 10) catch 0;
             i += 1;
+        }
+    }
+
+    if (use_quic) {
+        // Use QUIC transport
+        var client = quic_transport.QuicClient.init(gpa);
+        defer client.deinit();
+
+        try client.connect(server_address, server_port);
+        const stream = try client.getStream();
+
+        // Send HELLO
+        try stream.writeAll("{{\"type\":\"HELLO\",\"client_name\":\"geodec\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}}\n");
+
+        if (do_begin) {
+            try stream.writeAll("{{\"type\":\"BEGIN\"}}\n");
+            const ack = try stream.readLine(1 << 16);
+            defer gpa.free(ack);
+            if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
+                const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+                try stderr_file.writeAll(ack);
+                try stderr_file.writeAll("\n");
+                std.process.exit(2);
+            }
+        }
+
+        // RUN_GQL
+        if (param_name) |pn| {
+            const pj = param_json orelse "{}";
+            const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ text, pn, pj });
+            defer gpa.free(msg);
+            try stream.writeAll(msg);
+        } else {
+            const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{text});
+            defer gpa.free(msg);
+            try stream.writeAll(msg);
+        }
+
+        // Read response
+        const line1 = try stream.readLine(1 << 16);
+        defer gpa.free(line1);
+
+        if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            try stderr_file.writeAll(line1);
+            try stderr_file.writeAll("\n");
+            std.process.exit(2);
+        }
+
+        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        if (fmt_txt) {
+            // Text format handling would go here
+            try stdout_file.writeAll(line1);
+            try stdout_file.writeAll("\n");
+        } else {
+            try stdout_file.writeAll(line1);
+            try stdout_file.writeAll("\n");
+        }
+
+        // Handle additional responses and PULL if needed
+        if (pull_all or extra_pulls > 0) {
+            // Implementation for pulling additional pages
+            var pulls_done: usize = 0;
+            while (pull_all or pulls_done < extra_pulls) : (pulls_done += 1) {
+                const pull_msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"PULL\",\"page_size\":{d}}}\n", .{page_size});
+                defer gpa.free(pull_msg);
+                try stream.writeAll(pull_msg);
+
+                const response = stream.readLine(1 << 16) catch |err| {
+                    if (err == error.EndOfStream) break;
+                    return err;
+                };
+                defer gpa.free(response);
+
+                try stdout_file.writeAll(response);
+                try stdout_file.writeAll("\n");
+
+                if (std.mem.indexOf(u8, response, "\"final\":true") != null) break;
+            }
+        }
+
+        if (do_commit) {
+            try stream.writeAll("{{\"type\":\"COMMIT\"}}\n");
+            const ack = try stream.readLine(1 << 16);
+            defer gpa.free(ack);
+        } else if (do_rollback) {
+            try stream.writeAll("{{\"type\":\"ROLLBACK\"}}\n");
+            const ack = try stream.readLine(1 << 16);
+            defer gpa.free(ack);
+        }
+
+        return;
+    }
+
+    // Fallback to stdio mode for backward compatibility
+    var server_path: []const u8 = "./zig-out/bin/geoded";
+    if (use_stdio) {
+        // Use the server address as the path if it looks like a path
+        if (std.mem.startsWith(u8, server_address, "./") or std.mem.startsWith(u8, server_address, "/")) {
+            server_path = server_address;
         }
     }
 

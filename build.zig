@@ -174,6 +174,12 @@ pub fn build(b: *std.Build) void {
     // util: text formatter module
     const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("text_formatter", util_text_formatter_mod);
+    // transport: QUIC module (simplified wrapper, vendored library integration pending)
+    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("transport/quic.zig", transport_quic_mod);
+    // tools: cert generation module
+    const tools_cert_gen_mod = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("tools/cert_gen.zig", tools_cert_gen_mod);
     b.installArtifact(geoded_exe);
 
     const geodec_exe = b.addExecutable(.{
@@ -182,6 +188,8 @@ pub fn build(b: *std.Build) void {
     });
     geodec_exe.root_module.addImport("sentinel", sentinel_mod);
     geodec_exe.root_module.addOptions("build_options", build_opts);
+    // Add transport module to client
+    geodec_exe.root_module.addImport("../transport/quic.zig", transport_quic_mod);
     b.installArtifact(geodec_exe);
 
     // Ensure binaries are installed before tests so e2e can run them
@@ -239,4 +247,12 @@ pub fn build(b: *std.Build) void {
     wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_mod);
     b.installArtifact(wal_compact_exe);
     tools_step.dependOn(&wal_compact_exe.step);
+
+    // Certificate generation tool
+    const cert_gen_exe = b.addExecutable(.{
+        .name = "cert_gen",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(cert_gen_exe);
+    tools_step.dependOn(&cert_gen_exe.step);
 }

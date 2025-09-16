@@ -270,7 +270,7 @@ pub const Wal = struct {
         const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = txn_id, .typ = typ, .payload = payload, .prev_lsn = prev_lsn };
         try self.buf.append(self.ally, rec);
         try self.diskWrite(rec);
-        
+
         // Automatic compaction cadence
         if (typ == .Commit) {
             self.commits_since_checkpoint += 1;
@@ -278,7 +278,7 @@ pub const Wal = struct {
                 _ = self.writeCheckpoint() catch {};
                 self.commits_since_checkpoint = 0;
                 self.checkpoints_since_compaction += 1;
-                
+
                 if (self.checkpoints_since_compaction >= self.compaction_interval) {
                     // Use current LSN as durable horizon for compaction
                     self.compact(lsn_val) catch {};
@@ -286,7 +286,7 @@ pub const Wal = struct {
                 }
             }
         }
-        
+
         return rec_lsn;
     }
 
@@ -351,21 +351,21 @@ pub const Wal = struct {
         const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = 0, .typ = .Checkpoint, .payload = &.{}, .prev_lsn = 0 };
         try self.buf.append(self.ally, rec);
         try self.diskWrite(rec);
-        
+
         self.last_checkpoint_lsn = lsn_val;
         try self.fsync();
         return rec_lsn;
     }
-    
+
     /// Configure compaction cadence
     pub fn setCompactionCadence(self: *Wal, checkpoint_interval: usize, compaction_interval: usize) void {
         self.checkpoint_interval = checkpoint_interval;
         self.compaction_interval = compaction_interval;
     }
-    
+
     /// Get compaction statistics
-    pub fn getCompactionStats(self: *const Wal) struct { 
-        commits_since_checkpoint: usize, 
+    pub fn getCompactionStats(self: *const Wal) struct {
+        commits_since_checkpoint: usize,
         checkpoints_since_compaction: usize,
         last_checkpoint_lsn: u64,
     } {

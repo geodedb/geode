@@ -6,52 +6,52 @@ const SchemaCol = struct { name: []const u8, type: []const u8 };
 /// Text formatter for consistent multi-format outputs
 pub const TextFormatter = struct {
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) TextFormatter {
         return .{ .allocator = allocator };
     }
-    
+
     pub fn formatSchema(self: *TextFormatter, cols: []const SchemaCol) ![]u8 {
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer buf.deinit(self.allocator);
-        
+
         const writer = buf.writer(self.allocator);
-        
+
         // Header
         try writer.writeAll("Schema:\n");
         try writer.writeAll("--------\n");
-        
+
         for (cols, 0..) |col, i| {
             try writer.print("{d}. {s} ({s})\n", .{ i + 1, col.name, col.type });
         }
-        
+
         if (cols.len == 0) {
             try writer.writeAll("(no columns)\n");
         }
-        
+
         return buf.toOwnedSlice(self.allocator);
     }
-    
+
     pub fn formatBindings(self: *TextFormatter, rows_json: []const u8, ordered: bool, order_keys: []const []const u8) ![]u8 {
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer buf.deinit(self.allocator);
-        
+
         const writer = buf.writer(self.allocator);
-        
+
         // Parse JSON rows for text formatting
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, rows_json, .{}) catch {
             try writer.writeAll("Error parsing JSON data\n");
             return buf.toOwnedSlice(self.allocator);
         };
         defer parsed.deinit();
-        
+
         if (parsed.value != .array) {
             try writer.writeAll("Invalid data format\n");
             return buf.toOwnedSlice(self.allocator);
         }
-        
+
         const rows = parsed.value.array.items;
-        
+
         // Header info
         if (ordered) {
             try writer.writeAll("Ordered result");
@@ -67,35 +67,35 @@ pub const TextFormatter = struct {
         } else {
             try writer.writeAll("Unordered result\n");
         }
-        
+
         try writer.print("Rows: {d}\n", .{rows.len});
         try writer.writeAll("--------\n");
-        
+
         if (rows.len == 0) {
             try writer.writeAll("(no rows)\n");
             return buf.toOwnedSlice(self.allocator);
         }
-        
+
         // Extract column names from first row
         var column_names = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer column_names.deinit(self.allocator);
-        
+
         if (rows[0] == .object) {
             var iter = rows[0].object.iterator();
             while (iter.next()) |entry| {
                 try column_names.append(self.allocator, entry.key_ptr.*);
             }
         }
-        
+
         // Calculate column widths
         var col_widths = try self.allocator.alloc(usize, column_names.items.len);
         defer self.allocator.free(col_widths);
-        
+
         // Initialize with header widths
         for (column_names.items, 0..) |name, i| {
             col_widths[i] = name.len;
         }
-        
+
         // Check data widths
         for (rows) |row| {
             if (row == .object) {
@@ -108,12 +108,12 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         // Print header
         for (column_names.items, 0..) |name, i| {
             if (i > 0) try writer.writeAll(" | ");
             try writer.print("{s}", .{name});
-            
+
             // Pad to width
             const padding = col_widths[i] - name.len;
             var p: usize = 0;
@@ -122,7 +122,7 @@ pub const TextFormatter = struct {
             }
         }
         try writer.writeAll("\n");
-        
+
         // Print separator
         for (column_names.items, 0..) |_, i| {
             if (i > 0) try writer.writeAll("-+-");
@@ -132,18 +132,18 @@ pub const TextFormatter = struct {
             }
         }
         try writer.writeAll("\n");
-        
+
         // Print data rows
         for (rows) |row| {
             if (row == .object) {
                 for (column_names.items, 0..) |col_name, i| {
                     if (i > 0) try writer.writeAll(" | ");
-                    
+
                     if (row.object.get(col_name)) |value| {
                         const value_str = try self.jsonValueToString(value);
                         defer self.allocator.free(value_str);
                         try writer.print("{s}", .{value_str});
-                        
+
                         // Pad to width
                         const padding = col_widths[i] - value_str.len;
                         var p: usize = 0;
@@ -162,44 +162,44 @@ pub const TextFormatter = struct {
                 try writer.writeAll("\n");
             }
         }
-        
+
         return buf.toOwnedSlice(self.allocator);
     }
-    
+
     pub fn formatError(self: *TextFormatter, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer buf.deinit(self.allocator);
-        
+
         const writer = buf.writer(self.allocator);
-        
+
         try writer.writeAll("ERROR: ");
         try writer.writeAll(message);
         try writer.writeAll("\n");
         try writer.print("Code: {s}\n", .{code});
-        
+
         if (anchor.len > 0) {
             try writer.print("Reference: ISO/IEC 39075 §{s}\n", .{anchor});
         }
-        
+
         return buf.toOwnedSlice(self.allocator);
     }
-    
+
     pub fn formatExplain(self: *TextFormatter, json_payload: []const u8) ![]u8 {
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer buf.deinit(self.allocator);
-        
+
         const writer = buf.writer(self.allocator);
-        
+
         try writer.writeAll("Query Plan:\n");
         try writer.writeAll("-----------\n");
-        
+
         // Parse and format the explain JSON
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, json_payload, .{}) catch {
             try writer.writeAll("Error parsing explain data\n");
             return buf.toOwnedSlice(self.allocator);
         };
         defer parsed.deinit();
-        
+
         if (parsed.value == .object) {
             if (parsed.value.object.get("logical")) |logical| {
                 if (logical == .array) {
@@ -209,7 +209,7 @@ pub const TextFormatter = struct {
                             if (op.object.get("op")) |op_name| {
                                 if (op_name == .string) {
                                     try writer.print("{s}", .{op_name.string});
-                                    
+
                                     // Add additional details if available
                                     if (op.object.get("mode")) |mode| {
                                         if (mode == .string) {
@@ -223,7 +223,7 @@ pub const TextFormatter = struct {
                     }
                 }
             }
-            
+
             // Add properties section
             if (parsed.value.object.get("properties")) |props| {
                 try writer.writeAll("\nProperties:\n");
@@ -238,40 +238,40 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         return buf.toOwnedSlice(self.allocator);
     }
-    
+
     pub fn formatProfile(self: *TextFormatter, json_payload: []const u8) ![]u8 {
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer buf.deinit(self.allocator);
-        
+
         const writer = buf.writer(self.allocator);
-        
+
         try writer.writeAll("Query Profile:\n");
         try writer.writeAll("==============\n\n");
-        
+
         // Parse the profile JSON
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, json_payload, .{}) catch {
             try writer.writeAll("Error parsing profile data\n");
             return buf.toOwnedSlice(self.allocator);
         };
         defer parsed.deinit();
-        
+
         if (parsed.value != .object) {
             try writer.writeAll("Invalid profile format\n");
             return buf.toOwnedSlice(self.allocator);
         }
-        
+
         const root = parsed.value.object;
-        
+
         // Profile version
         if (root.get("profile_version")) |ver| {
             if (ver == .integer) {
                 try writer.print("Profile Version: {d}\n", .{ver.integer});
             }
         }
-        
+
         // Timing information
         if (root.get("total_time_ns")) |time| {
             if (time == .integer) {
@@ -279,7 +279,7 @@ pub const TextFormatter = struct {
                 try writer.print("Total Time: {d:.2} ms\n", .{ms});
             }
         }
-        
+
         // Memory information
         if (root.get("peak_memory_bytes")) |mem| {
             if (mem == .integer) {
@@ -287,7 +287,7 @@ pub const TextFormatter = struct {
                 try writer.print("Peak Memory: {d:.2} MB\n", .{mb});
             }
         }
-        
+
         // Spill information
         var has_spills = false;
         if (root.get("sort_spills")) |spills| {
@@ -302,14 +302,14 @@ pub const TextFormatter = struct {
                 has_spills = true;
             }
         }
-        
+
         if (!has_spills) {
             try writer.writeAll("No Spills\n");
         }
-        
+
         try writer.writeAll("\nOperator Tree:\n");
         try writer.writeAll("--------------\n");
-        
+
         // Process operators
         if (root.get("ops")) |ops| {
             if (ops == .array) {
@@ -320,7 +320,7 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         // Peak memory contributors
         if (root.get("peak_memory_contributors")) |contributors| {
             if (contributors == .array and contributors.array.items.len > 0) {
@@ -344,24 +344,24 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         return buf.toOwnedSlice(self.allocator);
     }
-    
+
     fn formatOperator(self: *TextFormatter, writer: anytype, op: std.json.ObjectMap, indent: usize) !void {
         _ = self;
-        
+
         // Indentation
         var i: usize = 0;
         while (i < indent) : (i += 1) {
             try writer.writeAll("  ");
         }
-        
+
         // Operator name
         if (op.get("op")) |op_name| {
             if (op_name == .string) {
                 try writer.print("→ {s}", .{op_name.string});
-                
+
                 // Special handling for index operations
                 if (std.mem.eql(u8, op_name.string, "NodeIndexScan") or std.mem.eql(u8, op_name.string, "NodeScan")) {
                     if (op.get("index_name")) |idx_name| {
@@ -380,7 +380,7 @@ pub const TextFormatter = struct {
                 }
             }
         }
-        
+
         // Row counts
         var has_rows = false;
         if (op.get("input_rows")) |in_rows| {
@@ -402,7 +402,7 @@ pub const TextFormatter = struct {
         } else if (has_rows) {
             try writer.writeAll(")");
         }
-        
+
         // Time
         if (op.get("time_ns")) |time| {
             if (time == .integer and time.integer > 0) {
@@ -410,7 +410,7 @@ pub const TextFormatter = struct {
                 try writer.print(" [{d:.2} ms]", .{ms});
             }
         }
-        
+
         // Memory
         if (op.get("bytes_alloc")) |bytes| {
             if (bytes == .integer and bytes.integer > 0) {
@@ -418,16 +418,16 @@ pub const TextFormatter = struct {
                 try writer.print(" [mem: {d:.1} KB]", .{kb});
             }
         }
-        
+
         try writer.writeAll("\n");
     }
-    
+
     fn jsonValueToString(self: *TextFormatter, value: std.json.Value) ![]u8 {
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
         defer buf.deinit(self.allocator);
-        
+
         const writer = buf.writer(self.allocator);
-        
+
         switch (value) {
             .null => try writer.writeAll("NULL"),
             .bool => |b| try writer.writeAll(if (b) "true" else "false"),
@@ -438,22 +438,22 @@ pub const TextFormatter = struct {
             .array => try writer.writeAll("[array]"),
             .object => try writer.writeAll("[object]"),
         }
-        
+
         return buf.toOwnedSlice(self.allocator);
     }
 };
 
 test "text formatter schema" {
     var formatter = TextFormatter.init(std.testing.allocator);
-    
+
     const cols = [_]SchemaCol{
         .{ .name = "id", .type = "INT" },
         .{ .name = "name", .type = "STRING" },
     };
-    
+
     const result = try formatter.formatSchema(&cols);
     defer std.testing.allocator.free(result);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, result, "Schema:") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "id (INT)") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "name (STRING)") != null);
@@ -461,13 +461,13 @@ test "text formatter schema" {
 
 test "text formatter bindings" {
     var formatter = TextFormatter.init(std.testing.allocator);
-    
+
     const rows_json = "[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]";
     const order_keys = [_][]const u8{"id"};
-    
+
     const result = try formatter.formatBindings(rows_json, true, &order_keys);
     defer std.testing.allocator.free(result);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, result, "Ordered result") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "Alice") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "Bob") != null);

@@ -12,8 +12,8 @@ pub fn main() !void {
     defer allocator.free(data_old);
     defer allocator.free(data_new);
 
-    for (var i: usize = 0; i < N; i += 1) {
-        data_old[i] = @intCast(i32, rng.random().int(i32));
+    for (0..N) |i| {
+        data_old[i] = @intCast(rng.random().int(i32));
         data_new[i] = data_old[i];
     }
 

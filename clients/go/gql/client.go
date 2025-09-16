@@ -3,6 +3,7 @@ package gql
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	quic "github.com/quic-go/quic-go"
 )
 
 // Value is a native representation of Geode values, including DECIMAL and NULL.
@@ -65,17 +68,18 @@ func Open(dsn string) (*DB, error) {
 }
 
 type dsnConfig struct {
-	Mode        string // process or tcp
+	Mode        string // process, tcp, or quic
 	Path        string // process path
-	Addr        string // tcp address
+	Addr        string // tcp/quic address
 	PageSize    int
 	HelloName   string
 	HelloVer    string
 	Conformance string
+	UseQUIC     bool
 }
 
 func parseDSN(dsn string) dsnConfig {
-	cfg := dsnConfig{Mode: "process", Path: "./zig-out/bin/geoded", PageSize: 1000, HelloName: "gql-go", HelloVer: "0.1", Conformance: "min"}
+	cfg := dsnConfig{Mode: "process", Path: "./zig-out/bin/geoded", PageSize: 1000, HelloName: "gql-go", HelloVer: "0.1", Conformance: "min", UseQUIC: false}
 	if dsn == "" {
 		if p := os.Getenv("GEODE_SERVER_PATH"); p != "" { cfg.Path = p }
 		return cfg
@@ -96,6 +100,16 @@ func parseDSN(dsn string) dsnConfig {
 		if q != "" { for _, kv := range strings.Split(q, "&") { if kv==""{continue}; p:=strings.SplitN(kv,"=",2); k:=p[0]; v:=""; if len(p)==2{v=p[1]}; switch k{case"page_size": if n,err:=strconv.Atoi(v); err==nil&&n>0{cfg.PageSize=n}; case"hello_name": if v!=""{cfg.HelloName=v}; case"hello_ver": if v!=""{cfg.HelloVer=v}; case"conformance": if v!=""{cfg.Conformance=v}} } }
 		return cfg
 	}
+	if strings.HasPrefix(dsn, "quic:") {
+		cfg.Mode = "quic"
+		cfg.UseQUIC = true
+		rest := strings.TrimPrefix(dsn, "quic:")
+		q := ""
+		if i := strings.Index(rest, "?"); i >= 0 { cfg.Addr = rest[:i]; q = rest[i+1:] } else { cfg.Addr = rest }
+		if cfg.Addr == "" { cfg.Addr = "127.0.0.1:7567" }
+		if q != "" { for _, kv := range strings.Split(q, "&") { if kv==""{continue}; p:=strings.SplitN(kv,"=",2); k:=p[0]; v:=""; if len(p)==2{v=p[1]}; switch k{case"page_size": if n,err:=strconv.Atoi(v); err==nil&&n>0{cfg.PageSize=n}; case"hello_name": if v!=""{cfg.HelloName=v}; case"hello_ver": if v!=""{cfg.HelloVer=v}; case"conformance": if v!=""{cfg.Conformance=v}} } }
+		return cfg
+	}
 	return cfg
 }
 
@@ -106,11 +120,52 @@ type Conn struct {
 	outR   io.ReadCloser
 	bufRd  *bufio.Reader
 	nc     net.Conn
+	qConn  interface{} // quic.Connection or quic.EarlyConnection
+	qStream interface{} // quic.Stream
 	cancel func()
+	useQUIC bool
 }
 
 func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 	if db.path == "" && db.addr == "" { return nil, fmt.Errorf("invalid config") }
+	
+	// Parse DSN to check if QUIC mode is requested
+	cfg := parseDSN(db.addr)
+	
+	if cfg.UseQUIC && db.addr != "" { // QUIC mode
+		tlsConf := &tls.Config{
+			InsecureSkipVerify: true, // For development; in production use proper cert validation
+			NextProtos: []string{"geode/1"},
+			MinVersion: tls.VersionTLS13,
+		}
+		
+		qConn, err := quic.DialAddr(ctx, db.addr, tlsConf, nil)
+		if err != nil { return nil, err }
+		
+		qStream, err := qConn.OpenStreamSync(ctx)
+		if err != nil { _ = qConn.CloseWithError(0, "failed to open stream"); return nil, err }
+		
+		c := &Conn{
+			qConn: qConn,
+			qStream: qStream,
+			bufRd: bufio.NewReaderSize(qStream, 64<<10),
+			useQUIC: true,
+		}
+		c.cancel = func(){ 
+			if stream := c.qStream; stream != nil {
+				if s, ok := stream.(quic.Stream); ok { _ = s.Close() }
+			}
+			if conn := c.qConn; conn != nil {
+				if qc, ok := conn.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
+					_ = qc.CloseWithError(0, "closing")
+				}
+			}
+		}
+		hello := map[string]any{"type":"HELLO","client_name":db.helloName,"client_ver":db.helloVer,"wanted_conformance":db.conf}
+		if err := c.writeJSON(hello); err != nil { _ = c.Close(); return nil, err }
+		return c, nil
+	}
+	
 	if db.addr != "" { // TCP
 		nc, err := net.Dial("tcp", db.addr)
 		if err != nil { return nil, err }
@@ -136,6 +191,19 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 }
 
 func (c *Conn) Close() error {
+	if c.useQUIC {
+		if stream := c.qStream; stream != nil {
+			if s, ok := stream.(quic.Stream); ok {
+				_ = s.Close()
+			}
+		}
+		if conn := c.qConn; conn != nil {
+			if qc, ok := conn.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
+				_ = qc.CloseWithError(0, "closing")
+			}
+		}
+		return nil
+	}
 	if c.nc != nil {
 		// Attempt a small read-ahead with short deadline to ensure server flushed
 		_ = c.nc.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
@@ -151,6 +219,15 @@ func (c *Conn) Close() error {
 func (c *Conn) writeJSON(v any) error {
 	b, e := json.Marshal(v); if e != nil { return e }
 	b = append(b, '\n')
+	if c.useQUIC {
+		if stream := c.qStream; stream != nil {
+			if s, ok := stream.(quic.Stream); ok {
+				_, e = s.Write(b)
+				return e
+			}
+		}
+		return fmt.Errorf("invalid QUIC stream")
+	}
 	if c.nc != nil { _, e = c.nc.Write(b); return e }
 	_, e = c.inW.Write(b); return e
 }

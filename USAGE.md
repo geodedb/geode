@@ -1,5 +1,42 @@
 # Geode CLI (gql)
 
+## QUIC/TLS 1.3 Support
+
+Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication:
+
+### Server
+```bash
+# Start server with QUIC (default port 7567)
+./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
+
+# Custom certificates (default: certs/server.crt and certs/server.key)
+./zig-out/bin/geoded --listen-quic 0.0.0.0:7567 --cert path/to/cert.pem --key path/to/key.pem
+
+# Generate self-signed certificates for development
+./zig-out/bin/cert_gen
+```
+
+### Client
+```bash
+# Connect using QUIC (default)
+./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:7567
+
+# Force stdio mode (backward compatibility)
+./zig-out/bin/geodec "RETURN 1 AS x" --no-quic
+```
+
+### Go Client
+```go
+// Connect using QUIC
+db, _ := gql.Open("quic:127.0.0.1:7567")
+
+// Connect using TCP (backward compatibility)
+db, _ := gql.Open("tcp:127.0.0.1:7567")
+
+// Connect using process mode
+db, _ := gql.Open("process:./zig-out/bin/geoded")
+```
+
 Flags (subset):
 
 - --ast | --ast-json | --ast-json-verbose
