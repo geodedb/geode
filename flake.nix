@@ -5,6 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     dev-env.url = "github:spyderorg/dev-env";
+    quic.url = "github:spyderorg/quic";
   };
 
   outputs =
@@ -12,6 +13,7 @@
       self,
       nixpkgs,
       dev-env,
+      quic,
       flake-utils,
       ...
     }:
@@ -25,6 +27,8 @@
           };
 
           zigPkg = dev-env.packages.${system}.zigPackages;
+          quicPkg = quic.packages.${system}.quic;
+          quicDebugPkg = quic.packages.${system}.quic-debug;
 
           # Build zcap packages - use dev-env zig (0.15.1)
           zcapPkg = pkgs.callPackage ./nix/zcap.nix {
@@ -41,10 +45,12 @@
           };
           
           # Single source of truth for the development environment packages
-          devShellPackages = with pkgs; [
-            zigPkg
-            tcpdump
-            file
+          devShellPackages = [
+            quicPkg
+            quicDebugPkg
+            pkgs.zigPkg
+            pkgs.tcpdump
+            pkgs.file
           ];
         in
         {
