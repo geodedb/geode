@@ -4,31 +4,31 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Now (P0)
 
-1. **Index selectivity estimator (reservoir/HLL++) (REQ-GQL-039)**
-   - **Why**: Enable cost-based index vs scan decisions
-   - **What**: Maintain per-label/property HLL++ distinct + sample; expose in EXPLAIN estimates
-   - **Acceptance**: Selective label query picks index; non-selective chooses scan; EXPLAIN shows selectivity <0.10
-   - **ISO**: 14.4 (MATCH), 14.10 (planning semantics)
-   - **Deps**: src/planner.zig, estimator stats
+1. **Conformance auto-regeneration script (REQ-GQL-018/034/045)**
+   - **Why**: Prevent drift between source annotations and GAP ledger
+   - **What**: Script enumerates REQ-GQL-### & features, rewrites tables; CI check ensures no manual divergence
+   - **Acceptance**: `zig run scripts/doc_sync.zig --regen` produces zero git diff
+   - **ISO**: 24.x
+   - **Deps**: docs/*.md, scripts/
    - **Scope**: M
-   - **DRI**: core
+   - **DRI**: docs
 
-2. **NodeIndexScan inline metadata (REQ-GQL-039)**
-   - **Why**: Remove indirection (IndexMeta stub) and expose selectivity + index_name for PROFILE consumers
-   - **What**: Elide IndexMeta op; extend PROFILE op JSON with `index_name`,`selectivity_est` fields
-   - **Acceptance**: `PROFILE RETURN 1 AS x` (with synthetic index usage case) shows NodeIndexScan op having `index_name` and numeric `selectivity_est`; IndexMeta absent
-   - **ISO**: 14.10 (primitive result), 23.2 (diagnostics unaffected)
-   - **Deps**: src/server/main.zig (profile emission), src/planner.zig
+2. **Numeric promotion matrix & div/0 subclass (REQ-GQL-013/012)**
+   - **Why**: Clarify coercion + stable diagnostics for analysis
+   - **What**: Add promotion table to README or dedicated doc; introduce TypeMismatch.DivZero subclass code
+   - **Acceptance**: `RETURN 1/0` emits TypeMismatch.DivZero; mixed int+decimal operations match table
+   - **ISO**: 16.x, 23.2
+   - **Deps**: src/eval.zig, src/diagnostics.zig
    - **Scope**: S
    - **DRI**: core
 
-3. **Result formatting parity TXT (EXPLAIN/PROFILE) (REQ-GQL-023/019/020)**
-   - **Why**: Ensure consistent multi-format outputs for automation
-   - **What**: Add text serializer; tests diff-stable
-   - **Acceptance**: `PROFILE RETURN 1` with `--format=txt` matches golden file; mismatch fails test
-   - **ISO**: 24.x (conformance disclosure), 14.10
-   - **Deps**: src/client/main.zig, src/server/main.zig
-   - **Scope**: S
+3. **MVCC Snapshot Isolation full (REQ-GQL-027)**
+   - **Why**: Provide consistent reads & write-write conflict handling
+   - **What**: Version chains, snapshot visibility rules, write lock detection
+   - **Acceptance**: Concurrent conflicting updates produce abort; snapshot sees pre-commit values
+   - **ISO**: §8
+   - **Deps**: src/txn/manager.zig, wal integration
+   - **Scope**: L
    - **DRI**: core
 
 ## Next (P1)
@@ -173,6 +173,9 @@ Excluded this milestone: full GPU operators, learned cost model integration, enc
 - ✅ **GROUP BY HashAgg** (REQ-GQL-016): Execution already implemented in exec.runGroupedQuery; test scaffold added
 - ✅ **Transaction baseline** (REQ-GQL-027): BEGIN/COMMIT/ROLLBACK with proper status_class responses (00000/25000)
 - ✅ **WAL compaction automation** (REQ-GQL-026): Configurable via GEODE_WAL_COMPACT_INTERVAL (default 5 commits)
+- ✅ **Index selectivity estimator** (REQ-GQL-039): Cost-based decisions with adaptive learning
+- ✅ **NodeIndexScan metadata** (REQ-GQL-039): Enhanced PROFILE with index_name and selectivity_est
+- ✅ **Text formatting parity** (REQ-GQL-023): EXPLAIN/PROFILE text output with --format=txt
 - Fixed planner test compilation issues (AST literal syntax, const qualifiers)
 - WAL sparse pageLSN index & fast-seek redo path
 - MVCC delete_ts & rollback semantics
