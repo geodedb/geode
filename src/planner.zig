@@ -196,27 +196,29 @@ fn exprAllowedInGroup(e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
 
 test "planner: temporal compare across timezones and local attach" {
     const ctx = SessionContext{ .session_offset_minutes = 0 };
-    const dt1 = .{ .DateTime = .{ .raw = "2024-08-12T10:15Z", .parsed = try temporal.parseDateTime("2024-08-12T10:15Z", true) } };
-    const dt2 = .{ .DateTime = .{ .raw = "2024-08-12T11:15+01", .parsed = try temporal.parseDateTime("2024-08-12T11:15+01", true) } };
+    const dt1 = ast.Expr{ .DateTime = .{ .raw = "2024-08-12T10:15Z", .parsed = try temporal.parseDateTime("2024-08-12T10:15Z", true) } };
+    const dt2 = ast.Expr{ .DateTime = .{ .raw = "2024-08-12T11:15+01", .parsed = try temporal.parseDateTime("2024-08-12T11:15+01", true) } };
     try std.testing.expect((try compareTemporalForOrder(dt1, dt2, ctx)) == 0);
     // Local vs zoned with session offset
-    const ldt = .{ .LocalDateTime = .{ .raw = "2024-08-12T10:15", .parsed = try temporal.parseDateTime("2024-08-12T10:15", false) } };
+    const ldt = ast.Expr{ .LocalDateTime = .{ .raw = "2024-08-12T10:15", .parsed = try temporal.parseDateTime("2024-08-12T10:15", false) } };
     try std.testing.expect((try compareTemporalForOrder(ldt, dt1, ctx)) == 0);
 }
 
 test "planner: time compare invalid across zone mismatch" {
     const ctx = SessionContext{};
-    const t1 = .{ .Time = .{ .raw = "10:15Z", .parsed = try temporal.parseTime("10:15Z", true) } };
-    const t2 = .{ .Time = .{ .raw = "10:15", .parsed = try temporal.parseTime("10:15", true) } };
+    const t1 = ast.Expr{ .Time = .{ .raw = "10:15Z", .parsed = try temporal.parseTime("10:15Z", true) } };
+    const t2 = ast.Expr{ .Time = .{ .raw = "10:15", .parsed = try temporal.parseTime("10:15", true) } };
     try std.testing.expectError(CompareError.Invalid, compareTemporalForOrder(t1, t2, ctx));
 }
 
 // Adaptive planner heuristic tests
 test "planner: heuristic index on equality predicate" {
+    var left_expr = ast.Expr{ .Ident = "a" };
+    var right_expr = ast.Expr{ .Int = 1 };
     var q: ast.Query = undefined;
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
-    q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &ast.Expr{ .Ident = "a" }, .right = &ast.Expr{ .Int = 1 } } };
+    q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &left_expr, .right = &right_expr } };
     q.with_clause = null;
     q.group_by = null;
     q.ret = .{ .items = &.{}, .distinct = false };
@@ -228,10 +230,12 @@ test "planner: heuristic index on equality predicate" {
 }
 
 test "planner: no index without equality predicate" {
+    var left_expr = ast.Expr{ .Ident = "a" };
+    var right_expr = ast.Expr{ .Int = 1 };
     var q: ast.Query = undefined;
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
-    q.where_clause = ast.Expr{ .Binary = .{ .op = .Gt, .left = &ast.Expr{ .Ident = "a" }, .right = &ast.Expr{ .Int = 1 } } };
+    q.where_clause = ast.Expr{ .Binary = .{ .op = .Gt, .left = &left_expr, .right = &right_expr } };
     q.with_clause = null;
     q.group_by = null;
     q.ret = .{ .items = &.{}, .distinct = false };
@@ -294,6 +298,7 @@ test "planner: group by legality basic" {
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
     q.with_clause = null;
+    q.having = null;
     q.order_by = null;
     q.limit = null;
     q.offset = null;
@@ -303,15 +308,47 @@ test "planner: group by legality basic" {
     var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
     _ = try planQuery(q, .{});
-    // Illegal: RETURN m (not grouped) without aggregate
-    items[0] = .{ .expr = .{ .Ident = "m" }, .alias = null };
+}
+
+test "planner: group by illegal non-grouped return" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = null;
+    q.with_clause = null;
+    q.having = null;
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    // GROUP BY n, RETURN m (not grouped) should be illegal
+    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    q.group_by = .{ .keys = keys[0..] };
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "m" }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
     try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
-    // Legal: RETURN count(m)
+}
+
+test "planner: group by legal aggregate return" {
+    var q: ast.Query = undefined;
+    q.optional_match = false;
+    q.match = .{ .chains = &.{} };
+    q.where_clause = null;
+    q.with_clause = null;
+    q.having = null;
+    q.order_by = null;
+    q.limit = null;
+    q.offset = null;
+    // GROUP BY n, RETURN n, count(m) should be legal (includes the GROUP BY key)
+    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    q.group_by = .{ .keys = keys[0..] };
     var callee = ast.Expr{ .Ident = "count" };
     var arg = ast.Expr{ .Ident = "m" };
-    const call = ast.Expr{ .Call = .{ .callee = &callee, .args = &.{&arg} } };
-    items[0] = .{ .expr = call, .alias = null };
+    var args = [_]*ast.Expr{&arg};
+    const call = ast.Expr{ .Call = .{ .callee = &callee, .args = args[0..] } };
+    var items: [2]ast.ReturnItem = .{
+        .{ .expr = .{ .Ident = "n" }, .alias = null },
+        .{ .expr = call, .alias = null },
+    };
     q.ret = .{ .items = items[0..], .distinct = false };
     _ = try planQuery(q, .{});
 }
@@ -322,6 +359,7 @@ test "planner: having legality" {
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
     q.with_clause = null;
+    q.having = null;
     q.order_by = null;
     q.limit = null;
     q.offset = null;
@@ -333,7 +371,8 @@ test "planner: having legality" {
     var callee = ast.Expr{ .Ident = "count" };
     var arg = ast.Expr{ .Ident = "m" };
     var one = ast.Expr{ .Int = 1 };
-    const call = ast.Expr{ .Call = .{ .callee = &callee, .args = &.{&arg} } };
+    var args = [_]*ast.Expr{&arg};
+    var call = ast.Expr{ .Call = .{ .callee = &callee, .args = args[0..] } };
     const pred = ast.Expr{ .Binary = .{ .op = .Gt, .left = &call, .right = &one } };
     q.having = pred;
     _ = try planQuery(q, .{});

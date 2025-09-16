@@ -18,6 +18,7 @@ fn readLineAlloc(ally: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
 }
 
 pub fn main() !void {
+    var test_wal_skip_ratio: ?[]const u8 = null;
     const build_options = @import("build_options");
     const sentinel = @import("sentinel");
     const gpa = if (build_options.enable_sentinel) sentinel.maybeSentinel(std.heap.page_allocator) else std.heap.page_allocator;
@@ -40,7 +41,12 @@ pub fn main() !void {
     var extra_pulls: usize = 0;
     var fmt_txt = false;
     while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--server")) {
+        if (std.mem.eql(u8, argv[i], "--test-wal-skip-ratio")) {
+            if (i + 1 < argv.len) {
+                test_wal_skip_ratio = argv[i + 1];
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) break;
             server_path = argv[i + 1];
             i += 1;
@@ -75,7 +81,16 @@ pub fn main() !void {
     }
 
     // Spawn server
-    var child = std.process.Child.init(&.{server_path}, gpa);
+    // Build server args
+    var server_args = std.ArrayList([]const u8).initCapacity(gpa, 4) catch return error.OutOfMemory;
+    defer server_args.deinit(gpa);
+    try server_args.append(gpa, server_path);
+    if (test_wal_skip_ratio) |val| {
+        try server_args.append(gpa, "--test-wal-skip-ratio");
+        try server_args.append(gpa, val);
+    }
+
+    var child = std.process.Child.init(server_args.items, gpa);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     // Inherit stderr so large error outputs don't block the child process

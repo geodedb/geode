@@ -10,9 +10,15 @@ const _e2e_recovery_checksum_committed = @import("e2e_protocol_recovery_checksum
 const _e2e_hashagg_spill = @import("e2e_protocol_hashagg_spill.zig");
 const _e2e_mvcc_phantom = @import("e2e_protocol_mvcc_phantom.zig");
 const _e2e_sort_spill = @import("e2e_protocol_sort_spill.zig");
+const _e2e_wal_skip_ratio = @import("e2e_wal_skip_ratio.zig");
+const _e2e_protocol_wal_skip_ratio = @import("e2e_protocol_wal_skip_ratio.zig");
+const _e2e_storage_checksum = @import("e2e_protocol_storage_checksum_diag.zig");
 
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
+
+// Existing placeholder
+const _e2e_sort_spill_placeholder = @import("e2e_protocol_sort_spill.zig");
 
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query

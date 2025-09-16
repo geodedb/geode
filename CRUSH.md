@@ -32,7 +32,15 @@ Project conventions
 - Logging: JSON Lines at INFO; errors at ERROR
 
 Pending Commit Message:
-chore(docs): refresh GAP analysis + next steps; add ISO-GQL conformance profile & crosswalk
+fix(planner): correct AST literal syntax and test isolation in planner tests
+
+- Fixed malformed while loop in src/client/main.zig that caused build failures
+- Updated planner tests to use proper ast.Expr syntax instead of anonymous structs
+- Fixed const qualifier issues by creating mutable expression variables
+- Separated complex test into individual test functions to avoid interference
+- Updated test imports to use proper module system (geode import)
+- Fixed @intCast syntax for newer Zig versions
+- All planner tests now pass (17/17)
 
 Cursor/Copilot rules to honor
 

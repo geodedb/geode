@@ -38,7 +38,7 @@ const ServerState = struct {
     spill_distinct: usize = 0,
     spill_union: usize = 0,
     spill_hashagg: usize = 0,
-    
+
     // WAL integration (phase: skip ratio exposure) — optional pointer injected during server bootstrap.
     wal_ptr: ?*anyopaque = null,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
@@ -1373,7 +1373,7 @@ pub fn main() !void {
             env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
         } else if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
             env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
-        }    
+        }
         if (env.get("GEODE_NULLS_LAST")) |_| g_nulls_last = true;
         if (env.get("GEODE_PROFILE_MEMCURVE")) |_| memcurve_profile = true;
         if (env.get("GEODE_ADAPT_ESTIMATES")) |_| g_adapt_estimates = true;
