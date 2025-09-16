@@ -5,11 +5,45 @@
 Geode is a Zig-based graph database project exploring an ISO/IEC 39075:2024 (GQL) front end with
 structured temporals, ORDER BY policy checks, and developer-friendly printers and CLI tooling.
 
+# Geode Graph Database
+
+## Description
+
+Geode is a Zig-based graph database project exploring an ISO/IEC 39075:2024 (GQL) front end with
+structured temporals, ORDER BY policy checks, and developer-friendly printers and CLI tooling.
+
 ## Status & Conformance Summary
 
-- Requirements Ledger and evidence: see docs/GAP_ANALYSIS.md
-- GQL Conformance Profile (initial): see docs/GAP_ANALYSIS.md (bottom)
-- Execution-ready backlog: see docs/NEXT.md
+**Current Implementation Status**: 32 requirements implemented, 8 partial, 6 missing (see detailed breakdown below)
+
+**Key Links**:
+- **Requirements Ledger**: [docs/GAP_ANALYSIS.md#1-requirements-ledger](docs/GAP_ANALYSIS.md#1-requirements-ledger) — Authoritative status of all REQ-GQL-### requirements with evidence
+- **GQL Conformance Profile**: [docs/GAP_ANALYSIS.md#2-gql-conformance-profile-initial](docs/GAP_ANALYSIS.md#2-gql-conformance-profile-initial) — ISO/IEC 39075:2024 feature support matrix
+- **Execution-ready backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized tasks with acceptance criteria
+- **GQL→Engine Crosswalk**: [docs/query_engine.md#10-gqlengine-crosswalk-milestone-v015-core](docs/query_engine.md#10-gqlengine-crosswalk-milestone-v015-core) — Mapping from GQL constructs to implementation
+
+**Implementation Highlights**:
+- ✅ **Core GQL Language**: MATCH/OPTIONAL patterns, ORDER BY with US001 policy, LIMIT/OFFSET, GROUP BY legality
+- ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics and deterministic ordering
+- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals, mixed-type arithmetic
+- ✅ **Binary Protocol**: SCHEMA/BINDINGS frames with ordered metadata, status codes, diagnostics precedence
+- ✅ **Profiling & Metrics**: PROFILE/EXPLAIN with stable JSON schema (profile_version=2)
+- 🔄 **Storage Layer**: Slotted pages and WAL/ARIES (partial - missing catalog and adjacency structures)
+- 🔄 **Transactions**: MVCC timestamps and basic lifecycle (partial - missing conflict detection)
+- ❌ **Distributed**: Raft/2PC scaffold (missing - single-node only)
+
+**High-Risk Areas**:
+1. **Durability** (REQ-GQL-026): WAL/ARIES needs fuzz scaling and automated compaction
+2. **Transactions** (REQ-GQL-027): MVCC lacks full conflict detection and lock management  
+3. **Storage** (REQ-GQL-025): Missing persistent catalog and CSR adjacency structures
+4. **Distribution** (REQ-GQL-028/042): No distributed scaffold limits scalability
+5. **Indexing** (REQ-GQL-039): Only stub statistics, no real selectivity estimation
+
+**Conformance Notes**:
+- Implements ISO/IEC 39075:2024 minimum conformance plus selected optional features
+- Implementation-defined policies: US001 (unordered pagination rejection), binary collation, int→decimal promotion
+- Implementation-dependent behaviors: UA005/UA006 path tie-breaking (planned), null ordering policy
+- All diagnostics follow ISO 23.2 precedence rules with proper status_class/subclass mapping
 
 Highlights
 

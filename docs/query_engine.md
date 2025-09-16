@@ -757,6 +757,8 @@ _End of report._
 
 ## 10) GQL→Engine Crosswalk (Milestone v0.15 Core)
 
+### Core GQL Constructs to Engine Mapping
+
 | GQL Clause / Construct | ISO Clause(s) | AST Node(s) / Fields  | Logical Operator(s) | Physical Operator(s) | Storage / Index Access | Txn / WAL Action | Protocol Frame(s) | Diagnostics (Primary -> Additional) | Impl-defined / Dependent (I:/U:) |
 | ---------------------- | ------------- | --------------------- | ------------------- | -------------------- | ---------------------- | ---------------- | ----------------- | ----------------------------------- | -------------------------------- |
 | Linear composition     | 14.3          | LinearStmt sequence   | Pipeline            | Operator pipeline    | —                      | snapshot ref     | SCHEMA/BINDINGS   | (parse) -> (planner) precedence     | —                                |
@@ -773,6 +775,24 @@ _End of report._
 | PROFILE / EXPLAIN      | 14.10 / 23.2  | ProfileStmt           | (instrumentation)   | Timed ops wrapper    | metrics snapshot       | —                | EXPLAIN/PROFILE   | (profiling) additional_statuses     | I:ProfileSchema v2               |
 | Transactions (stubs)   | 8             | Begin/Commit AST      | TxnBoundary         | Txn state apply      | WAL append (planned)   | LSN assign       | status only       | (conflict) -> status subclass       | I:AccessMode(IE002)              |
 | Path patterns (future) | 22.4          | PathPattern           | PathExpand          | BFS / BiBFS          | adjacency list         | read visibility  | BINDINGS          | (path length) additional flag       | U:UA005/UA006                    |
+
+### Extended Crosswalk: Session Management & Error Handling
+
+| GQL Construct | ISO Clause(s) | Engine Component | Implementation | WAL/Txn Integration | Diagnostics Mapping |
+| ------------- | ------------- | ---------------- | -------------- | ------------------- | ------------------- |
+| Session lifecycle | 7.1-7.3 | SessionContext | src/server/main.zig session state | Begin/End markers | SessionState codes |
+| Error precedence | 23.2 | DiagnosticsFold | src/diagnostics.zig foldCodes | Error logging | UA002 precedence |
+| Conformance flags | 24.x | Flagger | Protocol frame emission | — | Implementation flags |
+| Resource limits | Impl-defined | Memory governance | Counting allocator wrapper | Spill triggers | Resource exhaustion |
+
+### Storage & Persistence Integration
+
+| Storage Layer | Purpose | Implementation | WAL Integration | Recovery Actions |
+| ------------- | ------- | -------------- | --------------- | ---------------- |
+| Slotted pages | Variable-length records | src/storage/page_manager.zig | Page LSN tracking | Redo/undo operations |
+| Property heap | Node/edge properties | Planned (REQ-GQL-025) | Property updates | Value recovery |
+| CSR adjacency | Graph traversal | Planned (REQ-GQL-025) | Edge modifications | Adjacency rebuild |
+| Index structures | Query acceleration | Partial (REQ-GQL-039) | Index maintenance | Index reconstruction |
 
 Notes:
 
