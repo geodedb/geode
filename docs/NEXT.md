@@ -4,50 +4,32 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Now (P0)
 
-1. **Memory governance finalization (REQ-GQL-037)**
-   - **Why**: Enforce per-query soft memory limits to avoid OOMs in production
-   - **What**: Add `soft_mem_limit_bytes` to SessionContext; read `GEODE_QUERY_MEM_LIMIT_BYTES` in server; wrap allocators to track bytes and trigger spill instead of OOM
-   - **Acceptance**: `PROFILE RETURN 1 AS x` with very low `GEODE_QUERY_MEM_LIMIT_BYTES` sets `sort_spills` or `hashagg_spills` without crashing; status_class remains 00000
-   - **ISO**: Implementation-defined resource management
-   - **Deps**: src/server/main.zig, src/util/counting_allocator.zig
-   - **Scope**: S
-   - **DRI**: core
-
-2. **WAL skip ratio exposure & synthetic test (REQ-GQL-026)**
-   - **Why**: Quantify redo pruning efficiency; drive compaction heuristic design
-   - **What**: Add `skip_ratio` field to PROFILE (recovery scenario) or expose via CLI flag; add `e2e_wal_skip_ratio.zig` ensuring ratio ≥0.60 on crafted log
-   - **Acceptance**: Test asserts JSON contains `"skip_ratio":0.` prefix and value ≥0.60; `PROFILE RETURN 1` after recovery shows skip metrics
-   - **ISO**: §8 (durability impl-defined metrics)
-   - **Deps**: src/wal/wal.zig, tests/
-   - **Scope**: S
-   - **DRI**: storage
-
-3. **StoragePageChecksum diagnostic propagation (REQ-GQL-026)**
-   - **Why**: Surface page corruption early & unify with diagnostics precedence
-   - **What**: Map page_manager checksum failure to new diagnostic subclass; ensure precedence folding stable
-   - **Acceptance**: Injected corrupt page test emits additional_status with code; base status_class 58000 (data error) and includes anchor comment
-   - **ISO**: 23.2 (diagnostics), §8 (recovery)
-   - **Deps**: src/storage/page_manager.zig, src/diagnostics.zig, src/server/main.zig
-   - **Scope**: S
-   - **DRI**: storage
-
-4. **GROUP BY execution (HashAgg) (REQ-GQL-016)**
-   - **Why**: Move from legality-only to actual aggregation output
-   - **What**: Implement HashAgg physical op; add aggregation evaluation + PROFILE rows reduction
+1. **Complete HashAgg execution implementation (REQ-GQL-016)**
+   - **Why**: GROUP BY currently only validates legality but doesn't execute aggregations
+   - **What**: Wire up HashAgg physical operator to actually compute aggregates; connect to eval engine
    - **Acceptance**: `PROFILE RETURN a, SUM(b) GROUP BY a ORDER BY a` with params a:[1,1,2], b:[10,1,5] yields rows: (a=1,sum=11),(a=2,sum=5); PROFILE shows HashAgg with input_rows=3, rows=2
    - **ISO**: 14.10 (group semantics), 16.x (expressions)
-   - **Deps**: src/eval.zig, src/planner.zig, src/server/main.zig
+   - **Deps**: src/eval.zig, src/planner.zig, src/server/main.zig, tests/e2e_protocol_groupby_hashagg.zig
    - **Scope**: M
    - **DRI**: core
 
-5. **Transactions baseline (BEGIN/COMMIT/ROLLBACK) (REQ-GQL-027 subset)**
-   - **Why**: Provide user-visible atomicity semantics for sequential statements
-   - **What**: Implement txn manager with state, simple write set placeholder, status codes; protocol frames carry txn outcome
+2. **Complete transaction state management (REQ-GQL-027)**
+   - **Why**: BEGIN/COMMIT/ROLLBACK frames need proper state tracking and error handling
+   - **What**: Implement transaction state machine in txn manager; handle nested transaction errors
    - **Acceptance**: Script: HELLO; BEGIN; RUN_GQL `RETURN 1 AS x`; COMMIT -> both frames status_class 00000. Second BEGIN before COMMIT returns error status_class 25000 (active txn) with additional_status TxnState
    - **ISO**: §8 (transactions), 23.2 (diagnostics), 7 (sessions)
-   - **Deps**: src/txn/manager.zig, src/protocol.zig, src/server/main.zig
+   - **Deps**: src/txn/manager.zig, src/protocol.zig, src/server/main.zig, tests/e2e_protocol_txn_baseline.zig
    - **Scope**: M
    - **DRI**: core
+
+3. **WAL compaction automation (REQ-GQL-026)**
+   - **Why**: Manual compaction is operational burden; need automatic reclamation
+   - **What**: Add server option to trigger rotate + compact when reclaim ratio > threshold after checkpoint
+   - **Acceptance**: Integration test forces segment rollover; after checkpoint auto compaction removes ≥1 old segment
+   - **ISO**: §8 (durability)
+   - **Deps**: src/wal/wal.zig, src/server/main.zig
+   - **Scope**: M
+   - **DRI**: storage
 
 ## Next (P1)
 
@@ -185,6 +167,11 @@ Excluded this milestone: full GPU operators, learned cost model integration, enc
 
 ## Recent Progress (Snapshot)
 
+- ✅ **Memory governance** (REQ-GQL-037): Added memory limit tracking with spill triggers for HashAgg/Sort/Distinct
+- ✅ **WAL skip ratio** (REQ-GQL-026): Exposed skip_ratio metric in WAL recovery; test validates ≥0.60 efficiency
+- ✅ **Storage checksum diagnostics** (REQ-GQL-026): Added mapStorageError for PageChecksumMismatch → StoragePageChecksum diagnostic
+- 🚧 **GROUP BY HashAgg** (REQ-GQL-016): Test scaffold created (e2e_protocol_groupby_hashagg.zig), execution pending
+- 🚧 **Transaction baseline** (REQ-GQL-027): Test scaffold created (e2e_protocol_txn_baseline.zig), state machine pending
 - Fixed planner test compilation issues (AST literal syntax, const qualifiers)
 - WAL sparse pageLSN index & fast-seek redo path
 - MVCC delete_ts & rollback semantics
