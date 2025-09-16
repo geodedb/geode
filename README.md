@@ -172,16 +172,54 @@ Updating Tests for New Ops:
 - Add new op to ordering validation allowlist in `e2e_protocol_profile_alloc_deltas.zig` (maintain monotonic order).
 - Update snapshot signature after confirming stable normalized output.
 
+## Numeric Promotion Matrix (REQ-GQL-013)
+
+Geode implements ISO/IEC 39075:2024 numeric type coercion with the following promotion rules:
+
+### Type Precedence (lowest to highest)
+1. **Int** (64-bit signed integer)
+2. **Decimal** (128-bit coefficient with scale)
+3. **Float** (64-bit IEEE 754)
+
+### Promotion Rules
+| From    | To      | Valid? | Lossy? | Notes                                    |
+|---------|---------|--------|--------|------------------------------------------|
+| Int     | Decimal | ✓      | ✗      | Always safe, scales coefficient by 10^n |
+| Int     | Float   | ✓      | ✗      | Safe for values within float precision  |
+| Decimal | Int     | ✓      | ✓      | Truncates fractional part               |
+| Decimal | Float   | ✓      | ✓      | May lose precision for large decimals   |
+| Float   | Int     | ✓      | ✓      | Truncates fractional part               |
+| Float   | Decimal | ✓      | ✓      | May lose precision at extremes          |
+
+### Operation Result Types
+- **Addition/Subtraction**: Result type is the higher precedence operand type
+- **Multiplication**: Result type is the higher precedence operand type  
+- **Division**: Result type is at least Decimal (Int÷Int→Decimal for precision)
+- **Comparison**: All numeric types are comparable through promotion
+
+### Division by Zero Handling
+Division by zero operations emit `TypeMismatch.DivZero` diagnostic (ISO 16.x) instead of runtime panic.
+
+```gql
+RETURN 1/0  -- Emits TypeMismatch.DivZero with status_class 22000
+```
+
+### Implementation-Defined Policies
+- **I:NumericPromotion**: Int→Decimal widening preserves exact value
+- **I:DecimalScale**: Default scale is 2 for division results
+- **I:FloatPrecision**: IEEE 754 double precision (53-bit mantissa)
+
 ## Diagnostics (policy and ISO anchors)
 
-| Code            | Meaning                                                    | ISO anchor  | Example                        |
-| --------------- | ---------------------------------------------------------- | ----------- | ------------------------------ |
-| US001           | LIMIT/OFFSET on unordered table (requires stable ORDER BY) | 16.18–16.19 | RETURN 1 LIMIT 10 OFFSET 5     |
-| IllegalOrderKey | ORDER BY key must be identifier (policy: ident-only)       | 14.10       | RETURN a ORDER BY f(a)         |
-| GroupByIllegal  | Invalid GROUP BY legality (e.g., non-aggregated columns)   | 14.10       | RETURN a, SUM(b) GROUP BY a, b |
-| TypeMismatch    | Illegal cross-type comparison/ordering                     | 16.x        | RETURN 1 < "2"                 |
-| TxnState        | Transaction state error (invalid lifecycle transition)     | 8           | COMMIT without BEGIN           |
-| StoragePageChecksum | Page checksum mismatch during storage operations       | 4           | Corrupted page detected        |
+| Code                | Meaning                                                    | ISO anchor  | Example                        |
+| ------------------- | ---------------------------------------------------------- | ----------- | ------------------------------ |
+| US001               | LIMIT/OFFSET on unordered table (requires stable ORDER BY) | 16.18–16.19 | RETURN 1 LIMIT 10 OFFSET 5     |
+| IllegalOrderKey     | ORDER BY key must be identifier (policy: ident-only)       | 14.10       | RETURN a ORDER BY f(a)         |
+| GroupByIllegal      | Invalid GROUP BY legality (e.g., non-aggregated columns)   | 14.10       | RETURN a, SUM(b) GROUP BY a, b |
+| TypeMismatch        | Illegal cross-type comparison/ordering                     | 16.x        | RETURN 1 < "2"                 |
+| TypeMismatch.DivZero| Division by zero operation                                 | 16.x        | RETURN 1/0                     |
+| TxnState            | Transaction state error (invalid lifecycle transition)     | 8           | COMMIT without BEGIN           |
+| StoragePageChecksum | Page checksum mismatch during storage operations          | 4           | Corrupted page detected        |
 
 The CLI and server surface diagnostics with status_class/subclass per ISO 23.2. Tests assert codes/anchors via stderr.
 
@@ -192,7 +230,5 @@ Maintain alignment between implemented requirement codes (REQ-GQL-###) and the l
 ```bash
 zig run src/tools/doc_sync.zig
 ```
-
-**Note**: Currently requires Zig API compatibility fix for bufferedReader (see REQ-GQL-018 in NEXT.md).
 
 The script prints any MISSING (referenced in code but absent from GAP_ANALYSIS) or EXTRA (present in GAP_ANALYSIS but not found in source) requirement IDs. Resolve discrepancies by editing `docs/GAP_ANALYSIS.md` until the script outputs no differences. Integrate this check in CI to prevent drift.

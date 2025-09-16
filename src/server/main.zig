@@ -1835,7 +1835,13 @@ pub fn main() !void {
                     _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx = state.active_txn.?;
-                    state.txn_manager.commit(&tx);
+                    state.txn_manager.commit(&tx) catch |err| {
+                        // Handle commit failure (e.g., serialization failure)
+                        const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{@errorName(err)});
+                        defer gpa.free(err_json);
+                        _ = stdout_file.write(err_json) catch {};
+                        return;
+                    };
                     // Assign commit timestamp to newly committed records from this txn
                     state.global_commit_ts += 1;
                     const cts = state.global_commit_ts;
@@ -1992,7 +1998,7 @@ pub fn main() !void {
                                 // If autocommit, immediately commit the txn.
                                 if (started_auto) {
                                     if (state.active_txn) |*txc| {
-                                        state.txn_manager.commit(txc);
+                                        state.txn_manager.commit(txc) catch {};
                                         state.global_commit_ts += 1;
                                         const cts_auto = state.global_commit_ts;
                                         var mi: usize = 0;

@@ -157,16 +157,100 @@ pub const PageManager = struct {
     pages: std.ArrayList([]u8),
     page_size: usize = 4096,
     base_path: ?[]const u8 = null, // optional directory for persistence
+    free_pages: std.ArrayList(u32), // List of free page IDs for reuse
+    next_page_id: u32 = 0,
+
+    pub fn init(ally: std.mem.Allocator) PageManager {
+        return .{ 
+            .allocator = ally, 
+            .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), 
+            .page_size = 4096, 
+            .base_path = null,
+            .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
+            .next_page_id = 0,
+        };
+    }
 
     pub fn initInMemory(ally: std.mem.Allocator, page_size: usize) PageManager {
-        return .{ .allocator = ally, .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), .page_size = page_size, .base_path = null };
+        return .{ 
+            .allocator = ally, 
+            .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), 
+            .page_size = page_size, 
+            .base_path = null,
+            .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
+            .next_page_id = 0,
+        };
     }
+    
     pub fn initPersistent(ally: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
-        return .{ .allocator = ally, .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), .page_size = page_size, .base_path = base_path };
+        return .{ 
+            .allocator = ally, 
+            .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), 
+            .page_size = page_size, 
+            .base_path = base_path,
+            .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
+            .next_page_id = 0,
+        };
     }
+    
     pub fn deinit(self: *PageManager) void {
         for (self.pages.items) |p| self.allocator.free(p);
         self.pages.deinit(self.allocator);
+        self.free_pages.deinit(self.allocator);
+    }
+
+    /// Allocate a new page, reusing free pages when available
+    pub fn allocatePage(self: *PageManager) !u32 {
+        // Reuse free page if available
+        if (self.free_pages.items.len > 0) {
+            return self.free_pages.pop();
+        }
+        
+        // Allocate new page
+        const page_id = self.next_page_id;
+        self.next_page_id += 1;
+        
+        // Ensure pages array is large enough
+        while (self.pages.items.len <= page_id) {
+            try self.newPage();
+        }
+        
+        return page_id;
+    }
+    
+    /// Free a page for reuse
+    pub fn freePage(self: *PageManager, page_id: u32) !void {
+        if (page_id >= self.pages.items.len) {
+            return error.InvalidPageId;
+        }
+        
+        // Clear the page
+        const page_mem = self.pages.items[page_id];
+        @memset(page_mem, 0);
+        _ = Page.init(page_mem);
+        
+        // Add to free list
+        try self.free_pages.append(page_id);
+        
+        // Persist if needed
+        if (self.base_path) |bp| {
+            try self.writePage(bp, page_id);
+        }
+    }
+    
+    /// Get a page by ID
+    pub fn getPage(self: *PageManager, page_id: u32) ![]u8 {
+        if (page_id >= self.pages.items.len) {
+            return error.InvalidPageId;
+        }
+        return self.pages.items[page_id];
+    }
+    
+    /// Flush a page to disk
+    pub fn flushPage(self: *PageManager, page_id: u32) !void {
+        if (self.base_path) |bp| {
+            try self.writePage(bp, page_id);
+        }
     }
     fn ensurePage(self: *PageManager) !usize {
         if (self.pages.items.len == 0) try self.newPage();
@@ -278,37 +362,6 @@ pub const PageManager = struct {
         if (total_count == 0) return 0.0;
         const zero_ratio = @as(f64, @floatFromInt(zero_count)) / @as(f64, @floatFromInt(total_count));
         return if (zero_ratio > 0.9) zero_ratio else 0.0;
-    }
-    
-    /// Allocate a new page and return its ID
-    pub fn allocatePage(self: *PageManager) !u32 {
-        try self.newPage();
-        return @intCast(self.pages.items.len - 1);
-    }
-    
-    /// Free a page (mark as available for reuse)
-    pub fn freePage(self: *PageManager, page_id: u32) !void {
-        if (page_id >= self.pages.items.len) {
-            return error.InvalidPageId;
-        }
-        // For now, just zero out the page
-        @memset(self.pages.items[page_id], 0);
-        _ = Page.init(self.pages.items[page_id]);
-    }
-    
-    /// Get a page by ID
-    pub fn getPage(self: *PageManager, page_id: u32) ![]u8 {
-        if (page_id >= self.pages.items.len) {
-            return error.InvalidPageId;
-        }
-        return self.pages.items[page_id];
-    }
-    
-    /// Flush a page to disk (if persistent)
-    pub fn flushPage(self: *PageManager, page_id: u32) !void {
-        if (self.base_path) |bp| {
-            try self.writePage(bp, page_id);
-        }
     }
 };
 

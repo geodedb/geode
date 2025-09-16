@@ -21,12 +21,62 @@ pub const LockEntry = struct {
     count: u32 = 1, // for lock escalation
 };
 
+pub const ConflictType = enum { ReadWrite, WriteWrite, WriteRead };
+
+pub const ConflictMatrix = struct {
+    conflicts: std.AutoHashMap(struct { TxnId, TxnId }, ConflictType),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) ConflictMatrix {
+        return .{
+            .conflicts = std.AutoHashMap(struct { TxnId, TxnId }, ConflictType).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *ConflictMatrix) void {
+        self.conflicts.deinit();
+    }
+
+    pub fn addConflict(self: *ConflictMatrix, t1: TxnId, t2: TxnId, conflict_type: ConflictType) !void {
+        try self.conflicts.put(.{ t1, t2 }, conflict_type);
+    }
+
+    pub fn hasConflict(self: *ConflictMatrix, t1: TxnId, t2: TxnId) bool {
+        return self.conflicts.contains(.{ t1, t2 }) or self.conflicts.contains(.{ t2, t1 });
+    }
+
+    pub fn getConflictType(self: *ConflictMatrix, t1: TxnId, t2: TxnId) ?ConflictType {
+        if (self.conflicts.get(.{ t1, t2 })) |ct| return ct;
+        if (self.conflicts.get(.{ t2, t1 })) |ct| return ct;
+        return null;
+    }
+
+    pub fn removeConflicts(self: *ConflictMatrix, txn_id: TxnId) void {
+        var to_remove = std.ArrayList(struct { TxnId, TxnId }).initCapacity(self.allocator, 0) catch @panic("OOM");
+        defer to_remove.deinit(self.allocator);
+
+        var iter = self.conflicts.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (key[0] == txn_id or key[1] == txn_id) {
+                to_remove.append(self.allocator, key) catch continue;
+            }
+        }
+
+        for (to_remove.items) |key| {
+            _ = self.conflicts.remove(key);
+        }
+    }
+};
+
 pub const Manager = struct {
     next_id: TxnId = 1,
     next_ts: Timestamp = 1,
     locks: std.StringHashMap(std.ArrayList(LockEntry)) = undefined, // key -> list of lock holders
     active_txns: std.AutoHashMap(TxnId, Txn) = undefined,
     wait_for_graph: std.AutoHashMap(TxnId, std.ArrayList(TxnId)) = undefined, // deadlock detection
+    conflict_matrix: ConflictMatrix = undefined, // write-write conflict detection
     allocator: std.mem.Allocator,
 
     pub fn init(self: *Manager, ally: std.mem.Allocator) void {
@@ -36,6 +86,7 @@ pub const Manager = struct {
             .locks = std.StringHashMap(std.ArrayList(LockEntry)).init(ally),
             .active_txns = std.AutoHashMap(TxnId, Txn).init(ally),
             .wait_for_graph = std.AutoHashMap(TxnId, std.ArrayList(TxnId)).init(ally),
+            .conflict_matrix = ConflictMatrix.init(ally),
             .allocator = ally,
         };
     }
@@ -56,6 +107,7 @@ pub const Manager = struct {
         }
         self.wait_for_graph.deinit();
 
+        self.conflict_matrix.deinit();
         self.active_txns.deinit();
     }
 
@@ -69,13 +121,22 @@ pub const Manager = struct {
         return txn;
     }
 
-    pub fn commit(self: *Manager, txn: *Txn) void {
+    pub fn commit(self: *Manager, txn: *Txn) !void {
+        // Check for write-write conflicts before committing
+        if (try self.hasWriteWriteConflicts(txn.id)) {
+            return error.SerializationFailure;
+        }
+
         txn.state = .Committed;
         txn.commit_ts = self.next_ts;
         self.next_ts += 1;
 
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
+        
+        // Remove from conflict matrix
+        self.conflict_matrix.removeConflicts(txn.id);
+        
         _ = self.active_txns.remove(txn.id);
     }
 
@@ -84,7 +145,28 @@ pub const Manager = struct {
 
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
+        
+        // Remove from conflict matrix
+        self.conflict_matrix.removeConflicts(txn.id);
+        
         _ = self.active_txns.remove(txn.id);
+    }
+
+    fn hasWriteWriteConflicts(self: *Manager, txn_id: TxnId) !bool {
+        var iter = self.conflict_matrix.conflicts.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const conflict_type = entry.value_ptr.*;
+            
+            if ((key[0] == txn_id or key[1] == txn_id) and conflict_type == .WriteWrite) {
+                // Check if the conflicting transaction is still active
+                const other_txn = if (key[0] == txn_id) key[1] else key[0];
+                if (self.active_txns.contains(other_txn)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     fn releaseAllLocks(self: *Manager, txn_id: TxnId) void {
@@ -153,6 +235,15 @@ pub const Manager = struct {
         // Check for conflicts with existing locks
         for (lock_list.items) |existing_lock| {
             if (existing_lock.txn_id != txn.id) {
+                // Record write-write conflicts for serialization failure detection
+                if (existing_lock.mode == .Exclusive and mode == .Exclusive) {
+                    try self.conflict_matrix.addConflict(txn.id, existing_lock.txn_id, .WriteWrite);
+                } else if (existing_lock.mode == .Exclusive and mode == .Shared) {
+                    try self.conflict_matrix.addConflict(txn.id, existing_lock.txn_id, .WriteRead);
+                } else if (existing_lock.mode == .Shared and mode == .Exclusive) {
+                    try self.conflict_matrix.addConflict(txn.id, existing_lock.txn_id, .ReadWrite);
+                }
+
                 // Conflict matrix: Exclusive conflicts with everything, Shared conflicts with Exclusive
                 if (existing_lock.mode == .Exclusive or mode == .Exclusive) {
                     // Add to wait-for graph for deadlock detection
@@ -366,4 +457,53 @@ test "txn manager: deadlock detection" {
 
     // T2 tries to lock A (would create deadlock)
     try std.testing.expectError(error.Deadlock, mgr.acquireWrite("A", &t2, std.testing.allocator));
+}
+
+test "txn manager: write-write conflict detection" {
+    var mgr: Manager = undefined;
+    mgr.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var t1 = mgr.begin();
+    var t2 = mgr.begin();
+
+    // T1 acquires exclusive lock on resource
+    try mgr.acquireWrite("row:1", &t1, std.testing.allocator);
+
+    // T2 tries to acquire exclusive lock on same resource (conflict)
+    try std.testing.expectError(error.LockConflict, mgr.acquireWrite("row:1", &t2, std.testing.allocator));
+
+    // Verify conflict is recorded
+    try std.testing.expect(mgr.conflict_matrix.hasConflict(t1.id, t2.id));
+    try std.testing.expect(mgr.conflict_matrix.getConflictType(t1.id, t2.id) == .WriteWrite);
+
+    // T1 commits successfully
+    try mgr.commit(&t1);
+
+    // T2 should now be able to acquire the lock
+    try mgr.acquireWrite("row:1", &t2, std.testing.allocator);
+    try mgr.commit(&t2);
+}
+
+test "txn manager: serialization failure on commit" {
+    var mgr: Manager = undefined;
+    mgr.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var t1 = mgr.begin();
+    var t2 = mgr.begin();
+
+    // Simulate write-write conflict by manually adding to conflict matrix
+    try mgr.conflict_matrix.addConflict(t1.id, t2.id, .WriteWrite);
+
+    // T1 tries to commit but should fail due to active conflicting transaction
+    try std.testing.expectError(error.SerializationFailure, mgr.commit(&t1));
+
+    // After T2 commits, conflicts should be cleaned up
+    try mgr.commit(&t2);
+    
+    // Now T1 should be able to commit (if it were still active)
+    // But since T1 already failed, we'll test with a new transaction
+    var t3 = mgr.begin();
+    try mgr.commit(&t3);
 }
