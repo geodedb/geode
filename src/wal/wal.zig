@@ -368,11 +368,19 @@ pub const Wal = struct {
         commits_since_checkpoint: usize,
         checkpoints_since_compaction: usize,
         last_checkpoint_lsn: u64,
+        segment_count: usize,
+        total_wal_size_bytes: usize,
+        oldest_segment_age_seconds: i64,
+        background_compaction_enabled: bool,
     } {
         return .{
             .commits_since_checkpoint = self.commits_since_checkpoint,
             .checkpoints_since_compaction = self.checkpoints_since_compaction,
             .last_checkpoint_lsn = self.last_checkpoint_lsn,
+            .segment_count = self.countSegments() catch 0,
+            .total_wal_size_bytes = self.getTotalWalSize() catch 0,
+            .oldest_segment_age_seconds = self.getOldestSegmentAge() catch 0,
+            .background_compaction_enabled = self.background_compaction_enabled,
         };
     }
 
