@@ -158,7 +158,7 @@ pub const PageManager = struct {
     page_size: usize = 4096,
     base_path: ?[]const u8 = null, // optional directory for persistence
 
-    pub fn init(ally: std.mem.Allocator, page_size: usize) PageManager {
+    pub fn initInMemory(ally: std.mem.Allocator, page_size: usize) PageManager {
         return .{ .allocator = ally, .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"), .page_size = page_size, .base_path = null };
     }
     pub fn initPersistent(ally: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
@@ -279,10 +279,41 @@ pub const PageManager = struct {
         const zero_ratio = @as(f64, @floatFromInt(zero_count)) / @as(f64, @floatFromInt(total_count));
         return if (zero_ratio > 0.9) zero_ratio else 0.0;
     }
+    
+    /// Allocate a new page and return its ID
+    pub fn allocatePage(self: *PageManager) !u32 {
+        try self.newPage();
+        return @intCast(self.pages.items.len - 1);
+    }
+    
+    /// Free a page (mark as available for reuse)
+    pub fn freePage(self: *PageManager, page_id: u32) !void {
+        if (page_id >= self.pages.items.len) {
+            return error.InvalidPageId;
+        }
+        // For now, just zero out the page
+        @memset(self.pages.items[page_id], 0);
+        _ = Page.init(self.pages.items[page_id]);
+    }
+    
+    /// Get a page by ID
+    pub fn getPage(self: *PageManager, page_id: u32) ![]u8 {
+        if (page_id >= self.pages.items.len) {
+            return error.InvalidPageId;
+        }
+        return self.pages.items[page_id];
+    }
+    
+    /// Flush a page to disk (if persistent)
+    pub fn flushPage(self: *PageManager, page_id: u32) !void {
+        if (self.base_path) |bp| {
+            try self.writePage(bp, page_id);
+        }
+    }
 };
 
 test "page_manager: insert/read & free space monotonic + checksum" {
-    var pm = PageManager.init(std.testing.allocator, 512);
+    var pm = PageManager.initInMemory(std.testing.allocator, 512);
     defer pm.deinit();
     const r1 = try pm.insert("hello");
     const r2 = try pm.insert("world!!!");

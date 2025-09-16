@@ -13,7 +13,35 @@ pub const Plan = struct {
     note: []const u8 = "",
 };
 
-pub const PlanError = error{ OffsetPushdownRequiresOrder, GroupByIllegal };
+pub const PlanError = error{ OffsetPushdownRequiresOrder, GroupByIllegal, PathPatternUnsupported };
+
+// Path pattern execution operator (REQ-GQL-017)
+pub const PathExpand = struct {
+    min_hops: u32 = 1,
+    max_hops: u32 = 1,
+    tie_break_policy: TieBreakPolicy = .LengthId,
+    
+    pub const TieBreakPolicy = enum {
+        LengthId, // UA005/UA006: (length, start_id, end_id) deterministic ordering
+    };
+    
+    pub fn execute(self: PathExpand, start_nodes: []const u64, allocator: std.mem.Allocator) ![]const PathResult {
+        // Placeholder implementation for bounded path search
+        // In a real implementation, this would use BFS/DFS with the adjacency structures
+        _ = self;
+        _ = start_nodes;
+        
+        // Return empty results for now - this is a stub for the interface
+        return try allocator.alloc(PathResult, 0);
+    }
+};
+
+pub const PathResult = struct {
+    start_id: u64,
+    end_id: u64,
+    path_length: u32,
+    edge_ids: []const u64,
+};
 
 fn hasEqPred(e: ast.Expr) bool {
     return switch (e) {

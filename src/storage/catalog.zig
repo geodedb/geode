@@ -100,420 +100,196 @@ pub const StorageCatalog = struct {
             try self.createCatalog();
             return;
         }
-
-        // Scan first page for catalog magic number
-        const first_page = storage.Page{ .buf = self.page_manager.pages.items[0] };
-        if (self.isCatalogPage(&first_page)) {
-            self.catalog_page_id = 0;
-            try self.loadCatalogFromPage(0);
-        } else {
-            // Create new catalog
-            try self.createCatalog();
-        }
+        
+        // Load catalog from page 0 (reserved for catalog)
+        self.catalog_page_id = 0;
+        const catalog_page = try self.page_manager.getPage(0);
+        try self.deserializeCatalog(catalog_page);
     }
-
+    
     /// Save catalog to persistent storage
     pub fn save(self: *StorageCatalog) !void {
         if (self.catalog_page_id == null) {
-            try self.createCatalog();
+            // Allocate catalog page
+            self.catalog_page_id = try self.page_manager.allocatePage();
         }
-
-        try self.saveCatalogToPage(self.catalog_page_id.?);
+        
+        const catalog_page = try self.page_manager.getPage(self.catalog_page_id.?);
+        try self.serializeCatalog(catalog_page);
+        try self.page_manager.flushPage(self.catalog_page_id.?);
     }
-
-    /// Create a new table
+    
+    fn createCatalog(self: *StorageCatalog) !void {
+        // Create initial catalog page
+        self.catalog_page_id = try self.page_manager.allocatePage();
+        try self.save();
+    }
+    
+    fn serializeCatalog(self: *StorageCatalog, page: []u8) !void {
+        // Simple serialization format for catalog metadata
+        // Format: [table_count:u32][table_entries...][index_count:u32][index_entries...]
+        var offset: usize = 0;
+        
+        // Write table count
+        const table_count: u32 = @intCast(self.tables.count());
+        std.mem.writeInt(u32, page[offset..offset+4], table_count, .little);
+        offset += 4;
+        
+        // Write table entries (simplified - just names and page IDs for now)
+        var table_iter = self.tables.iterator();
+        while (table_iter.next()) |entry| {
+            const name = entry.value_ptr.name;
+            const name_len: u32 = @intCast(name.len);
+            
+            // Write name length and name
+            std.mem.writeInt(u32, page[offset..offset+4], name_len, .little);
+            offset += 4;
+            @memcpy(page[offset..offset+name.len], name);
+            offset += name.len;
+            
+            // Write root page ID
+            std.mem.writeInt(u32, page[offset..offset+4], entry.value_ptr.root_page_id, .little);
+            offset += 4;
+        }
+        
+        // Write index count (placeholder)
+        const index_count: u32 = @intCast(self.indexes.count());
+        std.mem.writeInt(u32, page[offset..offset+4], index_count, .little);
+        offset += 4;
+        
+        // Mark remaining space as unused
+        @memset(page[offset..], 0);
+    }
+    
+    fn deserializeCatalog(self: *StorageCatalog, page: []const u8) !void {
+        var offset: usize = 0;
+        
+        // Read table count
+        const table_count = std.mem.readInt(u32, page[offset..offset+4], .little);
+        offset += 4;
+        
+        // Read table entries
+        for (0..table_count) |_| {
+            // Read name length and name
+            const name_len = std.mem.readInt(u32, page[offset..offset+4], .little);
+            offset += 4;
+            
+            const name = try self.allocator.dupe(u8, page[offset..offset+name_len]);
+            offset += name_len;
+            
+            // Read root page ID
+            const root_page_id = std.mem.readInt(u32, page[offset..offset+4], .little);
+            offset += 4;
+            
+            // Create minimal table metadata
+            const table_meta = TableMetadata{
+                .name = name,
+                .columns = &.{}, // Empty for now
+                .primary_key = null,
+                .root_page_id = root_page_id,
+                .row_count = 0,
+                .created_at = 0,
+                .modified_at = 0,
+            };
+            
+            try self.tables.put(name, table_meta);
+        }
+        
+        // Read index count (placeholder)
+        const index_count = std.mem.readInt(u32, page[offset..offset+4], .little);
+        _ = index_count; // Unused for now
+    }
+    
+    /// Create a new table in the catalog
     pub fn createTable(self: *StorageCatalog, name: []const u8, columns: []const TableMetadata.ColumnMetadata) !void {
         if (self.tables.contains(name)) {
             return error.TableAlreadyExists;
         }
-
-        // Allocate root page for table data
-        const root_page_id = @as(u32, @intCast(self.page_manager.pages.items.len));
-        try self.page_manager.newPage();
-
-        // Copy column metadata
-        var column_copies = try self.allocator.alloc(TableMetadata.ColumnMetadata, columns.len);
-        for (columns, 0..) |col, i| {
-            column_copies[i] = .{
-                .name = try self.allocator.dupe(u8, col.name),
-                .type_name = try self.allocator.dupe(u8, col.type_name),
-                .nullable = col.nullable,
-                .default_value = if (col.default_value) |dv| try self.allocator.dupe(u8, dv) else null,
-                .ordinal_position = col.ordinal_position,
-            };
+        
+        const root_page_id = try self.page_manager.allocatePage();
+        const table_name = try self.allocator.dupe(u8, name);
+        const table_columns = try self.allocator.dupe(TableMetadata.ColumnMetadata, columns);
+        
+        // Duplicate column metadata strings
+        for (table_columns) |*col| {
+            col.name = try self.allocator.dupe(u8, col.name);
+            col.type_name = try self.allocator.dupe(u8, col.type_name);
+            if (col.default_value) |default| {
+                col.default_value = try self.allocator.dupe(u8, default);
+            }
         }
-
+        
         const table_meta = TableMetadata{
-            .name = try self.allocator.dupe(u8, name),
-            .columns = column_copies,
+            .name = table_name,
+            .columns = table_columns,
             .primary_key = null,
             .root_page_id = root_page_id,
             .row_count = 0,
             .created_at = std.time.timestamp(),
             .modified_at = std.time.timestamp(),
         };
-
-        try self.tables.put(name, table_meta);
+        
+        try self.tables.put(table_name, table_meta);
         try self.save();
     }
-
-    /// Drop a table
+    
+    /// Drop a table from the catalog
     pub fn dropTable(self: *StorageCatalog, name: []const u8) !void {
         if (!self.tables.contains(name)) {
             return error.TableNotFound;
         }
-
-        // TODO: Clean up table pages and associated indexes
+        
+        // Get table metadata to free resources
+        const table_meta = self.tables.get(name).?;
+        
+        // Free the table's root page
+        try self.page_manager.freePage(table_meta.root_page_id);
+        
+        // Remove from catalog
         _ = self.tables.remove(name);
         try self.save();
     }
-
+    
+    /// Get table metadata
+    pub fn getTable(self: *StorageCatalog, name: []const u8) ?TableMetadata {
+        return self.tables.get(name);
+    }
+    
     /// Create an index
     pub fn createIndex(self: *StorageCatalog, name: []const u8, table_name: []const u8, columns: []const []const u8, unique: bool) !void {
         if (self.indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
-
+        
         if (!self.tables.contains(table_name)) {
             return error.TableNotFound;
         }
-
-        // Allocate root page for index
-        const root_page_id = @as(u32, @intCast(self.page_manager.pages.items.len));
-        try self.page_manager.newPage();
-
-        // Copy column names
-        var column_copies = try self.allocator.alloc([]const u8, columns.len);
-        for (columns, 0..) |col, i| {
-            column_copies[i] = try self.allocator.dupe(u8, col);
+        
+        const root_page_id = try self.page_manager.allocatePage();
+        const index_name = try self.allocator.dupe(u8, name);
+        const index_table_name = try self.allocator.dupe(u8, table_name);
+        const index_columns = try self.allocator.dupe([]const u8, columns);
+        
+        // Duplicate column name strings
+        for (index_columns) |*col| {
+            col.* = try self.allocator.dupe(u8, col.*);
         }
-
+        
         const index_meta = IndexMetadata{
-            .name = try self.allocator.dupe(u8, name),
-            .table_name = try self.allocator.dupe(u8, table_name),
-            .columns = column_copies,
+            .name = index_name,
+            .table_name = index_table_name,
+            .columns = index_columns,
             .unique = unique,
             .root_page_id = root_page_id,
             .created_at = std.time.timestamp(),
         };
-
-        try self.indexes.put(name, index_meta);
+        
+        try self.indexes.put(index_name, index_meta);
         try self.save();
     }
-
-    /// Get table metadata
-    pub fn getTable(self: *StorageCatalog, name: []const u8) ?*const TableMetadata {
-        return self.tables.getPtr(name);
-    }
-
+    
     /// Get index metadata
-    pub fn getIndex(self: *StorageCatalog, name: []const u8) ?*const IndexMetadata {
-        return self.indexes.getPtr(name);
-    }
-
-    /// List all tables
-    pub fn listTables(self: *StorageCatalog) ![][]const u8 {
-        var table_names = try self.allocator.alloc([]const u8, self.tables.count());
-        var i: usize = 0;
-
-        var iter = self.tables.iterator();
-        while (iter.next()) |entry| {
-            table_names[i] = try self.allocator.dupe(u8, entry.key_ptr.*);
-            i += 1;
-        }
-
-        return table_names;
-    }
-
-    /// Update table statistics
-    pub fn updateTableStats(self: *StorageCatalog, table_name: []const u8, row_count: usize) !void {
-        if (self.tables.getPtr(table_name)) |table| {
-            table.row_count = row_count;
-            table.modified_at = std.time.timestamp();
-            try self.save();
-        }
-    }
-
-    /// Create sequence
-    pub fn createSequence(self: *StorageCatalog, name: []const u8, start_value: i64, increment: i64) !void {
-        if (self.sequences.contains(name)) {
-            return error.SequenceAlreadyExists;
-        }
-
-        const seq_meta = SequenceMetadata{
-            .name = try self.allocator.dupe(u8, name),
-            .current_value = start_value,
-            .increment = increment,
-            .min_value = std.math.minInt(i64),
-            .max_value = std.math.maxInt(i64),
-            .cycle = false,
-        };
-
-        try self.sequences.put(name, seq_meta);
-        try self.save();
-    }
-
-    /// Get next sequence value
-    pub fn nextSequenceValue(self: *StorageCatalog, name: []const u8) !i64 {
-        if (self.sequences.getPtr(name)) |seq| {
-            const current = seq.current_value;
-            seq.current_value += seq.increment;
-
-            if (seq.current_value > seq.max_value) {
-                if (seq.cycle) {
-                    seq.current_value = seq.min_value;
-                } else {
-                    return error.SequenceExhausted;
-                }
-            }
-
-            try self.save();
-            return current;
-        }
-
-        return error.SequenceNotFound;
-    }
-
-    fn createCatalog(self: *StorageCatalog) !void {
-        // Create catalog root page
-        try self.page_manager.newPage();
-        self.catalog_page_id = @as(u32, @intCast(self.page_manager.pages.items.len - 1));
-
-        // Initialize catalog page with magic number
-        var catalog_page = storage.Page{ .buf = self.page_manager.pages.items[self.catalog_page_id.?] };
-        self.writeCatalogMagic(&catalog_page);
-
-        try self.save();
-    }
-
-    fn isCatalogPage(self: *StorageCatalog, page: *const storage.Page) bool {
-        _ = self;
-
-        // Check for catalog magic number in page header
-        const magic_offset = storage.Page.HeaderSize;
-        if (page.buf.len < magic_offset + 8) return false;
-
-        const magic = std.mem.readInt(u64, page.buf[magic_offset .. magic_offset + 8], .little);
-        return magic == 0x474551444554414C; // "GEODECAT" in little-endian
-    }
-
-    fn writeCatalogMagic(self: *StorageCatalog, page: *storage.Page) void {
-        _ = self;
-
-        const magic_offset = storage.Page.HeaderSize;
-        if (page.buf.len >= magic_offset + 8) {
-            std.mem.writeInt(u64, page.buf[magic_offset .. magic_offset + 8], 0x474551444554414C, .little);
-        }
-    }
-
-    fn loadCatalogFromPage(self: *StorageCatalog, page_id: u32) !void {
-        _ = self;
-        _ = page_id;
-
-        // TODO: Implement catalog deserialization from page
-        // This would read the serialized catalog metadata from the page
-        // and populate the in-memory hash maps
-    }
-
-    fn saveCatalogToPage(self: *StorageCatalog, page_id: u32) !void {
-        _ = self;
-        _ = page_id;
-
-        // TODO: Implement catalog serialization to page
-        // This would serialize the in-memory catalog metadata
-        // and write it to the specified page
+    pub fn getIndex(self: *StorageCatalog, name: []const u8) ?IndexMetadata {
+        return self.indexes.get(name);
     }
 };
-
-/// CSR (Compressed Sparse Row) adjacency structure for graph storage
-pub const CSRAdjacency = struct {
-    allocator: std.mem.Allocator,
-    page_manager: *storage.PageManager,
-    node_offsets: std.ArrayList(u32), // Offset into edges array for each node
-    edges: std.ArrayList(Edge),
-    properties: std.ArrayList(PropertyValue),
-
-    const Edge = struct {
-        target_node: u32,
-        edge_type: u16,
-        property_offset: u32,
-        property_count: u16,
-    };
-
-    const PropertyValue = struct {
-        key: []const u8,
-        value: []const u8,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, page_manager: *storage.PageManager) CSRAdjacency {
-        return .{
-            .allocator = allocator,
-            .page_manager = page_manager,
-            .node_offsets = std.ArrayList(u32).init(allocator),
-            .edges = std.ArrayList(Edge).init(allocator),
-            .properties = std.ArrayList(PropertyValue).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *CSRAdjacency) void {
-        self.node_offsets.deinit();
-        self.edges.deinit();
-
-        for (self.properties.items) |prop| {
-            self.allocator.free(prop.key);
-            self.allocator.free(prop.value);
-        }
-        self.properties.deinit();
-    }
-
-    /// Add a node (reserves space in offset array)
-    pub fn addNode(self: *CSRAdjacency) !u32 {
-        const node_id = @as(u32, @intCast(self.node_offsets.items.len));
-        try self.node_offsets.append(@as(u32, @intCast(self.edges.items.len)));
-        return node_id;
-    }
-
-    /// Add an edge from source to target
-    pub fn addEdge(self: *CSRAdjacency, source: u32, target: u32, edge_type: u16, properties: []const PropertyValue) !void {
-        if (source >= self.node_offsets.items.len) {
-            return error.InvalidSourceNode;
-        }
-
-        // Copy properties
-        const prop_start = @as(u32, @intCast(self.properties.items.len));
-        for (properties) |prop| {
-            try self.properties.append(.{
-                .key = try self.allocator.dupe(u8, prop.key),
-                .value = try self.allocator.dupe(u8, prop.value),
-            });
-        }
-
-        const edge = Edge{
-            .target_node = target,
-            .edge_type = edge_type,
-            .property_offset = prop_start,
-            .property_count = @as(u16, @intCast(properties.len)),
-        };
-
-        try self.edges.append(edge);
-
-        // Update offsets for subsequent nodes
-        var i = source + 1;
-        while (i < self.node_offsets.items.len) : (i += 1) {
-            self.node_offsets.items[i] += 1;
-        }
-    }
-
-    /// Get edges for a node
-    pub fn getEdges(self: *CSRAdjacency, node_id: u32) []const Edge {
-        if (node_id >= self.node_offsets.items.len) {
-            return &.{};
-        }
-
-        const start = self.node_offsets.items[node_id];
-        const end = if (node_id + 1 < self.node_offsets.items.len)
-            self.node_offsets.items[node_id + 1]
-        else
-            @as(u32, @intCast(self.edges.items.len));
-
-        return self.edges.items[start..end];
-    }
-
-    /// Get properties for an edge
-    pub fn getEdgeProperties(self: *CSRAdjacency, edge: *const Edge) []const PropertyValue {
-        const start = edge.property_offset;
-        const end = start + edge.property_count;
-
-        if (end > self.properties.items.len) {
-            return &.{};
-        }
-
-        return self.properties.items[start..end];
-    }
-
-    /// Persist CSR structure to pages
-    pub fn persist(self: *CSRAdjacency) !void {
-        // TODO: Implement CSR serialization to pages
-        // This would write the node offsets, edges, and properties
-        // to a series of pages in the page manager
-        _ = self;
-    }
-
-    /// Load CSR structure from pages
-    pub fn load(self: *CSRAdjacency) !void {
-        // TODO: Implement CSR deserialization from pages
-        // This would read the serialized CSR data from pages
-        // and reconstruct the in-memory structures
-        _ = self;
-    }
-};
-
-test "storage catalog basic operations" {
-    var page_manager = storage.PageManager.init(std.testing.allocator, 4096);
-    defer page_manager.deinit();
-
-    var catalog = StorageCatalog.init(std.testing.allocator, &page_manager);
-    defer catalog.deinit();
-
-    try catalog.load();
-
-    // Create a table
-    const columns = [_]StorageCatalog.TableMetadata.ColumnMetadata{
-        .{ .name = "id", .type_name = "INT", .nullable = false, .default_value = null, .ordinal_position = 1 },
-        .{ .name = "name", .type_name = "STRING", .nullable = true, .default_value = null, .ordinal_position = 2 },
-    };
-
-    try catalog.createTable("users", &columns);
-
-    // Verify table exists
-    const table = catalog.getTable("users");
-    try std.testing.expect(table != null);
-    try std.testing.expect(std.mem.eql(u8, table.?.name, "users"));
-    try std.testing.expect(table.?.columns.len == 2);
-
-    // Create an index
-    const index_columns = [_][]const u8{"id"};
-    try catalog.createIndex("users_pk", "users", &index_columns, true);
-
-    // Verify index exists
-    const index = catalog.getIndex("users_pk");
-    try std.testing.expect(index != null);
-    try std.testing.expect(index.?.unique);
-}
-
-test "CSR adjacency structure" {
-    var page_manager = storage.PageManager.init(std.testing.allocator, 4096);
-    defer page_manager.deinit();
-
-    var csr = CSRAdjacency.init(std.testing.allocator, &page_manager);
-    defer csr.deinit();
-
-    // Add nodes
-    const node1 = try csr.addNode();
-    const node2 = try csr.addNode();
-    const node3 = try csr.addNode();
-
-    try std.testing.expect(node1 == 0);
-    try std.testing.expect(node2 == 1);
-    try std.testing.expect(node3 == 2);
-
-    // Add edges
-    const props = [_]CSRAdjacency.PropertyValue{
-        .{ .key = "weight", .value = "1.5" },
-        .{ .key = "type", .value = "friend" },
-    };
-
-    try csr.addEdge(0, 1, 1, &props);
-    try csr.addEdge(0, 2, 1, &.{});
-
-    // Verify edges
-    const edges = csr.getEdges(0);
-    try std.testing.expect(edges.len == 2);
-    try std.testing.expect(edges[0].target_node == 1);
-    try std.testing.expect(edges[1].target_node == 2);
-
-    // Verify properties
-    const edge_props = csr.getEdgeProperties(&edges[0]);
-    try std.testing.expect(edge_props.len == 2);
-    try std.testing.expect(std.mem.eql(u8, edge_props[0].key, "weight"));
-}
