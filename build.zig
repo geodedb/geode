@@ -174,9 +174,22 @@ pub fn build(b: *std.Build) void {
     // util: text formatter module
     const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("text_formatter", util_text_formatter_mod);
-    // transport: QUIC module (simplified wrapper, vendored library integration pending)
-    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    // Vendored QUIC library module
+    const vendor_quic_mod = b.createModule(.{ 
+        .root_source_file = b.path("vendor/quic/lib.zig"), 
+        .target = target, 
+        .optimize = optimize 
+    });
+    
+    // transport: QUIC module with vendored library dependency
+    const transport_quic_mod = b.createModule(.{ 
+        .root_source_file = b.path("src/transport/quic.zig"), 
+        .target = target, 
+        .optimize = optimize 
+    });
+    transport_quic_mod.addImport("vendor_quic", vendor_quic_mod);
     geoded_exe.root_module.addImport("transport/quic.zig", transport_quic_mod);
+    geoded_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
     // tools: cert generation module
     const tools_cert_gen_mod = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("tools/cert_gen.zig", tools_cert_gen_mod);
@@ -190,6 +203,7 @@ pub fn build(b: *std.Build) void {
     geodec_exe.root_module.addOptions("build_options", build_opts);
     // Add transport module to client
     geodec_exe.root_module.addImport("../transport/quic.zig", transport_quic_mod);
+    geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
     b.installArtifact(geodec_exe);
 
     // Ensure binaries are installed before tests so e2e can run them

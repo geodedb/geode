@@ -114,3 +114,52 @@ func TestGQL_CaseParams(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return len(sub) == 0 || (len(s) >= len(sub) && (s == sub || (func() bool { return strings.Contains(s, sub) })())) }
+
+// startQUIC launches a geoded in QUIC mode on the default port (127.0.0.1:7567) for the duration of the test.
+func startQUIC(t *testing.T) string {
+	t.Helper()
+	ensureServer(t)
+	// Check if already listening on QUIC
+	cmd := exec.Command("../../../zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567")
+	if err := cmd.Start(); err != nil { t.Fatalf("start quic server: %v", err) }
+	// Wait for server to be ready
+	time.Sleep(500 * time.Millisecond)
+	t.Cleanup(func(){ _ = cmd.Process.Kill() })
+	return "127.0.0.1:7567"
+}
+
+func TestGQL_QUIC_OrderLimit(t *testing.T) {
+	addr := startQUIC(t)
+	db, err := Open("quic://" + addr + "?page_size=3")
+	if err != nil { t.Fatalf("Open err: %v", err) }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := db.Connect(ctx)
+	if err != nil { t.Fatalf("Connect err: %v", err) }
+	defer conn.Close()
+	
+	first, _, err := conn.Query(ctx, "RETURN 1 AS x ORDER BY x LIMIT 1", nil, 10)
+	if err != nil { t.Fatalf("query err: %v", err) }
+	if len(first.Rows) != 1 { t.Fatalf("want 1 row, got %d", len(first.Rows)) }
+	if first.Rows[0]["x"].Int != 1 { t.Fatalf("want x=1, got %v", first.Rows[0]["x"]) }
+	if !first.Ordered { t.Fatalf("want ordered=true") }
+	if len(first.OrderKeys) == 0 || first.OrderKeys[0] != "x" { t.Fatalf("want order_keys [x], got %v", first.OrderKeys) }
+}
+
+func TestGQL_TCP_OrderLimit(t *testing.T) {
+	addr := startTCP(t)
+	db, err := Open("tcp://" + addr + "?page_size=3")
+	if err != nil { t.Fatalf("Open err: %v", err) }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := db.Connect(ctx)
+	if err != nil { t.Fatalf("Connect err: %v", err) }
+	defer conn.Close()
+	
+	first, _, err := conn.Query(ctx, "RETURN 1 AS x ORDER BY x LIMIT 1", nil, 10)
+	if err != nil { t.Fatalf("query err: %v", err) }
+	if len(first.Rows) != 1 { t.Fatalf("want 1 row, got %d", len(first.Rows)) }
+	if first.Rows[0]["x"].Int != 1 { t.Fatalf("want x=1, got %v", first.Rows[0]["x"]) }
+	if !first.Ordered { t.Fatalf("want ordered=true") }
+	if len(first.OrderKeys) == 0 || first.OrderKeys[0] != "x" { t.Fatalf("want order_keys [x], got %v", first.OrderKeys) }
+}

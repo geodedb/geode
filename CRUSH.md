@@ -15,6 +15,7 @@ Tests
 - All tests: zig build test
 - Single test file: zig test src/main.zig
 - E2E protocol tests: zig test tests/e2e_protocol.zig
+- Go client tests: make go-test (or cd clients/go/gql && go test -v)
 - Note: tests should be deterministic, RSS ≤512 MiB, timeout ≤30s
 
 Lint/format/typecheck

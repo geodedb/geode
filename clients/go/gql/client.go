@@ -64,7 +64,7 @@ type DB struct {
 
 func Open(dsn string) (*DB, error) {
 	cfg := parseDSN(dsn)
-	return &DB{path: cfg.Path, pageSize: cfg.PageSize, helloName: cfg.HelloName, helloVer: cfg.HelloVer, conf: cfg.Conformance}, nil
+	return &DB{path: cfg.Path, addr: cfg.Addr, pageSize: cfg.PageSize, helloName: cfg.HelloName, helloVer: cfg.HelloVer, conf: cfg.Conformance}, nil
 }
 
 type dsnConfig struct {
@@ -121,7 +121,7 @@ type Conn struct {
 	bufRd  *bufio.Reader
 	nc     net.Conn
 	qConn  interface{} // quic.Connection or quic.EarlyConnection
-	qStream interface{} // quic.Stream
+	qStream interface{} // *quic.Stream (pointer to avoid copy)
 	cancel func()
 	useQUIC bool
 }
@@ -129,17 +129,20 @@ type Conn struct {
 func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 	if db.path == "" && db.addr == "" { return nil, fmt.Errorf("invalid config") }
 	
-	// Parse DSN to check if QUIC mode is requested
-	cfg := parseDSN(db.addr)
-	
-	if cfg.UseQUIC && db.addr != "" { // QUIC mode
+	// Check if QUIC mode is requested
+	if strings.HasPrefix(db.addr, "quic:") {
+		// Parse the address for QUIC
+		addr := strings.TrimPrefix(db.addr, "quic:")
+		addr = strings.TrimPrefix(addr, "//")
+		if addr == "" { addr = "127.0.0.1:7567" }
+		
 		tlsConf := &tls.Config{
 			InsecureSkipVerify: true, // For development; in production use proper cert validation
 			NextProtos: []string{"geode/1"},
 			MinVersion: tls.VersionTLS13,
 		}
 		
-		qConn, err := quic.DialAddr(ctx, db.addr, tlsConf, nil)
+		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
 		if err != nil { return nil, err }
 		
 		qStream, err := qConn.OpenStreamSync(ctx)
@@ -147,13 +150,13 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		
 		c := &Conn{
 			qConn: qConn,
-			qStream: qStream,
+			qStream: &qStream, // Store pointer to avoid copy
 			bufRd: bufio.NewReaderSize(qStream, 64<<10),
 			useQUIC: true,
 		}
 		c.cancel = func(){ 
 			if stream := c.qStream; stream != nil {
-				if s, ok := stream.(quic.Stream); ok { _ = s.Close() }
+				if s, ok := stream.(*quic.Stream); ok { _ = (*s).Close() }
 			}
 			if conn := c.qConn; conn != nil {
 				if qc, ok := conn.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
@@ -166,8 +169,15 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		return c, nil
 	}
 	
-	if db.addr != "" { // TCP
-		nc, err := net.Dial("tcp", db.addr)
+	if db.addr != "" { // TCP mode
+		// Clean up the address from tcp:// prefix if present
+		addr := db.addr
+		addr = strings.TrimPrefix(addr, "tcp://")
+		addr = strings.TrimPrefix(addr, "tcp:")
+		addr = strings.TrimPrefix(addr, "//")
+		if addr == "" { addr = "127.0.0.1:7567" }
+		
+		nc, err := net.Dial("tcp", addr)
 		if err != nil { return nil, err }
 		c := &Conn{nc: nc, bufRd: bufio.NewReaderSize(nc, 64<<10)}
 		c.cancel = func(){ _ = nc.Close() }
@@ -193,8 +203,8 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 func (c *Conn) Close() error {
 	if c.useQUIC {
 		if stream := c.qStream; stream != nil {
-			if s, ok := stream.(quic.Stream); ok {
-				_ = s.Close()
+			if s, ok := stream.(*quic.Stream); ok {
+				_ = (*s).Close()
 			}
 		}
 		if conn := c.qConn; conn != nil {
@@ -221,8 +231,8 @@ func (c *Conn) writeJSON(v any) error {
 	b = append(b, '\n')
 	if c.useQUIC {
 		if stream := c.qStream; stream != nil {
-			if s, ok := stream.(quic.Stream); ok {
-				_, e = s.Write(b)
+			if s, ok := stream.(*quic.Stream); ok {
+				_, e = (*s).Write(b)
 				return e
 			}
 		}

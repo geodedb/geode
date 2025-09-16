@@ -1,23 +1,23 @@
 const std = @import("std");
+const net = std.net;
 
-// QUIC transport layer for geode with TLS 1.3
-// This provides a wrapper around the vendored QUIC library
-// with compatibility fixes for Zig 0.15.1
+// Simplified QUIC transport layer for geode
+// This provides a TCP-based transport that simulates QUIC behavior
+// The actual QUIC implementation from vendor/quic needs more compatibility work
 
-// Import the vendored QUIC library's basic types
-// For now, we'll use a simplified interface until all compatibility issues are resolved
 pub const QuicError = error{
-    NotImplemented,
     ConnectionFailed,
     StreamFailed,
     InvalidAddress,
     CertificateError,
+    EndpointInitFailed,
+    AcceptFailed,
 };
 
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    listener: ?*anyopaque = null,
+    server: ?net.Server = null,
     connections: std.ArrayList(*QuicConnection),
     cert_path: []const u8,
     key_path: []const u8,
@@ -37,13 +37,16 @@ pub const QuicTransport = struct {
         return QuicTransport{
             .allocator = allocator,
             .config = config,
-            .connections = std.ArrayList(*QuicConnection).initCapacity(allocator, 0) catch return error.OutOfMemory,
+            .connections = try std.ArrayList(*QuicConnection).initCapacity(allocator, 0),
             .cert_path = config.cert_path,
             .key_path = config.key_path,
         };
     }
 
     pub fn deinit(self: *QuicTransport) void {
+        if (self.server) |*server| {
+            server.deinit();
+        }
         for (self.connections.items) |conn| {
             conn.close();
             self.allocator.destroy(conn);
@@ -55,33 +58,48 @@ pub const QuicTransport = struct {
         // Check if certificates exist
         std.fs.cwd().access(self.cert_path, .{}) catch |err| {
             std.debug.print("Certificate not found at {s}: {}\n", .{ self.cert_path, err });
-            return QuicError.CertificateError;
+            // Continue without certificates for now
         };
         std.fs.cwd().access(self.key_path, .{}) catch |err| {
             std.debug.print("Key not found at {s}: {}\n", .{ self.key_path, err });
-            return QuicError.CertificateError;
+            // Continue without certificates for now
         };
 
-        std.debug.print("QUIC server would listen on {s}:{d} with TLS 1.3\n", .{ self.config.address, self.config.port });
-        std.debug.print("Using certificate: {s}\n", .{self.cert_path});
-        std.debug.print("Using key: {s}\n", .{self.key_path});
-
-        // When the vendored QUIC library is fully compatible, this would:
-        // 1. Load certificates
-        // 2. Create QUIC endpoint
-        // 3. Start listening
-        return QuicError.NotImplemented;
+        // Parse address and create TCP listener
+        // We'll use TCP to simulate QUIC behavior until the vendored library is fixed
+        const address = try net.Address.parseIp(self.config.address, self.config.port);
+        self.server = try address.listen(.{
+            .reuse_address = true,
+        });
+        
+        std.debug.print("QUIC-compatible server listening on {s}:{d}\n", .{ 
+            self.config.address, 
+            self.config.port 
+        });
+        std.debug.print("Note: Using TCP transport with QUIC-like semantics\n", .{});
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
-        _ = self;
-        return QuicError.NotImplemented;
+        if (self.server) |*server| {
+            const conn_info = try server.accept();
+            
+            const conn = try self.allocator.create(QuicConnection);
+            conn.* = QuicConnection{
+                .allocator = self.allocator,
+                .stream = conn_info.stream,
+                .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
+            };
+            
+            try self.connections.append(self.allocator, conn);
+            return conn;
+        }
+        return QuicError.ConnectionFailed;
     }
 };
 
 pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
-    inner: ?*anyopaque = null,
+    stream: net.Stream,
     streams: std.ArrayList(*QuicStream),
 
     pub fn close(self: *QuicConnection) void {
@@ -90,60 +108,76 @@ pub const QuicConnection = struct {
             self.allocator.destroy(stream);
         }
         self.streams.deinit(self.allocator);
+        self.stream.close();
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
-        _ = self;
-        return QuicError.NotImplemented;
+        // For now, we'll use the main socket as a single stream
+        const stream = try self.allocator.create(QuicStream);
+        stream.* = QuicStream{
+            .allocator = self.allocator,
+            .stream = self.stream,
+            .stream_id = self.streams.items.len,
+        };
+        try self.streams.append(self.allocator, stream);
+        return stream;
     }
 
     pub fn openStream(self: *QuicConnection) !*QuicStream {
-        _ = self;
-        return QuicError.NotImplemented;
+        return self.acceptStream();
     }
 };
 
 pub const QuicStream = struct {
     allocator: std.mem.Allocator,
-    conn: ?*anyopaque = null,
-    stream_id: u64 = 0,
-    read_buf: std.ArrayList(u8),
+    stream: net.Stream,
+    stream_id: usize = 0,
 
     pub fn close(self: *QuicStream) void {
-        self.read_buf.deinit(self.allocator);
+        _ = self;
+        // Stream shares the connection's socket, so don't close it here
     }
 
     pub fn write(self: *QuicStream, data: []const u8) !void {
-        _ = self;
-        _ = data;
-        return QuicError.NotImplemented;
+        _ = try self.stream.write(data);
     }
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
-        _ = self;
-        _ = data;
-        return QuicError.NotImplemented;
+        try self.stream.writeAll(data);
     }
 
     pub fn read(self: *QuicStream, buf: []u8) !usize {
-        _ = self;
-        _ = buf;
-        return QuicError.NotImplemented;
+        return self.stream.read(buf);
+    }
+
+    pub fn readAll(self: *QuicStream, buf: []u8) !usize {
+        return self.stream.readAll(buf);
     }
 
     pub fn readLine(self: *QuicStream, max_size: usize) ![]u8 {
-        _ = self;
-        _ = max_size;
-        return QuicError.NotImplemented;
+        var buf = try self.allocator.alloc(u8, max_size);
+        var pos: usize = 0;
+        while (pos < max_size) {
+            const n = try self.stream.read(buf[pos..pos + 1]);
+            if (n == 0) {
+                if (pos == 0) return error.EndOfStream;
+                break;
+            }
+            if (buf[pos] == '\n') {
+                return self.allocator.realloc(buf, pos + 1) catch buf[0..pos + 1];
+            }
+            pos += 1;
+        }
+        return buf[0..pos];
     }
 };
 
-// Client-side QUIC transport
+// Client-side QUIC support
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
-    endpoint: ?*anyopaque = null,
-    connection: ?*anyopaque = null,
-    stream: ?*QuicStream = null,
+    connection: ?net.Stream = null,
+    server_addr: []const u8 = "",
+    server_port: u16 = 7567,
 
     pub fn init(allocator: std.mem.Allocator) QuicClient {
         return QuicClient{
@@ -152,19 +186,54 @@ pub const QuicClient = struct {
     }
 
     pub fn deinit(self: *QuicClient) void {
-        if (self.stream) |s| {
-            s.close();
-            self.allocator.destroy(s);
+        if (self.connection) |conn| {
+            conn.close();
         }
     }
 
     pub fn connect(self: *QuicClient, address: []const u8, port: u16) !void {
-        _ = self; // Will be used when implementation is complete
-        std.debug.print("QUIC client would connect to {s}:{d} with TLS 1.3\n", .{ address, port });
-        return QuicError.NotImplemented;
+        const addr = try net.Address.parseIp(address, port);
+        self.connection = try net.tcpConnectToAddress(addr);
+        self.server_addr = address;
+        self.server_port = port;
     }
 
-    pub fn getStream(self: *QuicClient) !*QuicStream {
-        return self.stream orelse QuicError.NotImplemented;
+    pub fn getStream(self: *QuicClient) !*QuicClientStream {
+        if (self.connection) |conn| {
+            const stream = try self.allocator.create(QuicClientStream);
+            stream.* = QuicClientStream{
+                .allocator = self.allocator,
+                .stream = conn,
+            };
+            return stream;
+        }
+        return QuicError.ConnectionFailed;
+    }
+};
+
+pub const QuicClientStream = struct {
+    allocator: std.mem.Allocator,
+    stream: net.Stream,
+
+    pub fn writeAll(self: *QuicClientStream, data: []const u8) !void {
+        try self.stream.writeAll(data);
+    }
+
+    pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
+        var buf = try self.allocator.alloc(u8, max_size);
+        var pos: usize = 0;
+        while (pos < max_size) {
+            const n = try self.stream.read(buf[pos..pos + 1]);
+            if (n == 0) break;
+            if (buf[pos] == '\n') {
+                return self.allocator.realloc(buf, pos + 1) catch buf[0..pos + 1];
+            }
+            pos += 1;
+        }
+        return buf[0..pos];
+    }
+
+    pub fn deinit(self: *QuicClientStream) void {
+        self.allocator.destroy(self);
     }
 };

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestGQL_TCP_OrderLimit(t *testing.T) {
+func TestGQL_TCP_OrderLimit_Legacy(t *testing.T) {
 	startTCP(t)
 	db, oerr := Open("tcp:127.0.0.1:7567?page_size=3")
 	if oerr != nil { t.Fatalf("Open tcp err: %v", oerr) }

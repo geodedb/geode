@@ -1361,6 +1361,101 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
     return all_rows.toOwnedSlice(ally) catch &.{};
 }
 
+fn handleTcpConnection(
+    gpa: std.mem.Allocator,
+    conn: std.net.Server.Connection,
+    result_format_txt: bool,
+    disable_estimates: bool,
+    compact_profile: bool,
+    memcurve_profile: bool,
+    test_wal_skip_ratio: ?f64,
+    env_spill_sort: usize,
+    env_spill_distinct: usize,
+    env_spill_union: usize,
+    env_spill_threshold: usize,
+    env_storage_checksum_error: bool,
+    env_wal_compact_interval: usize,
+) !void {
+    _ = env_wal_compact_interval;
+    defer conn.stream.close();
+
+    // Initialize WAL
+    var wal = wal_mod.Wal.init(gpa);
+    defer wal.deinit();
+    wal.openFile("/tmp/geode_ephemeral_wal") catch {};
+    if (test_wal_skip_ratio) |ov| {
+        wal.test_skip_ratio_override = ov;
+    }
+
+    // Initialize state
+    var state = ServerState{ .allocator = gpa };
+    state.txn_manager.init(gpa);
+    state.inserted_values = .{};
+    state.wal_ptr = @ptrCast(&wal);
+    state.spill_sort = env_spill_sort;
+    state.spill_distinct = env_spill_distinct;
+    state.spill_union = env_spill_union;
+    state.query_mem_limit_bytes = env_spill_threshold;
+    state.storage_checksum_error = env_storage_checksum_error;
+
+    // Use the TCP stream for I/O
+    var line_storage: [65536]u8 = undefined;
+
+    // Process messages
+    while (true) {
+        var read_len: usize = 0;
+        var got_newline = false;
+        while (!got_newline and read_len < line_storage.len) {
+            var one: [1]u8 = undefined;
+            const amt = conn.stream.read(&one) catch 0;
+            if (amt == 0) break; // EOF or error
+            const b = one[0];
+            if (b == '\n') {
+                got_newline = true;
+                break;
+            }
+            line_storage[read_len] = b;
+            read_len += 1;
+        }
+        if (read_len == 0) {
+            // No bytes collected. Check for EOF
+            var probe: [1]u8 = undefined;
+            const probe_amt = conn.stream.read(&probe) catch 0;
+            if (probe_amt == 0) break; // real EOF
+            if (probe[0] == '\n') continue; // blank line
+            // Start new line with probe byte
+            line_storage[0] = probe[0];
+            read_len = 1;
+            // Continue filling remainder of line
+            while (!got_newline and read_len < line_storage.len) {
+                var one: [1]u8 = undefined;
+                const amt2 = conn.stream.read(&one) catch 0;
+                if (amt2 == 0) break;
+                const b2 = one[0];
+                if (b2 == '\n') {
+                    got_newline = true;
+                    break;
+                }
+                line_storage[read_len] = b2;
+                read_len += 1;
+            }
+        }
+        const line = line_storage[0..read_len];
+        if (line.len == 0) continue; // skip blank lines
+
+        // Process the line
+        const response = processMessage(gpa, &state, line, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |e| {
+            // Send error response
+            const err_msg = std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"status_subclass\":\"000\",\"message\":\"Internal error: {s}\"}}\n", .{@errorName(e)}) catch continue;
+            defer gpa.free(err_msg);
+            _ = conn.stream.write(err_msg) catch {};
+            continue;
+        };
+        defer gpa.free(response);
+        _ = conn.stream.write(response) catch {};
+    }
+}
+
 fn handleQuicConnection(
     gpa: std.mem.Allocator,
     conn: *quic_transport.QuicConnection,
@@ -1468,6 +1563,7 @@ pub fn main() !void {
     var ai: usize = 1;
     var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
     var listen_quic: ?[]const u8 = null;
+    var listen_tcp: ?[]const u8 = null;
     var cert_path: []const u8 = "certs/server.crt";
     var key_path: []const u8 = "certs/server.key";
     while (ai < args.len) : (ai += 1) {
@@ -1489,8 +1585,7 @@ pub fn main() !void {
             listen_quic = args[ai + 1];
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--listen-tcp") and ai + 1 < args.len) {
-            // Keep TCP for backward compatibility but prefer QUIC
-            if (listen_quic == null) listen_quic = args[ai + 1];
+            listen_tcp = args[ai + 1];
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--cert") and ai + 1 < args.len) {
             cert_path = args[ai + 1];
@@ -1589,6 +1684,39 @@ pub fn main() !void {
             // For now, handle synchronously
             handleQuicConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval) catch |err| {
                 std.debug.print("Error handling QUIC connection: {}\n", .{err});
+            };
+        }
+        return;
+    }
+
+    // TCP mode
+    if (listen_tcp) |addr_str| {
+        const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':');
+        var port: u16 = 7567;
+        var address_str: []const u8 = "127.0.0.1";
+
+        if (colon) |ci| {
+            address_str = addr_str[0..ci];
+            const p = addr_str[ci + 1 ..];
+            port = std.fmt.parseUnsigned(u16, p, 10) catch 7567;
+        } else {
+            // If no colon, treat as port only
+            port = std.fmt.parseUnsigned(u16, addr_str, 10) catch 7567;
+        }
+
+        const address = try std.net.Address.parseIp(address_str, port);
+        var server = try address.listen(.{
+            .reuse_address = true,
+        });
+        defer server.deinit();
+
+        std.debug.print("TCP server listening on {s}:{d}\n", .{ address_str, port });
+
+        while (true) {
+            const conn = try server.accept();
+            // Handle each connection synchronously for now
+            handleTcpConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval) catch |err| {
+                std.debug.print("Error handling TCP connection: {}\n", .{err});
             };
         }
         return;
