@@ -35,11 +35,10 @@ func ensureServer(t *testing.T) string {
 func startTCP(t *testing.T) string {
 	t.Helper()
 	ensureServer(t)
-	// If already listening, reuse.
-	if c, err := net.DialTimeout("tcp", "127.0.0.1:7567", 100*time.Millisecond); err == nil {
-		_ = c.Close()
-		return "127.0.0.1:7567"
-	}
+	// Kill any existing server on the port (could be QUIC or TCP from previous test)
+	exec.Command("pkill", "-f", "geoded.*7567").Run()
+	time.Sleep(100 * time.Millisecond)
+	
 	cmd := exec.Command("../../../zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7567")
 	if err := cmd.Start(); err != nil { t.Fatalf("start tcp server: %v", err) }
 	// Wait readiness

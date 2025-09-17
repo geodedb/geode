@@ -166,6 +166,8 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		}
 		hello := map[string]any{"type":"HELLO","client_name":db.helloName,"client_ver":db.helloVer,"wanted_conformance":db.conf}
 		if err := c.writeJSON(hello); err != nil { _ = c.Close(); return nil, err }
+		// Read and discard HELLO response
+		if _, err := c.readLine(ctx); err != nil { _ = c.Close(); return nil, err }
 		return c, nil
 	}
 	
@@ -183,6 +185,8 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		c.cancel = func(){ _ = nc.Close() }
 		hello := map[string]any{"type":"HELLO","client_name":db.helloName,"client_ver":db.helloVer,"wanted_conformance":db.conf}
 		if err := c.writeJSON(hello); err != nil { _ = c.Close(); return nil, err }
+		// Read and discard HELLO response
+		if _, err := c.readLine(ctx); err != nil { _ = c.Close(); return nil, err }
 		return c, nil
 	}
 	// process mode
@@ -197,6 +201,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 	c.cancel = func(){ _ = cmd.Process.Kill() }
 	hello := map[string]any{"type":"HELLO","client_name":db.helloName,"client_ver":db.helloVer,"wanted_conformance":db.conf}
 	if err := c.writeJSON(hello); err != nil { _ = c.Close(); return nil, err }
+	// Note: process mode (stdio) doesn't send HELLO response
 	return c, nil
 }
 
@@ -281,9 +286,9 @@ func (c *Conn) Query(ctx context.Context, text string, params map[string]any, pa
 	if len(params) > 0 { run["params"] = params }
 	if err := c.writeJSON(run); err != nil { return Page{}, nil, err }
 	l1, err := c.readLine(ctx); if err != nil { return Page{}, nil, err }
-	var fr frame; if err := json.Unmarshal(l1, &fr); err != nil { return Page{}, nil, err }
+	var fr frame; if err := json.Unmarshal(l1, &fr); err != nil { return Page{}, nil, fmt.Errorf("unmarshal error: %v, raw: %s", err, string(l1)) }
 	if fr.Result.Type == "ERROR" { return Page{}, nil, fmt.Errorf("%s: %s", fr.Result.Code, fr.Result.Message) }
-	if fr.Result.Type != "SCHEMA" { return Page{}, nil, fmt.Errorf("unexpected: %s", fr.Result.Type) }
+	if fr.Result.Type != "SCHEMA" { return Page{}, nil, fmt.Errorf("unexpected: %s (raw: %s)", fr.Result.Type, string(l1)) }
 	cols := make([]Column, len(fr.Result.Columns))
 	types := make(map[string]string, len(fr.Result.Columns))
 	for i, cdef := range fr.Result.Columns { cols[i] = Column{Name: cdef.Name, Type: cdef.Type}; types[cdef.Name] = cdef.Type }

@@ -40,6 +40,7 @@ func TestPoolConcurrency(t *testing.T) { // part of pool tests
 // TestPoolAcquireTimeout ensures Acquire times out when closed.
 func TestPoolAcquireTimeout(t *testing.T) {
 	startTCP(t)
+	time.Sleep(50 * time.Millisecond) // Give server time to stabilize
 	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 1, 10*time.Second)
 	ctx := context.Background()
 	c, err := p.Acquire(ctx)

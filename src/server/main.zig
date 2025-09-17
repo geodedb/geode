@@ -1499,6 +1499,27 @@ fn evaluateBinarySet(
     return out_rows.toOwnedSlice(ally) catch &.{};
 }
 
+fn handleTcpConnectionThread(
+    gpa: std.mem.Allocator,
+    conn: std.net.Server.Connection,
+    result_format_txt: bool,
+    disable_estimates: bool,
+    compact_profile: bool,
+    memcurve_profile: bool,
+    test_wal_skip_ratio: ?f64,
+    env_spill_sort: usize,
+    env_spill_distinct: usize,
+    env_spill_union: usize,
+    env_spill_threshold: usize,
+    env_storage_checksum_error: bool,
+    env_wal_compact_interval: usize,
+    force_serialization_failure: bool,
+) void {
+    handleTcpConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, force_serialization_failure) catch |err| {
+        std.debug.print("Error handling TCP connection: {}\n", .{err});
+    };
+}
+
 fn handleTcpConnection(
     gpa: std.mem.Allocator,
     conn: std.net.Server.Connection,
@@ -1541,58 +1562,27 @@ fn handleTcpConnection(
     // Use the TCP stream for I/O
     var line_storage: [65536]u8 = undefined;
 
-    // Process messages
+    // Process messages (simple blocking read until newline)
     while (true) {
         var read_len: usize = 0;
-        var got_newline = false;
-        while (!got_newline and read_len < line_storage.len) {
+        while (read_len < line_storage.len) {
             var one: [1]u8 = undefined;
-            const amt = conn.stream.read(&one) catch 0;
-            if (amt == 0) break; // EOF or error
-            const b = one[0];
-            if (b == '\n') {
-                got_newline = true;
-                break;
-            }
-            line_storage[read_len] = b;
+            const n = conn.stream.read(&one) catch 0;
+            if (n == 0) break;
+            if (one[0] == '\n') break;
+            line_storage[read_len] = one[0];
             read_len += 1;
         }
-        if (read_len == 0) {
-            // No bytes collected. Check for EOF
-            var probe: [1]u8 = undefined;
-            const probe_amt = conn.stream.read(&probe) catch 0;
-            if (probe_amt == 0) break; // real EOF
-            if (probe[0] == '\n') continue; // blank line
-            // Start new line with probe byte
-            line_storage[0] = probe[0];
-            read_len = 1;
-            // Continue filling remainder of line
-            while (!got_newline and read_len < line_storage.len) {
-                var one: [1]u8 = undefined;
-                const amt2 = conn.stream.read(&one) catch 0;
-                if (amt2 == 0) break;
-                const b2 = one[0];
-                if (b2 == '\n') {
-                    got_newline = true;
-                    break;
-                }
-                line_storage[read_len] = b2;
-                read_len += 1;
-            }
-        }
+        if (read_len == 0) break;
         const line = line_storage[0..read_len];
-        if (line.len == 0) continue; // skip blank lines
-
-        // Process the line
         const response = processMessage(gpa, &state, line, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |e| {
-            // Send error response
             const err_msg = std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"status_subclass\":\"000\",\"message\":\"Internal error: {s}\"}}\n", .{@errorName(e)}) catch continue;
             defer gpa.free(err_msg);
-            _ = conn.stream.write(err_msg) catch {};
+            _ = conn.stream.writeAll(err_msg) catch {};
             continue;
         };
         defer gpa.free(response);
-        _ = conn.stream.write(response) catch {};
+        _ = conn.stream.writeAll(response) catch {};
     }
 }
 
@@ -1684,7 +1674,9 @@ fn processMessage(
     const msg = protocol.parseClientMessage(arena.allocator(), _line) catch return try gpa.dupe(u8, "");
     switch (msg) {
         .HELLO => |_| {
-            return try gpa.dupe(u8, "");
+            // Return HELLO response with capabilities
+            const hello_response = "{\"status_class\":\"00000\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}\n";
+            return try gpa.dupe(u8, hello_response);
         },
         .PING => |_| {
             const ok = "{\"ok\":true}";
@@ -1714,7 +1706,8 @@ fn processMessage(
                             var mode: []const u8 = "DISTINCT";
                             const rows = evaluateUnion(gpa, u_stmt, pn, pr, &mode, &metrics) catch &.{};
                             var cols_box = gpa.alloc(protocol.SchemaCol, u_stmt.first.ret.items.len) catch return try gpa.dupe(u8, "");
-                            var ci: usize = 0; while (ci < u_stmt.first.ret.items.len) : (ci += 1) {
+                            var ci: usize = 0;
+                            while (ci < u_stmt.first.ret.items.len) : (ci += 1) {
                                 const it = u_stmt.first.ret.items[ci];
                                 var name_slice: []const u8 = "col";
                                 if (it.alias) |al| name_slice = al else {
@@ -1991,9 +1984,9 @@ pub fn main() !void {
 
         while (true) {
             const conn = try server.accept();
-            handleTcpConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
-                std.debug.print("Error handling TCP connection: {}\n", .{err});
-            };
+            // Spawn a thread to handle each connection concurrently
+            const thread = try std.Thread.spawn(.{}, handleTcpConnectionThread, .{ gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false });
+            thread.detach();
             if (test_exit_after_first) break;
         }
         return;

@@ -51,12 +51,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Conn, error) {
 			c := p.idle[n-1]
 			p.idle = p.idle[:n-1]
 			p.mu.Unlock()
-			// NOTE: PING health check removed for now. The previous implementation
-			// dropped the connection on any failure without decrementing the
-			// created counter, leading to a deadlock where created == max but no
-			// usable connections existed. We'll trust the connection; failures will
-			// surface on next use and the caller can Close(). A future revision can
-			// reintroduce health checks with proper accounting.
+			// Return idle connection directly (no health check)
 			return c, nil
 		}
 		if p.created < p.max {
