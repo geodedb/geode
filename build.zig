@@ -67,6 +67,10 @@ pub fn build(b: *std.Build) void {
     });
     // Expose project root as a module so submodules can import by name
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+    
+    // Create a single shared storage_page_manager module to avoid duplicates
+    const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    root_mod.addImport("storage_page_manager", storage_page_manager_shared);
     gql_exe.root_module.addImport("geode", root_mod);
     // Also mount the submodule path 'gql' for deep imports like @import("gql/ast.zig")
     const gql_mod = b.createModule(.{ .root_source_file = b.path("src/gql/ast.zig"), .target = target, .optimize = optimize });
@@ -126,13 +130,18 @@ pub fn build(b: *std.Build) void {
 
     // Aggregated custom tests under tests/ (e.g., evaluator unit tests not covered by source-root modules)
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
+    // Mount geode root for tests; do NOT rely on geode to re-export CSR to avoid duplicate module roots in tests
     custom_tests.root_module.addImport("geode", root_mod);
-    // Make storage modules available to tests
-    const storage_page_manager_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    // Catalog module wired to the shared page_manager
     const storage_catalog_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
-    storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_mod_tests);
-    custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_mod_tests);
+    storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
+    // CSR module for tests, wired to the same page_manager alias
+    const storage_csr_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/csr_adjacency.zig"), .target = target, .optimize = optimize });
+    storage_csr_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
+    // Expose modules to test root (exactly once each)
+    custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod_tests);
+    custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
@@ -159,13 +168,17 @@ pub fn build(b: *std.Build) void {
     const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("storage_mem", storage_mem_mod);
     // add storage_page_manager module alias required for checksum diagnostic path
-    const storage_page_manager_mod2 = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("storage_page_manager", storage_page_manager_mod2);
+    geoded_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     // storage catalog module
     const storage_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
     // Ensure catalog module can import page_manager by name
-    storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_mod2);
+    storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_shared);
     geoded_exe.root_module.addImport("storage_catalog", storage_catalog_mod);
+    // Provide CSR adjacency module to server binary
+    const storage_csr_mod = b.createModule(.{ .root_source_file = b.path("src/storage/csr_adjacency.zig"), .target = target, .optimize = optimize });
+    storage_csr_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    geoded_exe.root_module.addImport("storage/csr_adjacency.zig", storage_csr_mod);
+    // Don't add CSR to root_mod to avoid module conflicts in tests
     // txn / wal / dist modules
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("txn", txn_mod);
@@ -260,8 +273,7 @@ pub fn build(b: *std.Build) void {
     const wal_scan_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
     // add storage page manager module alias required by wal.zig (@import("storage_page_manager"))
-    const storage_page_manager_mod = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
-    wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_mod);
+    wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     b.installArtifact(wal_compact_exe);
     tools_step.dependOn(&wal_compact_exe.step);
 

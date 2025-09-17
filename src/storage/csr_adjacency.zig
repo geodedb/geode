@@ -1,5 +1,5 @@
 const std = @import("std");
-const storage = @import("page_manager.zig");
+const storage = @import("storage_page_manager");
 
 /// Compressed Sparse Row (CSR) adjacency list storage for graph traversal
 pub const CSRAdjacency = struct {

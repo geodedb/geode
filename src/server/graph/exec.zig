@@ -40,6 +40,8 @@ pub const GraphStorage = struct {
     // Adjacency lists for efficient traversal
     outgoing: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
     incoming: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
+    // Optional CSR adjacency (outgoing)
+    csr: ?*const geode.storage.csr.CSRAdjacency = null,
     
     pub fn init(allocator: std.mem.Allocator) GraphStorage {
         return .{
@@ -47,6 +49,7 @@ pub const GraphStorage = struct {
             .edges = std.ArrayList(Edge).initCapacity(allocator, 0) catch unreachable,
             .outgoing = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
             .incoming = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
+            .csr = null,
         };
     }
     
@@ -209,57 +212,54 @@ pub fn expand(
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
     
     for (bindings) |binding| {
-        // Get source node from binding
         const source_val = binding.vars.get(source_var) orelse continue;
         const source_id = switch (source_val) {
             .Node => |id| id,
             else => continue,
         };
         
-        // Get edges based on direction
+        // If CSR is enabled at compile time and available, prefer it for outgoing traversal (right direction)
+        const use_csr = @hasDecl(@import("build_options"), "GEODE_USE_CSR") and @import("build_options").GEODE_USE_CSR;
+        if (use_csr and direction == .right) {
+            if (graph.csr) |c| {
+                if (c.getNeighbors(source_id)) |ns| {
+                    for (ns.neighbors) |entry| {
+                        var new_binding = try binding.clone(allocator);
+                        if (edge_var) |ev| { try new_binding.vars.put(ev, .{ .Edge = @intCast(entry.edge_id) }); }
+                        if (target_var) |tv| { try new_binding.vars.put(tv, .{ .Node = entry.target_node }); }
+                        try results.append(allocator, new_binding);
+                    }
+                    continue;
+                }
+            }
+        }
+        
         const edge_ids = switch (direction) {
             .right => graph.outgoing.get(source_id),
             .left => graph.incoming.get(source_id),
-            .undirected => null, // Would need to combine both
+            .undirected => null,
         };
         
         if (edge_ids) |edges| {
             for (edges.items) |edge_id| {
                 const edge = graph.edges.items[edge_id];
-                
-                // Check edge type filter
                 if (edge_types.len > 0) {
                     var matches = false;
                     for (edge_types) |required_type| {
-                        if (std.mem.eql(u8, required_type, edge.edge_type)) {
-                            matches = true;
-                            break;
-                        }
+                        if (std.mem.eql(u8, required_type, edge.edge_type)) { matches = true; break; }
                     }
                     if (!matches) continue;
                 }
-                
-                // Create new binding with edge and target
                 var new_binding = try binding.clone(allocator);
-                
-                if (edge_var) |ev| {
-                    try new_binding.vars.put(ev, .{ .Edge = edge_id });
-                }
-                
+                if (edge_var) |ev| { try new_binding.vars.put(ev, .{ .Edge = edge_id }); }
                 if (target_var) |tv| {
-                    const target_id = switch (direction) {
-                        .right => edge.target,
-                        .left => edge.source,
-                        .undirected => edge.target, // Would need both
-                    };
+                    const target_id = switch (direction) { .right => edge.target, .left => edge.source, .undirected => edge.target };
                     try new_binding.vars.put(tv, .{ .Node = target_id });
                 }
-                
                 try results.append(allocator, new_binding);
             }
         }
     }
-    
     return results.toOwnedSlice(allocator);
 }
 
@@ -335,42 +335,60 @@ pub fn executeMatch(
         return results;
     }
     
-    // For now, handle simple single-chain patterns
-    const chain = pattern.chains[0];
-    if (chain.hops.len == 0) {
-        return &.{};
-    }
-    
+    // For now, handle patterns by chaining chains with cross join, with OPTIONAL semantics applied per chain when no matches
     var current_bindings: []Binding = &.{};
     
-    // Process each hop in the chain
-    for (chain.hops, 0..) |hop, i| {
-        if (i == 0) {
-            // Start with node scan for first node
-            current_bindings = try nodeScan(
-                allocator,
-                graph,
-                hop.left.labels,
-                hop.left.name,
-            );
+    for (pattern.chains, 0..) |chain, chain_idx| {
+        if (chain.hops.len == 0) continue;
+        var chain_bindings: []Binding = &.{};
+        for (chain.hops, 0..) |hop, i| {
+            if (i == 0) {
+                chain_bindings = try nodeScan(allocator, graph, hop.left.labels, hop.left.name);
+                // If not the first chain, cross-join with current_bindings by merging maps
+                if (chain_idx > 0 and current_bindings.len > 0 and chain_bindings.len > 0) {
+                    var joined = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+                    for (current_bindings) |lb| {
+                        for (chain_bindings) |rb| {
+                            var nb = try lb.clone(allocator);
+                            var it = rb.vars.iterator();
+                            while (it.next()) |e| {
+                                try nb.vars.put(e.key_ptr.*, e.value_ptr.*);
+                            }
+                            try joined.append(allocator, nb);
+                        }
+                    }
+                    chain_bindings = try joined.toOwnedSlice(allocator);
+                }
+            }
+            if (hop.left.name) |source_var| {
+                const expanded = try expand(allocator, graph, chain_bindings, source_var, hop.rel.types, hop.rel.dir, hop.right.name, hop.rel.name);
+                if (expanded.len == 0) {
+                    var preserved = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+                    for (chain_bindings) |b| {
+                        var nb = try b.clone(allocator);
+                        if (hop.rel.name) |ev| { try nb.vars.put(ev, .{ .Value = .Null }); }
+                        if (hop.right.name) |tv| { try nb.vars.put(tv, .{ .Value = .Null }); }
+                        try preserved.append(allocator, nb);
+                    }
+                    chain_bindings = try preserved.toOwnedSlice(allocator);
+                } else {
+                    chain_bindings = expanded;
+                }
+            }
         }
-        
-        // Expand along the edge
-        if (hop.left.name) |source_var| {
-            current_bindings = try expand(
-                allocator,
-                graph,
-                current_bindings,
-                source_var,
-                hop.rel.types,
-                hop.rel.dir,
-                hop.right.name,
-                hop.rel.name,
-            );
+        // Attach chain result
+        if (chain_idx == 0) {
+            current_bindings = chain_bindings;
+        } else if (current_bindings.len == 0) {
+            current_bindings = chain_bindings;
+        } else if (chain_bindings.len == 0) {
+            // OPTIONAL chain: preserve current_bindings with nulls for newly introduced variables
+            current_bindings = current_bindings; // already preserved above per-hop
+        } else {
+            current_bindings = chain_bindings; // already cross-joined at start of chain
         }
     }
     
-    // Apply WHERE clause if present
     if (where_clause) |where| {
         current_bindings = try filter(allocator, current_bindings, where, graph);
     }
@@ -466,7 +484,6 @@ pub fn bindingsToJson(
 fn writeBindingValue(writer: anytype, val: BindingValue, graph: *const GraphStorage) !void {
     switch (val) {
         .Node => |id| {
-            // Return node as object with id and labels
             try writer.writeAll("{\"id\":");
             try writer.print("{}", .{id});
             if (graph.nodes.get(id)) |node| {
@@ -482,10 +499,20 @@ fn writeBindingValue(writer: anytype, val: BindingValue, graph: *const GraphStor
         .Edge => |id| {
             try writer.print("{}", .{id});
         },
+        .Path => |nodes| {
+            try writer.writeAll("[");
+            var i: usize = 0;
+            while (i < nodes.len) : (i += 1) {
+                if (i > 0) try writer.writeAll(",");
+                const nid = nodes[i];
+                // Reuse node rendering for each id
+                try writeBindingValue(writer, BindingValue{ .Node = nid }, graph);
+            }
+            try writer.writeAll("]");
+        },
         .Value => |pv| {
             try writePropertyValue(writer, pv);
         },
-        else => try writer.writeAll("null"),
     }
 }
 

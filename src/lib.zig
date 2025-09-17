@@ -31,6 +31,11 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Re-export storage submodules needed across server modules (CSR adjacency)
+pub const storage = struct {
+    // Note: CSR is available to the server binary via build.zig module injection; tests import it directly.
+    pub const csr = @import("storage/csr_adjacency.zig");
+};
 
 // Lightweight helper to carry parameter bindings across subsystems
 pub const ParamBindings = struct {
