@@ -1684,59 +1684,101 @@ fn processMessage(
     const msg = protocol.parseClientMessage(arena.allocator(), _line) catch return try gpa.dupe(u8, "");
     switch (msg) {
         .HELLO => |_| {
-            var caps = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-            defer caps.deinit(gpa);
-            caps.append(gpa, "\"QUIC\"") catch {};
-            caps.append(gpa, "\"TLS1.3\"") catch {};
-            const dist_enabled = false;
-            const raft_enabled = false;
-            const two_pc_enabled = false;
-            const sharding_enabled = false;
-            const is_leader = false;
-            var caps_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
-            defer caps_buf.deinit(gpa);
-            var w = caps_buf.writer(gpa);
-            var i: usize = 0;
-            while (i < caps.items.len) : (i += 1) {
-                if (i > 0) w.writeAll(",") catch {};
-                w.writeAll(caps.items[i]) catch {};
-            }
-            const caps_json = caps_buf.toOwnedSlice(gpa) catch &.{};
-            defer if (caps_json.len > 0) gpa.free(caps_json);
-            const order_feat = if (g_order_keys_expr) "\"ORDER_KEYS=expr\"" else "\"ORDER_KEYS=ident-only\"";
-            const features = std.fmt.allocPrint(gpa, "[\"GQ01\",\"ORDER\",\"UNION\",\"INTERSECT\",\"EXCEPT\",\"TXN\",\"EXPLAIN\",\"PROFILE\",{s},\"PROFILE_SCHEMA=v2\"]", .{order_feat}) catch ("[\"GQ01\",\"ORDER\"]");
-            defer if (features.ptr != "[\"GQ01\"]".ptr) gpa.free(features);
-            const digest = "deadbeef";
-            var buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
-            const wr = buf.writer(gpa);
-            wr.writeAll("{\"status_class\":\"00000\",\"capabilities\":[") catch {};
-            wr.writeAll(caps_json) catch {};
-            wr.writeAll("],\"distributed\":{") catch {};
-            wr.writeAll("\"enabled\":") catch {};
-            wr.writeAll(if (dist_enabled) "true" else "false") catch {};
-            wr.writeAll(",\"raft\":") catch {};
-            wr.writeAll(if (raft_enabled) "true" else "false") catch {};
-            wr.writeAll(",\"two_pc\":") catch {};
-            wr.writeAll(if (two_pc_enabled) "true" else "false") catch {};
-            wr.writeAll(",\"sharding\":") catch {};
-            wr.writeAll(if (sharding_enabled) "true" else "false") catch {};
-            wr.writeAll(",\"is_leader\":") catch {};
-            wr.writeAll(if (is_leader) "true" else "false") catch {};
-            wr.writeAll("},\"conformance\":{") catch {};
-            wr.writeAll("\"digest\":\"") catch {};
-            wr.writeAll(digest) catch {};
-            wr.writeAll("\",\"features\":") catch {};
-            wr.writeAll(features) catch {};
-            wr.writeAll("}}\n") catch {};
-            return buf.toOwnedSlice(gpa) catch try gpa.dupe(u8, "");
+            return try gpa.dupe(u8, "");
         },
         .PING => |_| {
             const ok = "{\"ok\":true}";
             const flags = computeBaseFlags(false, false);
             return protocol.buildBindingsLine(gpa, false, &.{}, ok, true, &.{}, flags) catch try gpa.dupe(u8, "");
         },
+        .RUN_GQL => |rq| {
+            state.resetResult();
+            var text = rq.text;
+            if (std.mem.startsWith(u8, text, "PROFILE ")) text = text[8..];
+            if (std.mem.startsWith(u8, text, "EXPLAIN ")) text = text[8..];
+            var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = !g_order_keys_expr, .forbid_orderby_calls = !g_order_keys_expr }) catch return try gpa.dupe(u8, "");
+            defer if (parse_res == .Ok) parse_res.Ok.deinit();
+            switch (parse_res) {
+                .Err => |_| return try gpa.dupe(u8, ""),
+                .Ok => |ok| {
+                    if (ok.program.statements.len == 0) {
+                        if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| return line else |_| return try gpa.dupe(u8, "");
+                    }
+                    const st = ok.program.statements[0];
+                    switch (st) {
+                        .Union => |u_stmt| {
+                            var pn: [][]const u8 = &.{};
+                            var pr: [][]const eval.Value = &.{};
+                            parseParams(gpa, rq.params_json, &pn, &pr);
+                            var metrics: UnionMetrics = .{ .left_in = 0, .right_in = 0, .out = 0, .hash_size = null };
+                            var mode: []const u8 = "DISTINCT";
+                            const rows = evaluateUnion(gpa, u_stmt, pn, pr, &mode, &metrics) catch &.{};
+                            var cols_box = gpa.alloc(protocol.SchemaCol, u_stmt.first.ret.items.len) catch return try gpa.dupe(u8, "");
+                            var ci: usize = 0; while (ci < u_stmt.first.ret.items.len) : (ci += 1) {
+                                const it = u_stmt.first.ret.items[ci];
+                                var name_slice: []const u8 = "col";
+                                if (it.alias) |al| name_slice = al else {
+                                    const tmpn = geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col";
+                                    name_slice = tmpn;
+                                }
+                                cols_box[ci] = .{ .name = name_slice, .type = "INT" };
+                            }
+                            const cols: []const protocol.SchemaCol = cols_box;
+                            state.last_columns = cols;
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = std.mem.eql(u8, mode, "DISTINCT");
+                            state.page_items = @constCast(rows);
+                            state.page_index = 0;
+                            state.active_result = true;
+                            return protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(false, state.last_distinct)) catch try gpa.dupe(u8, "");
+                        },
+                        .Query => |q| {
+                            var pn: [][]const u8 = &.{};
+                            var pr: [][]const eval.Value = &.{};
+                            parseParams(gpa, rq.params_json, &pn, &pr);
+                            var ord = false;
+                            var oks: [][]const u8 = &.{};
+                            var cols: []const protocol.SchemaCol = &.{};
+                            var run_code: diagnostics.Code = .IllegalOrderKey;
+                            const rows = evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, null, &run_code, null) catch &.{};
+                            state.last_columns = cols;
+                            state.last_ordered = ord;
+                            state.last_order_keys = oks;
+                            state.last_distinct = q.ret.distinct;
+                            state.page_items = @constCast(rows);
+                            state.page_index = 0;
+                            state.active_result = true;
+                            return protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(ord, q.ret.distinct)) catch try gpa.dupe(u8, "");
+                        },
+                        else => return try gpa.dupe(u8, ""),
+                    }
+                },
+            }
+        },
+        .PULL => |pl| {
+            const page_size = if (pl.page_size == 0) 1000 else pl.page_size;
+            const start = state.page_index;
+            const end = @min(state.page_index + page_size, state.page_items.len);
+            var arr_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+            const w = arr_buf.writer(gpa);
+            w.writeAll("[") catch {};
+            var i: usize = start;
+            var first = true;
+            while (i < end) : (i += 1) {
+                if (!first) w.writeAll(",") catch {};
+                first = false;
+                w.writeAll(state.page_items[i]) catch {};
+            }
+            w.writeAll("]") catch {};
+            const json_rows = arr_buf.toOwnedSlice(gpa) catch "[]";
+            state.page_index = end;
+            const is_final = end >= state.page_items.len;
+            if (is_final) state.active_result = false;
+            const flags = computeBaseFlags(state.last_ordered, state.last_distinct);
+            return protocol.buildBindingsLine(gpa, state.last_ordered, state.last_order_keys, json_rows, is_final, &.{}, flags) catch try gpa.dupe(u8, "");
+        },
         else => {
-            _ = state;
             return try gpa.dupe(u8, "");
         },
     }
@@ -2030,55 +2072,8 @@ pub fn main() !void {
         const msg = protocol.parseClientMessage(arena.allocator(), raw) catch continue; // ignore invalid
         switch (msg) {
             .HELLO => |_| {
-                // Reply with capabilities + conformance profile
-                var caps = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
-                defer caps.deinit(gpa);
-                caps.append(gpa, "\"QUIC\"") catch {};
-                caps.append(gpa, "\"TLS1.3\"") catch {};
-                const dist_enabled = false;
-                const raft_enabled = false;
-                const two_pc_enabled = false;
-                const sharding_enabled = false;
-                const is_leader = false;
-                // distributed disabled in this build; caps static
-                var caps_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
-                defer caps_buf.deinit(gpa);
-                var w = caps_buf.writer(gpa);
-                var i: usize = 0;
-                while (i < caps.items.len) : (i += 1) {
-                    if (i > 0) w.writeAll(",") catch {};
-                    w.writeAll(caps.items[i]) catch {};
-                }
-                const caps_json = caps_buf.toOwnedSlice(gpa) catch &.{};
-                defer if (caps_json.len > 0) gpa.free(caps_json);
-                const order_feat = "\"ORDER_KEYS=ident-only\"";
-                const features = std.fmt.allocPrint(gpa, "[\"GQ01\",\"ORDER\",\"UNION\",\"INTERSECT\",\"EXCEPT\",\"TXN\",\"EXPLAIN\",\"PROFILE\",{s},\"PROFILE_SCHEMA=v2\"]", .{order_feat}) catch ("[\"GQ01\",\"ORDER\"]");
-                defer if (features.ptr != "[\"GQ01\"]".ptr) gpa.free(features);
-                const digest = "deadbeef";
-                var hb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
-                const hw = hb.writer(gpa);
-                hw.writeAll("{\"status_class\":\"00000\",\"capabilities\":[") catch {};
-                hw.writeAll(caps_json) catch {};
-                hw.writeAll("],\"distributed\":{") catch {};
-                hw.writeAll("\"enabled\":") catch {};
-                hw.writeAll(if (dist_enabled) "true" else "false") catch {};
-                hw.writeAll(",\"raft\":") catch {};
-                hw.writeAll(if (raft_enabled) "true" else "false") catch {};
-                hw.writeAll(",\"two_pc\":") catch {};
-                hw.writeAll(if (two_pc_enabled) "true" else "false") catch {};
-                hw.writeAll(",\"sharding\":") catch {};
-                hw.writeAll(if (sharding_enabled) "true" else "false") catch {};
-                hw.writeAll(",\"is_leader\":") catch {};
-                hw.writeAll(if (is_leader) "true" else "false") catch {};
-                hw.writeAll("},\"conformance\":{") catch {};
-                hw.writeAll("\"digest\":\"") catch {};
-                hw.writeAll(digest) catch {};
-                hw.writeAll("\",\"features\":") catch {};
-                hw.writeAll(features) catch {};
-                hw.writeAll("}}\n") catch {};
-                const hello = hb.toOwnedSlice(gpa) catch "{}\n";
-                _ = stdout_file.write(hello) catch {};
-                if (hello.ptr != "{}\n".ptr) gpa.free(hello);
+                // No-op HELLO on stdio
+                continue;
             },
             .BEGIN => |_| {
                 if (state.active_txn != null) {
