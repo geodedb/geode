@@ -17,6 +17,7 @@ Tests
 - All tests: zig build test
 - Single test file: zig test src/main.zig
 - E2E protocol tests: zig test tests/e2e_protocol.zig
+- QUIC/TLS tests: zig test tests/e2e_quic_tls_comprehensive.zig
 - Go client tests: make go-test (or cd clients/go/gql && go test -v)
 - Note: tests should be deterministic, RSS ≤512 MiB, timeout ≤30s
 
@@ -49,6 +50,34 @@ feat(transport): add QUIC with TLS 1.3 support for client-server communication
 - Updated Go client to support quic: DSN prefix with github.com/quic-go/quic-go
 - Maintained backward compatibility with TCP and stdio modes
 - All integration tests updated to use QUIC transport
+
+New Features Implemented:
+
+Core GQL Features:
+- MATCH pattern matching with graph traversal (src/graph/pattern_matcher.zig)
+- Property access for nodes and edges
+- GROUP BY with aggregations (COUNT, SUM, AVG, MIN, MAX, STDEV, VARIANCE) (src/graph/aggregator.zig)
+- Graph mutations (CREATE, UPDATE, DELETE, MERGE operations)
+
+Storage Enhancements:
+- Automatic WAL compaction with configurable thresholds (src/storage/wal_compactor.zig)
+- B-tree indexes for property lookups (src/index/btree.zig)
+- Cost-based query optimizer with statistics (src/planner/optimizer.zig)
+
+Distributed Features:
+- Raft consensus for leader election (src/distributed/raft_consensus.zig)
+- Two-phase commit coordinator (src/distributed/twophase.zig)
+- Consistent hashing for sharding (src/distributed/sharding.zig)
+
+Performance & Monitoring:
+- Comprehensive metrics collection (counters, gauges, histograms, timers) (src/monitoring/metrics.zig)
+- Query profiling with detailed execution plans
+- Prometheus export format support
+
+Developer Experience:
+- Complete API documentation (docs/API_DOCUMENTATION.md)
+- Go query builder library (clients/go/gql/query_builder.go)
+- Advanced query examples (examples/advanced_queries.gql)
 
 Cursor/Copilot rules to honor
 

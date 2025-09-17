@@ -1,0 +1,171 @@
+// Graph query examples demonstrating various GQL features
+
+// 1. Social Network Queries
+// Find mutual friends between two people
+MATCH (user1:Person {name: 'Alice'})-[:KNOWS]->(mutual:Person)<-[:KNOWS]-(user2:Person {name: 'Bob'})
+RETURN mutual.name AS mutual_friend, mutual.age
+ORDER BY mutual.age DESC
+
+// Find friends of friends (2-hop relationships)
+MATCH (p:Person {name: 'Alice'})-[:KNOWS*2]->(fof:Person)
+WHERE NOT EXISTS { MATCH (p)-[:KNOWS]->(fof) }
+RETURN DISTINCT fof.name AS friend_of_friend
+
+// Find the most influential person in a network
+MATCH (p:Person)
+OPTIONAL MATCH (p)<-[:KNOWS]-(follower:Person)
+RETURN p.name, COUNT(follower) AS influence_score
+ORDER BY influence_score DESC
+LIMIT 10
+
+// 2. Recommendation Queries
+// Product recommendations based on purchase history
+MATCH (user:Person {id: 123})-[:PURCHASED]->(product:Product)<-[:PURCHASED]-(other:Person)
+WHERE user <> other
+MATCH (other)-[:PURCHASED]->(recommendation:Product)
+WHERE NOT EXISTS { MATCH (user)-[:PURCHASED]->(recommendation) }
+RETURN recommendation.name, recommendation.category, COUNT(*) AS score
+ORDER BY score DESC
+LIMIT 20
+
+// Movie recommendations based on genre preferences
+MATCH (user:Person {name: 'Alice'})-[:LIKES]->(movie:Movie)-[:HAS_GENRE]->(genre:Genre)
+WITH user, COLLECT(DISTINCT genre) AS preferred_genres
+MATCH (recommended:Movie)-[:HAS_GENRE]->(g:Genre)
+WHERE g IN preferred_genres AND NOT EXISTS { MATCH (user)-[:LIKES]->(recommended) }
+RETURN recommended.title, COUNT(g) AS genre_matches
+ORDER BY genre_matches DESC
+LIMIT 10
+
+// 3. Path Finding Queries
+// Shortest path between two nodes
+MATCH path = shortestPath((start:Person {name: 'Alice'})-[:KNOWS*]-(end:Person {name: 'Charlie'}))
+RETURN path, LENGTH(path) AS distance
+
+// All paths with specific constraints
+MATCH path = (start:Station {name: 'A'})-[:CONNECTED*1..5]->(end:Station {name: 'Z'})
+WHERE ALL(r IN relationships(path) WHERE r.distance < 100)
+RETURN path, REDUCE(total = 0, r IN relationships(path) | total + r.distance) AS total_distance
+ORDER BY total_distance
+LIMIT 5
+
+// 4. Aggregation Queries
+// Sales analysis by region and product category
+MATCH (s:Sale)-[:IN_REGION]->(r:Region)
+MATCH (s)-[:FOR_PRODUCT]->(p:Product)-[:IN_CATEGORY]->(c:Category)
+RETURN r.name AS region, c.name AS category, 
+       COUNT(s) AS sales_count,
+       SUM(s.amount) AS total_revenue,
+       AVG(s.amount) AS avg_sale
+GROUP BY r.name, c.name
+ORDER BY total_revenue DESC
+
+// Time-series aggregation
+MATCH (t:Transaction)
+WHERE t.timestamp >= timestamp() - duration('P30D')
+RETURN date(t.timestamp) AS day,
+       COUNT(t) AS transaction_count,
+       SUM(t.amount) AS daily_total
+GROUP BY day
+ORDER BY day
+
+// 5. Graph Algorithms
+// PageRank-style influence calculation
+MATCH (p:Person)
+OPTIONAL MATCH (p)<-[r:FOLLOWS]-(follower:Person)
+WITH p, COUNT(follower) AS direct_followers
+OPTIONAL MATCH (p)<-[:FOLLOWS*2]-(indirect:Person)
+RETURN p.name, 
+       direct_followers,
+       COUNT(DISTINCT indirect) AS indirect_reach,
+       direct_followers + COUNT(DISTINCT indirect) * 0.5 AS influence_score
+ORDER BY influence_score DESC
+
+// Community detection (finding clusters)
+MATCH (p1:Person)-[:KNOWS]-(p2:Person)
+WITH p1, COLLECT(p2) AS neighbors
+MATCH (n1:Person)-[:KNOWS]-(n2:Person)
+WHERE n1 IN neighbors AND n2 IN neighbors
+RETURN p1.name AS person, 
+       SIZE(neighbors) AS degree,
+       COUNT(DISTINCT n2) AS clustering_coefficient
+ORDER BY clustering_coefficient DESC
+
+// 6. Complex Business Queries
+// Supply chain analysis
+MATCH path = (supplier:Company)-[:SUPPLIES*]->(manufacturer:Company {name: 'ACME Corp'})
+WHERE LENGTH(path) <= 3
+RETURN supplier.name, 
+       LENGTH(path) AS supply_chain_depth,
+       [r IN relationships(path) | r.lead_time] AS lead_times,
+       REDUCE(total = 0, r IN relationships(path) | total + r.lead_time) AS total_lead_time
+ORDER BY supply_chain_depth, total_lead_time
+
+// Fraud detection pattern
+MATCH (account:Account {id: 'suspicious123'})
+MATCH path = (account)-[:TRANSFER*2..4]->(destination:Account)
+WHERE ALL(t IN relationships(path) WHERE 
+    t.amount > 10000 AND 
+    t.timestamp > timestamp() - duration('PT1H'))
+RETURN path, destination, 
+       [t IN relationships(path) | t.amount] AS amounts,
+       SUM([t IN relationships(path) | t.amount]) AS total_transferred
+
+// 7. Data Modification Queries
+// Batch update with conditions
+MATCH (p:Person)
+WHERE p.age >= 18 AND p.country = 'USA'
+SET p.can_vote = true, p.updated_at = timestamp()
+RETURN COUNT(p) AS updated_count
+
+// Cascade delete
+MATCH (c:Company {name: 'OldCorp'})
+OPTIONAL MATCH (c)<-[:WORKS_AT]-(e:Employee)
+OPTIONAL MATCH (c)-[:OWNS]->(a:Asset)
+DELETE c, e, a
+
+// Merge with conditional properties
+MERGE (u:User {email: 'user@example.com'})
+ON CREATE SET u.created_at = timestamp(), u.status = 'new'
+ON MATCH SET u.last_login = timestamp(), u.login_count = COALESCE(u.login_count, 0) + 1
+RETURN u
+
+// 8. Set Operations
+// Union of different entity types
+MATCH (p:Person)-[:LIVES_IN]->(city:City {name: 'NYC'})
+RETURN p.name AS entity_name, 'Person' AS entity_type
+UNION
+MATCH (c:Company)-[:HEADQUARTERED_IN]->(city:City {name: 'NYC'})
+RETURN c.name AS entity_name, 'Company' AS entity_type
+ORDER BY entity_name
+
+// Intersection - common connections
+MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(common:Person)
+MATCH (b:Person {name: 'Bob'})-[:KNOWS]->(common)
+RETURN common.name
+INTERSECT
+MATCH (c:Person {name: 'Charlie'})-[:KNOWS]->(common:Person)
+RETURN common.name
+
+// 9. Window Functions (if supported)
+// Ranking within groups
+MATCH (e:Employee)-[:WORKS_IN]->(d:Department)
+RETURN d.name AS department, 
+       e.name AS employee,
+       e.salary,
+       RANK() OVER (PARTITION BY d.name ORDER BY e.salary DESC) AS salary_rank
+
+// Running totals
+MATCH (t:Transaction)
+WHERE t.account_id = 'ACC123'
+RETURN t.date, t.amount,
+       SUM(t.amount) OVER (ORDER BY t.date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_balance
+ORDER BY t.date
+
+// 10. Graph Mutations with Validation
+// Create relationship with validation
+MATCH (p:Person {id: $personId})
+MATCH (c:Company {id: $companyId})
+WHERE NOT EXISTS { MATCH (p)-[:WORKS_AT]->(:Company) }
+CREATE (p)-[:WORKS_AT {start_date: date(), position: $position}]->(c)
+RETURN p, c

@@ -153,6 +153,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_custom_tests.step);
 
+    // Add comprehensive test suite
+    const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
+    quic_tls_tests.root_module.addImport("geode", root_mod);
+    const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
+    test_step.dependOn(&run_quic_tls_tests.step);
+    
     // Add geoded (server) and geodec (client) executables for protocol tests
     const geoded_exe = b.addExecutable(.{
         .name = "geoded",
