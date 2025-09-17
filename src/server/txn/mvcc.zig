@@ -76,9 +76,9 @@ pub const Transaction = struct {
             .start_timestamp = timestamp,
             .commit_timestamp = null,
             .snapshot_timestamp = timestamp,
-            .locks_held = std.ArrayList(LockRequest).init(allocator),
-            .write_set = std.ArrayList(WriteOp).init(allocator),
-            .read_set = std.ArrayList(u64).init(allocator),
+            .locks_held = std.ArrayList(LockRequest).initCapacity(allocator, 0) catch unreachable,
+            .write_set = std.ArrayList(WriteOp).initCapacity(allocator, 0) catch unreachable,
+            .read_set = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable,
         };
     }
     
@@ -120,7 +120,7 @@ pub const LockManager = struct {
     pub fn requestLock(self: *LockManager, txn: *Transaction, resource_id: u64, mode: LockMode) !bool {
         // Check for lock compatibility
         var requests = self.lock_table.get(resource_id) orelse blk: {
-            var list = std.ArrayList(LockRequest).init(self.allocator);
+            const list = std.ArrayList(LockRequest).initCapacity(self.allocator, 0) catch unreachable;
             try self.lock_table.put(resource_id, list);
             break :blk self.lock_table.get(resource_id).?;
         };
@@ -162,8 +162,8 @@ pub const LockManager = struct {
             .waiting_since = if (!can_grant) std.time.timestamp() else null,
         };
         
-        try requests.append(lock_req);
-        try txn.locks_held.append(lock_req);
+        try requests.append(self.allocator, lock_req);
+        try txn.locks_held.append(self.allocator, lock_req);
         
         return can_grant;
     }
@@ -288,7 +288,7 @@ pub const MVCCManager = struct {
         const txn_id = self.current_timestamp;
         self.current_timestamp += 1;
         
-        var txn = try self.allocator.create(Transaction);
+        const txn = try self.allocator.create(Transaction);
         txn.* = Transaction.init(self.allocator, txn_id, txn_id, isolation);
         
         try self.active_transactions.put(txn_id, txn);
@@ -304,7 +304,7 @@ pub const MVCCManager = struct {
         }
         
         // Track read for validation
-        try txn.read_set.append(resource_id);
+        try txn.read_set.append(self.allocator, resource_id);
         
         // Find visible version
         if (self.versions.get(resource_id)) |version_chain| {
@@ -346,7 +346,7 @@ pub const MVCCManager = struct {
         }
         
         // Add to write set
-        try txn.write_set.append(.{
+        try txn.write_set.append(self.allocator, .{
             .resource_id = resource_id,
             .timestamp = self.current_timestamp,
             .new_value = data,
@@ -381,12 +381,12 @@ pub const MVCCManager = struct {
         
         for (txn.write_set.items) |write_op| {
             var version_chain = self.versions.get(write_op.resource_id) orelse blk: {
-                var chain = std.ArrayList(Version).init(self.allocator);
+                const chain = std.ArrayList(Version).initCapacity(self.allocator, 0) catch unreachable;
                 try self.versions.put(write_op.resource_id, chain);
                 break :blk self.versions.get(write_op.resource_id).?;
             };
             
-            try version_chain.append(.{
+            try version_chain.append(self.allocator, .{
                 .timestamp = commit_timestamp,
                 .txn_id = txn.id,
                 .data = write_op.new_value,

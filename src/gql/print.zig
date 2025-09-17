@@ -203,6 +203,7 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
                     try walkExpr(ally_inner, dst, b.right.*);
                 },
                 .Member => |m| try walkExpr(ally_inner, dst, m.target.*),
+                .PropertyAccess => |_| {}, // No nested expressions to walk
                 .Call => |c| {
                     try walkExpr(ally_inner, dst, c.callee.*);
                     for (c.args) |a| try walkExpr(ally_inner, dst, a.*);
@@ -479,6 +480,9 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .Member => |m| {
             try printExprWith(w, m.target.*, 0, opts);
             try w.print(".{s}", .{m.field});
+        },
+        .PropertyAccess => |pa| {
+            try w.print("{s}.{s}", .{ pa.object, pa.property });
         },
         .Unary => |u| {
             switch (u.op) {

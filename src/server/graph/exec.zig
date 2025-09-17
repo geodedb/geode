@@ -1,7 +1,7 @@
 const std = @import("std");
-const geode = @import("../lib.zig");
-const eval = @import("../eval.zig");
-const protocol = @import("../protocol.zig");
+const geode = @import("geode");
+const eval = geode.eval;
+const protocol = @import("protocol");
 
 // Graph execution operators for MATCH patterns
 
@@ -44,7 +44,7 @@ pub const GraphStorage = struct {
     pub fn init(allocator: std.mem.Allocator) GraphStorage {
         return .{
             .nodes = std.AutoHashMap(NodeId, Node).init(allocator),
-            .edges = std.ArrayList(Edge).init(allocator),
+            .edges = std.ArrayList(Edge).initCapacity(allocator, 0) catch unreachable,
             .outgoing = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
             .incoming = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
         };
@@ -77,7 +77,7 @@ pub const GraphStorage = struct {
     
     // Add a node to the graph
     pub fn addNode(self: *GraphStorage, allocator: std.mem.Allocator, id: NodeId, labels: []const []const u8) !void {
-        var props = std.StringHashMap(PropertyValue).init(allocator);
+        const props = std.StringHashMap(PropertyValue).init(allocator);
         try self.nodes.put(id, .{
             .id = id,
             .labels = labels,
@@ -88,8 +88,8 @@ pub const GraphStorage = struct {
     // Add an edge to the graph
     pub fn addEdge(self: *GraphStorage, allocator: std.mem.Allocator, source: NodeId, target: NodeId, edge_type: []const u8) !EdgeId {
         const edge_id = self.edges.items.len;
-        var props = std.StringHashMap(PropertyValue).init(allocator);
-        try self.edges.append(.{
+        const props = std.StringHashMap(PropertyValue).init(allocator);
+        try self.edges.append(allocator, .{
             .id = edge_id,
             .source = source,
             .target = target,
@@ -98,12 +98,12 @@ pub const GraphStorage = struct {
         });
         
         // Update adjacency lists
-        var out_list = self.outgoing.get(source) orelse std.ArrayList(EdgeId).init(allocator);
-        try out_list.append(edge_id);
+        var out_list = self.outgoing.get(source) orelse std.ArrayList(EdgeId).initCapacity(allocator, 0) catch unreachable;
+        try out_list.append(allocator, edge_id);
         try self.outgoing.put(source, out_list);
         
-        var in_list = self.incoming.get(target) orelse std.ArrayList(EdgeId).init(allocator);
-        try in_list.append(edge_id);
+        var in_list = self.incoming.get(target) orelse std.ArrayList(EdgeId).initCapacity(allocator, 0) catch unreachable;
+        try in_list.append(allocator, edge_id);
         try self.incoming.put(target, in_list);
         
         return edge_id;
@@ -163,7 +163,7 @@ pub fn nodeScan(
     labels: []const []const u8,
     var_name: ?[]const u8,
 ) ![]Binding {
-    var results = std.ArrayList(Binding).init(allocator);
+    var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
     
     var iter = graph.nodes.iterator();
     while (iter.next()) |entry| {
@@ -189,10 +189,10 @@ pub fn nodeScan(
         if (var_name) |name| {
             try binding.vars.put(name, .{ .Node = node.id });
         }
-        try results.append(binding);
+        try results.append(allocator, binding);
     }
     
-    return results.toOwnedSlice();
+    return results.toOwnedSlice(allocator);
 }
 
 // Expand operator - traverse edges from a node
@@ -206,7 +206,7 @@ pub fn expand(
     target_var: ?[]const u8,
     edge_var: ?[]const u8,
 ) ![]Binding {
-    var results = std.ArrayList(Binding).init(allocator);
+    var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
     
     for (bindings) |binding| {
         // Get source node from binding
@@ -255,12 +255,12 @@ pub fn expand(
                     try new_binding.vars.put(tv, .{ .Node = target_id });
                 }
                 
-                try results.append(new_binding);
+                try results.append(allocator, new_binding);
             }
         }
     }
     
-    return results.toOwnedSlice();
+    return results.toOwnedSlice(allocator);
 }
 
 // Filter operator - apply WHERE clause predicates
@@ -270,16 +270,17 @@ pub fn filter(
     predicate: geode.ast.Expr,
     graph: *const GraphStorage,
 ) ![]Binding {
-    var results = std.ArrayList(Binding).init(allocator);
+    _ = graph; // unused parameter for now
+    var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
     
     for (bindings) |binding| {
         // Convert binding to eval environment
-        var env_names = std.ArrayList([]const u8).init(allocator);
-        var env_values = std.ArrayList(eval.Value).init(allocator);
+        var env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        var env_values = std.ArrayList(eval.Value).initCapacity(allocator, 0) catch unreachable;
         
         var iter = binding.vars.iterator();
         while (iter.next()) |entry| {
-            try env_names.append(entry.key_ptr.*);
+            try env_names.append(allocator, entry.key_ptr.*);
             
             // Convert binding value to eval value
             const eval_val = switch (entry.value_ptr.*) {
@@ -288,7 +289,7 @@ pub fn filter(
                 .Value => |pv| propertyToEvalValue(pv),
                 else => eval.Value{ .Null = {} },
             };
-            try env_values.append(eval_val);
+            try env_values.append(allocator, eval_val);
         }
         
         const env = eval.Env{
@@ -301,11 +302,11 @@ pub fn filter(
         
         // Keep binding if predicate is true
         if (result == .Bool and result.Bool) {
-            try results.append(binding);
+            try results.append(allocator, binding);
         }
     }
     
-    return results.toOwnedSlice();
+    return results.toOwnedSlice(allocator);
 }
 
 // Convert property value to eval value
@@ -314,8 +315,8 @@ fn propertyToEvalValue(pv: PropertyValue) eval.Value {
         .Null => eval.Value{ .Null = {} },
         .Bool => |b| eval.Value{ .Bool = b },
         .Int => |i| eval.Value{ .Int = i },
-        .String => |s| eval.Value{ .String = s },
-        .Decimal => |d| eval.Value{ .Decimal = d },
+        .String => |s| eval.Value{ .Str = s },
+        .Decimal => |d| eval.Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
     };
 }
 
@@ -328,7 +329,7 @@ pub fn executeMatch(
 ) ![]Binding {
     if (pattern.chains.len == 0) {
         // Empty pattern returns single empty binding
-        var binding = Binding.init(allocator);
+        const binding = Binding.init(allocator);
         var results = try allocator.alloc(Binding, 1);
         results[0] = binding;
         return results;
@@ -384,11 +385,11 @@ pub fn bindingsToJson(
     return_items: []const geode.ast.ReturnItem,
     graph: *const GraphStorage,
 ) ![][]const u8 {
-    var rows = std.ArrayList([]const u8).init(allocator);
+    var rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     
     for (bindings) |binding| {
-        var buf = std.ArrayList(u8).init(allocator);
-        const writer = buf.writer();
+        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+        const writer = buf.writer(allocator);
         try writer.writeAll("{");
         
         for (return_items, 0..) |item, i| {
@@ -429,19 +430,19 @@ pub fn bindingsToJson(
                 },
                 else => {
                     // For other expressions, convert to eval environment
-                    var env_names = std.ArrayList([]const u8).init(allocator);
-                    var env_values = std.ArrayList(eval.Value).init(allocator);
+                    var env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                    var env_values = std.ArrayList(eval.Value).initCapacity(allocator, 0) catch unreachable;
                     
                     var iter = binding.vars.iterator();
                     while (iter.next()) |entry| {
-                        try env_names.append(entry.key_ptr.*);
+                        try env_names.append(allocator, entry.key_ptr.*);
                         const eval_val = switch (entry.value_ptr.*) {
                             .Node => |id| eval.Value{ .Int = @intCast(id) },
                             .Edge => |id| eval.Value{ .Int = @intCast(id) },
                             .Value => |pv| propertyToEvalValue(pv),
                             else => eval.Value{ .Null = {} },
                         };
-                        try env_values.append(eval_val);
+                        try env_values.append(allocator, eval_val);
                     }
                     
                     const env = eval.Env{
@@ -456,10 +457,10 @@ pub fn bindingsToJson(
         }
         
         try writer.writeAll("}");
-        try rows.append(buf.items);
+        try rows.append(allocator, buf.items);
     }
     
-    return rows.toOwnedSlice();
+    return rows.toOwnedSlice(allocator);
 }
 
 fn writeBindingValue(writer: anytype, val: BindingValue, graph: *const GraphStorage) !void {
@@ -472,7 +473,7 @@ fn writeBindingValue(writer: anytype, val: BindingValue, graph: *const GraphStor
                 try writer.writeAll(",\"labels\":[");
                 for (node.labels, 0..) |label, i| {
                     if (i > 0) try writer.writeAll(",");
-                    try writer.print("\"{}\"", .{std.zig.fmtEscapes(label)});
+                    try writer.print("\"{s}\"", .{label});
                 }
                 try writer.writeAll("]");
             }
@@ -493,7 +494,7 @@ fn writePropertyValue(writer: anytype, val: PropertyValue) !void {
         .Null => try writer.writeAll("null"),
         .Bool => |b| try writer.print("{}", .{b}),
         .Int => |i| try writer.print("{}", .{i}),
-        .String => |s| try writer.print("\"{}\"", .{std.zig.fmtEscapes(s)}),
+        .String => |s| try writer.print("\"{s}\"", .{s}),
         .Decimal => |d| {
             // Simple decimal formatting
             try writer.print("{}", .{d.coeff});
@@ -513,7 +514,7 @@ fn writeEvalValue(writer: anytype, val: eval.Value) !void {
         .Null => try writer.writeAll("null"),
         .Bool => |b| try writer.print("{}", .{b}),
         .Int => |i| try writer.print("{}", .{i}),
-        .String => |s| try writer.print("\"{}\"", .{std.zig.fmtEscapes(s)}),
+        .Str => |s| try writer.print("\"{s}\"", .{s}),
         .Decimal => |d| {
             try writer.print("{}", .{d.coeff});
             if (d.scale > 0) {
@@ -524,6 +525,5 @@ fn writeEvalValue(writer: anytype, val: eval.Value) !void {
                 }
             }
         },
-        else => try writer.writeAll("null"),
     }
 }

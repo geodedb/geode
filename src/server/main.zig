@@ -230,7 +230,7 @@ fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
         return mgr;
     }
     
-    var mgr = ally.create(mvcc.MVCCManager) catch unreachable;
+    const mgr = ally.create(mvcc.MVCCManager) catch unreachable;
     mgr.* = mvcc.MVCCManager.init(ally);
     g_mvcc_manager = mgr;
     return mgr;
@@ -242,7 +242,7 @@ fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
     }
     
     // Create and initialize graph storage
-    var graph = ally.create(graph_exec.GraphStorage) catch unreachable;
+    const graph = ally.create(graph_exec.GraphStorage) catch unreachable;
     graph.* = graph_exec.GraphStorage.init(ally);
     
     // Add some sample data for testing
@@ -998,7 +998,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     if (q.match.chains.len > 0) {
         // Initialize graph storage (for now, use a global singleton)
         // In production, this would be loaded from persistent storage
-        var graph = getOrCreateGraphStorage(ally);
+        const graph = getOrCreateGraphStorage(ally);
         
         // Execute MATCH pattern
         const bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause);
@@ -2228,7 +2228,6 @@ pub fn main() !void {
                             // Handle serialization failure
                             const err_msg = switch (err) {
                                 error.SerializationFailure => "Write-write conflict detected",
-                                error.WriteConflict => "Concurrent write conflict",
                                 else => "Transaction commit failed",
                             };
                             const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction rolled back due to concurrent update\"}}]}}\n", .{err_msg});
