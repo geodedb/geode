@@ -127,6 +127,12 @@ pub fn build(b: *std.Build) void {
     // Aggregated custom tests under tests/ (e.g., evaluator unit tests not covered by source-root modules)
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    // Make storage modules available to tests
+    const storage_page_manager_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    const storage_catalog_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
+    storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_mod_tests);
+    custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_mod_tests);
+    custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod_tests);
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
@@ -155,6 +161,11 @@ pub fn build(b: *std.Build) void {
     // add storage_page_manager module alias required for checksum diagnostic path
     const storage_page_manager_mod2 = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("storage_page_manager", storage_page_manager_mod2);
+    // storage catalog module
+    const storage_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
+    // Ensure catalog module can import page_manager by name
+    storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_mod2);
+    geoded_exe.root_module.addImport("storage_catalog", storage_catalog_mod);
     // txn / wal / dist modules
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("txn", txn_mod);

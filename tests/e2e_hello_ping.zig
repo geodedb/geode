@@ -12,10 +12,12 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     // Send HELLO
     try child.stdin.?.writeAll("{\"type\":\"HELLO\",\"client_name\":\"test\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
     const hello = try child.stdout.?.readToEndAlloc(ally, 1 << 20);
-    // We expect conformance digest and diagnostics array present
+    // We expect conformance digest and diagnostics array present, ORDER_KEYS and PROFILE_SCHEMA=v2 in features
     defer ally.free(hello);
-    const ok_digest = std.mem.indexOf(u8, hello, "\"conformance\":{") != null and std.mem.indexOf(u8, hello, "\"digest\":\"") != null;
-    try std.testing.expect(ok_digest);
+    try std.testing.expect(std.mem.indexOf(u8, hello, "\"conformance\":{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hello, "\"digest\":\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hello, "ORDER_KEYS=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hello, "PROFILE_SCHEMA=v2") != null);
 
     // Now send PING
     try child.stdin.?.writeAll("{\"type\":\"PING\"}\n");
@@ -28,12 +30,16 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     child.stdin.?.close();
     child.stdout.?.close();
     const term = try child.wait();
-    const code: i32 = switch (term) { .Exited => |st| st, else => 2 };
+    const code: i32 = switch (term) {
+        .Exited => |st| st,
+        else => 2,
+    };
     try std.testing.expectEqual(@as(i32, 0), code);
+    return .{ .code = code, .out = try ally.dupe(u8, ""), .err = try ally.dupe(u8, "") };
 }
 
 test "HELLO includes conformance digest and diagnostics; PING health OK" {
     const exe = "./zig-out/bin/geoded";
-    const res = try run(&.{ exe });
+    const res = try run(&.{exe});
     _ = res;
 }

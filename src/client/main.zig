@@ -221,8 +221,10 @@ pub fn main() !void {
     try child.spawn();
     const child_stdin_file = child.stdin.?; // use direct file writes (simpler API under Zig 0.15)
 
-    // Send HELLO
+    // Send HELLO and consume ack
     try child_stdin_file.writeAll("{\"type\":\"HELLO\",\"client_name\":\"geodec\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
+    const _hello_ack = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
+    defer gpa.free(_hello_ack);
     if (do_begin) {
         try child_stdin_file.writeAll("{\"type\":\"BEGIN\"}\n");
         const ack = try readLineAlloc(gpa, child.stdout.?, 1 << 16);

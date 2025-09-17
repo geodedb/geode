@@ -14,6 +14,13 @@ const _e2e_wal_skip_ratio = @import("e2e_wal_skip_ratio.zig");
 const _e2e_protocol_wal_skip_ratio = @import("e2e_protocol_wal_skip_ratio.zig");
 const _e2e_protocol_groupby_hashagg = @import("e2e_protocol_groupby_hashagg.zig");
 const _e2e_protocol_txn_baseline = @import("e2e_protocol_txn_baseline.zig");
+const _e2e_setops_intersect_except = @import("e2e_setops_intersect_except.zig");
+const _e2e_setops_all = @import("e2e_setops_all.zig");
+const _e2e_setops_mixed_nulls = @import("e2e_setops_mixed_nulls.zig");
+const _e2e_order_policy_toggle = @import("e2e_order_policy_toggle.zig");
+const _e2e_explain_setops = @import("e2e_explain_setops.zig");
+const _e2e_catalog_persistence_disk = @import("e2e_catalog_persistence_disk.zig");
+const _e2e_quic_basic = @import("e2e_quic_basic.zig");
 
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.

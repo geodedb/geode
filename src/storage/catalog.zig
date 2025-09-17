@@ -1,5 +1,5 @@
 const std = @import("std");
-const storage = @import("../storage/page_manager.zig");
+const storage = @import("storage_page_manager");
 
 /// Persistent storage catalog for metadata management
 pub const StorageCatalog = struct {
@@ -132,7 +132,7 @@ pub const StorageCatalog = struct {
 
         // Write table count
         const table_count: u32 = @intCast(self.tables.count());
-        std.mem.writeInt(u32, page[offset .. offset + 4], table_count, .little);
+        std.mem.writeInt(u32, page[offset..][0..4], table_count, .little);
         offset += 4;
 
         // Write table entries (simplified - just names and page IDs for now)
@@ -142,19 +142,19 @@ pub const StorageCatalog = struct {
             const name_len: u32 = @intCast(name.len);
 
             // Write name length and name
-            std.mem.writeInt(u32, page[offset .. offset + 4], name_len, .little);
+            std.mem.writeInt(u32, page[offset..][0..4], name_len, .little);
             offset += 4;
             @memcpy(page[offset .. offset + name.len], name);
             offset += name.len;
 
             // Write root page ID
-            std.mem.writeInt(u32, page[offset .. offset + 4], entry.value_ptr.root_page_id, .little);
+            std.mem.writeInt(u32, page[offset..][0..4], entry.value_ptr.root_page_id, .little);
             offset += 4;
         }
 
         // Write index count (placeholder)
         const index_count: u32 = @intCast(self.indexes.count());
-        std.mem.writeInt(u32, page[offset .. offset + 4], index_count, .little);
+        std.mem.writeInt(u32, page[offset..][0..4], index_count, .little);
         offset += 4;
 
         // Mark remaining space as unused
@@ -165,20 +165,20 @@ pub const StorageCatalog = struct {
         var offset: usize = 0;
 
         // Read table count
-        const table_count = std.mem.readInt(u32, page[offset .. offset + 4], .little);
+        const table_count = std.mem.readInt(u32, page[offset..][0..4], .little);
         offset += 4;
 
         // Read table entries
         for (0..table_count) |_| {
             // Read name length and name
-            const name_len = std.mem.readInt(u32, page[offset .. offset + 4], .little);
+            const name_len = std.mem.readInt(u32, page[offset..][0..4], .little);
             offset += 4;
 
             const name = try self.allocator.dupe(u8, page[offset .. offset + name_len]);
             offset += name_len;
 
             // Read root page ID
-            const root_page_id = std.mem.readInt(u32, page[offset .. offset + 4], .little);
+            const root_page_id = std.mem.readInt(u32, page[offset..][0..4], .little);
             offset += 4;
 
             // Create minimal table metadata
@@ -196,7 +196,7 @@ pub const StorageCatalog = struct {
         }
 
         // Read index count (placeholder)
-        const index_count = std.mem.readInt(u32, page[offset .. offset + 4], .little);
+        const index_count = std.mem.readInt(u32, page[offset..][0..4], .little);
         _ = index_count; // Unused for now
     }
 

@@ -177,6 +177,8 @@ jobs:
         run: zig build tools
       - name: Doccheck
         run: ./zig-out/bin/doccheck
+      - name: Doc sync
+        run: zig run src/tools/doc_sync.zig -- --check
       - name: Ensure GAP updated on code changes
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash

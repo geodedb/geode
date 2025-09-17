@@ -203,7 +203,8 @@ pub const PageManager = struct {
     pub fn allocatePage(self: *PageManager) !u32 {
         // Reuse free page if available
         if (self.free_pages.items.len > 0) {
-            return self.free_pages.pop();
+            const id = self.free_pages.pop() orelse unreachable;
+            return id;
         }
 
         // Allocate new page

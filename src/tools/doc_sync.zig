@@ -43,6 +43,22 @@ fn scanReqIds(ally: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
+
+    // Parse optional --check flag after "--"
+    var args_iter = try std.process.argsWithAllocator(gpa);
+    defer args_iter.deinit();
+    var saw_sep = false;
+    var check_mode = false;
+    while (args_iter.next()) |a| {
+        if (!saw_sep) {
+            if (std.mem.eql(u8, a, "--")) {
+                saw_sep = true;
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--check")) check_mode = true;
+    }
+
     var reqs = ReqSet.init(gpa);
     defer reqs.deinit();
     const paths = [_][]const u8{ "docs/GAP_ANALYSIS.md", "docs/NEXT.md", "docs/REQUIREMENTS.md" };
@@ -75,6 +91,9 @@ pub fn main() !void {
     }
     if (dup_found) {
         std.debug.print("doc_sync: WARNING - some requirements have very high occurrence counts\n", .{});
+        if (check_mode) {
+            std.process.exit(2);
+        }
     } else {
         std.debug.print("doc_sync: validation PASSED\n", .{});
     }

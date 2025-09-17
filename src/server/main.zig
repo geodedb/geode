@@ -6,6 +6,7 @@ const eval = geode.eval;
 const exec = geode.exec;
 const wal_mod = @import("wal");
 const storage_pm = @import("storage_page_manager");
+const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
@@ -86,6 +87,7 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Dynamic flag construction originally used stack slices causing dangling references.
 // Replace with static precomputed combinations (NULLs policy toggled at runtime where needed).
 var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
+var g_order_keys_expr: bool = false; // default identifiers-only; toggled via --order-keys expr
 
 // Base flag strings (shared)
 const F_ILLEGAL = "I:IllegalOrderKeyPolicy=ident-only";
@@ -568,7 +570,7 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
     }
 }
 
-fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool }) []const u8 {
+fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool, setop_kind: ?[]const u8 }) []const u8 {
     // Canonical pipeline order with monotonic id: Project(0), Distinct(1), Sort(2), Offset(3), Limit(4), SetOpUnion(5)
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return "{\"logical\":[]}";
     const w = buf.writer(ally);
@@ -605,7 +607,10 @@ fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, lim
         id += 1;
     }
     if (params.union_mode) |um| {
-        w.writeAll(",{\"op\":\"SetOpUnion\",\"id\":") catch {};
+        const sop = if (params.setop_kind) |sk| sk else "SetOpUnion";
+        w.writeAll(",{\"op\":\"") catch {};
+        w.writeAll(sop) catch {};
+        w.writeAll("\",\"id\":") catch {};
         w.print("{d}", .{id}) catch {};
         w.writeAll(",\"mode\":\"") catch {};
         w.writeAll(um) catch {};
@@ -1361,6 +1366,139 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
     return all_rows.toOwnedSlice(ally) catch &.{};
 }
 
+fn evaluateBinarySet(
+    ally: std.mem.Allocator,
+    left: geode.ast.Query,
+    right: geode.ast.Query,
+    param_names: [][]const u8,
+    param_matrix: [][]const eval.Value,
+    is_intersect: bool,
+    all: bool,
+) ![][]const u8 {
+    var dcols: []const protocol.SchemaCol = &.{};
+    var ord: bool = false;
+    var oks: [][]const u8 = &.{};
+    const left_rows = try evaluateSimpleQuery(ally, left, param_names, param_matrix, &ord, &oks, &dcols, null, null, null);
+    ord = false;
+    oks = &.{};
+    dcols = &.{};
+    const right_rows = try evaluateSimpleQuery(ally, right, param_names, param_matrix, &ord, &oks, &dcols, null, null, null);
+
+    if (all) {
+        var lc = std.StringHashMap(usize).init(ally);
+        defer lc.deinit();
+        var rc = std.StringHashMap(usize).init(ally);
+        defer rc.deinit();
+        for (left_rows) |lr| {
+            const key = canonicalRowKey(ally, lr);
+            const e = lc.getOrPut(key) catch continue;
+            if (!e.found_existing) {
+                e.key_ptr.* = key;
+                e.value_ptr.* = 1;
+            } else {
+                e.value_ptr.* += 1;
+                ally.free(key);
+            }
+        }
+        for (right_rows) |rr| {
+            const key = canonicalRowKey(ally, rr);
+            const e = rc.getOrPut(key) catch continue;
+            if (!e.found_existing) {
+                e.key_ptr.* = key;
+                e.value_ptr.* = 1;
+            } else {
+                e.value_ptr.* += 1;
+                ally.free(key);
+            }
+        }
+        var out = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+        defer out.deinit(ally);
+        var it = lc.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const lcnt = entry.value_ptr.*;
+            const rcnt = rc.get(key) orelse 0;
+            if (is_intersect) {
+                const m = if (lcnt < rcnt) lcnt else rcnt;
+                var i: usize = 0;
+                while (i < m) : (i += 1) {
+                    var found: []const u8 = &.{};
+                    var li: usize = 0;
+                    while (li < left_rows.len) : (li += 1) {
+                        const k2 = canonicalRowKey(ally, left_rows[li]);
+                        const eq = std.mem.eql(u8, k2, key);
+                        ally.free(k2);
+                        if (eq) {
+                            found = left_rows[li];
+                            break;
+                        }
+                    }
+                    if (found.len == 0 and left_rows.len > 0) found = left_rows[0];
+                    out.append(ally, found) catch {};
+                }
+            } else {
+                if (lcnt > rcnt) {
+                    var d: usize = lcnt - rcnt;
+                    while (d > 0) : (d -= 1) {
+                        var found: []const u8 = &.{};
+                        var li: usize = 0;
+                        while (li < left_rows.len) : (li += 1) {
+                            const k2 = canonicalRowKey(ally, left_rows[li]);
+                            const eq = std.mem.eql(u8, k2, key);
+                            ally.free(k2);
+                            if (eq) {
+                                found = left_rows[li];
+                                break;
+                            }
+                        }
+                        if (found.len == 0 and left_rows.len > 0) found = left_rows[0];
+                        out.append(ally, found) catch {};
+                    }
+                }
+            }
+        }
+        var ri: usize = 0;
+        while (ri < right_rows.len) : (ri += 1) ally.free(right_rows[ri]);
+        return out.toOwnedSlice(ally) catch &.{};
+    }
+
+    var seen_left = std.StringHashMap(void).init(ally);
+    defer seen_left.deinit();
+    var outd = std.StringHashMap([]const u8).init(ally);
+    defer outd.deinit();
+    for (left_rows) |lr| {
+        const key = canonicalRowKey(ally, lr);
+        if (!seen_left.contains(key)) {
+            seen_left.put(key, {}) catch {};
+            const e = outd.getOrPut(key) catch continue;
+            if (!e.found_existing) e.value_ptr.* = lr else ally.free(key);
+        } else ally.free(key);
+    }
+    var seen_right = std.StringHashMap(void).init(ally);
+    defer seen_right.deinit();
+    for (right_rows) |rr| {
+        const key = canonicalRowKey(ally, rr);
+        seen_right.put(key, {}) catch {};
+        // do not free key; map holds reference for duration of function
+    }
+    var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    defer out_rows.deinit(ally);
+    var it2 = outd.iterator();
+    while (it2.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const row = entry.value_ptr.*;
+        const in_right = seen_right.contains(key);
+        if (is_intersect) {
+            if (in_right) out_rows.append(ally, row) catch {};
+        } else {
+            if (!in_right) out_rows.append(ally, row) catch {};
+        }
+    }
+    var rr: usize = 0;
+    while (rr < right_rows.len) : (rr += 1) ally.free(right_rows[rr]);
+    return out_rows.toOwnedSlice(ally) catch &.{};
+}
+
 fn handleTcpConnection(
     gpa: std.mem.Allocator,
     conn: std.net.Server.Connection,
@@ -1375,8 +1513,10 @@ fn handleTcpConnection(
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     env_wal_compact_interval: usize,
+    _force_serialization_failure_unused: bool,
 ) !void {
     _ = env_wal_compact_interval;
+    _ = _force_serialization_failure_unused;
     defer conn.stream.close();
 
     // Initialize WAL
@@ -1470,8 +1610,10 @@ fn handleQuicConnection(
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     env_wal_compact_interval: usize,
+    _force_serialization_failure_unused: bool,
 ) !void {
     _ = env_wal_compact_interval;
+    _ = _force_serialization_failure_unused;
     defer conn.close();
 
     // Accept a stream for the protocol communication
@@ -1526,29 +1668,78 @@ fn handleQuicConnection(
 fn processMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
-    line: []const u8,
+    _line: []const u8,
     result_format_txt: bool,
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
 ) ![]u8 {
-    _ = state;
     _ = disable_estimates;
     _ = compact_profile;
     _ = memcurve_profile;
     _ = result_format_txt;
 
-    // This would contain the actual message processing logic from the main loop
-    // For now, return a simple acknowledgment
-    // In a complete implementation, this would parse the JSON message,
-    // handle different message types (HELLO, RUN_GQL, PULL, etc.),
-    // and generate appropriate responses
-
-    if (std.mem.indexOf(u8, line, "\"type\":\"HELLO\"")) |_| {
-        return try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}}\n", .{});
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const msg = protocol.parseClientMessage(arena.allocator(), _line) catch return try gpa.dupe(u8, "");
+    switch (msg) {
+        .HELLO => |_| {
+            var caps = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
+            defer caps.deinit(gpa);
+            caps.append(gpa, "\"QUIC\"") catch {};
+            caps.append(gpa, "\"TLS1.3\"") catch {};
+            const dist_enabled = false;
+            const raft_enabled = false;
+            const two_pc_enabled = false;
+            const sharding_enabled = false;
+            const is_leader = false;
+            var caps_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+            defer caps_buf.deinit(gpa);
+            var w = caps_buf.writer(gpa);
+            var i: usize = 0;
+            while (i < caps.items.len) : (i += 1) {
+                if (i > 0) w.writeAll(",") catch {};
+                w.writeAll(caps.items[i]) catch {};
+            }
+            const caps_json = caps_buf.toOwnedSlice(gpa) catch &.{};
+            defer if (caps_json.len > 0) gpa.free(caps_json);
+            const order_feat = if (g_order_keys_expr) "\"ORDER_KEYS=expr\"" else "\"ORDER_KEYS=ident-only\"";
+            const features = std.fmt.allocPrint(gpa, "[\"GQ01\",\"ORDER\",\"UNION\",\"INTERSECT\",\"EXCEPT\",\"TXN\",\"EXPLAIN\",\"PROFILE\",{s},\"PROFILE_SCHEMA=v2\"]", .{order_feat}) catch ("[\"GQ01\",\"ORDER\"]");
+            defer if (features.ptr != "[\"GQ01\"]".ptr) gpa.free(features);
+            const digest = "deadbeef";
+            var buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+            const wr = buf.writer(gpa);
+            wr.writeAll("{\"status_class\":\"00000\",\"capabilities\":[") catch {};
+            wr.writeAll(caps_json) catch {};
+            wr.writeAll("],\"distributed\":{") catch {};
+            wr.writeAll("\"enabled\":") catch {};
+            wr.writeAll(if (dist_enabled) "true" else "false") catch {};
+            wr.writeAll(",\"raft\":") catch {};
+            wr.writeAll(if (raft_enabled) "true" else "false") catch {};
+            wr.writeAll(",\"two_pc\":") catch {};
+            wr.writeAll(if (two_pc_enabled) "true" else "false") catch {};
+            wr.writeAll(",\"sharding\":") catch {};
+            wr.writeAll(if (sharding_enabled) "true" else "false") catch {};
+            wr.writeAll(",\"is_leader\":") catch {};
+            wr.writeAll(if (is_leader) "true" else "false") catch {};
+            wr.writeAll("},\"conformance\":{") catch {};
+            wr.writeAll("\"digest\":\"") catch {};
+            wr.writeAll(digest) catch {};
+            wr.writeAll("\",\"features\":") catch {};
+            wr.writeAll(features) catch {};
+            wr.writeAll("}}\n") catch {};
+            return buf.toOwnedSlice(gpa) catch try gpa.dupe(u8, "");
+        },
+        .PING => |_| {
+            const ok = "{\"ok\":true}";
+            const flags = computeBaseFlags(false, false);
+            return protocol.buildBindingsLine(gpa, false, &.{}, ok, true, &.{}, flags) catch try gpa.dupe(u8, "");
+        },
+        else => {
+            _ = state;
+            return try gpa.dupe(u8, "");
+        },
     }
-
-    return try gpa.dupe(u8, "");
 }
 
 pub fn main() !void {
@@ -1566,6 +1757,10 @@ pub fn main() !void {
     var listen_tcp: ?[]const u8 = null;
     var cert_path: []const u8 = "certs/server.crt";
     var key_path: []const u8 = "certs/server.key";
+    var order_keys_mode_expr = false;
+    var data_dir: ?[]const u8 = null;
+    var test_exit_after_first: bool = false;
+    var catalog_create_name: ?[]const u8 = null;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
             const f = args[ai + 1];
@@ -1592,6 +1787,18 @@ pub fn main() !void {
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--key") and ai + 1 < args.len) {
             key_path = args[ai + 1];
+            ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--data_dir") and ai + 1 < args.len) {
+            data_dir = args[ai + 1];
+            ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--order-keys") and ai + 1 < args.len) {
+            const mode = args[ai + 1];
+            if (std.mem.eql(u8, mode, "expr")) order_keys_mode_expr = true;
+            ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--test-exit-after-first-request")) {
+            test_exit_after_first = true;
+        } else if (std.mem.eql(u8, args[ai], "--catalog-create") and ai + 1 < args.len) {
+            catalog_create_name = args[ai + 1];
             ai += 1;
         }
     }
@@ -1647,6 +1854,34 @@ pub fn main() !void {
         }
     } else |_| {}
 
+    // Apply ORDER BY key policy based on CLI flag
+    g_order_keys_expr = order_keys_mode_expr;
+
+    // Initialize persistent page manager if data_dir provided and wire StorageCatalog
+    var pm_persist_active = false;
+    var pm_persist: storage_pm.PageManager = undefined;
+    var catalog_inited = false;
+    var catalog = storage_catalog.StorageCatalog{ .allocator = gpa, .page_manager = undefined, .tables = undefined, .indexes = undefined, .sequences = undefined, .catalog_page_id = null };
+    if (data_dir) |dd| {
+        std.fs.cwd().makePath(dd) catch {};
+        pm_persist = storage_pm.PageManager.initPersistent(gpa, 4096, dd);
+        pm_persist_active = true;
+        pm_persist.loadPage(dd, 0) catch {};
+        catalog = storage_catalog.StorageCatalog.init(gpa, &pm_persist);
+        catalog.load() catch {};
+        catalog_inited = true;
+        if (catalog_create_name) |tname| {
+            catalog.createTable(tname, &.{}) catch {};
+        }
+    }
+    defer {
+        if (catalog_inited) {
+            catalog.save() catch {};
+            catalog.deinit();
+        }
+        if (pm_persist_active) pm_persist.deinit();
+    }
+
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {
         const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':');
@@ -1680,11 +1915,11 @@ pub fn main() !void {
                 continue;
             };
 
-            // Handle each connection in a separate thread (future enhancement)
-            // For now, handle synchronously
-            handleQuicConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval) catch |err| {
+            handleQuicConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
                 std.debug.print("Error handling QUIC connection: {}\n", .{err});
             };
+
+            if (test_exit_after_first) break;
         }
         return;
     }
@@ -1714,10 +1949,10 @@ pub fn main() !void {
 
         while (true) {
             const conn = try server.accept();
-            // Handle each connection synchronously for now
-            handleTcpConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval) catch |err| {
+            handleTcpConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
                 std.debug.print("Error handling TCP connection: {}\n", .{err});
             };
+            if (test_exit_after_first) break;
         }
         return;
     }
@@ -1794,7 +2029,57 @@ pub fn main() !void {
         defer arena.deinit();
         const msg = protocol.parseClientMessage(arena.allocator(), raw) catch continue; // ignore invalid
         switch (msg) {
-            .HELLO => |_| {},
+            .HELLO => |_| {
+                // Reply with capabilities + conformance profile
+                var caps = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
+                defer caps.deinit(gpa);
+                caps.append(gpa, "\"QUIC\"") catch {};
+                caps.append(gpa, "\"TLS1.3\"") catch {};
+                const dist_enabled = false;
+                const raft_enabled = false;
+                const two_pc_enabled = false;
+                const sharding_enabled = false;
+                const is_leader = false;
+                // distributed disabled in this build; caps static
+                var caps_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+                defer caps_buf.deinit(gpa);
+                var w = caps_buf.writer(gpa);
+                var i: usize = 0;
+                while (i < caps.items.len) : (i += 1) {
+                    if (i > 0) w.writeAll(",") catch {};
+                    w.writeAll(caps.items[i]) catch {};
+                }
+                const caps_json = caps_buf.toOwnedSlice(gpa) catch &.{};
+                defer if (caps_json.len > 0) gpa.free(caps_json);
+                const order_feat = "\"ORDER_KEYS=ident-only\"";
+                const features = std.fmt.allocPrint(gpa, "[\"GQ01\",\"ORDER\",\"UNION\",\"INTERSECT\",\"EXCEPT\",\"TXN\",\"EXPLAIN\",\"PROFILE\",{s},\"PROFILE_SCHEMA=v2\"]", .{order_feat}) catch ("[\"GQ01\",\"ORDER\"]");
+                defer if (features.ptr != "[\"GQ01\"]".ptr) gpa.free(features);
+                const digest = "deadbeef";
+                var hb = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+                const hw = hb.writer(gpa);
+                hw.writeAll("{\"status_class\":\"00000\",\"capabilities\":[") catch {};
+                hw.writeAll(caps_json) catch {};
+                hw.writeAll("],\"distributed\":{") catch {};
+                hw.writeAll("\"enabled\":") catch {};
+                hw.writeAll(if (dist_enabled) "true" else "false") catch {};
+                hw.writeAll(",\"raft\":") catch {};
+                hw.writeAll(if (raft_enabled) "true" else "false") catch {};
+                hw.writeAll(",\"two_pc\":") catch {};
+                hw.writeAll(if (two_pc_enabled) "true" else "false") catch {};
+                hw.writeAll(",\"sharding\":") catch {};
+                hw.writeAll(if (sharding_enabled) "true" else "false") catch {};
+                hw.writeAll(",\"is_leader\":") catch {};
+                hw.writeAll(if (is_leader) "true" else "false") catch {};
+                hw.writeAll("},\"conformance\":{") catch {};
+                hw.writeAll("\"digest\":\"") catch {};
+                hw.writeAll(digest) catch {};
+                hw.writeAll("\",\"features\":") catch {};
+                hw.writeAll(features) catch {};
+                hw.writeAll("}}\n") catch {};
+                const hello = hb.toOwnedSlice(gpa) catch "{}\n";
+                _ = stdout_file.write(hello) catch {};
+                if (hello.ptr != "{}\n".ptr) gpa.free(hello);
+            },
             .BEGIN => |_| {
                 if (state.active_txn != null) {
                     // Return proper transaction state error with status_class 25000
@@ -1825,7 +2110,11 @@ pub fn main() !void {
             },
             .PING => |_| {
                 // Simple health check
-                writeBindingsAdaptive(stdout_file, false, &.{}, "[]", true, false, computeBaseFlags(false, false));
+                const ok = "{\"ok\":true}";
+                if (protocol.buildBindingsLine(gpa, false, &.{}, ok, true, &.{}, computeBaseFlags(false, false))) |line| {
+                    defer gpa.free(line);
+                    _ = stdout_file.write(line) catch {};
+                } else |_| {}
             },
             .COMMIT => |_| {
                 if (state.active_txn == null) {
@@ -1835,6 +2124,12 @@ pub fn main() !void {
                     _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx = state.active_txn.?;
+                    if (false) {
+                        const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"forced\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{});
+                        defer gpa.free(err_json);
+                        _ = stdout_file.write(err_json) catch {};
+                        continue;
+                    }
                     state.txn_manager.commit(&tx) catch |err| {
                         // Handle commit failure (e.g., serialization failure)
                         const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{@errorName(err)});
@@ -1934,7 +2229,7 @@ pub fn main() !void {
                 @memcpy(qt_copy[0..take_qt], text[0..take_qt]);
                 state.query_text = qt_copy;
 
-                var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = true, .forbid_orderby_calls = true }) catch |e| {
+                var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = !g_order_keys_expr, .forbid_orderby_calls = !g_order_keys_expr }) catch |e| {
                     // Aggregate all parse-time diagnostics (policy + US001) and emit with precedence.
                     var codes_buf: [4]diagnostics.Code = undefined;
                     const n_raw = collectTextDiagnostics(text, @errorName(e), &codes_buf);
@@ -1979,6 +2274,84 @@ pub fn main() !void {
                         }
                         const st = ok.program.statements[0];
                         switch (st) {
+                            .Intersect => |is| {
+                                var param_names: [][]const u8 = &.{};
+                                var param_rows: [][]const eval.Value = &.{};
+                                parseParams(gpa, rq.params_json, &param_names, &param_rows);
+                                if (explain_mode) {
+                                    const mode = if (is.all) "ALL" else "DISTINCT";
+                                    const json = buildExplainJson(gpa, .{ .ordered = false, .limit = null, .offset = null, .union_mode = mode, .distinct = !is.all, .setop_kind = "SetOpIntersect" });
+                                    const flags_u = computeBaseFlags(false, !is.all);
+                                    const l2 = protocol.buildExplainLine(gpa, json, flags_u) catch null;
+                                    if (l2) |linex| {
+                                        defer gpa.free(linex);
+                                        _ = stdout_file.write(linex) catch {};
+                                    }
+                                    continue;
+                                }
+                                const rows = evaluateBinarySet(gpa, is.left, is.right, param_names, param_rows, true, is.all) catch &.{};
+                                var cols_is: []protocol.SchemaCol = gpa.alloc(protocol.SchemaCol, is.left.ret.items.len) catch &.{};
+                                var ci_is: usize = 0;
+                                while (ci_is < is.left.ret.items.len) : (ci_is += 1) {
+                                    const it = is.left.ret.items[ci_is];
+                                    cols_is[ci_is] = .{ .name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col", .type = "INT" };
+                                }
+                                state.last_columns = cols_is;
+                                state.last_ordered = false;
+                                state.last_order_keys = &.{};
+                                state.last_distinct = !is.all;
+                                state.page_items = @constCast(rows);
+                                state.active_result = true;
+                                if (!result_format_txt) {
+                                    {
+                                        const line = protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(false, !is.all)) catch null;
+                                        if (line) |l| {
+                                            defer gpa.free(l);
+                                            _ = stdout_file.write(l) catch {};
+                                        }
+                                    }
+                                }
+                                continue;
+                            },
+                            .Except => |ex| {
+                                var param_names: [][]const u8 = &.{};
+                                var param_rows: [][]const eval.Value = &.{};
+                                parseParams(gpa, rq.params_json, &param_names, &param_rows);
+                                if (explain_mode) {
+                                    const mode = if (ex.all) "ALL" else "DISTINCT";
+                                    const json = buildExplainJson(gpa, .{ .ordered = false, .limit = null, .offset = null, .union_mode = mode, .distinct = !ex.all, .setop_kind = "SetOpExcept" });
+                                    const flags_u = computeBaseFlags(false, !ex.all);
+                                    const l3 = protocol.buildExplainLine(gpa, json, flags_u) catch null;
+                                    if (l3) |linex| {
+                                        defer gpa.free(linex);
+                                        _ = stdout_file.write(linex) catch {};
+                                    }
+                                    continue;
+                                }
+                                const rows = evaluateBinarySet(gpa, ex.left, ex.right, param_names, param_rows, false, ex.all) catch &.{};
+                                var cols_ex: []protocol.SchemaCol = gpa.alloc(protocol.SchemaCol, ex.left.ret.items.len) catch &.{};
+                                var ci_ex: usize = 0;
+                                while (ci_ex < ex.left.ret.items.len) : (ci_ex += 1) {
+                                    const it = ex.left.ret.items[ci_ex];
+                                    cols_ex[ci_ex] = .{ .name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col", .type = "INT" };
+                                }
+                                state.last_columns = cols_ex;
+                                state.last_ordered = false;
+                                state.last_order_keys = &.{};
+                                state.last_distinct = !ex.all;
+                                state.page_items = @constCast(rows);
+                                state.active_result = true;
+                                if (!result_format_txt) {
+                                    {
+                                        const line = protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(false, !ex.all)) catch null;
+                                        if (line) |l| {
+                                            defer gpa.free(l);
+                                            _ = stdout_file.write(l) catch {};
+                                        }
+                                    }
+                                }
+                                continue;
+                            },
                             .InsertValue => |iv| {
                                 // Implicit autocommit: if not in explicit transaction, wrap this DML in begin/commit.
                                 var started_auto = false;
@@ -2061,7 +2434,7 @@ pub fn main() !void {
                                     continue;
                                 }
                                 if (explain_mode) {
-                                    const json = buildExplainJson(gpa, .{ .ordered = plan.ordered, .limit = q.limit, .offset = q.offset, .union_mode = null, .distinct = q.ret.distinct });
+                                    const json = buildExplainJson(gpa, .{ .ordered = plan.ordered, .limit = q.limit, .offset = q.offset, .union_mode = null, .distinct = q.ret.distinct, .setop_kind = null });
 
                                     if (result_format_txt) {
                                         // Text format output
@@ -2877,7 +3250,7 @@ pub fn main() !void {
                                 var param_rows: [][]const eval.Value = &.{};
                                 parseParams(gpa, rq.params_json, &param_names, &param_rows);
                                 if (explain_mode) {
-                                    const json = buildExplainJson(gpa, .{ .ordered = false, .limit = null, .offset = null, .union_mode = "DISTINCT", .distinct = true });
+                                    const json = buildExplainJson(gpa, .{ .ordered = false, .limit = null, .offset = null, .union_mode = "DISTINCT", .distinct = true, .setop_kind = "SetOpUnion" });
                                     const flags_u = computeBaseFlags(false, true);
                                     if (protocol.buildExplainLine(gpa, json, flags_u)) |l2| {
                                         defer gpa.free(l2);
@@ -3191,4 +3564,5 @@ pub fn main() !void {
         const wflush: *wal_mod.Wal = @ptrCast(@alignCast(wp_flush));
         wflush.fsync() catch {};
     }
+    // deinit handled in defer above
 }

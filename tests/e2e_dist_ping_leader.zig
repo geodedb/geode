@@ -26,7 +26,10 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     child.stdin.?.close();
     child.stdout.?.close();
     const term = try child.wait();
-    const code: i32 = switch (term) { .Exited => |st| st, else => 2 };
+    const code: i32 = switch (term) {
+        .Exited => |st| st,
+        else => 2,
+    };
     try std.testing.expectEqual(@as(i32, 0), code);
 }
 

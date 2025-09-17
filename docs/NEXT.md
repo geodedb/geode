@@ -4,10 +4,12 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Now (P0)
 
-1. **Doc sync tool Zig compatibility fix (REQ-GQL-018)**
-   - **Why**: Tool currently fails due to bufferedReader API change in newer Zig versions
-   - **What**: Update src/tools/doc_sync.zig to use current Zig 0.15.1 std.io API
-   - **Acceptance**: `zig run src/tools/doc_sync.zig` executes without compilation errors; produces requirement analysis
+- Status: in progress. Items being tackled top-down.
+
+1. **Doc sync tool enhancements (REQ-GQL-018)**
+   - **Why**: Keep GAP_ANALYSIS/NEXT/REQUIREMENTS consistent and machine-checkable during rapid iteration
+   - **What**: Update src/tools/doc_sync.zig to scan all docs, count REQ-GQL IDs, warn on duplicates, and support `--check` exit code
+   - **Acceptance**: `zig run src/tools/doc_sync.zig -- --check` exits 0 with "validation PASSED" on consistency; exits 2 and prints WARNING when duplicates detected
    - **ISO**: 24.x
    - **Deps**: src/tools/doc_sync.zig
    - **Scope**: S
@@ -44,10 +46,10 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 2. **Storage catalog persistence (REQ-GQL-025)**
    - **Why**: Complete persistent storage layer with catalog and adjacency structures
-   - **What**: Add catalog persistence, CSR adjacency storage, free space management
-   - **Acceptance**: Database restart preserves schema metadata; adjacency scans use CSR format
+   - **What**: Add --data_dir to server; use PageManager.initPersistent(page_size, data_dir). Catalog save/load at startup/shutdown. CSR adjacency storage, free space management later.
+   - **Acceptance**: With --data_dir=<tmpdir>, creating a table then restarting preserves metadata; e2e_catalog_persistence_disk passes; adjacency scans use CSR format (later)
    - **ISO**: impl-defined storage management
-   - **Deps**: src/storage/catalog.zig, src/storage/page_manager.zig
+   - **Deps**: src/storage/catalog.zig, src/storage/page_manager.zig, src/server/main.zig
    - **Scope**: L
    - **DRI**: storage
 
@@ -167,18 +169,20 @@ Excluded this milestone: full GPU operators, learned cost model integration, enc
 
 ## Recent Progress (Snapshot)
 
+- ✅ **Doc sync tool** (REQ-GQL-018): Duplicate REQ detection, `--check` mode, consolidated scan across GAP_ANALYSIS/NEXT/REQUIREMENTS
+- ✅ **Binary protocol HELLO/health (stdio + QUIC parity)** (REQ-GQL-001/002): HELLO includes conformance digest and feature list; PING returns ok:true; QUIC path uses shared processMessage
+- ✅ **ORDER key policy toggle (CLI)** (REQ-GQL-004): `--order-keys expr` enables ORDER BY expressions; default identifiers-only policy enforced
+- ✅ **Transaction baseline** (REQ-GQL-027): BEGIN/COMMIT/ROLLBACK with proper status_class responses (00000/25000); TxnState mapping test added (tests/e2e_protocol_txn_serialization_failure.zig)
+- ✅ **WAL compaction automation** (REQ-GQL-026): Configurable via GEODE_WAL_COMPACT_INTERVAL (default 5 commits)
 - ✅ **Memory governance** (REQ-GQL-037): Added memory limit tracking with spill triggers for HashAgg/Sort/Distinct
-- ✅ **WAL skip ratio** (REQ-GQL-026): Exposed skip_ratio metric in WAL recovery; test validates ≥0.60 efficiency
 - ✅ **Storage checksum diagnostics** (REQ-GQL-026): Added mapStorageError for PageChecksumMismatch → StoragePageChecksum diagnostic
 - ✅ **GROUP BY HashAgg** (REQ-GQL-016): Execution complete in exec.runGroupedQuery; comprehensive test coverage
-- ✅ **Transaction baseline** (REQ-GQL-027): BEGIN/COMMIT/ROLLBACK with proper status_class responses (00000/25000)
-- ✅ **WAL compaction automation** (REQ-GQL-026): Configurable via GEODE_WAL_COMPACT_INTERVAL (default 5 commits)
 - ✅ **Index selectivity estimator** (REQ-GQL-039): Cost-based decisions with adaptive learning
 - ✅ **NodeIndexScan metadata** (REQ-GQL-039): Enhanced PROFILE with index_name and selectivity_est
 - ✅ **Text formatting parity** (REQ-GQL-023): EXPLAIN/PROFILE text output with --format=txt
 - ✅ **Diagnostics precedence** (REQ-GQL-014/030): UA002 folding with deterministic precedence rules
-- ✅ **Binary protocol stability** (REQ-GQL-021/022): SCHEMA/BINDINGS framing with status codes
-- ✅ **Set operations** (REQ-GQL-003): UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics
+- ✅ **Set operations** (REQ-GQL-003): UNION (DISTINCT/ALL) and INTERSECT/EXCEPT (DISTINCT/ALL) implemented; EXPLAIN shows SetOpUnion/SetOpIntersect/SetOpExcept
+- ✅ **Storage catalog persistence (smoke)** (REQ-GQL-025): Added save/load test over in-memory page manager (tests/e2e_catalog_persistence.zig)
 - ✅ **Expression engine** (REQ-GQL-004/005): CASE expressions, string predicates, mixed-type arithmetic
 - ✅ **Temporal literals** (REQ-GQL-008): DATE/TIME/DATETIME parsing with normalization
 
