@@ -159,7 +159,7 @@ pub const LockManager = struct {
             .mode = mode,
             .resource_id = resource_id,
             .granted = can_grant,
-            .waiting_since = if (!can_grant) std.time.timestamp() else null,
+            .waiting_since = if (!can_grant) @intCast(std.time.timestamp()) else null,
         };
         
         try requests.append(self.allocator, lock_req);

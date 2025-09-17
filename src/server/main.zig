@@ -2397,6 +2397,63 @@ pub fn main() !void {
                             continue;
                         }
                         const st = ok.program.statements[0];
+                        // Test-only mutation: detect UPDATE_VALUE("key","val") pattern in raw text and execute under MVCC/locks
+                        if (std.mem.startsWith(u8, text, "UPDATE_VALUE(")) {
+                            if (state.active_txn == null) {
+                                const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\"}}\n", .{});
+                                defer gpa.free(err_json);
+                                _ = stdout_file.write(err_json) catch {};
+                                continue;
+                            }
+                            // crude parser: UPDATE_VALUE("key","val")
+                            const close = std.mem.lastIndexOfScalar(u8, text, ')') orelse text.len;
+                            const inside = text[13..close]; // after 'UPDATE_VALUE('
+                            const parts = std.mem.tokenizeSequence(u8, inside, "\",");
+                            var key_s: []const u8 = &.{};
+                            var val_s: []const u8 = &.{};
+                            var itp = parts;
+                            var idxp: usize = 0;
+                            while (itp.next()) |tok| : (idxp += 1) {
+                                var t = std.mem.trim(u8, tok, &std.ascii.whitespace);
+                                t = std.mem.trim(u8, t, "\"");
+                                if (idxp == 0) key_s = t else if (idxp == 1) val_s = t;
+                            }
+                            if (key_s.len == 0) {
+                                const err = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"22023\",\"message\":\"Invalid UPDATE_VALUE syntax\"}}\n", .{});
+                                defer gpa.free(err);
+                                _ = stdout_file.write(err) catch {};
+                                continue;
+                            }
+                            var txm = state.active_txn.?;
+                            // Acquire exclusive lock using txn manager
+                            state.txn_manager.acquireWrite(key_s, &txm, gpa) catch |err| {
+                                const e = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"LockConflict\",\"message\":\"{s}\"}}\n", .{@errorName(err)});
+                                defer gpa.free(e);
+                                _ = stdout_file.write(e) catch {};
+                                continue;
+                            };
+                            // Ensure MVCC txn present
+                            if (state.mvcc_manager == null) state.mvcc_manager = getOrCreateMVCCManager(gpa);
+                            if (state.current_mvcc_txn == null) state.current_mvcc_txn = state.mvcc_manager.?.beginTransaction(.SnapshotIsolation) catch null;
+                            // Derive resource id from key hash
+                            var hasher = std.hash.Wyhash.init(0);
+                            hasher.update(key_s);
+                            const rid: u64 = hasher.final();
+                            const mv = if (val_s.len > 0) val_s else "";
+                            state.mvcc_manager.?.write(state.current_mvcc_txn.?, rid, mv) catch |err| {
+                                const err_msg = switch (err) { error.SerializationFailure => "Write-write conflict detected", else => @errorName(err) };
+                                const ej = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\"}}\n", .{err_msg});
+                                defer gpa.free(ej);
+                                _ = stdout_file.write(ej) catch {};
+                                continue;
+                            };
+                            // ACK schema
+                            if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line_ack| {
+                                defer gpa.free(line_ack);
+                                _ = stdout_file.write(line_ack) catch {};
+                            } else |_| {}
+                            continue;
+                        }
                         switch (st) {
                             .Intersect => |is| {
                                 var param_names: [][]const u8 = &.{};
