@@ -2,196 +2,163 @@
 
 Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope (S/M/L) • DRI. Swimlanes: Now / Next / Later. All acceptance include concrete GQL plus expected result shape or diagnostic.
 
-## Now (P0)
+## Now (P0) - Critical Gaps
 
-- Status: in progress. Items being tackled top-down.
+- Status: **BLOCKED** - Core graph features missing. These must be addressed before claiming GQL conformance.
 
-1. **Doc sync tool enhancements (REQ-GQL-018)**
-   - **Why**: Keep GAP_ANALYSIS/NEXT/REQUIREMENTS consistent and machine-checkable during rapid iteration
-   - **What**: Update src/tools/doc_sync.zig to scan all docs, count REQ-GQL IDs, warn on duplicates, and support `--check` exit code
-   - **Acceptance**: `zig run src/tools/doc_sync.zig -- --check` exits 0 with "validation PASSED" on consistency; exits 2 and prints WARNING when duplicates detected
-   - **ISO**: 24.x
-   - **Deps**: src/tools/doc_sync.zig
+1. **MATCH Pattern Execution (REQ-GQL-014)**
+   - **Why**: Cannot claim GQL conformance without basic graph pattern matching - this is the fundamental feature
+   - **What**: Implement NodeScan and basic edge traversal in evaluateSimpleQuery; map MATCH AST to execution operators
+   - **Acceptance**: `MATCH (n) RETURN n` returns all nodes; `MATCH (n)-[r]->(m) RETURN n, m` returns connected node pairs
+   - **ISO**: 14.4, 22
+   - **Deps**: src/server/main.zig, src/exec.zig, storage adjacency
+   - **Scope**: L
+   - **DRI**: core
+
+2. **Property Graph Model (REQ-GQL-017/018)**
+   - **Why**: Cannot query graph data without property access and label filtering
+   - **What**: Add property storage, implement property access (n.name), label predicates in NodeScan
+   - **Acceptance**: `MATCH (n:Person) WHERE n.age > 30 RETURN n.name` filters by label and property
+   - **ISO**: 4.3, 22
+   - **Deps**: src/storage/heap.zig, src/server/main.zig
+   - **Scope**: L
+   - **DRI**: core
+
+3. **Edge Traversal (REQ-GQL-016)**
+   - **Why**: Graph queries require relationship traversal beyond single nodes
+   - **What**: Implement Expand operator for edge traversal, CSR adjacency storage
+   - **Acceptance**: `MATCH (n)-[r:KNOWS]->(m) RETURN n, r, m` traverses edges with type filtering
+   - **ISO**: 22, 14.4
+   - **Deps**: src/storage/csr_adjacency.zig, src/exec.zig
+   - **Scope**: L
+   - **DRI**: core
+
+4. **MVCC Conflict Detection (REQ-GQL-027)**
+   - **Why**: Current implementation lacks write-write conflict detection - data consistency at risk
+   - **What**: Add conflict detection matrix, lock management, proper abort with 40001 status
+   - **Acceptance**: Concurrent conflicting updates produce serialization failure; snapshot isolation maintained
+   - **ISO**: 8
+   - **Deps**: src/server/main.zig (TxnState), WAL integration
+   - **Scope**: M
+   - **DRI**: txn
+
+## Next (P1) - Core Completion
+
+1. **OPTIONAL MATCH (REQ-GQL-015)**
+   - **Why**: Required for complete pattern matching with left-outer semantics
+   - **What**: Implement OPTIONAL as left-outer join over pattern fragments
+   - **Acceptance**: `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, m` returns nodes with NULL for unmatched
+   - **ISO**: 14.4
+   - **Deps**: MATCH implementation, src/exec.zig
+   - **Scope**: M
+   - **DRI**: core
+
+2. **Variable-Length Paths (REQ-GQL-016)**
+   - **Why**: Enable bounded path queries with [*1..3] syntax
+   - **What**: Implement PathExpand operator with BFS, bounded traversal
+   - **Acceptance**: `MATCH (a)-[*1..3]->(b) RETURN a, b` returns paths up to length 3
+   - **ISO**: 22.4
+   - **Deps**: src/exec.zig, adjacency storage
+   - **Scope**: L
+   - **DRI**: core
+
+3. **Storage Catalog Persistence (REQ-GQL-025)**
+   - **Why**: No durable storage limits production use
+   - **What**: Add --data_dir flag, implement catalog save/load, CSR adjacency persistence
+   - **Acceptance**: Server restart preserves graph data; `--data_dir=/tmp/geode` creates persistent storage
+   - **ISO**: impl-defined storage
+   - **Deps**: src/storage/catalog.zig, src/storage/page_manager.zig
+   - **Scope**: L
+   - **DRI**: storage
+
+4. **WITH Clause (REQ-GQL-020)**
+   - **Why**: Query composition and chaining required for complex queries
+   - **What**: Parse and execute WITH for intermediate projections
+   - **Acceptance**: `MATCH (n) WITH n, count(*) AS c WHERE c > 1 RETURN n` chains queries
+   - **ISO**: 14.5
+   - **Deps**: gql/parser.zig, src/server/main.zig
+   - **Scope**: M
+   - **DRI**: planner
+
+5. **Path Tie-Breaking (UA005/UA006)**
+   - **Why**: Deterministic path selection required for reproducible results
+   - **What**: Document and implement tie-break policy (length, start_id, end_id)
+   - **Acceptance**: Multiple shortest paths return deterministic selection; policy documented
+   - **ISO**: 22.4
+   - **Deps**: PathExpand implementation
    - **Scope**: S
-   - **DRI**: docs
-
-2. **Numeric promotion matrix documentation (REQ-GQL-013)**
-   - **Why**: Clarify coercion rules and add TypeMismatch.DivZero subclass for stable diagnostics
-   - **What**: Add promotion table to README; introduce TypeMismatch.DivZero subclass code
-   - **Acceptance**: `RETURN 1/0` emits TypeMismatch.DivZero; mixed int+decimal operations follow documented table
-   - **ISO**: 16.x, 23.2
-   - **Deps**: src/eval.zig, src/diagnostics.zig
-   - **Scope**: S
    - **DRI**: core
 
-3. **MVCC conflict detection completion (REQ-GQL-027)**
-   - **Why**: Current implementation lacks write-write conflict detection and lock management
-   - **What**: Add conflict detection matrix, lock escalation, and proper abort handling
-   - **Acceptance**: Concurrent conflicting updates produce proper abort with status_class 25000; snapshot isolation maintained
-   - **ISO**: §8
-   - **Deps**: src/txn/manager.zig, WAL integration
+## Later (P2+) - Extensions
+
+1. **Graph Mutations (REQ-GQL-019)**
+   - **Why**: Complete CRUD operations for graph data
+   - **What**: Implement CREATE, DELETE, MERGE statements
+   - **Acceptance**: `CREATE (n:Person {name: 'Alice'})` creates node; `DELETE n` removes nodes
+   - **ISO**: 15
+   - **Deps**: Parser, storage layer, transaction integration
    - **Scope**: L
-   - **DRI**: core
+   - **DRI**: dml
 
-## Next (P1)
-
-1. **Path patterns execution (REQ-GQL-017)**
-   - **Why**: Enable bounded path queries with deterministic tie-breaking
-   - **What**: Implement PathExpand operator with BFS; document tie-break policy (length, start_id, end_id)
-   - **Acceptance**: `MATCH (a)-[*1..3]->(b) RETURN a, b` returns stable ordering; UA005/UA006 flags present
-   - **ISO**: 22.4, UA005/UA006
-   - **Deps**: src/planner.zig, storage adjacency
-   - **Scope**: L
-   - **DRI**: core
-
-2. **Storage catalog persistence (REQ-GQL-025)**
-   - **Why**: Complete persistent storage layer with catalog and adjacency structures
-   - **What**: Add --data_dir to server; use PageManager.initPersistent(page_size, data_dir). Catalog save/load at startup/shutdown. CSR adjacency storage, free space management later.
-   - **Acceptance**: With --data_dir=<tmpdir>, creating a table then restarting preserves metadata; e2e_catalog_persistence_disk passes; adjacency scans use CSR format (later)
-   - **ISO**: impl-defined storage management
-   - **Deps**: src/storage/catalog.zig, src/storage/page_manager.zig, src/server/main.zig
-   - **Scope**: L
-   - **DRI**: storage
-
-3. **Index selectivity accuracy (REQ-GQL-039)**
-   - **Why**: Improve cost-based planning with better cardinality estimates
-   - **What**: Enhance SelectivityEstimator with HLL++ sketches and adaptive sampling
-   - **Acceptance**: Selective queries choose index scan; non-selective choose full scan; EXPLAIN shows accurate selectivity estimates
-   - **ISO**: 14.4 (MATCH planning)
-   - **Deps**: src/index/selectivity.zig, src/planner.zig
-   - **Scope**: M
-   - **DRI**: core
-
-4. **WAL compaction automation (REQ-GQL-026)**
-   - **Why**: Prevent unbounded WAL growth with automated segment reclamation
-   - **What**: Add background compaction based on configurable thresholds and checkpoint boundaries
-   - **Acceptance**: Long-running database automatically reclaims old WAL segments; configurable via GEODE_WAL_COMPACT_INTERVAL
-   - **ISO**: §8
-   - **Deps**: src/wal/wal.zig, src/server/main.zig
-   - **Scope**: M
-   - **DRI**: storage
-
-5. **Memory governance enhancements (REQ-GQL-037)**
-   - **Why**: Improve memory safety and prevent OOM conditions
-   - **What**: Enhanced spill triggers, memory pressure detection, graceful degradation
-   - **Acceptance**: Large queries spill to disk before OOM; memory pressure metrics in PROFILE
-   - **ISO**: impl-defined resource management
-   - **Deps**: src/util/memory_governor.zig, src/server/main.zig
-   - **Scope**: M
-   - **DRI**: core
-
-6. **Text formatting parity (REQ-GQL-023)**
-   - **Why**: Ensure consistent multi-format outputs for automation and human consumption
-   - **What**: Complete text serializer for all EXPLAIN/PROFILE variants
-   - **Acceptance**: `PROFILE RETURN 1` with `--format=txt` matches golden file; all JSON fields have text equivalents
-   - **ISO**: 24.x (conformance disclosure)
-   - **Deps**: src/util/text_formatter.zig, src/client/main.zig
-   - **Scope**: S
-   - **DRI**: core
-
-## Later (P2+)
-
-1. **Distributed scaffold implementation (REQ-GQL-028/042)**
-   - **Why**: Foundation for future scale-out and high availability
-   - **What**: Raft leader election, 2PC coordinator interfaces, shard-aware query planning
-   - **Acceptance**: Feature-flagged distributed mode supports basic replication; 2PC prepare/commit phases work
-   - **ISO**: impl-defined distribution semantics
-   - **Deps**: new dist/ module, src/txn/ integration
-   - **Scope**: L
-   - **DRI**: dist
-
-2. **Lock manager implementation (REQ-GQL-044)**
-   - **Why**: Enable proper concurrency control and deadlock detection
-   - **What**: Reader/writer locks, deadlock detection, lock escalation policies
-   - **Acceptance**: Concurrent transactions properly serialize; deadlocks detected and resolved
-   - **ISO**: §8
-   - **Deps**: src/txn/manager.zig, new locking module
-   - **Scope**: L
-   - **DRI**: core
-
-3. **Page compaction and vacuum (REQ-GQL-040)**
-   - **Why**: Prevent space amplification in slotted page storage
-   - **What**: Background vacuum process, fragmentation detection, space reclamation
-   - **Acceptance**: Fragmented pages automatically compacted; space utilization >85% maintained
-   - **ISO**: impl-defined storage management
-   - **Deps**: src/storage/page_manager.zig
-   - **Scope**: M
-   - **DRI**: storage
-
-4. **Encryption at rest design (REQ-GQL-038)**
-   - **Why**: Prepare for compliance and data protection requirements
-   - **What**: Design document with key hierarchy, KMS integration, threat model
-   - **Acceptance**: Design document approved; encryption interfaces defined
-   - **ISO**: impl-defined security
-   - **Deps**: docs/, new security module design
-   - **Scope**: M
-   - **DRI**: security
-
-5. **Recovery harness expansion (REQ-GQL-041)**
-   - **Why**: Validate crash safety and WAL correctness under stress
-   - **What**: Deterministic crash injection, large-scale fuzz testing, replay verification
-   - **Acceptance**: 1000+ randomized crash scenarios pass recovery verification in <30s each
-   - **ISO**: §8
-   - **Deps**: tests/, src/wal/
-   - **Scope**: M
-   - **DRI**: storage
-
-6. **Sharding strategy configuration (REQ-GQL-043)**
-   - **Why**: Enable optimal data distribution for different workloads
-   - **What**: Edge-cut vs vertex-cut partitioning, hybrid strategies, partition metadata
-   - **Acceptance**: Configurable partitioning strategies; query planner respects partition boundaries
+2. **Distributed Execution (REQ-GQL-028/042/043)**
+   - **Why**: Scale-out for large graphs
+   - **What**: Complete Raft implementation, 2PC coordination, partition-aware planning
+   - **Acceptance**: Multi-node cluster with replicated data; distributed query execution
    - **ISO**: impl-defined distribution
-   - **Deps**: dist/ module, src/planner.zig
-   - **Scope**: L
+   - **Deps**: src/distributed/, network layer
+   - **Scope**: XL
    - **DRI**: dist
 
-7. **Advanced query optimization (REQ-GQL-ORDER-OPT)**
-   - **Why**: Improve performance for complex queries with ordering and limits
-   - **What**: Top-k optimization, ranked enumeration, adaptive re-optimization
-   - **Acceptance**: `ORDER BY ... LIMIT` queries show early termination in PROFILE; adaptive reopt triggers on estimate misses
-   - **ISO**: 16.18–16.19
-   - **Deps**: src/planner.zig, src/exec.zig
+3. **Advanced Path Algorithms**
+   - **Why**: Shortest path, centrality, community detection
+   - **What**: Implement graph algorithms as built-in functions
+   - **Acceptance**: `MATCH p = shortestPath((a)-[*]-(b)) RETURN p` finds shortest path
+   - **ISO**: Extensions beyond core
+   - **Deps**: Path execution framework
    - **Scope**: L
-   - **DRI**: core
+   - **DRI**: algo
 
-8. **Secret scanning automation (REQ-GQL-045)**
-   - **Why**: Prevent accidental secret exposure in logs and code
-   - **What**: Automated secret detection in CI, runtime log filtering
-   - **Acceptance**: CI fails on detected secrets; runtime logs never contain sensitive data
-   - **ISO**: impl-defined security
-   - **Deps**: CI configuration, logging infrastructure
-   - **Scope**: S
-   - **DRI**: security
+4. **Index Structures**
+   - **Why**: Performance optimization for large graphs
+   - **What**: B-tree indexes on properties, label indexes, full-text search
+   - **Acceptance**: EXPLAIN shows index usage; 100x speedup on indexed lookups
+   - **ISO**: impl-defined optimization
+   - **Deps**: Storage layer, planner cost model
+   - **Scope**: L
+   - **DRI**: storage
 
-## Cutline
+5. **Schema Constraints**
+   - **Why**: Data integrity and validation
+   - **What**: Unique constraints, property existence, cardinality limits
+   - **Acceptance**: `CREATE CONSTRAINT unique_name ON (n:Person) ASSERT n.name IS UNIQUE`
+   - **ISO**: Extensions
+   - **Deps**: Storage layer, DDL parsing
+   - **Scope**: M
+   - **DRI**: schema
 
-Excluded this milestone: full GPU operators, learned cost model integration, encryption implementation (beyond design), full distributed query shipping, advanced WCOJ attribute ordering heuristics, path cardinality estimation research prototypes. Rationale: focus on correctness, durability, and core GQL conformance first.
+## Documentation Updates Required
 
-## Recent Progress (Snapshot)
+1. **README Accuracy**
+   - Update to reflect actual capabilities vs aspirations
+   - Remove claims of MATCH/OPTIONAL support until implemented
+   - Add clear roadmap to graph database functionality
 
-- ✅ **Doc sync tool** (REQ-GQL-018): Duplicate REQ detection, `--check` mode, consolidated scan across GAP_ANALYSIS/NEXT/REQUIREMENTS
-- ✅ **Binary protocol HELLO/health (stdio + QUIC parity)** (REQ-GQL-001/002): HELLO includes conformance digest and feature list; PING returns ok:true; QUIC path uses shared processMessage
-- ✅ **ORDER key policy toggle (CLI)** (REQ-GQL-004): `--order-keys expr` enables ORDER BY expressions; default identifiers-only policy enforced
-- ✅ **Transaction baseline** (REQ-GQL-027): BEGIN/COMMIT/ROLLBACK with proper status_class responses (00000/25000); TxnState mapping test added (tests/e2e_protocol_txn_serialization_failure.zig)
-- ✅ **WAL compaction automation** (REQ-GQL-026): Configurable via GEODE_WAL_COMPACT_INTERVAL (default 5 commits)
-- ✅ **Memory governance** (REQ-GQL-037): Added memory limit tracking with spill triggers for HashAgg/Sort/Distinct
-- ✅ **Storage checksum diagnostics** (REQ-GQL-026): Added mapStorageError for PageChecksumMismatch → StoragePageChecksum diagnostic
-- ✅ **GROUP BY HashAgg** (REQ-GQL-016): Execution complete in exec.runGroupedQuery; comprehensive test coverage
-- ✅ **Index selectivity estimator** (REQ-GQL-039): Cost-based decisions with adaptive learning
-- ✅ **NodeIndexScan metadata** (REQ-GQL-039): Enhanced PROFILE with index_name and selectivity_est
-- ✅ **Text formatting parity** (REQ-GQL-023): EXPLAIN/PROFILE text output with --format=txt
-- ✅ **Diagnostics precedence** (REQ-GQL-014/030): UA002 folding with deterministic precedence rules
-- ✅ **Set operations** (REQ-GQL-003): UNION (DISTINCT/ALL) and INTERSECT/EXCEPT (DISTINCT/ALL) implemented; EXPLAIN shows SetOpUnion/SetOpIntersect/SetOpExcept
-- ✅ **Storage catalog persistence (smoke)** (REQ-GQL-025): Added save/load test over in-memory page manager (tests/e2e_catalog_persistence.zig)
-- ✅ **Expression engine** (REQ-GQL-004/005): CASE expressions, string predicates, mixed-type arithmetic
-- ✅ **Temporal literals** (REQ-GQL-008): DATE/TIME/DATETIME parsing with normalization
+2. **Conformance Profile**
+   - Mark graph features as "Planned" not "Yes"
+   - Document current SQL-like subset clearly
+   - Add timeline for core graph features
+
+3. **Test Coverage**
+   - Add test stubs for missing features with skip markers
+   - Document why custom functions (MATCH_1HOP) exist as workarounds
+   - Create acceptance test suite for graph features
 
 ## Summary (Top Risks)
 
-1. **Doc sync tool compatibility** — immediate blocker for requirement validation
-2. **MVCC conflict detection** — risk of data consistency anomalies
-3. **Missing distributed scaffold** — scale-out blocked
-4. **Storage catalog persistence** — limits production readiness
-5. **Path pattern execution** — limits query expressiveness
+1. **False Advertising** — System claims GQL conformance but lacks graph database fundamentals
+2. **No Graph Execution** — MATCH patterns parsed but not executed
+3. **Data Consistency** — MVCC conflicts undetected
+4. **No Property Model** — Cannot access node/edge properties
+5. **No Persistence** — Storage not durable
 
-First 8 tasks enumerated across Now+Next cover immediate correctness, observability, and core functionality gaps.
+The system currently provides a **SQL-like query engine** with GQL syntax parsing but requires substantial work to become a true graph database. Priority must be on implementing core graph features (MATCH, properties, traversal) before any other enhancements.

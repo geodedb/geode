@@ -2,29 +2,64 @@
 
 ## A. Product
 
-- Implementation: <name/version>
-- Scope: GQL front‑end + planner/executor for distributed ACID graph DB.
+- Implementation: Geode v0.15.0 (development)
+- Scope: Working toward GQL front‑end + planner/executor for distributed ACID graph DB.
+- **Current Status**: SQL-like query engine with GQL syntax parsing; graph features not yet implemented.
 
 ## B. Minimum conformance
 
-- This implementation **correctly translates/executes** all GQL programs conforming to the language and to the implementation‑defined features claimed here; it **rejects** programs whose errors require detection by the standard. :contentReference[oaicite:69]{index=69}
+- This implementation **will** correctly translate/execute all GQL programs conforming to the language when complete.
+- Currently **rejects** programs with proper ISO diagnostics but **cannot execute** graph patterns.
 
 ## C. Optional features claimed (Annex D)
 
-- **GQ03 UNION**, **GQ04/5 EXCEPT**, **GQ06/7 INTERSECT** (Phase 0/1 as implemented). :contentReference[oaicite:70]{index=70}
-- **G060 bounded quantifiers** (if enabled). :contentReference[oaicite:71]{index=71}
-- (Add others explicitly as you adopt them.)
+Currently implemented:
+- **GQ03 UNION** - DISTINCT and ALL variants working
+- **GQ04/5 EXCEPT** - DISTINCT and ALL variants working  
+- **GQ06/7 INTERSECT** - DISTINCT and ALL variants working
+- **GQ12 OFFSET** - With US001 policy enforcement
+- **GQ13 LIMIT** - Working with ORDER BY requirements
 
-## D. Implementation‑defined / dependent behaviors (partial)
+Planned but not implemented:
+- **G060 bounded quantifiers** - Path patterns not yet supported
+- Graph pattern features pending implementation
 
-- **US001**: Order chosen for OFFSET/LIMIT on unordered tables: `<doc policy>`. :contentReference[oaicite:72]{index=72}
-- **UA005/UA006**: Path tie‑break `(length, src_id, dst_id, edge_id)` (document exact rule). (Anchors summarized in planner doc.) :contentReference[oaicite:73]{index=73}
-- **UA002**: Multiple diagnostic conditions policy: `<doc policy>`. :contentReference[oaicite:74]{index=74}
+## D. Implementation‑defined / dependent behaviors
+
+Implemented:
+- **US001**: OFFSET/LIMIT on unordered tables rejected with diagnostic (ISO 16.16–16.19)
+- **UA002**: Multiple diagnostic conditions use precedence rules (ISO 23.2)
+- **I:ORDER**: ORDER BY keys restricted to identifiers by default (configurable via --order-keys expr)
+- **I:NULLS**: NULLS FIRST default, NULLS LAST via GEODE_NULLS_LAST env var
+- **I:COLLATION**: Binary comparison for strings
+- **I:DECIMAL**: Decimal values normalized to canonical form
+- **I:NUMERIC**: Int→Decimal promotion in mixed arithmetic
+
+Not yet implemented:
+- **UA005/UA006**: Path tie‑break rules (no path execution yet)
 
 ## E. Extensions / Options
 
-- Extra reserved words or processing modes (if any) and Flagger behavior. :contentReference[oaicite:75]{index=75}
+- Custom functions MATCH_1HOP, EXPAND_FROM as temporary workarounds (not standard GQL)
+- PROFILE/EXPLAIN prefixes for query analysis
+- Memory governance with spill thresholds
+- QUIC transport with TLS 1.3
 
 ## F. Flagger
 
-- Provided; flags extensions/options/impl‑defined features and non‑conforming modes. :contentReference[oaicite:76]{index=76}
+- Provided in protocol frames
+- Flags non-standard modes and extensions
+- Reports when implementation-defined choices affect results
+
+## G. Current Limitations
+
+The following core GQL features are **not yet implemented**:
+1. **MATCH patterns** - Parser recognizes but cannot execute graph traversal
+2. **Property access** - Cannot access node/edge properties (n.name syntax)
+3. **Node/edge labels** - No label-based filtering
+4. **OPTIONAL MATCH** - Parsed but not executed
+5. **Path patterns** - No variable-length traversal
+6. **Graph mutations** - CREATE/DELETE/MERGE not supported
+7. **WITH clause** - Query chaining not implemented
+
+See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for detailed implementation status and [NEXT.md](NEXT.md) for roadmap.

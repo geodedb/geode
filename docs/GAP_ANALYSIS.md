@@ -6,40 +6,106 @@ with subclause anchors.
 
 ## Requirements Ledger
 
-|| Requirement ID | Requirement (1–2 lines) | Source (research § / query_engine § and ISO) | Current Status | Evidence (file:line or test) | Gap / Risk | Deadline | Owner | Notes |
-||---|---|---|---|---|---|---|---|---|
-|| REQ‑GQL‑001 | Wire protocol processes: geoded (server), geodec (CLI); JSON frames HELLO/RUN_GQL/PULL/BEGIN/COMMIT/ROLLBACK | query_engine.md §Wire; ISO 7 (sessions), 23.2 (diagnostics) | Implemented | src/server/main.zig (.HELLO/.RUN_GQL/.PULL/.BEGIN/.COMMIT/.ROLLBACK); QUIC and stdio share processMessage; src/client/main.zig; tests/e2e_protocol.zig, tests/e2e_hello_ping.zig | Backpressure/batching TBD | 2025‑09‑30 | wire | Default JSON; TXT optional |
-|| REQ‑GQL‑002 | HELLO advertises capabilities and conformance profile basics | query_engine.md §Wire; ISO 24 (conformance) | Implemented | src/server/main.zig (.HELLO emits caps+conformance digest/features); tests/e2e_hello_ping.zig | Health/caps extensions later | 2025‑10‑07 | wire | Include flagger when non‑standard |
-|| REQ‑GQL‑003 | Transactions: BEGIN/COMMIT/ROLLBACK with session state | ISO 7, §8 | Implemented | src/server/main.zig (.BEGIN/.COMMIT/.ROLLBACK); tests/e2e_protocol_transactions.zig, tests/e2e_protocol_txn_serialization_failure.zig | Isolation error matrix pending | 2025‑10‑21 | txn | 25000 status mapping present |
-|| REQ‑GQL‑004 | RUN_GQL: RETURN; ORDER BY; LIMIT/OFFSET legality (US001 rejection) | ISO 14.3, 16.16–16.19, 23.2 | Implemented | src/server/main.zig (.RUN_GQL parse+legality; US001 guard; --order-keys expr policy); tests/e2e_protocol_multidiag_precedence.zig, tests/e2e_order_policy_toggle.zig | Configurable policy toggle later | 2025‑10‑21 | planner | Policy: identifiers‑only keys (I:) default; expr allowed with flag |
-|| REQ‑GQL‑005 | Set operations: UNION DISTINCT/ALL; INTERSECT/EXCEPT DISTINCT/ALL | ISO 16.10–16.12 | Implemented | src/server/main.zig (UNION path; evaluateBinarySet for INTERSECT/EXCEPT); tests/e2e_setops_all.zig, tests/e2e_setops_mixed_nulls.zig, tests/e2e_explain_setops.zig, tests/e2e_setops_intersect_except.zig | Further perf tuning later | 2025‑11‑04 | engine | Unordered output |
-|| REQ‑GQL‑006 | EXPLAIN/PROFILE frames; flagger findings | query_engine.md §Explain/Profile; ISO 24, 23.2 | Implemented | src/server/main.zig (EXPLAIN/PROFILE emission); tests e2e_protocol_profile_*.zig | Freeze schema versioning | 2025‑10‑28 | engine | profile_version=2 present |
-|| REQ‑GQL‑007 | Core value types: INT, BOOL, STRING, DECIMAL | ISO 18.6–18.8 | Implemented | src/server/main.zig; eval paths; tests/e2e_protocol_decimal_*.zig | Temporal/spatial later | 2025‑11‑18 | eval | 3VL covered in CASE |
-|| REQ‑GQL‑008 | CASE expression (searched) with 3‑valued logic | ISO 17.7, 18.3 | Implemented | tests/e2e_protocol.zig:116–132 | Add simple CASE parity | 2025‑11‑18 | eval | |
-|| REQ‑GQL‑009 | DISTINCT projection | ISO 16.9 | Implemented | src/server/main.zig | Memory use under high dupes | 2025‑10‑28 | engine | Canonicalization for DECIMAL |
-|| REQ‑GQL‑010 | Diagnostics precedence and folding; US001 aggregation | ISO 23.2; 16.16–16.19 | Implemented | src/server/main.zig; tests/e2e_protocol_multidiag_*.zig | Add mapping table to docs | 2025‑10‑14 | diag | |
-|| REQ‑GQL‑011 | QUIC transport with TLS 1.3 | query_engine.md §Transport; Security | Implemented | src/transport/quic.zig; server QUIC listen (src/server/main.zig); tools/cert_gen.zig | Cipher suite audit later | 2025‑10‑21 | wire | QUIC default |
-|| REQ‑GQL‑012 | WAL checkpoints/compaction hooks | Storage/WAL; ISO §8 | Partial | src/wal/wal.zig; COMMIT/autocommit writes checkpoint and compacts per GEODE_WAL_COMPACT_INTERVAL | ARIES completeness | 2025‑11‑25 | storage | Recovery exists |
-|| REQ‑GQL‑013 | MVCC (SI baseline) | ISO §8 | Partial | src/txn/manager.zig; server txn usage (session snapshot, commit_ts) | Conflict matrix pending | 2025‑11‑04 | txn | |
-|| REQ‑GQL‑025 | Storage catalog persistence (catalog, adjacency) | impl‑defined storage mgmt | Partial | src/storage/catalog.zig; src/storage/page_manager.zig; tests/e2e_catalog_persistence.zig | Implement --data_dir and on-disk save/load; adjacency CSR later | 2025‑11‑25 | storage | |
-|| REQ‑GQL‑028 | Distributed scaffold: Raft (leader only) with feature flag | research.md §6; ISO out‑of‑scope for wire | Implemented | src/distributed/raft.zig; src/distributed/mod.zig (start/tick/status); tests in file | Heartbeat tuning; callbacks | 2025‑10‑14 | dist | Leader in single‑node |
-|| REQ‑GQL‑042 | Distributed scaffold: 2PC coordinator interfaces | research.md §6; ISO §8 (txn) | Implemented | src/distributed/twophase.zig; mod.zig begin/commit/abort; tests in file | Network handlers stubbed | 2025‑10‑21 | dist | Feature‑flagged |
-|| REQ‑GQL‑043 | Distributed integration with server: CLI/env, HELLO caps, tests | query_engine.md §Wire; ISO 24 | Implemented | src/server/main.zig (CLI/env flags; HELLO caps); tests/e2e_distributed.zig | Health endpoint later | 2025‑10‑14 | dist | Client forwards flags in stdio |
-|| REQ‑GQL‑050 | Text format output for SCHEMA/BINDINGS/EXPLAIN/PROFILE | ISO 4.3.6 (binding tables) | Implemented | src/client/main.zig text paths; tests text format in e2e_protocol.zig | Text profile parity later | 2025‑10‑21 | cli | |
+| Requirement ID | Requirement (1–2 lines) | Source (ISO subclause) | Current Status | Evidence (file:line or test) | Gap / Risk | Deadline | Owner | Notes |
+|---|---|---|---|---|---|---|---|---|
+| REQ‑GQL‑001 | Wire protocol processes: geoded (server), geodec (CLI); JSON frames HELLO/RUN_GQL/PULL/BEGIN/COMMIT/ROLLBACK | ISO 7 (sessions), 23.2 (diagnostics) | Implemented | src/server/main.zig:1675-1800 (handleFrame); src/client/main.zig; tests/e2e_protocol.zig, tests/e2e_hello_ping.zig | Backpressure/batching TBD | 2025‑09‑30 | wire | Default JSON; TXT optional |
+| REQ‑GQL‑002 | HELLO advertises capabilities and conformance profile basics | ISO 24 (conformance) | Implemented | src/server/main.zig:1681-1700 (.HELLO emits caps+conformance); tests/e2e_hello_ping.zig | Health/caps extensions later | 2025‑10‑07 | wire | Include flagger when non‑standard |
+| REQ‑GQL‑003 | Transactions: BEGIN/COMMIT/ROLLBACK with session state | ISO 7, 8 (transactions) | Implemented | src/server/main.zig:1761-1800 (.BEGIN/.COMMIT/.ROLLBACK); tests/e2e_protocol_transactions.zig, tests/e2e_protocol_txn_serialization_failure.zig | Isolation error matrix pending | 2025‑10‑21 | txn | 25000 status mapping present |
+| REQ‑GQL‑004 | RUN_GQL: RETURN; ORDER BY; LIMIT/OFFSET legality (US001 rejection) | ISO 14.3, 16.16–16.19, 23.2 | Partial | src/server/main.zig:932-1224 (evaluateSimpleQuery); tests/e2e_protocol_multidiag_precedence.zig | Missing MATCH patterns | 2025‑10‑21 | planner | No graph traversal |
+| REQ‑GQL‑005 | Set operations: UNION DISTINCT/ALL; INTERSECT/EXCEPT DISTINCT/ALL | ISO 16.10–16.12 | Implemented | src/server/main.zig:1323-1400 (evaluateUnion); tests/e2e_setops_all.zig, tests/e2e_setops_intersect_except.zig | Further perf tuning later | 2025‑11‑04 | engine | Unordered output |
+| REQ‑GQL‑006 | EXPLAIN/PROFILE frames; flagger findings | ISO 24, 23.2 | Implemented | src/server/main.zig:1700-1750 (EXPLAIN/PROFILE emission); tests e2e_protocol_profile_*.zig | Freeze schema versioning | 2025‑10‑28 | engine | profile_version=2 present |
+| REQ‑GQL‑007 | Core value types: INT, BOOL, STRING, DECIMAL | ISO 18.6–18.8 | Implemented | src/server/main.zig; eval paths; tests/e2e_protocol_decimal_*.zig | Temporal/spatial later | 2025‑11‑18 | eval | 3VL covered in CASE |
+| REQ‑GQL‑008 | CASE expression (searched) with 3‑valued logic | ISO 17.7, 18.3 | Implemented | tests/e2e_protocol.zig:116–132 | Add simple CASE parity | 2025‑11‑18 | eval | |
+| REQ‑GQL‑009 | DISTINCT projection | ISO 16.9 | Implemented | src/server/main.zig:1100-1150 | Memory use under high dupes | 2025‑10‑28 | engine | Canonicalization for DECIMAL |
+| REQ‑GQL‑010 | Diagnostics precedence and folding; US001 aggregation | ISO 23.2; 16.16–16.19 | Implemented | src/diagnostics.zig:55-76; tests/e2e_protocol_multidiag_*.zig | Add mapping table to docs | 2025‑10‑14 | diag | |
+| REQ‑GQL‑011 | QUIC transport with TLS 1.3 | Security requirements | Implemented | src/transport/quic.zig; server QUIC listen (src/server/main.zig); tools/cert_gen.zig | Cipher suite audit later | 2025‑10‑21 | wire | QUIC default |
+| REQ‑GQL‑012 | WAL checkpoints/compaction hooks | ISO 8 (transactions) | Partial | src/wal/wal.zig; COMMIT/autocommit writes checkpoint | ARIES completeness | 2025‑11‑25 | storage | Recovery exists |
+| REQ‑GQL‑013 | MVCC (SI baseline) | ISO 8 | Partial | src/server/main.zig:200-250 (TxnState); session snapshot, commit_ts | Conflict detection missing | 2025‑11‑04 | txn | Write-write conflicts undetected |
+| REQ‑GQL‑014 | MATCH patterns: node/edge traversal | ISO 14.4, 22 (graph patterns) | Not Implemented | Parser recognizes (gql/parser.zig); no execution | Core graph feature missing | 2025‑11‑25 | core | Critical gap |
+| REQ‑GQL‑015 | OPTIONAL MATCH: left-outer semantics | ISO 14.4 | Not Implemented | Parser recognizes; no execution | Depends on MATCH | 2025‑12‑02 | core | |
+| REQ‑GQL‑016 | Path patterns: variable-length traversal | ISO 22.4 | Not Implemented | No PathExpand operator | Limits expressiveness | 2025‑12‑02 | core | |
+| REQ‑GQL‑017 | Property access: n.name syntax | ISO 4.3 (property graph model) | Not Implemented | Parser supports; no execution | Property model missing | 2025‑11‑25 | core | |
+| REQ‑GQL‑018 | Node/edge labels and filtering | ISO 4.3, 22 | Not Implemented | No label-based filtering | Core graph feature | 2025‑11‑25 | core | |
+| REQ‑GQL‑019 | Graph mutations: CREATE/DELETE/MERGE | ISO 15 (data modification) | Not Implemented | Not parsed or executed | DML not in scope yet | 2026‑01‑15 | dml | |
+| REQ‑GQL‑020 | WITH clause: query chaining | ISO 14.5 | Not Implemented | Not parsed | Query composition limited | 2025‑12‑15 | planner | |
+| REQ‑GQL‑025 | Storage catalog persistence (catalog, adjacency) | impl‑defined storage mgmt | Partial | src/storage/catalog.zig; tests/e2e_catalog_persistence.zig | Missing --data_dir, CSR adjacency | 2025‑11‑25 | storage | |
+| REQ‑GQL‑027 | MVCC conflict detection completion | ISO 8 | Partial | Basic timestamps only | No write-write detection | 2025‑11‑04 | txn | Data consistency risk |
+| REQ‑GQL‑028 | Distributed scaffold: Raft (leader only) | impl‑defined distribution | Stubbed | src/distributed/raft.zig; single-node only | No actual distribution | 2025‑12‑31 | dist | Feature‑flagged |
+| REQ‑GQL‑042 | Distributed scaffold: 2PC coordinator | ISO 8 (distributed txn) | Stubbed | src/distributed/twophase.zig | Network handlers missing | 2025‑12‑31 | dist | Feature‑flagged |
+| REQ‑GQL‑043 | Distributed integration with server | ISO 24 | Partial | CLI flags present; no actual distribution | Single-node only | 2025‑12‑31 | dist | |
+| REQ‑GQL‑050 | Text format output for SCHEMA/BINDINGS/EXPLAIN/PROFILE | ISO 4.3.6 (binding tables) | Implemented | src/client/main.zig text paths; tests in e2e_protocol.zig | Text profile parity later | 2025‑10‑21 | cli | |
 
-Notes: I: implementation‑defined; U: implementation‑dependent. Policy samples: ORDER keys ident‑only (I:), NullsFirst vs Last (I: flag), US001 enforced (U: policy disclosed). HELLO now includes conformance digest and features; ORDER key toggle scaffold present in tests.
+Notes: 
+- I: implementation‑defined; U: implementation‑dependent
+- Critical gaps: MATCH patterns (REQ‑GQL‑014), property model (REQ‑GQL‑017), path traversal (REQ‑GQL‑016)
+- The system currently implements a SQL-like subset of GQL without core graph features
 
-## GQL Conformance Profile (Initial)
+## GQL Conformance Profile
 
-|| Feature ID | Name | Supported? | Rationale | Engine Implications (parser / planner / storage / protocol) | Test Hook |
-||---|---|---|---|---|---|
-|| 14.3–14.4 | Linear queries; RETURN | Yes | Milestone‑1 minimum | Lexer/Parser/Executor; BINDINGS; RUN_GQL | e2e_protocol Valid ORDER/LIMIT |
-|| 16.16–16.19 | ORDER BY + PAGE | Yes | Pagination legality | Planner legality + diagnostics; ordered metadata | multidiag precedence test |
-|| 16.10–16.12 | UNION | Yes (DISTINCT/ALL) | Basic set ops | Merge + dedup; unordered output | union tests |
-|| 17.7 / 18.3 | CASE; 3VL | Yes | Usability baseline | Eval/type rules; JSON emit | CASE test |
-|| 18.6–18.8 | Numeric core | Yes | Required | Type coercion; decimal canonicalization | decimal tests |
-|| 23.2 | Diagnostics | Partial | Catalog present | additional_statuses; precedence folding | multidiag tests |
-|| 24.* | Conformance profile & flags | Partial | Disclosure baseline | Flagger in frames; docs tables | flags tests |
-|| G060 | Bounded path quantifiers | No | Deferred | PathExpand later | cutline |
+| Feature ID | ISO Subclause | Name | Claimed | Actual | Evidence | Notes |
+|---|---|---|---|---|---|---|
+| Core | 14.3–14.4 | Linear queries; RETURN | Yes | Partial | e2e_protocol.zig | No MATCH execution |
+| Core | 14.4 | MATCH patterns | Yes | No | Parser only | **Critical gap** |
+| Core | 14.4 | OPTIONAL MATCH | Yes | No | Parser only | Depends on MATCH |
+| Core | 22 | Graph patterns | Yes | No | No execution | **Core feature missing** |
+| Core | 4.3 | Property graph model | Yes | No | No property access | **Fundamental gap** |
+| Core | 16.16–16.19 | ORDER BY + PAGE | Yes | Yes | multidiag tests | US001 enforced |
+| GQ03 | 16.10 | UNION | Yes | Yes | union tests | DISTINCT/ALL working |
+| GQ04/05 | 16.11 | EXCEPT | Yes | Yes | except tests | DISTINCT/ALL working |
+| GQ06/07 | 16.12 | INTERSECT | Yes | Yes | intersect tests | DISTINCT/ALL working |
+| Core | 17.7 / 18.3 | CASE; 3VL | Yes | Yes | CASE test | Working |
+| Core | 18.6–18.8 | Numeric core | Yes | Yes | decimal tests | INT/DECIMAL/BOOL |
+| Core | 23.2 | Diagnostics | Yes | Yes | multidiag tests | ISO mapping complete |
+| Core | 24 | Conformance profile | Partial | Partial | HELLO frame | Flagger present |
+| G060 | 22.4 | Bounded path quantifiers | No | No | Not implemented | Deferred |
+| Core | 15 | Data modification | No | No | Not implemented | CREATE/DELETE/MERGE missing |
+| Core | 14.5 | WITH clause | No | No | Not implemented | Query chaining missing |
 
-Profile disclosures (I:/U:): Collation=binary (I:), ORDER key policy ident‑only (I:), NullsLast via env (I:), US001 rejection (U: policy disclosed), Decimal key canonicalization (I:).
+**Summary**: The implementation claims GQL conformance but lacks fundamental graph database features. It successfully implements:
+- SQL-like query operations (RETURN, ORDER BY, LIMIT, set operations)
+- Transaction management
+- Diagnostics and profiling
+- Storage layer basics
+
+But critically missing:
+- **Graph pattern matching** (MATCH clause execution)
+- **Property graph model** (node/edge properties, labels)
+- **Graph traversal** (path patterns, variable-length)
+- **Graph mutations** (CREATE, DELETE, MERGE)
+
+## Implementation-Defined/Dependent Behaviors
+
+| ID | ISO Reference | Behavior | Current Policy | Evidence |
+|---|---|---|---|---|
+| US001 | 16.16–16.19 | Order for OFFSET on unordered tables | Rejected with diagnostic | src/server/main.zig:442-477 |
+| UA005 | 22.4 | Path selection tie-break (shortest) | Not implemented | No path execution |
+| UA006 | 22.4 | Path selection tie-break (any) | Not implemented | No path execution |
+| UA002 | 23.2 | Multiple diagnostic precedence | Lower code wins | src/diagnostics.zig:55-76 |
+| I:ORDER | 14.10 | ORDER BY key restrictions | Identifiers only (default) | e2e_order_policy_toggle.zig |
+| I:NULLS | 16.17 | NULL ordering | NULLS FIRST (configurable) | GEODE_NULLS_LAST env var |
+| I:COLLATION | 18.x | String collation | Binary comparison | No Unicode collation |
+| I:DECIMAL | 18.8 | Decimal canonicalization | Normalized form | e2e_protocol_decimal.zig |
+
+## Risk Assessment
+
+### Critical Risks (P0)
+1. **No Graph Database Core**: System cannot execute MATCH patterns or traverse graphs - fundamental requirement missing
+2. **False Conformance Claims**: Documentation claims GQL conformance but lacks essential graph features
+3. **MVCC Conflicts**: Write-write conflicts undetected, risking data consistency
+
+### High Risks (P1)
+1. **Storage Persistence**: No durable catalog or adjacency structures
+2. **Property Model**: Cannot access node/edge properties
+3. **Path Operations**: No variable-length traversal capability
+
+### Medium Risks (P2)
+1. **Distribution**: Single-node only, no scale-out path
+2. **Query Composition**: No WITH clause for complex queries
+3. **Graph Mutations**: No CREATE/DELETE/MERGE operations
+
+## Recommendations
+
+1. **Immediate**: Update documentation to accurately reflect that this is a SQL-like query engine with GQL syntax parsing, not a graph database
+2. **Short-term**: Implement basic MATCH pattern execution with NodeScan and Expand operators
+3. **Medium-term**: Add property graph model with label and property filtering
+4. **Long-term**: Complete graph traversal, mutations, and distributed execution

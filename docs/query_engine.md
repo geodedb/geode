@@ -757,6 +757,10 @@ _End of report._
 
 ## 10) GQL→Engine Crosswalk (Milestone v0.15 Core)
 
+**Implementation Status Note**: As of audit date, the crosswalk below represents the **target architecture**. 
+Current implementation provides SQL-like query operations (RETURN, ORDER BY, set operations) but **lacks graph 
+pattern execution** (MATCH, OPTIONAL, path traversal). See GAP_ANALYSIS.md for actual vs planned features.
+
 ### Core GQL Constructs to Engine Mapping
 
 | GQL Clause / Construct | ISO Clause(s) | AST Node(s) / Fields  | Logical Operator(s) | Physical Operator(s) | Storage / Index Access | Txn / WAL Action | Protocol Frame(s) | Diagnostics (Primary -> Additional) | Impl-defined / Dependent (I:/U:) |

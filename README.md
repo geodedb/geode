@@ -2,58 +2,84 @@
 
 ## Description
 
-Geode is a Zig-based graph database project implementing ISO/IEC 39075:2024 (GQL) with
-structured temporals, ORDER BY policy checks, and developer-friendly tooling.
+Geode is a Zig-based database project working toward ISO/IEC 39075:2024 (GQL) compliance. Currently implements
+a SQL-like query engine with GQL syntax parsing, transactions, and storage foundations.
 
 **NEW: QUIC/TLS 1.3 Support** - Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication between client and server.
 
 ## Status & Conformance Summary
 
-**Current Implementation Status**: 36 requirements implemented, 3 partial, 6 missing (see detailed breakdown below)
+**⚠️ Important**: This is currently a **SQL-like query engine** with GQL syntax parsing, not yet a full graph database.
+Core graph features (MATCH patterns, property access, traversal) are **not yet implemented**.
+
+**Current Implementation Status**: 
+- ✅ 14 requirements fully implemented (query basics, transactions, storage)
+- 🔄 5 requirements partially implemented 
+- ❌ 11 requirements not implemented (graph-specific features)
 
 **Key Links**:
-- **Requirements Ledger**: [docs/GAP_ANALYSIS.md#1-requirements-ledger](docs/GAP_ANALYSIS.md#1-requirements-ledger) — Authoritative status of all REQ-GQL-### requirements with evidence
-- **GQL Conformance Profile**: [docs/GAP_ANALYSIS.md#2-gql-conformance-profile-initial](docs/GAP_ANALYSIS.md#2-gql-conformance-profile-initial) — ISO/IEC 39075:2024 feature support matrix
-- **Execution-ready backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized tasks with acceptance criteria
-- **GQL→Engine Crosswalk**: [docs/query_engine.md#10-gqlengine-crosswalk-milestone-v015-core](docs/query_engine.md#10-gqlengine-crosswalk-milestone-v015-core) — Mapping from GQL constructs to implementation
+- **Requirements Ledger**: [docs/GAP_ANALYSIS.md#requirements-ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Authoritative status with evidence
+- **GQL Conformance Profile**: [docs/GAP_ANALYSIS.md#gql-conformance-profile](docs/GAP_ANALYSIS.md#gql-conformance-profile) — Feature support matrix
+- **Execution Backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized roadmap to graph database
+- **GQL→Engine Crosswalk**: [docs/query_engine.md](docs/query_engine.md) — Implementation mapping
 
-**Implementation Highlights**:
-- ✅ **Core GQL Language**: MATCH/OPTIONAL patterns, ORDER BY with US001 policy, LIMIT/OFFSET, GROUP BY execution
-- ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics and deterministic ordering
-- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals, mixed-type arithmetic with decimal coercion
-- ✅ **Binary Protocol**: SCHEMA/BINDINGS frames with ordered metadata, status codes, diagnostics precedence (ISO 23.2)
-- ✅ **Profiling & Metrics**: PROFILE/EXPLAIN with stable JSON schema (profile_version=2) and text formatting
-- ✅ **WAL/ARIES**: Write-ahead logging with STEAL/NO-FORCE, recovery, compaction, checksum validation
-- ✅ **Transactions**: MVCC timestamps, BEGIN/COMMIT/ROLLBACK lifecycle with proper status responses
-- 🔄 **Storage Layer**: Slotted pages implemented (partial - missing catalog persistence and CSR adjacency)
-- 🔄 **MVCC**: Basic snapshot isolation (partial - missing conflict detection and lock management)
-- ❌ **Distributed**: Raft/2PC scaffold (missing - single-node only)
+**What Works Today**:
+- ✅ **SQL-like Queries**: RETURN, WHERE, ORDER BY, LIMIT/OFFSET, GROUP BY, DISTINCT
+- ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics
+- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals, arithmetic
+- ✅ **Binary Protocol**: HELLO/RUN_GQL/PULL frames, SCHEMA/BINDINGS results, ISO diagnostics
+- ✅ **Transactions**: BEGIN/COMMIT/ROLLBACK with MVCC timestamps
+- ✅ **Storage**: WAL with recovery, page management, checksums
+- ✅ **Profiling**: EXPLAIN/PROFILE with memory tracking and timing
 
-**High-Risk Areas**:
-1. **Doc Sync Tool** (REQ-GQL-018): Compatibility issue with Zig 0.15.1 API changes blocks requirement validation
-2. **MVCC Conflicts** (REQ-GQL-027): Missing write-write conflict detection risks data consistency anomalies
-3. **Storage Catalog** (REQ-GQL-025): No persistent catalog or CSR adjacency structures limits production readiness
-4. **Distribution** (REQ-GQL-028/042): No distributed scaffold limits scalability path
-5. **Path Execution** (REQ-GQL-017): Missing PathExpand operator limits query expressiveness
+**What's Missing (Graph Features)**:
+- ❌ **MATCH Patterns**: Parser recognizes but cannot execute `MATCH (n)-[r]->(m)`
+- ❌ **Property Access**: Cannot access `n.name` or filter by properties
+- ❌ **Node/Edge Labels**: No label-based filtering like `(n:Person)`
+- ❌ **Graph Traversal**: No path patterns or variable-length relationships
+- ❌ **OPTIONAL MATCH**: Parsed but not executed
+- ❌ **Graph Mutations**: No CREATE/DELETE/MERGE operations
+- ❌ **WITH Clause**: Query chaining not supported
+
+**Critical Risks**:
+1. **No Graph Core**: Cannot execute graph patterns - fundamental GQL requirement missing
+2. **MVCC Incomplete**: Write-write conflicts undetected, risking data consistency
+3. **No Persistence**: Storage catalog not durable, CSR adjacency not implemented
+4. **Single-Node Only**: Distributed features stubbed but not functional
 
 **Conformance Notes**:
-- Implements ISO/IEC 39075:2024 minimum conformance plus selected optional features (GQ12/GQ13 OFFSET/LIMIT, set operations)
-- Implementation-defined policies: US001 (unordered pagination rejection), binary collation, int→decimal promotion
-- Implementation-dependent behaviors: UA005/UA006 path tie-breaking (planned), null ordering policy (configurable)
-- All diagnostics follow ISO 23.2 precedence rules with proper status_class/subclass mapping and flagger output
+- Working toward ISO/IEC 39075:2024 compliance
+- Currently implements query basics without graph features
+- Implementation-defined: US001 (pagination requires ORDER), binary collation, NULLS FIRST default
+- Diagnostics follow ISO 23.2 with proper status codes and precedence
 
-## Core Features
+## Core Features (Currently Implemented)
 
-- **Parser/AST/Printers**: MATCH/OPTIONAL patterns, ORDER BY with legality checks, LIMIT/OFFSET with US001 enforcement,
-  GROUP BY execution, UNION/INTERSECT/EXCEPT with deterministic semantics, pattern comprehensions, string predicates,
-  CASE expressions, and structured temporal literals (DATE/TIME/DATETIME/LOCAL DATETIME) with normalization.
-- **Runtime Semantics**: Set operations over binding tables with deterministic ordering (DISTINCT variants return sorted results;
-  ALL variants preserve stable-left order), temporal-aware comparator for ORDER BY, parameter array expansion.
-- **Planner Policies**: Disallow OFFSET pushdown without explicit ORDER (US001), ORDER BY key legality (identifier-only by default),
-  GROUP BY legality validation, mixed-type arithmetic with TypeMismatch diagnostics.
-- **CLI Tools**: Normalization/clamping for temporals, AST JSON with verbose temporals, PROFILE/EXPLAIN with text formatting.
+- **Query Engine**: RETURN with expressions, WHERE filtering, ORDER BY with sort specs, LIMIT/OFFSET with US001 policy,
+  GROUP BY with aggregations, UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics, DISTINCT deduplication.
+- **Expression Evaluation**: CASE expressions (searched), string predicates (STARTS WITH, ENDS WITH, CONTAINS),
+  temporal literals (DATE/TIME/DATETIME), arithmetic with type coercion, 3-valued logic.
+- **Transaction Support**: BEGIN/COMMIT/ROLLBACK, MVCC with timestamps (partial conflict detection), 
+  proper ISO status codes (00000 success, 25000 txn state, 40001 serialization).
+- **Storage Layer**: WAL with STEAL/NO-FORCE, page management with checksums, recovery from WAL,
+  compaction support, in-memory and disk modes (partial persistence).
+- **Protocol & Transport**: Binary frames (HELLO, RUN_GQL, PULL), QUIC with TLS 1.3 (default),
+  TCP and stdio fallback, JSON and text output formats.
+- **Profiling**: EXPLAIN plans, PROFILE with timing/memory/spill metrics, memory curves,
+  CPU time tracking, adaptive estimates.
 
 See USAGE.md for commands and flags.
+
+## Roadmap to Graph Database
+
+The following features are required for true GQL graph database functionality:
+
+1. **Graph Pattern Matching** (P0): Implement MATCH clause execution with node and edge traversal
+2. **Property Graph Model** (P0): Add property storage and access (n.name syntax), label filtering
+3. **Graph Traversal** (P0): Variable-length paths, OPTIONAL MATCH with outer semantics
+4. **Graph Mutations** (P1): CREATE, DELETE, MERGE operations for nodes and relationships
+5. **Query Composition** (P1): WITH clause for multi-stage queries
+6. **Advanced Features** (P2): Shortest path algorithms, graph indexes, schema constraints
 
 ## Profiling & Metrics
 

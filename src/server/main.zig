@@ -12,6 +12,7 @@ const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("tools/cert_gen.zig");
+const mvcc = @import("txn/mvcc.zig");
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
@@ -56,6 +57,9 @@ const ServerState = struct {
     inserted_values: std.ArrayList(ServerStateInsertedValue) = undefined,
     global_commit_ts: u64 = 0, // monotonically increasing commit timestamp
     session_snapshot_ts: u64 = 0, // snapshot timestamp captured at BEGIN
+    // MVCC manager for conflict detection
+    mvcc_manager: ?*mvcc.MVCCManager = null,
+    current_mvcc_txn: ?*mvcc.Transaction = null,
     // Aggregation memory metrics (non-PROFILE path instrumentation)
     agg_build_bytes_last: usize = 0,
     agg_emit_bytes_last: usize = 0,
@@ -215,6 +219,64 @@ var flags_buf_base: [5][]const u8 = undefined; // room for adaptive flag
 var flags_buf_ext: [7][]const u8 = undefined; // room for adaptive + union phases + deprecation
 var g_adapt_estimates: bool = false; // env or future CLI toggled
 var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
+
+// Global graph storage singleton (temporary - should be persistent)
+var g_graph_storage: ?*graph_exec.GraphStorage = null;
+// Global MVCC manager for transaction conflict detection
+var g_mvcc_manager: ?*mvcc.MVCCManager = null;
+
+fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
+    if (g_mvcc_manager) |mgr| {
+        return mgr;
+    }
+    
+    var mgr = ally.create(mvcc.MVCCManager) catch unreachable;
+    mgr.* = mvcc.MVCCManager.init(ally);
+    g_mvcc_manager = mgr;
+    return mgr;
+}
+
+fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
+    if (g_graph_storage) |graph| {
+        return graph;
+    }
+    
+    // Create and initialize graph storage
+    var graph = ally.create(graph_exec.GraphStorage) catch unreachable;
+    graph.* = graph_exec.GraphStorage.init(ally);
+    
+    // Add some sample data for testing
+    // In production, this would load from persistent storage
+    initializeSampleGraph(ally, graph) catch {};
+    
+    g_graph_storage = graph;
+    return graph;
+}
+
+fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
+    // Add sample nodes
+    try graph.addNode(ally, 1, &.{"Person"});
+    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(1, "age", .{ .Int = 30 });
+    
+    try graph.addNode(ally, 2, &.{"Person"});
+    try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
+    try graph.setNodeProperty(2, "age", .{ .Int = 25 });
+    
+    try graph.addNode(ally, 3, &.{"Person"});
+    try graph.setNodeProperty(3, "name", .{ .String = "Charlie" });
+    try graph.setNodeProperty(3, "age", .{ .Int = 35 });
+    
+    // Add sample edges
+    const e1 = try graph.addEdge(ally, 1, 2, "KNOWS");
+    try graph.setEdgeProperty(e1, "since", .{ .Int = 2020 });
+    
+    const e2 = try graph.addEdge(ally, 2, 3, "KNOWS");
+    try graph.setEdgeProperty(e2, "since", .{ .Int = 2021 });
+    
+    const e3 = try graph.addEdge(ally, 1, 3, "WORKS_WITH");
+    try graph.setEdgeProperty(e3, "department", .{ .String = "Engineering" });
+}
 
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
     var n: usize = 0;
@@ -929,7 +991,45 @@ fn trackerGet(ctx: *anyopaque) usize {
     return t.net();
 }
 
+const graph_exec = @import("graph/exec.zig");
+
 fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code, alloc_tracker: ?AllocTracker) ![][]const u8 {
+    // Check if this is a MATCH query
+    if (q.match.chains.len > 0) {
+        // Initialize graph storage (for now, use a global singleton)
+        // In production, this would be loaded from persistent storage
+        var graph = getOrCreateGraphStorage(ally);
+        
+        // Execute MATCH pattern
+        const bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause);
+        
+        // Convert bindings to JSON rows
+        const rows = try graph_exec.bindingsToJson(ally, bindings, q.ret.items, graph);
+        
+        // Build column metadata
+        var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
+        for (q.ret.items, 0..) |item, i| {
+            const alias = item.alias orelse "col";
+            cols[i] = .{ .name = alias, .type = "MIXED" }; // Type will be determined at runtime
+        }
+        cols_out.* = cols;
+        
+        // Handle ORDER BY if present
+        if (q.order_by) |ob| {
+            // TODO: Implement ordering for graph results
+            ordered_meta.* = true;
+            order_keys.* = try ally.alloc([]const u8, ob.keys.len);
+            for (ob.keys, 0..) |key, i| {
+                if (key.expr == .Ident) {
+                    order_keys.*[i] = key.expr.Ident;
+                }
+            }
+        }
+        
+        return rows;
+    }
+    
+    // Original implementation for non-MATCH queries
     // Build rows
     var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
     var rows_json = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
@@ -2081,6 +2181,13 @@ pub fn main() !void {
                     state.txn_id = t.id;
                     // Capture snapshot timestamp (current global commit ts)
                     state.session_snapshot_ts = state.global_commit_ts;
+                    
+                    // Initialize MVCC transaction for conflict detection
+                    if (state.mvcc_manager == null) {
+                        state.mvcc_manager = getOrCreateMVCCManager(gpa);
+                    }
+                    state.current_mvcc_txn = state.mvcc_manager.?.beginTransaction(.SnapshotIsolation) catch null;
+                    
                     // Return success with status_class 00000
                     const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_BEGIN\",\"txn_id\":{}}}}}\n", .{t.id});
                     defer gpa.free(success_json);
@@ -2112,12 +2219,35 @@ pub fn main() !void {
                     _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx = state.active_txn.?;
-                    if (false) {
-                        const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"forced\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{});
-                        defer gpa.free(err_json);
-                        _ = stdout_file.write(err_json) catch {};
-                        continue;
+                    
+                    // Try to commit MVCC transaction first for conflict detection
+                    var mvcc_commit_success = true;
+                    if (state.current_mvcc_txn) |mvcc_txn| {
+                        state.mvcc_manager.?.commitTransaction(mvcc_txn) catch |err| {
+                            mvcc_commit_success = false;
+                            // Handle serialization failure
+                            const err_msg = switch (err) {
+                                error.SerializationFailure => "Write-write conflict detected",
+                                error.WriteConflict => "Concurrent write conflict",
+                                else => "Transaction commit failed",
+                            };
+                            const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction rolled back due to concurrent update\"}}]}}\n", .{err_msg});
+                            defer gpa.free(err_json);
+                            _ = stdout_file.write(err_json) catch {};
+                            
+                            // Clean up transaction state
+                            state.current_mvcc_txn = null;
+                            state.active_txn = null;
+                            state.in_txn = false;
+                            return;
+                        };
+                        state.current_mvcc_txn = null;
                     }
+                    
+                    if (!mvcc_commit_success) {
+                        return;
+                    }
+                    
                     state.txn_manager.commit(&tx) catch |err| {
                         // Handle commit failure (e.g., serialization failure)
                         const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{@errorName(err)});
@@ -2174,6 +2304,13 @@ pub fn main() !void {
                     _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx2 = state.active_txn.?;
+                    
+                    // Abort MVCC transaction
+                    if (state.current_mvcc_txn) |mvcc_txn| {
+                        state.mvcc_manager.?.abortTransaction(mvcc_txn) catch {};
+                        state.current_mvcc_txn = null;
+                    }
+                    
                     // Mark uncommitted inserts for this txn as aborted
                     var ia: usize = 0;
                     while (ia < state.inserted_values.items.len) : (ia += 1) {

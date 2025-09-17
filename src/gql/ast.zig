@@ -104,6 +104,7 @@ pub const Expr = union(enum) {
     LocalDateTime: struct { raw: []const u8, parsed: temporal.DateTime },
     List: []*Expr,
     Member: struct { target: *Expr, field: []const u8 },
+    PropertyAccess: struct { object: []const u8, property: []const u8 }, // n.name syntax
     Call: struct { callee: *Expr, args: []*Expr },
     Unary: struct { op: UnaryOp, expr: *Expr },
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
