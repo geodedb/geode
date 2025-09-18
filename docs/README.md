@@ -3,7 +3,7 @@
 ## Status & Conformance Summary
 
 - Requirements Ledger and evidence: [`docs/GAP_ANALYSIS.md#requirements-ledger`](GAP_ANALYSIS.md#requirements-ledger)
-- GQL Conformance Profile (initial): [`docs/GAP_ANALYSIS.md#gql-conformance-profile-initial`](GAP_ANALYSIS.md#gql-conformance-profile-initial)
+- GQL Conformance Profile (current): [`docs/GAP_ANALYSIS.md#gql-conformance-profile`](GAP_ANALYSIS.md#gql-conformance-profile)
 - Execution-ready backlog: [`docs/NEXT.md`](NEXT.md)
 
 ## Troubleshooting (diagnostics quick reference)
@@ -57,7 +57,7 @@ The `PROFILE` prefix produces a JSON PROFILE line (after the SCHEMA line) descri
 
 Pass `--profile-memcurve` to `geoded` with a PROFILE query, e.g.:
 
-```sh
+```
 ./zig-out/bin/geoded --profile-memcurve "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1"
 ```
 

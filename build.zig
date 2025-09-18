@@ -204,6 +204,9 @@ pub fn build(b: *std.Build) void {
     // util: text formatter module
     const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("text_formatter", util_text_formatter_mod);
+    // server txn mvcc module
+    const server_txn_mvcc_mod = b.createModule(.{ .root_source_file = b.path("src/server/txn/mvcc.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("server/txn/mvcc.zig", server_txn_mvcc_mod);
     // Vendored QUIC library module
     const vendor_quic_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
 

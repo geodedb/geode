@@ -328,23 +328,19 @@ pub fn executeMatch(
     where_clause: ?geode.ast.Expr,
 ) ![]Binding {
     if (pattern.chains.len == 0) {
-        // Empty pattern returns single empty binding
         const binding = Binding.init(allocator);
         var results = try allocator.alloc(Binding, 1);
         results[0] = binding;
         return results;
     }
-    
-    // For now, handle patterns by chaining chains with cross join, with OPTIONAL semantics applied per chain when no matches
+
     var current_bindings: []Binding = &.{};
-    
     for (pattern.chains, 0..) |chain, chain_idx| {
         if (chain.hops.len == 0) continue;
         var chain_bindings: []Binding = &.{};
         for (chain.hops, 0..) |hop, i| {
             if (i == 0) {
                 chain_bindings = try nodeScan(allocator, graph, hop.left.labels, hop.left.name);
-                // If not the first chain, cross-join with current_bindings by merging maps
                 if (chain_idx > 0 and current_bindings.len > 0 and chain_bindings.len > 0) {
                     var joined = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
                     for (current_bindings) |lb| {
@@ -361,18 +357,86 @@ pub fn executeMatch(
                 }
             }
             if (hop.left.name) |source_var| {
-                const expanded = try expand(allocator, graph, chain_bindings, source_var, hop.rel.types, hop.rel.dir, hop.right.name, hop.rel.name);
-                if (expanded.len == 0) {
-                    var preserved = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+                // Support variable-length bounded expand if hop.rel has min_len/max_len
+                const has_vlen = @hasField(@TypeOf(hop.rel), "min_len") and @hasField(@TypeOf(hop.rel), "max_len") and (hop.rel.min_len != null or hop.rel.max_len != null);
+                if (has_vlen) {
+                    const min_len: usize = if (hop.rel.min_len) |m| m else 1;
+                    const max_len: usize = if (hop.rel.max_len) |m2| m2 else min_len;
+                    var bfs_results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
                     for (chain_bindings) |b| {
-                        var nb = try b.clone(allocator);
-                        if (hop.rel.name) |ev| { try nb.vars.put(ev, .{ .Value = .Null }); }
-                        if (hop.right.name) |tv| { try nb.vars.put(tv, .{ .Value = .Null }); }
-                        try preserved.append(allocator, nb);
+                        const src_val = b.vars.get(source_var) orelse continue;
+                        const src_id = switch (src_val) { .Node => |nid| nid, else => continue };
+                        // BFS frontier
+                        const Step = struct { path: std.ArrayList(NodeId), last: NodeId };
+                        var frontier = std.ArrayList(Step).initCapacity(allocator, 0) catch unreachable;
+                        var start_path = std.ArrayList(NodeId).initCapacity(allocator, 1) catch unreachable;
+                        start_path.append(allocator, src_id) catch {};
+                        frontier.append(allocator, .{ .path = start_path, .last = src_id }) catch {};
+                        var depth: usize = 0;
+                        while (frontier.items.len > 0 and depth < max_len) : (depth += 1) {
+                            var next_frontier = std.ArrayList(Step).initCapacity(allocator, 0) catch unreachable;
+                            var fi: usize = 0;
+                            while (fi < frontier.items.len) : (fi += 1) {
+                                const item = frontier.items[fi];
+                                const last = item.last;
+                                const edge_ids = switch (hop.rel.dir) {
+                                    .right => graph.outgoing.get(last),
+                                    .left => graph.incoming.get(last),
+                                    .undirected => graph.outgoing.get(last),
+                                };
+                                if (edge_ids) |edges| {
+                                    for (edges.items) |eid| {
+                                        const e = graph.edges.items[eid];
+                                        if (hop.rel.types.len > 0) {
+                                            var matches = false;
+                                            for (hop.rel.types) |t| { if (std.mem.eql(u8, t, e.edge_type)) { matches = true; break; } }
+                                            if (!matches) continue;
+                                        }
+                                        const next_node: NodeId = switch (hop.rel.dir) { .right => e.target, .left => e.source, .undirected => e.target };
+                                        var new_path = std.ArrayList(NodeId).initCapacity(allocator, item.path.items.len + 1) catch unreachable;
+                                        // copy path
+                                        for (item.path.items) |nid| new_path.append(allocator, nid) catch {};
+                                        new_path.append(allocator, next_node) catch {};
+                                        next_frontier.append(allocator, .{ .path = new_path, .last = next_node }) catch {};
+                                        const reached_len = depth + 1;
+                                        if (reached_len >= min_len and reached_len <= max_len) {
+                                            var nb = try b.clone(allocator);
+                                            if (hop.right.name) |tv| { try nb.vars.put(tv, .{ .Node = next_node }); }
+                                            if (hop.rel.name) |ev| { try nb.vars.put(ev, .{ .Path = new_path.items }); }
+                                            try bfs_results.append(allocator, nb);
+                                        }
+                                    }
+                                }
+                            }
+                            // free previous frontier path buffers (bindings own copies for results)
+                            var ffi: usize = 0;
+                            while (ffi < frontier.items.len) : (ffi += 1) frontier.items[ffi].path.deinit(allocator);
+                            frontier.deinit(allocator);
+                            frontier = next_frontier;
+                        }
+                        // if no paths and OPTIONAL semantics, preserve with nulls
+                        if (bfs_results.items.len == 0) {
+                            var nb = try b.clone(allocator);
+                            if (hop.rel.name) |ev2| { try nb.vars.put(ev2, .{ .Value = .Null }); }
+                            if (hop.right.name) |tv2| { try nb.vars.put(tv2, .{ .Value = .Null }); }
+                            try bfs_results.append(allocator, nb);
+                        }
                     }
-                    chain_bindings = try preserved.toOwnedSlice(allocator);
+                    chain_bindings = try bfs_results.toOwnedSlice(allocator);
                 } else {
-                    chain_bindings = expanded;
+                    const expanded = try expand(allocator, graph, chain_bindings, source_var, hop.rel.types, hop.rel.dir, hop.right.name, hop.rel.name);
+                    if (expanded.len == 0) {
+                        var preserved = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+                        for (chain_bindings) |b| {
+                            var nb = try b.clone(allocator);
+                            if (hop.rel.name) |ev| { try nb.vars.put(ev, .{ .Value = .Null }); }
+                            if (hop.right.name) |tv| { try nb.vars.put(tv, .{ .Value = .Null }); }
+                            try preserved.append(allocator, nb);
+                        }
+                        chain_bindings = try preserved.toOwnedSlice(allocator);
+                    } else {
+                        chain_bindings = expanded;
+                    }
                 }
             }
         }
@@ -382,17 +446,16 @@ pub fn executeMatch(
         } else if (current_bindings.len == 0) {
             current_bindings = chain_bindings;
         } else if (chain_bindings.len == 0) {
-            // OPTIONAL chain: preserve current_bindings with nulls for newly introduced variables
-            current_bindings = current_bindings; // already preserved above per-hop
+            current_bindings = current_bindings;
         } else {
-            current_bindings = chain_bindings; // already cross-joined at start of chain
+            current_bindings = chain_bindings;
         }
     }
-    
+
     if (where_clause) |where| {
         current_bindings = try filter(allocator, current_bindings, where, graph);
     }
-    
+
     return current_bindings;
 }
 

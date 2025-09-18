@@ -12,7 +12,7 @@ const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("tools/cert_gen.zig");
-const mvcc = @import("txn/mvcc.zig");
+const mvcc = @import("server/txn/mvcc.zig");
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
@@ -237,20 +237,155 @@ fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
 }
 
 fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
-    if (g_graph_storage) |graph| {
-        return graph;
-    }
-    
-    // Create and initialize graph storage
+    if (g_graph_storage) |graph| return graph;
     const graph = ally.create(graph_exec.GraphStorage) catch unreachable;
     graph.* = graph_exec.GraphStorage.init(ally);
-    
-    // Add some sample data for testing
-    // In production, this would load from persistent storage
     initializeSampleGraph(ally, graph) catch {};
-    
     g_graph_storage = graph;
     return graph;
+}
+
+fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
+    const g = ally.create(graph_exec.GraphStorage) catch return error.OutOfMemory;
+    g.* = graph_exec.GraphStorage.init(ally);
+    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    defer dir.close();
+    // nodes.jsonl and edges.jsonl simple line-delimited json
+    if (dir.openFile("nodes.jsonl", .{})) |nf| {
+        defer nf.close();
+        const content = try nf.readToEndAlloc(ally, 1024 * 1024 * 10); // 10MB max
+        defer ally.free(content);
+        var lines = std.mem.tokenizeScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            const parsed = std.json.parseFromSlice(std.json.Value, ally, line, .{}) catch continue;
+            defer parsed.deinit();
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+            const idv = obj.get("id") orelse continue;
+            const id: u64 = switch (idv) { .integer => |iv| @intCast(iv), else => 0 };
+            if (id == 0) continue;
+            var labels: []const []const u8 = &.{};
+            if (obj.get("labels")) |lv| if (lv == .array) {
+                const arr = lv.array.items;
+                var tmp = try ally.alloc([]const u8, arr.len);
+                var i: usize = 0;
+                while (i < arr.len) : (i += 1) tmp[i] = if (arr[i] == .string) arr[i].string else "";
+                labels = tmp;
+            };
+            try g.addNode(ally, id, labels);
+            if (obj.get("properties")) |pv| {
+                if (pv == .object) {
+                    var it = pv.object.iterator();
+                    while (it.next()) |e| {
+                        const key = e.key_ptr.*;
+                        const val = e.value_ptr.*;
+                        const pv2: graph_exec.PropertyValue = switch (val) {
+                            .null => .{ .Null = {} },
+                            .bool => |b| .{ .Bool = b },
+                            .integer => |n| .{ .Int = @intCast(n) },
+                            .string => |s| .{ .String = s },
+                            else => .{ .Null = {} },
+                        };
+                        g.setNodeProperty(id, key, pv2) catch {};
+                    }
+                }
+            }
+        }
+    } else |_| {}
+    if (dir.openFile("edges.jsonl", .{})) |ef| {
+        defer ef.close();
+        const content = try ef.readToEndAlloc(ally, 1024 * 1024 * 10); // 10MB max
+        defer ally.free(content);
+        var lines = std.mem.tokenizeScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            const parsed = std.json.parseFromSlice(std.json.Value, ally, line, .{}) catch continue;
+            defer parsed.deinit();
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+            const sv = obj.get("source") orelse continue;
+            const tv = obj.get("target") orelse continue;
+            const tyv = obj.get("type") orelse continue;
+            const sid: u64 = switch (sv) { .integer => |iv| @intCast(iv), else => 0 };
+            const tid: u64 = switch (tv) { .integer => |iv| @intCast(iv), else => 0 };
+            const ety: []const u8 = switch (tyv) { .string => |s| s, else => "" };
+            if (sid == 0 or tid == 0) continue;
+            const eid = try g.addEdge(ally, sid, tid, ety);
+            if (obj.get("properties")) |pv| {
+                if (pv == .object) {
+                    var it = pv.object.iterator();
+                    while (it.next()) |e| {
+                        const key = e.key_ptr.*;
+                        const val = e.value_ptr.*;
+                        const pv2: graph_exec.PropertyValue = switch (val) {
+                            .null => .{ .Null = {} },
+                            .bool => |b| .{ .Bool = b },
+                            .integer => |n| .{ .Int = @intCast(n) },
+                            .string => |s| .{ .String = s },
+                            else => .{ .Null = {} },
+                        };
+                        g.setEdgeProperty(@intCast(eid), key, pv2) catch {};
+                    }
+                }
+            }
+        }
+    } else |_| {}
+    return g;
+}
+
+fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
+    std.fs.cwd().makePath(dir_path) catch return;
+    
+    // Save nodes
+    const nodes_path = std.mem.concat(ally, u8, &.{ dir_path, "/nodes.jsonl" }) catch return;
+    defer ally.free(nodes_path);
+    
+    var nodes_content = std.ArrayList(u8).initCapacity(ally, 0) catch return;
+    defer nodes_content.deinit(ally);
+    
+    var it = g.nodes.iterator();
+    while (it.next()) |entry| {
+        const node = entry.value_ptr.*;
+        std.fmt.format(nodes_content.writer(ally), "{{\"id\":{d},\"labels\":[", .{node.id}) catch {};
+        var li: usize = 0;
+        while (li < node.labels.len) : (li += 1) {
+            if (li > 0) nodes_content.appendSlice(ally, ",") catch {};
+            std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{node.labels[li]}) catch {};
+        }
+        nodes_content.appendSlice(ally, "],\"properties\":{") catch {};
+        var pit = node.properties.iterator();
+        var firstp = true;
+        while (pit.next()) |p| {
+            if (!firstp) nodes_content.appendSlice(ally, ",") catch {} else firstp = false;
+            const k = p.key_ptr.*;
+            const v = p.value_ptr.*;
+            std.fmt.format(nodes_content.writer(ally), "\"{s}\":", .{k}) catch {};
+            switch (v) {
+                .Null => nodes_content.appendSlice(ally, "null") catch {},
+                .Bool => |b| std.fmt.format(nodes_content.writer(ally), "{}", .{b}) catch {},
+                .Int => |iv| std.fmt.format(nodes_content.writer(ally), "{d}", .{iv}) catch {},
+                .String => |s| std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{s}) catch {},
+                .Decimal => nodes_content.appendSlice(ally, "null") catch {},
+            }
+        }
+        nodes_content.appendSlice(ally, "}}\n") catch {};
+    }
+    
+    std.fs.cwd().writeFile(.{ .sub_path = nodes_path, .data = nodes_content.items }) catch {};
+    
+    // Save edges
+    const edges_path = std.mem.concat(ally, u8, &.{ dir_path, "/edges.jsonl" }) catch return;
+    defer ally.free(edges_path);
+    
+    var edges_content = std.ArrayList(u8).initCapacity(ally, 0) catch return;
+    defer edges_content.deinit(ally);
+    
+    var i: usize = 0;
+    while (i < g.edges.items.len) : (i += 1) {
+        const e = g.edges.items[i];
+        std.fmt.format(edges_content.writer(ally), "{{\"source\":{d},\"target\":{d},\"type\":\"{s}\",\"properties\":{{}}}}\n", .{ e.source, e.target, e.edge_type }) catch {};
+    }
+    
+    std.fs.cwd().writeFile(.{ .sub_path = edges_path, .data = edges_content.items }) catch {};
 }
 
 fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
@@ -2008,6 +2143,13 @@ pub fn main() !void {
         if (catalog_create_name) |tname| {
             catalog.createTable(tname, &.{}) catch {};
         }
+        // Try load graph jsonl if present
+        if (g_graph_storage == null) {
+            const loaded = tryLoadGraphFromDir(gpa, dd) catch null;
+            if (loaded) |lg| {
+                g_graph_storage = lg;
+            }
+        }
     }
     defer {
         if (catalog_inited) {
@@ -3740,10 +3882,13 @@ pub fn main() !void {
             },
         }
     }
-    // Graceful shutdown: flush WAL if present before exiting.
+    // Graceful shutdown: persist graph if data_dir provided and in-memory graph exists
+    if (data_dir) |ddir| {
+        if (g_graph_storage) |gg| saveGraphToDir(gpa, gg, ddir);
+    }
+    // Flush WAL if present before exiting.
     if (state.wal_ptr) |wp_flush| {
         const wflush: *wal_mod.Wal = @ptrCast(@alignCast(wp_flush));
         wflush.fsync() catch {};
     }
-    // deinit handled in defer above
 }
