@@ -265,6 +265,18 @@ func (c *Conn) readLine(ctx context.Context) ([]byte, error) {
 	}
 }
 
+func (c *Conn) readJSON(ctx context.Context) (map[string]any, error) {
+	line, err := c.readLine(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(line, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+	return result, nil
+}
+
 // Transactions
 func (c *Conn) Begin(ctx context.Context) error {
 	if err := c.writeJSON(map[string]any{"type":"BEGIN"}); err != nil { return err }
