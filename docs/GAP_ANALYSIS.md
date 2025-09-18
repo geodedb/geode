@@ -27,7 +27,7 @@ with subclause anchors.
 | REQ‑GQL‑017 | Property access: n.name syntax | ISO 4.3 (property graph model) | Implemented | src/server/graph/exec.zig:420-473 (PropertyAccess in bindingsToJson); setNodeProperty | — | 2025‑11‑25 | core | |
 | REQ‑GQL‑018 | Node/edge labels and filtering | ISO 4.3, 22 | Implemented | src/server/graph/exec.zig:175-188 (label filter in nodeScan); addEdge(edge_type) | — | 2025‑11‑25 | core | |
 | REQ‑GQL‑019 | Graph mutations: CREATE/DELETE/MERGE | ISO 15 (data modification) | Not Implemented | Not parsed or executed | DML not in scope yet | 2026‑01‑15 | dml | |
-| REQ‑GQL‑020 | WITH clause: query chaining | ISO 14.5 | Not Implemented | Not parsed | Query composition limited | 2025‑12‑15 | planner | |
+| REQ‑GQL‑020 | WITH clause: query chaining | ISO 14.5 | Implemented | src/server/graph/exec.zig:executeWith; tests/e2e_with_clause.zig | — | 2024‑12‑17 | planner | Projection and aggregation |
 | REQ‑GQL‑025 | Storage catalog persistence (catalog, adjacency) | impl‑defined storage mgmt | Implemented | src/storage/catalog.zig:GraphMetadata; server --data_dir | — | 2024‑12‑17 | storage | Graph persistence |
 | REQ‑GQL‑027 | MVCC conflict detection completion | ISO 8 | Implemented | src/server/txn/mvcc.zig:detectConflict, conflictToError | — | 2024‑12‑17 | txn | 40001 mapping |
 | REQ‑GQL‑028 | Distributed scaffold: Raft (leader only) | impl‑defined distribution | Stubbed | src/distributed/raft.zig; single-node only | No actual distribution | 2025‑12‑31 | dist | Feature‑flagged |
@@ -37,7 +37,7 @@ with subclause anchors.
 
 Notes: 
 - I: implementation‑defined; U: implementation‑dependent
-- Critical gaps promoted: core graph MATCH/labels/properties now Implemented; remaining: OPTIONAL, variable-length paths, DML, WITH, persistence
+- Critical gaps promoted: core graph MATCH/labels/properties now Implemented; remaining: DML, persistence enhancements
 
 ## GQL Conformance Profile
 
@@ -58,15 +58,15 @@ Notes:
 | Core | 24 | Conformance profile | Partial | Partial | HELLO frame | Flagger present |
 | G060 | 22.4 | Bounded path quantifiers | No | No | Not implemented | Deferred |
 | Core | 15 | Data modification | No | No | Not implemented | CREATE/DELETE/MERGE missing |
-| Core | 14.5 | WITH clause | Planned | No | Not implemented | |
+| Core | 14.5 | WITH clause | Yes | Yes | src/server/graph/exec.zig:executeWith | Projection and aggregation |
 
 ## Implementation-Defined/Dependent Behaviors
 
 | ID | ISO Reference | Behavior | Current Policy | Evidence |
 |---|---|---|---|---|
 | US001 | 16.16–16.19 | Order for OFFSET on unordered tables | Rejected with diagnostic | src/server/main.zig:1334-1379, 392-418 |
-| UA005 | 22.4 | Path selection tie-break (shortest) | Not implemented | No path execution |
-| UA006 | 22.4 | Path selection tie-break (any) | Not implemented | No path execution |
+| UA005 | 22.4 | Path selection tie-break (shortest) | Implemented | src/server/graph/exec.zig:applyPathTieBreaking |
+| UA006 | 22.4 | Path selection tie-break (any) | Implemented | src/server/graph/exec.zig:applyPathTieBreaking |
 | UA002 | 23.2 | Multiple diagnostic precedence | Lower code wins | src/diagnostics.zig:55-76 |
 | I:ORDER | 14.10 | ORDER BY key restrictions | Identifiers only (default) | e2e_order_policy_toggle.zig |
 | I:NULLS | 16.17 | NULL ordering | NULLS FIRST (configurable) | GEODE_NULLS_LAST env var |

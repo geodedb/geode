@@ -20,29 +20,20 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 - Graph persistence with --data_dir integration
 - Location: src/storage/catalog.zig:GraphMetadata
 
+✅ **WITH Clause** (REQ-GQL-020)
+- Implemented projection stage with aggregation support
+- Location: src/server/graph/exec.zig:executeWith
+- Tests: tests/e2e_with_clause.zig
+
+✅ **Path Tie-Breaking** (UA005/UA006)
+- Deterministic shortest path selection implemented
+- Location: src/server/graph/exec.zig:applyPathTieBreaking
+- Policy: (length, start_id, end_id, intermediate_ids)
+- Tests: tests/unit_shortest_path_tiebreak.zig
+
 ## Now (P0) - Critical Gaps
 
-- Status: Core graph primitives complete. Focus shifts to query composition and DML.
-
-1. WITH Clause (REQ-GQL-020)
-   - Why: Query composition and chaining required for complex queries
-   - What: Parse and execute WITH for intermediate projections
-   - Acceptance: `MATCH (n) WITH n, count(*) AS c WHERE c > 1 RETURN n` chains queries
-   - ISO: 14.5
-   - Deps: gql/parser.zig, src/server/main.zig
-   - Scope: M
-   - DRI: planner
-
-2. Path Tie-Breaking (UA005/UA006)
-   - Why: Deterministic path selection required for reproducible results
-   - What: Document and implement tie-break policy (length, start_id, end_id)
-   - Acceptance: Multiple shortest paths return deterministic selection; policy documented
-   - ISO: 22.4
-   - Deps: PathExpand implementation
-   - Scope: S
-   - DRI: core
-
-## Later (P2+) - Extensions
+- Status: Core graph primitives and query composition complete. Focus shifts to DML and advanced features.
 
 1. Graph Mutations (REQ-GQL-019)
    - Why: Complete CRUD operations for graph data
@@ -52,6 +43,8 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
    - Deps: Parser, storage layer, transaction integration
    - Scope: L
    - DRI: dml
+
+## Later (P2+) - Extensions
 
 2. Distributed Execution (REQ-GQL-028/042/043)
    - Why: Scale-out for large graphs

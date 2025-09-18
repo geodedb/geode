@@ -74,3 +74,24 @@ This file records completed work for clarity, keeping `GAP_ANALYSIS.md` focused 
 - **Location**: src/server/graph/exec.zig:applyPathTieBreaking
 - **Policy**: Deterministic selection based on path length, node IDs
 - **ISO Reference**: 22.4
+
+### WITH Clause Execution (REQ-GQL-018)
+- **Location**: src/server/graph/exec.zig:executeWith
+- **Features**: 
+  - Projection stage that produces new bindings with only WITH items
+  - Supports aliases for projected items
+  - Handles aggregation functions (count, sum, avg, min, max)
+  - Applies WHERE predicates after WITH projection
+  - Integrates seamlessly between MATCH and RETURN stages
+- **Tests**: tests/e2e_with_clause.zig
+- **ISO Reference**: 14.5
+
+### Deterministic Shortest Path Selection (REQ-GQL-019)
+- **Location**: src/server/graph/exec.zig (enhanced pathExpand)
+- **Features**:
+  - Modified BFS traversal to collect all paths at minimal depth
+  - Deterministic tie-breaking when multiple shortest paths exist
+  - Applies UA005/UA006 policy: (length, start_id, end_id, intermediate_ids)
+  - Ensures consistent results across multiple executions
+- **Tests**: tests/unit_shortest_path_tiebreak.zig
+- **ISO Reference**: 22.4, UA005/UA006

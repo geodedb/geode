@@ -74,6 +74,9 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
         return switch (self.cur.kind) {
+            .CREATE => self.parseCreateStatement(),
+            .DELETE => self.parseDeleteStatement(),
+            .MERGE => self.parseMergeStatement(),
             .INSERT => blk_ins: {
                 self.advance();
                 // Syntax: INSERT VALUE <expr>
@@ -1126,5 +1129,195 @@ pub const Parser = struct {
         }
         // Unknown functions: allow any arity for now
         return true;
+    }
+
+    // Parse CREATE statement
+    fn parseCreateStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.CREATE);
+
+        // Parse the pattern to create
+        const pattern = try self.parseGraphPattern();
+
+        // Optional RETURN clause
+        var return_clause: ?ast.ReturnClause = null;
+        if (self.cur.kind == .RETURN) {
+            self.advance();
+            const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                self.advance();
+                break :blk true;
+            } else false;
+            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&return_items);
+            return_clause = .{
+                .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                .distinct = distinct,
+            };
+        }
+
+        return .{ .Create = .{
+            .pattern = pattern,
+            .return_clause = return_clause,
+        } };
+    }
+
+    // Parse DELETE statement
+    fn parseDeleteStatement(self: *Parser) ParserError!ast.Statement {
+        const detach = if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "DETACH")) blk: {
+            self.advance();
+            break :blk true;
+        } else false;
+
+        _ = try self.expect(.DELETE);
+
+        // Optional MATCH clause
+        var match_clause: ?ast.GraphPattern = null;
+        var where_clause: ?ast.Expr = null;
+
+        if (self.cur.kind == .MATCH) {
+            self.advance();
+            match_clause = try self.parseGraphPattern();
+
+            if (self.cur.kind == .WHERE) {
+                self.advance();
+                where_clause = try self.parseOrExpr();
+            }
+        }
+
+        // Parse items to delete
+        var items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
+
+        // Parse first item
+        const first_item = try self.parseDeleteItem();
+        try items.append(self.arena.allocator(), first_item);
+
+        // Parse additional items
+        while (self.cur.kind == .comma) {
+            self.advance();
+            const item = try self.parseDeleteItem();
+            try items.append(self.arena.allocator(), item);
+        }
+
+        // Optional RETURN clause
+        var return_clause: ?ast.ReturnClause = null;
+        if (self.cur.kind == .RETURN) {
+            self.advance();
+            const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                self.advance();
+                break :blk true;
+            } else false;
+            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&return_items);
+            return_clause = .{
+                .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                .distinct = distinct,
+            };
+        }
+
+        return .{ .Delete = .{
+            .match_clause = match_clause,
+            .where_clause = where_clause,
+            .detach = detach,
+            .items = try items.toOwnedSlice(self.arena.allocator()),
+            .return_clause = return_clause,
+        } };
+    }
+
+    fn parseDeleteItem(self: *Parser) ParserError!ast.DeleteItem {
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+        return .{ .Variable = name };
+    }
+
+    // Parse MERGE statement
+    fn parseMergeStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.MERGE);
+
+        // Parse the pattern to merge
+        const pattern = try self.parseGraphPattern();
+
+        // Parse ON CREATE/MATCH clauses
+        var on_create = std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+        var on_match = std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+
+        while (self.cur.kind == .ON) {
+            self.advance();
+
+            if (self.cur.kind == .CREATE) {
+                self.advance();
+                _ = try self.expect(.SET);
+                const clauses = try self.parseSetClauses();
+                try on_create.appendSlice(self.arena.allocator(), clauses);
+            } else if (self.cur.kind == .MATCH) {
+                self.advance();
+                _ = try self.expect(.SET);
+                const clauses = try self.parseSetClauses();
+                try on_match.appendSlice(self.arena.allocator(), clauses);
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Optional RETURN clause
+        var return_clause: ?ast.ReturnClause = null;
+        if (self.cur.kind == .RETURN) {
+            self.advance();
+            const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                self.advance();
+                break :blk true;
+            } else false;
+            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&return_items);
+            return_clause = .{
+                .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                .distinct = distinct,
+            };
+        }
+
+        return .{ .Merge = .{
+            .pattern = pattern,
+            .on_create = try on_create.toOwnedSlice(self.arena.allocator()),
+            .on_match = try on_match.toOwnedSlice(self.arena.allocator()),
+            .return_clause = return_clause,
+        } };
+    }
+
+    fn parseSetClauses(self: *Parser) ParserError![]ast.SetClause {
+        var clauses = std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+
+        // Parse first clause
+        const first = try self.parseSetClause();
+        try clauses.append(self.arena.allocator(), first);
+
+        // Parse additional clauses
+        while (self.cur.kind == .comma) {
+            self.advance();
+            const clause = try self.parseSetClause();
+            try clauses.append(self.arena.allocator(), clause);
+        }
+
+        return clauses.toOwnedSlice(self.arena.allocator());
+    }
+
+    fn parseSetClause(self: *Parser) ParserError!ast.SetClause {
+        // Parse property access (e.g., n.name)
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const object = self.cur.lexeme;
+        self.advance();
+
+        _ = try self.expect(.dot);
+
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const property = self.cur.lexeme;
+        self.advance();
+
+        _ = try self.expect(.eq);
+
+        const value = try self.parseOrExpr();
+
+        return .{
+            .target = .{ .object = object, .property = property },
+            .value = value,
+        };
     }
 };

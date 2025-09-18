@@ -153,6 +153,9 @@ fn tagName(st: ast.Statement) []const u8 {
         .Rollback => "Rollback",
         .InsertValue => "InsertValue",
         .ScanValues => "ScanValues",
+        .Create => "Create",
+        .Delete => "Delete",
+        .Merge => "Merge",
     };
 }
 

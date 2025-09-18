@@ -84,6 +84,8 @@ pub const TokenKind = enum {
     COMMIT,
     ROLLBACK,
     CREATE,
+    DELETE,
+    MERGE,
     GRAPH,
     DROP,
     ORDER,
@@ -97,6 +99,7 @@ pub const TokenKind = enum {
     NULLS,
     FIRST,
     LAST,
+    ON,
 
     // pattern and string operators (extras)
     regex_match, // =~

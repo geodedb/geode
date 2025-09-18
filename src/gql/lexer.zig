@@ -279,6 +279,8 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "COMMIT")) return .COMMIT;
         if (std.ascii.eqlIgnoreCase(word, "ROLLBACK")) return .ROLLBACK;
         if (std.ascii.eqlIgnoreCase(word, "CREATE")) return .CREATE;
+        if (std.ascii.eqlIgnoreCase(word, "DELETE")) return .DELETE;
+        if (std.ascii.eqlIgnoreCase(word, "MERGE")) return .MERGE;
         if (std.ascii.eqlIgnoreCase(word, "GRAPH")) return .GRAPH;
         if (std.ascii.eqlIgnoreCase(word, "DROP")) return .DROP;
         if (std.ascii.eqlIgnoreCase(word, "ORDER")) return .ORDER;
@@ -292,6 +294,7 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "NULLS")) return .NULLS;
         if (std.ascii.eqlIgnoreCase(word, "FIRST")) return .FIRST;
         if (std.ascii.eqlIgnoreCase(word, "LAST")) return .LAST;
+        if (std.ascii.eqlIgnoreCase(word, "ON")) return .ON;
         if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
         if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
         if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;

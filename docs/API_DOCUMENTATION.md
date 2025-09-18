@@ -86,6 +86,47 @@ OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company)
 RETURN p.name, c.name
 ```
 
+#### WITH Clause for Query Composition
+```gql
+MATCH (p:Person)-[:KNOWS]->(friend:Person)
+WITH p, COUNT(friend) AS friend_count
+WHERE friend_count > 5
+RETURN p.name, friend_count
+ORDER BY friend_count DESC
+```
+
+#### WITH and Aggregation
+```gql
+MATCH (p:Person)-[:PURCHASED]->(product:Product)
+WITH p, SUM(product.price) AS total_spent
+WHERE total_spent > 1000
+MATCH (p)-[:LIVES_IN]->(city:City)
+RETURN p.name, total_spent, city.name
+```
+
+### Path Queries
+
+#### Variable-Length Paths
+```gql
+MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person)
+WHERE a.name = 'Alice' AND b.city = 'NYC'
+RETURN path
+```
+
+#### Shortest Path (Deterministic)
+```gql
+MATCH path = (a:Person {name: 'Alice'})-[:KNOWS*1..5]->(b:Person {name: 'Bob'})
+RETURN path
+ORDER BY length(path)
+LIMIT 1
+```
+
+Note: When multiple shortest paths exist, geode applies deterministic tie-breaking based on:
+1. Path length (shortest wins)
+2. Start node ID (lexicographically smallest)
+3. End node ID (lexicographically smallest)
+4. Intermediate node IDs (lexicographically smallest)
+
 ### Aggregations
 
 #### GROUP BY with Aggregates

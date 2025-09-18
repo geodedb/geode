@@ -19,6 +19,10 @@ pub const Statement = union(enum) {
     InsertValue: struct { expr: Expr },
     // Scan all inserted values (heap table prototype)
     ScanValues,
+    // Graph mutations
+    Create: CreateStatement,
+    Delete: DeleteStatement,
+    Merge: MergeStatement,
 };
 
 pub const Query = struct {
@@ -128,3 +132,40 @@ pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div };
 pub const UnaryOp = enum { Not, Neg };
 
 pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };
+
+// Graph mutation statements
+pub const CreateStatement = struct {
+    pattern: GraphPattern,
+    return_clause: ?ReturnClause = null,
+};
+
+pub const DeleteStatement = struct {
+    match_clause: ?GraphPattern = null,
+    where_clause: ?Expr = null,
+    detach: bool = false,
+    items: []DeleteItem,
+    return_clause: ?ReturnClause = null,
+};
+
+pub const DeleteItem = union(enum) {
+    Variable: []const u8,
+    Node: []const u8,
+    Relationship: []const u8,
+};
+
+pub const MergeStatement = struct {
+    pattern: GraphPattern,
+    on_create: []SetClause = &.{},
+    on_match: []SetClause = &.{},
+    return_clause: ?ReturnClause = null,
+};
+
+pub const SetClause = struct {
+    target: PropertyAccess,
+    value: Expr,
+};
+
+pub const PropertyAccess = struct {
+    object: []const u8,
+    property: []const u8,
+};

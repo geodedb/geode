@@ -9,13 +9,15 @@ Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compli
 - ✅ **Variable-Length Paths** with bounded traversal `[*min..max]`
 - ✅ **Enhanced MVCC** with comprehensive conflict detection
 - ✅ **Graph Persistence** with catalog integration
+- ✅ **WITH Clause** for query composition and aggregation
+- ✅ **Deterministic Path Selection** with tie-breaking policy
 
 ## Status & Conformance Summary
 
 **Current Implementation Status**: 
-- ✅ 18 requirements fully implemented (including core graph features)
-- 🔄 3 requirements partially implemented 
-- ❌ 9 requirements not implemented (advanced features)
+- ✅ 20 requirements fully implemented (including core graph features, WITH clause, path tie-breaking)
+- 🔄 2 requirements partially implemented 
+- ❌ 8 requirements not implemented (advanced features)
 
 **Key Links**:
 - **Requirements Ledger**: [docs/GAP_ANALYSIS.md#requirements-ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Authoritative status with evidence
@@ -26,7 +28,8 @@ Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compli
 **What Works Today**:
 - ✅ **Graph Pattern Matching**: MATCH with node/edge traversal, label filtering
 - ✅ **OPTIONAL MATCH**: Left-outer join semantics with NULL preservation
-- ✅ **Variable-Length Paths**: Bounded traversal with `[*1..3]` syntax
+- ✅ **Variable-Length Paths**: Bounded traversal with `[*1..3]` syntax, deterministic shortest path
+- ✅ **WITH Clause**: Query composition, intermediate projections, aggregation support
 - ✅ **Property Access**: Node and edge property access with `n.name` syntax
 - ✅ **SQL-like Queries**: RETURN, WHERE, ORDER BY, LIMIT/OFFSET, GROUP BY, DISTINCT
 - ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics
@@ -39,15 +42,15 @@ Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compli
 - ✅ **Profiling**: EXPLAIN/PROFILE with memory and timing metrics
 
 **What's In Progress**:
-- 🔄 **WITH Clause**: Query chaining and composition
 - 🔄 **Graph Mutations**: CREATE/DELETE/MERGE operations
 - 🔄 **Distributed Features**: Raft consensus, 2PC coordination
 
 **Recent Achievements**:
 1. **Complete Graph Engine**: Full MATCH/OPTIONAL MATCH implementation
-2. **Path Queries**: Variable-length traversal with cycle detection
-3. **ACID Compliance**: Comprehensive MVCC with ISO 40001 error mapping
-4. **Production Storage**: Persistent catalog with graph metadata
+2. **Path Queries**: Variable-length traversal with deterministic tie-breaking
+3. **WITH Clause**: Query composition and aggregation support
+4. **ACID Compliance**: Comprehensive MVCC with ISO 40001 error mapping
+5. **Production Storage**: Persistent catalog with graph metadata
 
 **Conformance Notes**:
 - Working toward ISO/IEC 39075:2024 compliance
