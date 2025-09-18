@@ -1,0 +1,258 @@
+# Docker Compose for Geode - Distributed Deployment with Raft Consensus
+version: '3.8'
+
+services:
+  # Geode Leader Node
+  geode-leader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geode-leader
+    hostname: geode-leader
+    ports:
+      - "7567:7567/udp"  # QUIC
+      - "7568:7568/tcp"  # TCP
+      - "9090:9090"      # Metrics
+      - "8300:8300"      # Raft internal
+    volumes:
+      - geode-leader-data:/data
+      - geode-certs:/certs
+      - ./certs:/certs:ro
+    environment:
+      - NODE_ID=node-1
+      - NODE_ROLE=leader
+      - CLUSTER_NAME=geode-cluster
+      - RAFT_PORT=8300
+      - RAFT_PEERS=geode-follower-1:8300,geode-follower-2:8300
+      - GEODE_LOG_LEVEL=info
+      - GEODE_DISTRIBUTED=true
+      - GEODE_SHARD_COUNT=3
+      - GEODE_REPLICATION_FACTOR=2
+    command: >
+      --listen-quic 0.0.0.0:7567
+      --listen-tcp 0.0.0.0:7568
+      --data-dir /data
+      --node-id node-1
+      --raft-bind 0.0.0.0:8300
+      --raft-advertise geode-leader:8300
+      --bootstrap-expect 3
+      --log-json
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.10
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # Geode Follower Node 1
+  geode-follower-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geode-follower-1
+    hostname: geode-follower-1
+    ports:
+      - "7569:7567/udp"  # QUIC
+      - "7570:7568/tcp"  # TCP
+      - "9091:9090"      # Metrics
+      - "8301:8300"      # Raft internal
+    volumes:
+      - geode-follower-1-data:/data
+      - geode-certs:/certs
+      - ./certs:/certs:ro
+    environment:
+      - NODE_ID=node-2
+      - NODE_ROLE=follower
+      - CLUSTER_NAME=geode-cluster
+      - RAFT_PORT=8300
+      - RAFT_JOIN=geode-leader:8300
+      - GEODE_LOG_LEVEL=info
+      - GEODE_DISTRIBUTED=true
+    command: >
+      --listen-quic 0.0.0.0:7567
+      --listen-tcp 0.0.0.0:7568
+      --data-dir /data
+      --node-id node-2
+      --raft-bind 0.0.0.0:8300
+      --raft-advertise geode-follower-1:8300
+      --raft-join geode-leader:8300
+      --log-json
+    restart: unless-stopped
+    depends_on:
+      - geode-leader
+    healthcheck:
+      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 45s
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.11
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # Geode Follower Node 2
+  geode-follower-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geode-follower-2
+    hostname: geode-follower-2
+    ports:
+      - "7571:7567/udp"  # QUIC
+      - "7572:7568/tcp"  # TCP
+      - "9092:9090"      # Metrics
+      - "8302:8300"      # Raft internal
+    volumes:
+      - geode-follower-2-data:/data
+      - geode-certs:/certs
+      - ./certs:/certs:ro
+    environment:
+      - NODE_ID=node-3
+      - NODE_ROLE=follower
+      - CLUSTER_NAME=geode-cluster
+      - RAFT_PORT=8300
+      - RAFT_JOIN=geode-leader:8300
+      - GEODE_LOG_LEVEL=info
+      - GEODE_DISTRIBUTED=true
+    command: >
+      --listen-quic 0.0.0.0:7567
+      --listen-tcp 0.0.0.0:7568
+      --data-dir /data
+      --node-id node-3
+      --raft-bind 0.0.0.0:8300
+      --raft-advertise geode-follower-2:8300
+      --raft-join geode-leader:8300
+      --log-json
+    restart: unless-stopped
+    depends_on:
+      - geode-leader
+    healthcheck:
+      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 45s
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.12
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # HAProxy Load Balancer
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: geode-lb
+    ports:
+      - "7500:7500"  # Main LB port for TCP
+      - "8404:8404"  # HAProxy stats
+    volumes:
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.5
+    depends_on:
+      - geode-leader
+      - geode-follower-1
+      - geode-follower-2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7500"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Prometheus for cluster monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: geode-prometheus-cluster
+    volumes:
+      - ./monitoring/prometheus-cluster.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-cluster-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9093:9090"
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.20
+    restart: unless-stopped
+
+  # Grafana for cluster visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: geode-grafana-cluster
+    volumes:
+      - grafana-cluster-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=redis-datasource,redis-app
+    ports:
+      - "3001:3000"
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.21
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Optional: Cluster coordinator for advanced operations
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: geode-coordinator
+    entrypoint: /bin/sh
+    command: -c "sleep infinity"
+    volumes:
+      - geode-certs:/certs:ro
+      - ./scripts:/scripts:ro
+    environment:
+      - CLUSTER_NODES=geode-leader:7567,geode-follower-1:7567,geode-follower-2:7567
+    networks:
+      geode-cluster-net:
+        ipv4_address: 172.29.0.30
+    profiles:
+      - tools
+
+volumes:
+  geode-leader-data:
+    driver: local
+  geode-follower-1-data:
+    driver: local
+  geode-follower-2-data:
+    driver: local
+  geode-certs:
+    driver: local
+  prometheus-cluster-data:
+    driver: local
+  grafana-cluster-data:
+    driver: local
+
+networks:
+  geode-cluster-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16

@@ -1,0 +1,27 @@
+# Minimal Docker Compose for testing
+version: '3.8'
+
+services:
+  geode:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    container_name: geode-test
+    ports:
+      - "7567:7567/udp"
+      - "7568:7568/tcp"
+    volumes:
+      - ./data:/data
+    environment:
+      - GEODE_LOG_LEVEL=debug
+    command: >
+      --listen-quic 0.0.0.0:7567
+      --listen-tcp 0.0.0.0:7568
+      --data-dir /data
+      --log-json
+    healthcheck:
+      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

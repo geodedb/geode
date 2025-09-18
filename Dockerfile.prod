@@ -1,0 +1,48 @@
+# Production Dockerfile with optimizations and security hardening
+FROM debian:bookworm-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    xz-utils \
+    ca-certificates \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig 0.15.1
+ARG ZIG_VERSION=0.15.1
+RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz | tar -xJ -C /opt && \
+    ln -s /opt/zig-x86_64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+    zig version
+
+WORKDIR /build
+COPY . .
+
+# Build with maximum optimizations
+RUN zig build -Drelease-fast && \
+    zig build tools -Drelease-fast && \
+    strip /build/zig-out/bin/geoded && \
+    strip /build/zig-out/bin/geodec
+
+# Distroless runtime for minimal attack surface
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+
+# Copy binaries
+COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geoded /usr/local/bin/geoded
+COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geodec /usr/local/bin/geodec
+COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/cert_gen /usr/local/bin/cert_gen
+
+# Create data directories
+VOLUME ["/data", "/certs"]
+
+# Non-root user by default
+USER nonroot
+WORKDIR /home/nonroot
+
+# Expose ports
+EXPOSE 7567/udp 7568/tcp 9090/tcp
+
+# Run geoded
+ENTRYPOINT ["/usr/local/bin/geoded"]
+CMD ["--listen-quic", "0.0.0.0:7567", "--data-dir", "/data", "--log-json"]

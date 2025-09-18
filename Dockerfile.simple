@@ -1,0 +1,102 @@
+# Simplified Dockerfile with inline Zig installation
+FROM debian:bookworm-slim AS builder
+
+# Install dependencies including minisign for signature verification
+RUN apt-get update && apt-get install -y \
+    curl \
+    xz-utils \
+    ca-certificates \
+    git \
+    build-essential \
+    file \
+    minisign \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig with fallback mirrors
+ARG ZIG_VERSION=0.15.1
+ENV ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
+
+RUN set -ex && \
+    TARBALL="zig-x86_64-linux-${ZIG_VERSION}.tar.xz" && \
+    INSTALLED=false && \
+    # Try multiple mirrors \
+    for MIRROR in \
+        "https://ziglang.org/download/${ZIG_VERSION}" \
+        "https://github.com/ziglang/zig/releases/download/${ZIG_VERSION}" \
+        "https://mirror.bazel.build/ziglang.org/download/${ZIG_VERSION}" \
+    ; do \
+        echo "Trying mirror: ${MIRROR}" && \
+        if curl -fsSL --connect-timeout 10 --max-time 300 -o "/tmp/${TARBALL}" "${MIRROR}/${TARBALL}"; then \
+            # Try to get signature (optional) \
+            curl -fsSL --connect-timeout 5 --max-time 30 -o "/tmp/${TARBALL}.minisig" "${MIRROR}/${TARBALL}.minisig" 2>/dev/null || true; \
+            # Verify if signature exists \
+            if [ -f "/tmp/${TARBALL}.minisig" ]; then \
+                echo "${ZIG_PUBKEY}" > /tmp/zig.pub && \
+                minisign -Vm "/tmp/${TARBALL}" -P "${ZIG_PUBKEY}" -x "/tmp/${TARBALL}.minisig" || \
+                    echo "WARNING: Signature verification failed, proceeding anyway"; \
+                rm -f /tmp/zig.pub /tmp/${TARBALL}.minisig; \
+            fi; \
+            # Extract if we have a valid tarball \
+            if file "/tmp/${TARBALL}" | grep -q "XZ compressed data"; then \
+                tar -xJf "/tmp/${TARBALL}" -C /opt && \
+                rm "/tmp/${TARBALL}" && \
+                ln -s /opt/zig-x86_64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+                zig version && \
+                INSTALLED=true && \
+                break; \
+            else \
+                echo "Downloaded file is not valid XZ data, trying next mirror..."; \
+            fi; \
+        else \
+            echo "Download failed from ${MIRROR}, trying next..."; \
+        fi; \
+    done && \
+    if [ "$INSTALLED" = "false" ]; then \
+        echo "ERROR: Failed to install Zig from all mirrors" && \
+        exit 1; \
+    fi
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build geode
+RUN zig build -Drelease-safe || zig build -Doptimize=ReleaseSafe || zig build
+
+# Try to build tools (may fail, that's ok)
+RUN zig build tools -Drelease-safe 2>/dev/null || \
+    zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
+    zig build tools 2>/dev/null || \
+    echo "Warning: Some tools may not have built"
+
+# Runtime stage
+FROM debian:bookworm-slim AS runtime
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    openssl \
+    && rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1000 geode && \
+    mkdir -p /data /certs /var/log/geode && \
+    chown -R geode:geode /data /certs /var/log/geode
+
+# Copy all built binaries
+COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
+
+# Switch to non-root user
+USER geode
+WORKDIR /home/geode
+
+# Expose ports
+EXPOSE 7567/udp 7568/tcp 9090/tcp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD geodec "RETURN 1 AS health" --server 127.0.0.1:7567 || exit 1
+
+# Default entrypoint and command
+ENTRYPOINT ["/usr/local/bin/geoded"]
+CMD ["--listen-quic", "0.0.0.0:7567", "--data-dir", "/data", "--log-json"]

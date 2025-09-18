@@ -1,0 +1,28 @@
+# Development overrides for docker-compose.yml
+# This file is automatically loaded by docker-compose
+version: '3.8'
+
+services:
+  geode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    environment:
+      - GEODE_LOG_LEVEL=debug
+      - RUST_BACKTRACE=1
+    volumes:
+      # Mount source code for development
+      - ./src:/home/geode/src:ro
+      - ./tests:/home/geode/tests:ro
+      # Mount local data directory
+      - ./data:/data
+    ports:
+      # Additional debug port
+      - "9999:9999"
+    command: >
+      --listen-quic 0.0.0.0:7567
+      --listen-tcp 0.0.0.0:7568
+      --data-dir /data
+      --log-level debug
+      --log-json

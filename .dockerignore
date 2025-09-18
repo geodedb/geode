@@ -1,0 +1,45 @@
+# Ignore build artifacts
+zig-out/
+zig-cache/
+.zig-cache/
+
+# Ignore local data
+data/
+*.log
+
+# Ignore version control
+.git/
+.gitignore
+
+# Ignore documentation
+docs/*.pdf
+docs/*.tar
+
+# Ignore test artifacts
+test_*
+*_test
+
+# Ignore development files
+.envrc
+.secrets.baseline
+flake.lock
+flake.nix
+
+# Ignore Docker files themselves
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore Go build cache
+clients/go/gql/go.sum
+clients/go/gql/vendor/
+
+# Keep certificates
+!certs/

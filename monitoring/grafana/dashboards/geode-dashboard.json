@@ -1,0 +1,74 @@
+{
+  "dashboard": {
+    "title": "Geode Database Monitoring",
+    "panels": [
+      {
+        "title": "Query Rate",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(geode_queries_total[5m])",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      },
+      {
+        "title": "Active Connections",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "geode_connections_active",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      },
+      {
+        "title": "Memory Usage",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "geode_memory_used_bytes",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      },
+      {
+        "title": "WAL Size",
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "geode_wal_size_bytes",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      },
+      {
+        "title": "Transaction Rate",
+        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(geode_transactions_total[5m])",
+            "legendFormat": "{{instance}} - {{status}}"
+          }
+        ]
+      },
+      {
+        "title": "Query Latency (p95)",
+        "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, geode_query_duration_seconds)",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      }
+    ],
+    "version": 1
+  }
+}
