@@ -106,6 +106,32 @@ Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compli
 
 See USAGE.md for commands and flags.
 
+## Building from Source
+
+### Prerequisites
+- Zig 0.15.1 or later
+- Git (for submodules)
+- Optional: Go 1.19+ (for Go client)
+
+### Quick Start
+```bash
+# Clone with submodules (includes QUIC library)
+git clone --recursive https://github.com/yourusername/geode.git
+cd geode
+
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+
+# Build
+make build
+
+# Run tests
+make test
+```
+
+### QUIC Library
+The QUIC transport layer is included as a git submodule at `vendor/quic/`. For more details, see [docs/QUIC_SUBMODULE_SETUP.md](docs/QUIC_SUBMODULE_SETUP.md).
+
 ## Roadmap to Graph Database
 
 The following features are required for true GQL graph database functionality:

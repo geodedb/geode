@@ -17,8 +17,9 @@ ui/build/
 ui/node_modules/
 **/node_modules/
 
-# Removing Vendor
-vendor/
+# Removing Vendor (except quic submodule)
+vendor/*
+!vendor/quic/
 
 .vscode/
 

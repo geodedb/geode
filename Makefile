@@ -41,7 +41,8 @@ help:
 	@echo ""
 	@echo "Utility targets:"
 	@echo "  make doccheck    - Check documentation"
-	@echo "  make vendor-quic - Vendor QUIC library from nix"
+	@echo "  make quic-status - Check QUIC submodule status"
+	@echo "  make quic-init   - Initialize QUIC submodule"
 	@echo "  make cert-gen    - Generate TLS certificates"
 	@echo "  make fmt         - Format all code"
 	@echo "  make clean       - Clean build artifacts"
@@ -123,12 +124,15 @@ doccheck: tools
 		echo "doccheck not found, run 'make tools' first"; \
 	fi
 
-# Vendor QUIC library from nix
-vendor-quic:
-	@if [ -f "scripts/vendor_quic.sh" ]; then \
-		./scripts/vendor_quic.sh; \
+# Check QUIC submodule status
+quic-status:
+	@echo "QUIC library is managed as a git submodule"
+	@if [ -e "vendor/quic/.git" ]; then \
+		echo "✓ QUIC submodule is initialized"; \
+		cd vendor/quic && git log -1 --oneline; \
 	else \
-		echo "Vendor script not found at scripts/vendor_quic.sh"; \
+		echo "✗ QUIC submodule not initialized"; \
+		echo "Run: git submodule update --init --recursive"; \
 	fi
 
 # Generate TLS certificates
@@ -180,8 +184,14 @@ server-tcp: build
 	./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567
 
 # Development setup
-dev-setup: vendor-quic cert-gen
+dev-setup: quic-init cert-gen
 	@echo "Development environment setup complete"
+
+# Initialize QUIC submodule
+quic-init:
+	@echo "Initializing QUIC submodule..."
+	@git submodule update --init --recursive
+	@echo "QUIC submodule initialized"
 
 # Docker operations
 .PHONY: docker-build docker-up-singleton docker-up-distributed docker-down docker-test-singleton docker-test-distributed docker-test docker-logs-singleton docker-logs-distributed docker-ci docker-clean

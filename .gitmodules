@@ -1,0 +1,3 @@
+[submodule "vendor/quic"]
+	path = vendor/quic
+	url = https://github.com/spyderorg/quic.git
