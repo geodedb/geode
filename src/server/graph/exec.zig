@@ -157,6 +157,7 @@ pub const BindingValue = union(enum) {
     Edge: EdgeId,
     Path: []const NodeId,
     Value: PropertyValue,
+    Null, // For OPTIONAL MATCH
 };
 
 // NodeScan operator - scan all nodes with optional label filter
@@ -546,6 +547,7 @@ pub fn bindingsToJson(
 
 fn writeBindingValue(writer: anytype, val: BindingValue, graph: *const GraphStorage) !void {
     switch (val) {
+        .Null => try writer.writeAll("null"),
         .Node => |id| {
             try writer.writeAll("{\"id\":");
             try writer.print("{}", .{id});
@@ -616,4 +618,303 @@ fn writeEvalValue(writer: anytype, val: eval.Value) !void {
             }
         },
     }
+}
+
+// OPTIONAL MATCH implementation - left outer join semantics
+pub fn executeOptionalMatch(
+    allocator: std.mem.Allocator,
+    graph: *const GraphStorage,
+    base_bindings: []const Binding,
+    pattern: geode.ast.GraphPattern,
+    where_clause: ?geode.ast.Expr,
+) ![]Binding {
+    // If no base bindings, treat as regular MATCH
+    if (base_bindings.len == 0) {
+        return executeMatch(allocator, graph, pattern, where_clause);
+    }
+    
+    var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+    
+    // For each base binding, try to match the pattern
+    for (base_bindings) |base| {
+        // Execute the pattern starting from this base binding
+        const pattern_bindings = try executeMatchFromBinding(allocator, graph, &base, pattern, where_clause);
+        
+        if (pattern_bindings.len > 0) {
+            // Found matches - add them to results
+            for (pattern_bindings) |pb| {
+                try results.append(allocator, pb);
+            }
+        } else {
+            // No matches - preserve base binding with NULLs for new variables
+            var preserved = try base.clone(allocator);
+            
+            // Add NULL for all variables in the pattern
+            for (pattern.chains) |chain| {
+                for (chain.hops) |hop| {
+                    if (hop.left.name) |name| {
+                        if (!preserved.vars.contains(name)) {
+                            try preserved.vars.put(name, .Null);
+                        }
+                    }
+                    if (hop.rel.name) |name| {
+                        try preserved.vars.put(name, .Null);
+                    }
+                    if (hop.right.name) |name| {
+                        try preserved.vars.put(name, .Null);
+                    }
+                }
+            }
+            
+            try results.append(allocator, preserved);
+        }
+    }
+    
+    return results.toOwnedSlice(allocator);
+}
+
+// Execute MATCH starting from an existing binding
+fn executeMatchFromBinding(
+    allocator: std.mem.Allocator,
+    graph: *const GraphStorage,
+    base: *const Binding,
+    pattern: geode.ast.GraphPattern,
+    where_clause: ?geode.ast.Expr,
+) ![]Binding {
+    if (pattern.chains.len == 0) {
+        var result = try allocator.alloc(Binding, 1);
+        result[0] = try base.clone(allocator);
+        return result;
+    }
+    
+    var current_bindings = try allocator.alloc(Binding, 1);
+    current_bindings[0] = try base.clone(allocator);
+    
+    for (pattern.chains) |chain| {
+        for (chain.hops) |hop| {
+            // Check if we already have the source node bound
+            if (hop.left.name) |source_var| {
+                if (base.vars.get(source_var)) |_| {
+                    // Expand from this node
+                    current_bindings = try expand(
+                        allocator,
+                        graph,
+                        current_bindings,
+                        source_var,
+                        hop.rel.types,
+                        hop.rel.dir,
+                        hop.right.name,
+                        hop.rel.name,
+                    );
+                } else {
+                    // Need to scan for this node
+                    const scan_results = try nodeScan(allocator, graph, hop.left.labels, hop.left.name);
+                    
+                    // Join with current bindings
+                    var joined = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+                    for (current_bindings) |cb| {
+                        for (scan_results) |sr| {
+                            var new_binding = try cb.clone(allocator);
+                            var iter = sr.vars.iterator();
+                            while (iter.next()) |entry| {
+                                try new_binding.vars.put(entry.key_ptr.*, entry.value_ptr.*);
+                            }
+                            try joined.append(allocator, new_binding);
+                        }
+                    }
+                    current_bindings = try joined.toOwnedSlice(allocator);
+                }
+            }
+        }
+    }
+    
+    // Apply WHERE clause if present
+    if (where_clause) |where| {
+        current_bindings = try filter(allocator, current_bindings, where, graph);
+    }
+    
+    return current_bindings;
+}
+
+// Variable-length path expansion with bounded traversal
+pub fn pathExpand(
+    allocator: std.mem.Allocator,
+    graph: *const GraphStorage,
+    bindings: []const Binding,
+    source_var: []const u8,
+    edge_types: []const []const u8,
+    direction: geode.ast.RelDir,
+    min_hops: u32,
+    max_hops: u32,
+    target_var: ?[]const u8,
+    path_var: ?[]const u8,
+) ![]Binding {
+    var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+    
+    for (bindings) |binding| {
+        const source_val = binding.vars.get(source_var) orelse continue;
+        const source_id = switch (source_val) {
+            .Node => |id| id,
+            else => continue,
+        };
+        
+        // BFS traversal with bounded depth
+        var visited = std.AutoHashMap(NodeId, void).init(allocator);
+        defer visited.deinit();
+        
+        // Queue entries: (current_node, path, depth)
+        const QueueEntry = struct {
+            node: NodeId,
+            path: std.ArrayList(NodeId),
+            edges: std.ArrayList(EdgeId),
+            depth: u32,
+        };
+        
+        var queue = std.ArrayList(QueueEntry).initCapacity(allocator, 0) catch unreachable;
+        defer queue.deinit(allocator);
+        
+        // Initialize with source node
+        var initial_path = std.ArrayList(NodeId).initCapacity(allocator, 0) catch unreachable;
+        try initial_path.append(allocator, source_id);
+        const initial_edges = std.ArrayList(EdgeId).initCapacity(allocator, 0) catch unreachable;
+        
+        try queue.append(allocator, .{
+            .node = source_id,
+            .path = initial_path,
+            .edges = initial_edges,
+            .depth = 0,
+        });
+        
+        while (queue.items.len > 0) {
+            const entry = queue.orderedRemove(0);
+            defer entry.path.deinit(allocator);
+            defer entry.edges.deinit(allocator);
+            
+            // Check if we've reached the required depth
+            if (entry.depth >= min_hops and entry.depth <= max_hops) {
+                if (entry.depth > 0) { // Don't include 0-length paths
+                    var new_binding = try binding.clone(allocator);
+                    
+                    if (target_var) |tv| {
+                        try new_binding.vars.put(tv, .{ .Node = entry.node });
+                    }
+                    
+                    if (path_var) |pv| {
+                        // Clone the path for the binding
+                        const path_copy = try allocator.alloc(NodeId, entry.path.items.len);
+                        @memcpy(path_copy, entry.path.items);
+                        try new_binding.vars.put(pv, .{ .Path = path_copy });
+                    }
+                    
+                    try results.append(allocator, new_binding);
+                }
+            }
+            
+            // Continue traversal if not at max depth
+            if (entry.depth < max_hops) {
+                // Mark as visited to avoid cycles
+                try visited.put(entry.node, {});
+                
+                // Get edges based on direction
+                const edge_ids = switch (direction) {
+                    .right => graph.outgoing.get(entry.node),
+                    .left => graph.incoming.get(entry.node),
+                    .undirected => graph.outgoing.get(entry.node), // TODO: handle both directions
+                };
+                
+                if (edge_ids) |edges| {
+                    for (edges.items) |edge_id| {
+                        const edge = graph.edges.items[edge_id];
+                        
+                        // Check edge type filter
+                        if (edge_types.len > 0) {
+                            var matches = false;
+                            for (edge_types) |required_type| {
+                                if (std.mem.eql(u8, required_type, edge.edge_type)) {
+                                    matches = true;
+                                    break;
+                                }
+                            }
+                            if (!matches) continue;
+                        }
+                        
+                        const next_node = switch (direction) {
+                            .right => edge.target,
+                            .left => edge.source,
+                            .undirected => if (edge.source == entry.node) edge.target else edge.source,
+                        };
+                        
+                        // Skip if already visited (avoid cycles)
+                        if (visited.contains(next_node)) continue;
+                        
+                        // Create new path
+                        var new_path = std.ArrayList(NodeId).initCapacity(allocator, entry.path.items.len + 1) catch unreachable;
+                        try new_path.appendSlice(allocator, entry.path.items);
+                        try new_path.append(allocator, next_node);
+                        
+                        var new_edges = std.ArrayList(EdgeId).initCapacity(allocator, entry.edges.items.len + 1) catch unreachable;
+                        try new_edges.appendSlice(allocator, entry.edges.items);
+                        try new_edges.append(allocator, edge_id);
+                        
+                        try queue.append(allocator, .{
+                            .node = next_node,
+                            .path = new_path,
+                            .edges = new_edges,
+                            .depth = entry.depth + 1,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    
+    return results.toOwnedSlice(allocator);
+}
+
+// Path tie-breaking policy (UA005/UA006)
+// When multiple shortest paths exist, select deterministically:
+// 1. Shortest path length
+// 2. Lexicographically smallest start node ID
+// 3. Lexicographically smallest end node ID
+// 4. Lexicographically smallest intermediate node IDs
+pub fn applyPathTieBreaking(
+    _: std.mem.Allocator,
+    paths: []const BindingValue,
+) !BindingValue {
+    if (paths.len == 0) return .Null;
+    if (paths.len == 1) return paths[0];
+    
+    var best_path = paths[0];
+    var best_nodes = switch (best_path) {
+        .Path => |p| p,
+        else => return best_path,
+    };
+    
+    for (paths[1..]) |path| {
+        const nodes = switch (path) {
+            .Path => |p| p,
+            else => continue,
+        };
+        
+        // Compare path lengths (shorter is better)
+        if (nodes.len < best_nodes.len) {
+            best_path = path;
+            best_nodes = nodes;
+            continue;
+        }
+        if (nodes.len > best_nodes.len) continue;
+        
+        // Same length - compare node IDs lexicographically
+        var i: usize = 0;
+        while (i < nodes.len) : (i += 1) {
+            if (nodes[i] < best_nodes[i]) {
+                best_path = path;
+                best_nodes = nodes;
+                break;
+            }
+            if (nodes[i] > best_nodes[i]) break;
+        }
+    }
+    
+    return best_path;
 }

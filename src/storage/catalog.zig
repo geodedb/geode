@@ -9,6 +9,9 @@ pub const StorageCatalog = struct {
     indexes: std.StringHashMap(IndexMetadata),
     sequences: std.StringHashMap(SequenceMetadata),
     catalog_page_id: ?u32, // Root catalog page
+    
+    // Graph-specific metadata
+    graph_metadata: ?GraphMetadata,
 
     const TableMetadata = struct {
         name: []const u8,
@@ -45,6 +48,20 @@ pub const StorageCatalog = struct {
         max_value: i64,
         cycle: bool,
     };
+    
+    // Graph catalog metadata
+    const GraphMetadata = struct {
+        node_count: u64,
+        edge_count: u64,
+        max_node_id: u64,
+        max_edge_id: u64,
+        nodes_page_id: u32,      // Root page for nodes storage
+        edges_page_id: u32,      // Root page for edges storage
+        adjacency_page_id: u32,  // Root page for CSR adjacency
+        properties_page_id: u32, // Root page for properties heap
+        created_at: i64,
+        modified_at: i64,
+    };
 
     pub fn init(allocator: std.mem.Allocator, page_manager: *storage.PageManager) StorageCatalog {
         return .{
@@ -54,6 +71,7 @@ pub const StorageCatalog = struct {
             .indexes = std.StringHashMap(IndexMetadata).init(allocator),
             .sequences = std.StringHashMap(SequenceMetadata).init(allocator),
             .catalog_page_id = null,
+            .graph_metadata = null,
         };
     }
 
@@ -291,5 +309,90 @@ pub const StorageCatalog = struct {
     /// Get index metadata
     pub fn getIndex(self: *StorageCatalog, name: []const u8) ?IndexMetadata {
         return self.indexes.get(name);
+    }
+    
+    // Graph persistence methods
+    
+    /// Initialize graph metadata
+    pub fn initGraphMetadata(self: *StorageCatalog) !void {
+        if (self.graph_metadata != null) {
+            return; // Already initialized
+        }
+        
+        const nodes_page = try self.page_manager.allocatePage();
+        const edges_page = try self.page_manager.allocatePage();
+        const adjacency_page = try self.page_manager.allocatePage();
+        const properties_page = try self.page_manager.allocatePage();
+        
+        self.graph_metadata = GraphMetadata{
+            .node_count = 0,
+            .edge_count = 0,
+            .max_node_id = 0,
+            .max_edge_id = 0,
+            .nodes_page_id = nodes_page,
+            .edges_page_id = edges_page,
+            .adjacency_page_id = adjacency_page,
+            .properties_page_id = properties_page,
+            .created_at = std.time.timestamp(),
+            .modified_at = std.time.timestamp(),
+        };
+        
+        try self.save();
+    }
+    
+    /// Save graph metadata only (actual data saved separately)
+    pub fn saveGraphMetadata(self: *StorageCatalog, node_count: u64, edge_count: u64, max_node_id: u64, max_edge_id: u64) !void {
+        if (self.graph_metadata == null) {
+            try self.initGraphMetadata();
+        }
+        
+        var metadata = self.graph_metadata.?;
+        metadata.node_count = node_count;
+        metadata.edge_count = edge_count;
+        metadata.max_node_id = max_node_id;
+        metadata.max_edge_id = max_edge_id;
+        metadata.modified_at = std.time.timestamp();
+        
+        self.graph_metadata = metadata;
+        try self.save();
+    }
+    
+    /// Get graph metadata
+    pub fn getGraphMetadata(self: *StorageCatalog) ?GraphMetadata {
+        return self.graph_metadata;
+    }
+    
+    /// Write data to a graph page
+    pub fn writeGraphPage(self: *StorageCatalog, page_type: enum { Nodes, Edges, Adjacency, Properties }, data: []const u8) !void {
+        if (self.graph_metadata == null) {
+            try self.initGraphMetadata();
+        }
+        
+        const metadata = self.graph_metadata.?;
+        const page_id = switch (page_type) {
+            .Nodes => metadata.nodes_page_id,
+            .Edges => metadata.edges_page_id,
+            .Adjacency => metadata.adjacency_page_id,
+            .Properties => metadata.properties_page_id,
+        };
+        
+        try self.page_manager.writeData(page_id, data);
+    }
+    
+    /// Read data from a graph page
+    pub fn readGraphPage(self: *StorageCatalog, page_type: enum { Nodes, Edges, Adjacency, Properties }) ![]const u8 {
+        if (self.graph_metadata == null) {
+            return error.NoGraphData;
+        }
+        
+        const metadata = self.graph_metadata.?;
+        const page_id = switch (page_type) {
+            .Nodes => metadata.nodes_page_id,
+            .Edges => metadata.edges_page_id,
+            .Adjacency => metadata.adjacency_page_id,
+            .Properties => metadata.properties_page_id,
+        };
+        
+        return self.page_manager.readData(page_id);
     }
 };

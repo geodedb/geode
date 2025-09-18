@@ -68,6 +68,9 @@ pub const Transaction = struct {
     // Read set for validation
     read_set: std.ArrayList(u64), // Resource IDs read
     
+    // Conflict tracking
+    conflicts_detected: std.ArrayList(ConflictInfo),
+    
     pub fn init(allocator: std.mem.Allocator, id: TxnId, timestamp: Timestamp, isolation: IsolationLevel) Transaction {
         return .{
             .id = id,
@@ -79,6 +82,7 @@ pub const Transaction = struct {
             .locks_held = std.ArrayList(LockRequest).initCapacity(allocator, 0) catch unreachable,
             .write_set = std.ArrayList(WriteOp).initCapacity(allocator, 0) catch unreachable,
             .read_set = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable,
+            .conflicts_detected = std.ArrayList(ConflictInfo).initCapacity(allocator, 0) catch unreachable,
         };
     }
     
@@ -86,7 +90,25 @@ pub const Transaction = struct {
         self.locks_held.deinit();
         self.write_set.deinit();
         self.read_set.deinit();
+        self.conflicts_detected.deinit();
     }
+};
+
+// Conflict information for diagnostics
+pub const ConflictInfo = struct {
+    conflicting_txn: TxnId,
+    resource_id: u64,
+    conflict_type: ConflictType,
+    timestamp: Timestamp,
+};
+
+// Types of conflicts that can occur
+pub const ConflictType = enum {
+    WriteWrite,     // Two transactions writing same resource
+    WriteRead,      // Write-read conflict (dirty read prevention)
+    ReadWrite,      // Read-write conflict (lost update prevention)
+    PhantomRead,    // Phantom read conflict
+    Deadlock,       // Deadlock detected
 };
 
 // Lock manager for concurrency control
@@ -445,5 +467,122 @@ pub const MVCCManager = struct {
                 }
             }
         }
+    }
+    
+    // Enhanced conflict detection matrix
+    pub fn detectConflict(self: *MVCCManager, txn: *Transaction, resource_id: u64, operation: enum { Read, Write }) !?ConflictInfo {
+        // Check against all active transactions
+        var iter = self.active_transactions.iterator();
+        while (iter.next()) |entry| {
+            const other_txn = entry.value_ptr.*;
+            if (other_txn.id == txn.id) continue;
+            
+            // Check write-write conflicts
+            if (operation == .Write) {
+                for (other_txn.write_set.items) |write_op| {
+                    if (write_op.resource_id == resource_id) {
+                        // Write-write conflict detected
+                        const conflict = ConflictInfo{
+                            .conflicting_txn = other_txn.id,
+                            .resource_id = resource_id,
+                            .conflict_type = .WriteWrite,
+                            .timestamp = self.current_timestamp,
+                        };
+                        try txn.conflicts_detected.append(self.allocator, conflict);
+                        return conflict;
+                    }
+                }
+                
+                // Check read-write conflicts (lost update prevention)
+                for (other_txn.read_set.items) |read_id| {
+                    if (read_id == resource_id and other_txn.start_timestamp < txn.start_timestamp) {
+                        const conflict = ConflictInfo{
+                            .conflicting_txn = other_txn.id,
+                            .resource_id = resource_id,
+                            .conflict_type = .ReadWrite,
+                            .timestamp = self.current_timestamp,
+                        };
+                        try txn.conflicts_detected.append(self.allocator, conflict);
+                        return conflict;
+                    }
+                }
+            }
+            
+            // Check write-read conflicts (dirty read prevention)
+            if (operation == .Read) {
+                for (other_txn.write_set.items) |write_op| {
+                    if (write_op.resource_id == resource_id and 
+                        other_txn.state != .Committed and
+                        txn.isolation_level != .ReadUncommitted) {
+                        const conflict = ConflictInfo{
+                            .conflicting_txn = other_txn.id,
+                            .resource_id = resource_id,
+                            .conflict_type = .WriteRead,
+                            .timestamp = self.current_timestamp,
+                        };
+                        try txn.conflicts_detected.append(self.allocator, conflict);
+                        return conflict;
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    // Map conflict to ISO SQL error code 40001 (serialization failure)
+    pub fn conflictToError(conflict: ConflictInfo) !@import("protocol").DiagnosticInfo {
+        const protocol = @import("protocol");
+        return protocol.DiagnosticInfo{
+            .status_class = "40",
+            .status_subclass = "001",
+            .message = try std.fmt.allocPrint(
+                std.heap.page_allocator,
+                "Serialization failure: {s} conflict on resource {} with transaction {}",
+                .{ @tagName(conflict.conflict_type), conflict.resource_id, conflict.conflicting_txn }
+            ),
+            .anchor = null,
+        };
+    }
+    
+    // Validate transaction at commit time
+    pub fn validateTransaction(self: *MVCCManager, txn: *Transaction) !bool {
+        // For snapshot isolation, check for write-write conflicts
+        if (txn.isolation_level == .SnapshotIsolation) {
+            for (txn.write_set.items) |write_op| {
+                // Check if any other transaction has written to this resource
+                // since our snapshot
+                var iter = self.active_transactions.iterator();
+                while (iter.next()) |entry| {
+                    const other_txn = entry.value_ptr.*;
+                    if (other_txn.id == txn.id) continue;
+                    if (other_txn.state != .Committed) continue;
+                    
+                    for (other_txn.write_set.items) |other_write| {
+                        if (other_write.resource_id == write_op.resource_id and
+                            other_write.timestamp > txn.snapshot_timestamp and
+                            other_write.timestamp < self.current_timestamp) {
+                            // Conflict detected - abort transaction
+                            const conflict = ConflictInfo{
+                                .conflicting_txn = other_txn.id,
+                                .resource_id = write_op.resource_id,
+                                .conflict_type = .WriteWrite,
+                                .timestamp = self.current_timestamp,
+                            };
+                            try txn.conflicts_detected.append(self.allocator, conflict);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // For serializable, also check for phantom reads
+        if (txn.isolation_level == .Serializable) {
+            // Additional validation for phantom reads would go here
+            // This requires tracking predicate locks and range queries
+        }
+        
+        return true;
     }
 };

@@ -2131,7 +2131,7 @@ pub fn main() !void {
     var pm_persist_active = false;
     var pm_persist: storage_pm.PageManager = undefined;
     var catalog_inited = false;
-    var catalog = storage_catalog.StorageCatalog{ .allocator = gpa, .page_manager = undefined, .tables = undefined, .indexes = undefined, .sequences = undefined, .catalog_page_id = null };
+    var catalog = storage_catalog.StorageCatalog{ .allocator = gpa, .page_manager = undefined, .tables = undefined, .indexes = undefined, .sequences = undefined, .catalog_page_id = null, .graph_metadata = null };
     if (data_dir) |dd| {
         std.fs.cwd().makePath(dd) catch {};
         pm_persist = storage_pm.PageManager.initPersistent(gpa, 4096, dd);
@@ -2143,11 +2143,23 @@ pub fn main() !void {
         if (catalog_create_name) |tname| {
             catalog.createTable(tname, &.{}) catch {};
         }
-        // Try load graph jsonl if present
+        
+        // Try to load graph from catalog
         if (g_graph_storage == null) {
+            // For now, just use JSONL files
             const loaded = tryLoadGraphFromDir(gpa, dd) catch null;
             if (loaded) |lg| {
                 g_graph_storage = lg;
+                // Update catalog metadata
+                if (catalog.graph_metadata == null) {
+                    catalog.initGraphMetadata() catch {};
+                }
+                catalog.saveGraphMetadata(
+                    @intCast(lg.nodes.count()),
+                    @intCast(lg.edges.items.len),
+                    0, // max_node_id - would need to calculate
+                    if (lg.edges.items.len > 0) lg.edges.items.len - 1 else 0
+                ) catch {};
             }
         }
     }
@@ -3884,7 +3896,22 @@ pub fn main() !void {
     }
     // Graceful shutdown: persist graph if data_dir provided and in-memory graph exists
     if (data_dir) |ddir| {
-        if (g_graph_storage) |gg| saveGraphToDir(gpa, gg, ddir);
+        if (g_graph_storage) |gg| {
+            // Save to JSONL files
+            saveGraphToDir(gpa, gg, ddir);
+            
+            // Update catalog metadata if initialized
+            if (catalog_inited) {
+                catalog.saveGraphMetadata(
+                    @intCast(gg.nodes.count()),
+                    @intCast(gg.edges.items.len),
+                    0, // max_node_id - would need to calculate
+                    if (gg.edges.items.len > 0) gg.edges.items.len - 1 else 0
+                ) catch |err| {
+                    std.log.warn("Failed to save graph metadata to catalog: {}", .{err});
+                };
+            }
+        }
     }
     // Flush WAL if present before exiting.
     if (state.wal_ptr) |wp_flush| {
