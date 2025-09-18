@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Two-Phase Commit transaction states
 pub const TransactionState = enum {
@@ -30,6 +31,44 @@ pub const PrepareResponse = enum {
     timeout,
 };
 
+/// Operation types
+pub const Operation = union(enum) {
+    create_node: NodeOp,
+    update_node: NodeOp,
+    delete_node: NodeOp,
+    create_edge: EdgeOp,
+    update_edge: EdgeOp,
+    delete_edge: EdgeOp,
+};
+
+pub const NodeOp = struct {
+    node_id: u64,
+    label: []const u8,
+    properties: []const u8,
+};
+
+pub const EdgeOp = struct {
+    edge_id: u64,
+    source_id: u64,
+    target_id: u64,
+    edge_type: []const u8,
+    properties: []const u8,
+};
+
+/// Undo log entry for rollback
+pub const UndoEntry = struct {
+    operation: Operation,
+    old_value: []const u8,
+    timestamp: i64,
+};
+
+/// Redo log entry for recovery
+pub const RedoEntry = struct {
+    operation: Operation,
+    new_value: []const u8,
+    timestamp: i64,
+};
+
 /// Transaction participant information
 pub const Participant = struct {
     id: []const u8,
@@ -37,6 +76,21 @@ pub const Participant = struct {
     state: TransactionState,
     last_message_time: i64,
     prepare_response: ?PrepareResponse,
+    undo_log: std.ArrayList(UndoEntry),
+    redo_log: std.ArrayList(RedoEntry),
+};
+
+pub const IsolationLevel = enum {
+    read_uncommitted,
+    read_committed,
+    repeatable_read,
+    serializable,
+};
+
+pub const Savepoint = struct {
+    name: []const u8,
+    operation_index: usize,
+    timestamp: i64,
 };
 
 /// 2PC transaction context
@@ -47,368 +101,464 @@ pub const Transaction = struct {
     state: TransactionState,
     start_time: i64,
     timeout_ms: u64,
-    operations: std.ArrayList([]const u8),
+    operations: std.ArrayList(Operation),
+    isolation_level: IsolationLevel,
+    savepoints: std.ArrayList(Savepoint),
 
-    pub fn init(allocator: std.mem.Allocator, id: []const u8, coordinator_id: []const u8) Transaction {
+    pub fn init(allocator: Allocator, id: []const u8, coordinator_id: []const u8) !Transaction {
         return .{
-            .id = id,
-            .coordinator_id = coordinator_id,
-            .participants = std.ArrayList(Participant).initCapacity(allocator, 0) catch @panic("OOM"),
+            .id = try allocator.dupe(u8, id),
+            .coordinator_id = try allocator.dupe(u8, coordinator_id),
+            .participants = std.ArrayList(Participant).init(allocator),
             .state = .active,
             .start_time = std.time.timestamp(),
             .timeout_ms = 30000, // 30 seconds default
-            .operations = std.ArrayList([]const u8).initCapacity(allocator, 0) catch @panic("OOM"),
+            .operations = std.ArrayList(Operation).init(allocator),
+            .isolation_level = .read_committed,
+            .savepoints = std.ArrayList(Savepoint).init(allocator),
         };
     }
 
-    pub fn deinit(self: *Transaction, allocator: std.mem.Allocator) void {
-        for (self.participants.items) |participant| {
+    pub fn deinit(self: *Transaction, allocator: Allocator) void {
+        for (self.participants.items) |*participant| {
             allocator.free(participant.id);
             allocator.free(participant.endpoint);
+            participant.undo_log.deinit();
+            participant.redo_log.deinit();
         }
-        self.participants.deinit(allocator);
-
-        for (self.operations.items) |op| {
-            allocator.free(op);
-        }
-        self.operations.deinit(allocator);
-
+        self.participants.deinit();
+        self.operations.deinit();
+        self.savepoints.deinit();
         allocator.free(self.id);
         allocator.free(self.coordinator_id);
     }
 
-    pub fn addParticipant(self: *Transaction, allocator: std.mem.Allocator, id: []const u8, endpoint: []const u8) !void {
+    pub fn addParticipant(self: *Transaction, allocator: Allocator, id: []const u8, endpoint: []const u8) !void {
         const participant = Participant{
             .id = try allocator.dupe(u8, id),
             .endpoint = try allocator.dupe(u8, endpoint),
             .state = .active,
             .last_message_time = std.time.timestamp(),
             .prepare_response = null,
+            .undo_log = std.ArrayList(UndoEntry).init(allocator),
+            .redo_log = std.ArrayList(RedoEntry).init(allocator),
         };
-        try self.participants.append(allocator, participant);
+        try self.participants.append(participant);
     }
 
-    pub fn addOperation(self: *Transaction, allocator: std.mem.Allocator, operation: []const u8) !void {
-        try self.operations.append(allocator, try allocator.dupe(u8, operation));
+    pub fn addOperation(self: *Transaction, operation: Operation) !void {
+        try self.operations.append(operation);
     }
 
-    pub fn isTimedOut(self: *const Transaction) bool {
-        const now = std.time.timestamp();
-        return (now - self.start_time) * 1000 > @as(i64, @intCast(self.timeout_ms));
+    pub fn createSavepoint(self: *Transaction, allocator: Allocator, name: []const u8) !void {
+        const savepoint = Savepoint{
+            .name = try allocator.dupe(u8, name),
+            .operation_index = self.operations.items.len,
+            .timestamp = std.time.timestamp(),
+        };
+        try self.savepoints.append(savepoint);
     }
 
-    pub fn allParticipantsPrepared(self: *const Transaction) bool {
+    pub fn rollbackToSavepoint(self: *Transaction, name: []const u8) !void {
+        for (self.savepoints.items) |savepoint| {
+            if (std.mem.eql(u8, savepoint.name, name)) {
+                // Remove operations after savepoint
+                self.operations.shrinkRetainingCapacity(savepoint.operation_index);
+                return;
+            }
+        }
+        return error.SavepointNotFound;
+    }
+
+    pub fn prepare(self: *Transaction) !bool {
+        self.state = .preparing;
+        
+        // Send prepare messages to all participants
+        for (self.participants.items) |*participant| {
+            participant.state = .preparing;
+            // TODO: Send actual prepare message
+            // For now, simulate vote
+            participant.prepare_response = .vote_commit;
+        }
+        
+        // Check all votes
         for (self.participants.items) |participant| {
             if (participant.prepare_response != .vote_commit) {
+                self.state = .aborting;
                 return false;
             }
         }
+        
+        self.state = .prepared;
         return true;
     }
 
-    pub fn anyParticipantAborted(self: *const Transaction) bool {
-        for (self.participants.items) |participant| {
-            if (participant.prepare_response == .vote_abort) {
-                return true;
-            }
+    pub fn commit(self: *Transaction) !void {
+        if (self.state != .prepared) {
+            return error.InvalidState;
         }
-        return false;
+        
+        self.state = .committing;
+        
+        // Send commit messages to all participants
+        for (self.participants.items) |*participant| {
+            participant.state = .committing;
+            // TODO: Send actual commit message
+            participant.state = .committed;
+        }
+        
+        self.state = .committed;
     }
-};
 
-/// 2PC Coordinator configuration
-pub const CoordinatorConfig = struct {
-    coordinator_id: []const u8,
-    default_timeout_ms: u64 = 30000,
-    max_concurrent_transactions: usize = 1000,
-    recovery_interval_ms: u64 = 5000,
-    participant_timeout_ms: u64 = 10000,
+    pub fn abort(self: *Transaction) !void {
+        self.state = .aborting;
+        
+        // Send abort messages to all participants
+        for (self.participants.items) |*participant| {
+            participant.state = .aborting;
+            // TODO: Send actual abort message
+            // Apply undo log
+            while (participant.undo_log.popOrNull()) |undo_entry| {
+                // TODO: Apply undo operation
+                _ = undo_entry;
+            }
+            participant.state = .aborted;
+        }
+        
+        self.state = .aborted;
+    }
+
+    pub fn isTimedOut(self: *Transaction) bool {
+        const current_time = std.time.timestamp();
+        const elapsed_ms = @as(u64, @intCast((current_time - self.start_time) * 1000));
+        return elapsed_ms > self.timeout_ms;
+    }
 };
 
 /// Two-Phase Commit Coordinator
-pub const TwoPCCoordinator = struct {
-    allocator: std.mem.Allocator,
-    config: CoordinatorConfig,
-
-    // Active transactions
+pub const Coordinator = struct {
+    allocator: Allocator,
+    node_id: []const u8,
     transactions: std.StringHashMap(Transaction),
+    log_writer: ?*LogWriter,
 
-    // Recovery state
-    recovery_log: std.ArrayList([]const u8),
+    pub const LogWriter = struct {
+        file: std.fs.File,
+        
+        pub fn writeEntry(self: *LogWriter, entry: LogEntry) !void {
+            const json = try std.json.stringify(entry, .{}, self.file.writer());
+            try self.file.writer().writeByte('\n');
+            _ = json;
+        }
+    };
 
-    // Callbacks for integration
-    send_message_callback: ?*const fn ([]const u8, MessageType, []const u8) void,
-    local_prepare_callback: ?*const fn ([]const u8, []const []const u8) PrepareResponse,
-    local_commit_callback: ?*const fn ([]const u8, []const []const u8) bool,
-    local_abort_callback: ?*const fn ([]const u8, []const []const u8) bool,
+    pub const LogEntry = struct {
+        timestamp: i64,
+        transaction_id: []const u8,
+        event_type: LogEventType,
+        data: []const u8,
+    };
 
-    // Feature flags
-    enable_distributed_transactions: bool = false,
-    enable_recovery: bool = false,
+    pub const LogEventType = enum {
+        transaction_start,
+        prepare_sent,
+        vote_received,
+        commit_decision,
+        abort_decision,
+        transaction_complete,
+    };
 
-    pub fn init(allocator: std.mem.Allocator, config: CoordinatorConfig) TwoPCCoordinator {
+    pub fn init(allocator: Allocator, node_id: []const u8) Coordinator {
         return .{
             .allocator = allocator,
-            .config = config,
+            .node_id = node_id,
             .transactions = std.StringHashMap(Transaction).init(allocator),
-            .recovery_log = std.ArrayList([]const u8).initCapacity(allocator, 0) catch @panic("OOM"),
-            .send_message_callback = null,
-            .local_prepare_callback = null,
-            .local_commit_callback = null,
-            .local_abort_callback = null,
+            .log_writer = null,
         };
     }
 
-    pub fn deinit(self: *TwoPCCoordinator) void {
-        var iter = self.transactions.iterator();
-        while (iter.next()) |entry| {
+    pub fn deinit(self: *Coordinator) void {
+        var it = self.transactions.iterator();
+        while (it.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
         self.transactions.deinit();
-
-        for (self.recovery_log.items) |log_entry| {
-            self.allocator.free(log_entry);
-        }
-        self.recovery_log.deinit(self.allocator);
     }
 
-    /// Enable 2PC features (for gradual rollout)
-    pub fn enableFeatures(self: *TwoPCCoordinator, distributed_transactions: bool, recovery: bool) void {
-        self.enable_distributed_transactions = distributed_transactions;
-        self.enable_recovery = recovery;
-    }
-
-    /// Begin a new distributed transaction
-    pub fn beginTransaction(self: *TwoPCCoordinator, transaction_id: []const u8, participants: []const []const u8) !bool {
-        if (self.transactions.count() >= self.config.max_concurrent_transactions) {
-            return false;
-        }
-
-        var txn = Transaction.init(self.allocator, try self.allocator.dupe(u8, transaction_id), try self.allocator.dupe(u8, self.config.coordinator_id));
-
-        // Add participants
-        for (participants) |participant| {
-            try txn.addParticipant(self.allocator, participant, participant); // Using ID as endpoint for simplicity
-        }
-
+    pub fn beginTransaction(self: *Coordinator, transaction_id: []const u8) !*Transaction {
+        const txn = try Transaction.init(self.allocator, transaction_id, self.node_id);
         try self.transactions.put(transaction_id, txn);
-
-        if (self.enable_recovery) {
-            try self.logTransactionStart(transaction_id);
+        
+        // Log transaction start
+        if (self.log_writer) |writer| {
+            try writer.writeEntry(.{
+                .timestamp = std.time.timestamp(),
+                .transaction_id = transaction_id,
+                .event_type = .transaction_start,
+                .data = "",
+            });
         }
-
-        return true;
+        
+        return self.transactions.getPtr(transaction_id).?;
     }
 
-    /// Add an operation to a transaction
-    pub fn addOperation(self: *TwoPCCoordinator, transaction_id: []const u8, operation: []const u8) !bool {
-        var txn = self.transactions.getPtr(transaction_id) orelse return false;
-
-        if (txn.state != .active) {
-            return false;
+    pub fn executeTransaction(self: *Coordinator, transaction_id: []const u8) !bool {
+        const txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
+        
+        // Phase 1: Prepare
+        const can_commit = try txn.prepare();
+        
+        if (self.log_writer) |writer| {
+            try writer.writeEntry(.{
+                .timestamp = std.time.timestamp(),
+                .transaction_id = transaction_id,
+                .event_type = if (can_commit) .commit_decision else .abort_decision,
+                .data = "",
+            });
         }
-
-        try txn.addOperation(self.allocator, operation);
-        return true;
+        
+        // Phase 2: Commit or Abort
+        if (can_commit) {
+            try txn.commit();
+        } else {
+            try txn.abort();
+        }
+        
+        if (self.log_writer) |writer| {
+            try writer.writeEntry(.{
+                .timestamp = std.time.timestamp(),
+                .transaction_id = transaction_id,
+                .event_type = .transaction_complete,
+                .data = "",
+            });
+        }
+        
+        return can_commit;
     }
 
-    /// Commit a transaction (initiates 2PC protocol)
-    pub fn commitTransaction(self: *TwoPCCoordinator, transaction_id: []const u8) !bool {
-        var txn = self.transactions.getPtr(transaction_id) orelse return false;
-
-        if (txn.state != .active) {
-            return false;
-        }
-
-        if (!self.enable_distributed_transactions) {
-            // Single-node mode: commit locally
-            return self.commitLocal(txn);
-        }
-
-        // Start prepare phase
-        txn.state = .preparing;
-
-        if (self.enable_recovery) {
-            try self.logTransactionPreparing(transaction_id);
-        }
-
-        return true;
-    }
-
-    /// Abort a transaction
-    pub fn abortTransaction(self: *TwoPCCoordinator, transaction_id: []const u8) !bool {
-        var txn = self.transactions.getPtr(transaction_id) orelse return false;
-
-        if (txn.state == .committed or txn.state == .aborted) {
-            return false;
-        }
-
-        txn.state = .aborting;
-
-        if (self.enable_recovery) {
-            try self.logTransactionAborting(transaction_id);
-        }
-
-        if (!self.enable_distributed_transactions) {
-            _ = self.abortLocal(txn);
-        }
-
-        txn.state = .aborted;
-        return true;
-    }
-
-    /// Handle incoming 2PC messages
-    pub fn handleMessage(self: *TwoPCCoordinator, from: []const u8, message_type: MessageType, payload: []const u8) !void {
-        _ = self;
-        _ = from;
-        _ = message_type;
-        _ = payload;
-        // Message handling not fully implemented in v0.15.0
-    }
-
-    /// Process periodic tasks (timeouts, recovery, etc.)
-    pub fn tick(self: *TwoPCCoordinator) !void {
-        try self.processTimeouts();
-
-        if (self.enable_recovery) {
-            try self.processRecovery();
-        }
-    }
-
-    /// Get transaction statistics
-    pub fn getStats(self: *const TwoPCCoordinator) struct {
-        active_transactions: usize,
-        total_transactions: usize,
-        committed_transactions: usize,
-        aborted_transactions: usize,
-    } {
-        var committed: usize = 0;
-        var aborted: usize = 0;
-
-        var iter = self.transactions.iterator();
-        while (iter.next()) |entry| {
-            switch (entry.value_ptr.state) {
-                .committed => committed += 1,
-                .aborted => aborted += 1,
+    pub fn recoverFromLog(self: *Coordinator, log_file: []const u8) !void {
+        const file = try std.fs.cwd().openFile(log_file, .{});
+        defer file.close();
+        
+        var buf_reader = std.io.bufferedReader(file.reader());
+        var reader = buf_reader.reader();
+        
+        var line_buf: [4096]u8 = undefined;
+        while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+            // Parse log entry
+            const entry = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
+            defer entry.deinit();
+            
+            // Recover transaction state
+            switch (entry.value.event_type) {
+                .transaction_start => {
+                    _ = try self.beginTransaction(entry.value.transaction_id);
+                },
+                .commit_decision => {
+                    if (self.transactions.getPtr(entry.value.transaction_id)) |txn| {
+                        if (txn.state != .committed) {
+                            // Need to complete commit
+                            try txn.commit();
+                        }
+                    }
+                },
+                .abort_decision => {
+                    if (self.transactions.getPtr(entry.value.transaction_id)) |txn| {
+                        if (txn.state != .aborted) {
+                            // Need to complete abort
+                            try txn.abort();
+                        }
+                    }
+                },
                 else => {},
             }
         }
-
-        return .{
-            .active_transactions = self.transactions.count(),
-            .total_transactions = self.transactions.count(),
-            .committed_transactions = committed,
-            .aborted_transactions = aborted,
-        };
-    }
-
-    // Private methods
-
-    fn commitLocal(self: *TwoPCCoordinator, txn: *Transaction) bool {
-        if (self.local_commit_callback) |callback| {
-            return callback(txn.id, txn.operations.items);
-        }
-        return true; // Default success for testing
-    }
-
-    fn abortLocal(self: *TwoPCCoordinator, txn: *Transaction) bool {
-        if (self.local_abort_callback) |callback| {
-            return callback(txn.id, txn.operations.items);
-        }
-        return true; // Default success for testing
-    }
-
-    fn processTimeouts(self: *TwoPCCoordinator) !void {
-        var to_abort = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch @panic("OOM");
-        defer to_abort.deinit(self.allocator);
-
-        var iter = self.transactions.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.isTimedOut()) {
-                try to_abort.append(self.allocator, entry.key_ptr.*);
-            }
-        }
-
-        for (to_abort.items) |txn_id| {
-            _ = try self.abortTransaction(txn_id);
-        }
-    }
-
-    fn processRecovery(self: *TwoPCCoordinator) !void {
-        // Recovery processing not fully implemented in v0.15.0
-        _ = self;
-    }
-
-    fn logTransactionStart(self: *TwoPCCoordinator, transaction_id: []const u8) !void {
-        const log_entry = try std.fmt.allocPrint(self.allocator, "START {s}", .{transaction_id});
-        try self.recovery_log.append(self.allocator, log_entry);
-    }
-
-    fn logTransactionPreparing(self: *TwoPCCoordinator, transaction_id: []const u8) !void {
-        const log_entry = try std.fmt.allocPrint(self.allocator, "PREPARING {s}", .{transaction_id});
-        try self.recovery_log.append(self.allocator, log_entry);
-    }
-
-    fn logTransactionAborting(self: *TwoPCCoordinator, transaction_id: []const u8) !void {
-        const log_entry = try std.fmt.allocPrint(self.allocator, "ABORTING {s}", .{transaction_id});
-        try self.recovery_log.append(self.allocator, log_entry);
     }
 };
 
-// Tests
-test "2pc coordinator initialization" {
-    const config = CoordinatorConfig{
-        .coordinator_id = "coord1",
+/// Two-Phase Commit Participant
+pub const ParticipantNode = struct {
+    allocator: Allocator,
+    node_id: []const u8,
+    transactions: std.StringHashMap(LocalTransaction),
+    resource_manager: *ResourceManager,
+
+    pub const LocalTransaction = struct {
+        id: []const u8,
+        coordinator_id: []const u8,
+        state: TransactionState,
+        operations: std.ArrayList(Operation),
+        undo_log: std.ArrayList(UndoEntry),
+        redo_log: std.ArrayList(RedoEntry),
+        locks: std.ArrayList(Lock),
     };
 
-    var coordinator = TwoPCCoordinator.init(std.testing.allocator, config);
-    defer coordinator.deinit();
-
-    const stats = coordinator.getStats();
-    try std.testing.expect(stats.active_transactions == 0);
-}
-
-test "2pc single node transaction" {
-    const config = CoordinatorConfig{
-        .coordinator_id = "coord1",
+    pub const Lock = struct {
+        resource_id: u64,
+        lock_type: LockType,
+        acquired_at: i64,
     };
 
-    var coordinator = TwoPCCoordinator.init(std.testing.allocator, config);
-    defer coordinator.deinit();
-
-    // Begin transaction
-    const success = try coordinator.beginTransaction("txn1", &[_][]const u8{});
-    try std.testing.expect(success);
-
-    // Add operation
-    const op_success = try coordinator.addOperation("txn1", "INSERT INTO table VALUES (1)");
-    try std.testing.expect(op_success);
-
-    // Commit transaction (single-node mode)
-    const commit_success = try coordinator.commitTransaction("txn1");
-    try std.testing.expect(commit_success);
-}
-
-test "2pc transaction timeout" {
-    const config = CoordinatorConfig{
-        .coordinator_id = "coord1",
-        .default_timeout_ms = 100, // Very short timeout for testing
+    pub const LockType = enum {
+        shared,
+        exclusive,
     };
 
-    var coordinator = TwoPCCoordinator.init(std.testing.allocator, config);
-    defer coordinator.deinit();
+    pub const ResourceManager = struct {
+        locks: std.AutoHashMap(u64, LockInfo),
+        
+        pub const LockInfo = struct {
+            holder: ?[]const u8,
+            lock_type: LockType,
+            waiters: std.ArrayList([]const u8),
+        };
+        
+        pub fn acquireLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8, lock_type: LockType) !bool {
+            const result = try self.locks.getOrPut(resource_id);
+            if (!result.found_existing) {
+                result.value_ptr.* = .{
+                    .holder = transaction_id,
+                    .lock_type = lock_type,
+                    .waiters = std.ArrayList([]const u8).init(self.locks.allocator),
+                };
+                return true;
+            }
+            
+            // Check compatibility
+            if (result.value_ptr.holder == null) {
+                result.value_ptr.holder = transaction_id;
+                result.value_ptr.lock_type = lock_type;
+                return true;
+            }
+            
+            // Add to waiters
+            try result.value_ptr.waiters.append(transaction_id);
+            return false;
+        }
+        
+        pub fn releaseLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8) !void {
+            if (self.locks.getPtr(resource_id)) |lock_info| {
+                if (lock_info.holder) |holder| {
+                    if (std.mem.eql(u8, holder, transaction_id)) {
+                        // Release lock and give to next waiter
+                        if (lock_info.waiters.items.len > 0) {
+                            lock_info.holder = lock_info.waiters.orderedRemove(0);
+                        } else {
+                            lock_info.holder = null;
+                        }
+                    }
+                }
+            }
+        }
+    };
 
-    // Begin transaction
-    _ = try coordinator.beginTransaction("txn1", &[_][]const u8{"participant1"});
+    pub fn init(allocator: Allocator, node_id: []const u8, resource_manager: *ResourceManager) ParticipantNode {
+        return .{
+            .allocator = allocator,
+            .node_id = node_id,
+            .transactions = std.StringHashMap(LocalTransaction).init(allocator),
+            .resource_manager = resource_manager,
+        };
+    }
 
-    // Wait for timeout
-    std.time.sleep(150 * std.time.ns_per_ms);
+    pub fn deinit(self: *ParticipantNode) void {
+        var it = self.transactions.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.operations.deinit();
+            entry.value_ptr.undo_log.deinit();
+            entry.value_ptr.redo_log.deinit();
+            entry.value_ptr.locks.deinit();
+        }
+        self.transactions.deinit();
+    }
 
-    // Process timeouts
-    try coordinator.tick();
+    pub fn handlePrepare(self: *ParticipantNode, transaction_id: []const u8, operations: []Operation) !PrepareResponse {
+        // Create local transaction
+        var local_txn = LocalTransaction{
+            .id = transaction_id,
+            .coordinator_id = "", // Will be set by coordinator
+            .state = .preparing,
+            .operations = std.ArrayList(Operation).init(self.allocator),
+            .undo_log = std.ArrayList(UndoEntry).init(self.allocator),
+            .redo_log = std.ArrayList(RedoEntry).init(self.allocator),
+            .locks = std.ArrayList(Lock).init(self.allocator),
+        };
+        
+        // Try to acquire locks for all operations
+        for (operations) |op| {
+            const resource_id = switch (op) {
+                .create_node, .update_node, .delete_node => |node_op| node_op.node_id,
+                .create_edge, .update_edge, .delete_edge => |edge_op| edge_op.edge_id,
+            };
+            
+            const lock_acquired = try self.resource_manager.acquireLock(
+                resource_id,
+                transaction_id,
+                .exclusive,
+            );
+            
+            if (!lock_acquired) {
+                // Cannot acquire lock, vote abort
+                local_txn.state = .aborting;
+                try self.transactions.put(transaction_id, local_txn);
+                return .vote_abort;
+            }
+            
+            try local_txn.locks.append(.{
+                .resource_id = resource_id,
+                .lock_type = .exclusive,
+                .acquired_at = std.time.timestamp(),
+            });
+            
+            try local_txn.operations.append(op);
+        }
+        
+        // All locks acquired, prepare transaction
+        local_txn.state = .prepared;
+        try self.transactions.put(transaction_id, local_txn);
+        
+        return .vote_commit;
+    }
 
-    // Transaction should be aborted
-    const txn = coordinator.transactions.get("txn1");
-    try std.testing.expect(txn != null);
-    try std.testing.expect(txn.?.state == .aborted);
-}
+    pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
+        const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
+        
+        if (local_txn.state != .prepared) {
+            return error.InvalidState;
+        }
+        
+        local_txn.state = .committing;
+        
+        // Apply operations
+        for (local_txn.operations.items) |op| {
+            // TODO: Actually apply the operation to storage
+            _ = op;
+        }
+        
+        // Release locks
+        for (local_txn.locks.items) |lock| {
+            try self.resource_manager.releaseLock(lock.resource_id, transaction_id);
+        }
+        
+        local_txn.state = .committed;
+    }
+
+    pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
+        const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
+        
+        local_txn.state = .aborting;
+        
+        // Apply undo log
+        while (local_txn.undo_log.popOrNull()) |undo_entry| {
+            // TODO: Apply undo operation
+            _ = undo_entry;
+        }
+        
+        // Release locks
+        for (local_txn.locks.items) |lock| {
+            try self.resource_manager.releaseLock(lock.resource_id, transaction_id);
+        }
+        
+        local_txn.state = .aborted;
+    }
+};

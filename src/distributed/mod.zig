@@ -1,6 +1,8 @@
 const std = @import("std");
 const raft = @import("raft.zig");
+const raft_consensus = @import("raft_consensus.zig");
 const twophase = @import("twophase.zig");
+const sharding = @import("sharding.zig");
 
 pub const DistributedConfig = struct {
     node_id: []const u8,
@@ -18,6 +20,126 @@ pub const ShardInfo = struct {
     end_key: []const u8,
     replicas: []const []const u8,
     primary: []const u8,
+};
+
+// Partition-aware query planner
+pub const PartitionAwarePlanner = struct {
+    allocator: std.mem.Allocator,
+    shard_manager: sharding.ShardManager,
+    
+    pub const QueryPlan = struct {
+        query: []const u8,
+        partitions: []Partition,
+        execution_order: []usize,
+        requires_2pc: bool,
+        estimated_cost: f64,
+    };
+    
+    pub const Partition = struct {
+        shard_id: u64,
+        node_id: u64,
+        predicate: []const u8,
+        estimated_rows: u64,
+    };
+    
+    pub fn init(allocator: std.mem.Allocator) PartitionAwarePlanner {
+        return .{
+            .allocator = allocator,
+            .shard_manager = sharding.ShardManager.init(allocator, 3),
+        };
+    }
+    
+    pub fn deinit(self: *PartitionAwarePlanner) void {
+        self.shard_manager.deinit();
+    }
+    
+    pub fn planQuery(self: *PartitionAwarePlanner, query: []const u8) !QueryPlan {
+        // Parse query to identify accessed nodes/edges
+        const accessed_keys = try self.extractAccessedKeys(query);
+        defer self.allocator.free(accessed_keys);
+        
+        // Determine which partitions are needed
+        var partitions = std.ArrayList(Partition).init(self.allocator);
+        
+        for (accessed_keys) |key| {
+            if (self.shard_manager.getShard(key)) |shard| {
+                try partitions.append(.{
+                    .shard_id = shard.id,
+                    .node_id = shard.node_id,
+                    .predicate = key,
+                    .estimated_rows = 100, // Simplified estimate
+                });
+            }
+        }
+        
+        // Determine if 2PC is needed (multi-partition writes)
+        const requires_2pc = self.requiresTwoPhaseCommit(query, partitions.items);
+        
+        // Calculate execution order based on data locality
+        const execution_order = try self.calculateExecutionOrder(partitions.items);
+        
+        return QueryPlan{
+            .query = query,
+            .partitions = try partitions.toOwnedSlice(),
+            .execution_order = execution_order,
+            .requires_2pc = requires_2pc,
+            .estimated_cost = self.estimateCost(partitions.items),
+        };
+    }
+    
+    fn extractAccessedKeys(self: *PartitionAwarePlanner, query: []const u8) ![][]const u8 {
+        // Simplified: extract node IDs from query
+        var keys = std.ArrayList([]const u8).init(self.allocator);
+        
+        // In real implementation, parse query AST
+        if (std.mem.indexOf(u8, query, "MATCH") != null) {
+            try keys.append("node1");
+            try keys.append("node2");
+        }
+        
+        return try keys.toOwnedSlice();
+    }
+    
+    fn requiresTwoPhaseCommit(self: *PartitionAwarePlanner, query: []const u8, partitions: []Partition) bool {
+        _ = self;
+        // Check if query modifies data across multiple partitions
+        const is_write = std.mem.indexOf(u8, query, "CREATE") != null or
+                        std.mem.indexOf(u8, query, "DELETE") != null or
+                        std.mem.indexOf(u8, query, "MERGE") != null;
+        
+        return is_write and partitions.len > 1;
+    }
+    
+    fn calculateExecutionOrder(self: *PartitionAwarePlanner, partitions: []Partition) ![]usize {
+        // Order partitions by estimated cost and data locality
+        var order = try self.allocator.alloc(usize, partitions.len);
+        for (order, 0..) |*o, i| {
+            o.* = i;
+        }
+        
+        // Sort by estimated rows (simplified)
+        const Context = struct {
+            parts: []Partition,
+        };
+        const ctx = Context{ .parts = partitions };
+        
+        std.mem.sort(usize, order, ctx, struct {
+            fn lessThan(context: Context, a: usize, b: usize) bool {
+                return context.parts[a].estimated_rows < context.parts[b].estimated_rows;
+            }
+        }.lessThan);
+        
+        return order;
+    }
+    
+    fn estimateCost(self: *PartitionAwarePlanner, partitions: []Partition) f64 {
+        _ = self;
+        var cost: f64 = 0;
+        for (partitions) |p| {
+            cost += @as(f64, @floatFromInt(p.estimated_rows)) * 0.001;
+        }
+        return cost;
+    }
 };
 
 pub const DistributedCoordinator = struct {
