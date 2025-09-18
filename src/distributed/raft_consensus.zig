@@ -118,7 +118,7 @@ pub const RaftNode = struct {
             .state = .follower,
             .current_term = 0,
             .voted_for = null,
-            .log = std.ArrayList(LogEntry).init(allocator),
+            .log = std.ArrayList(LogEntry){},
             .commit_index = 0,
             .last_applied = 0,
             .next_index = null,
@@ -417,7 +417,7 @@ pub const RaftNode = struct {
 
     fn updateCommitIndex(self: *RaftNode) !void {
         // Find the highest index that a majority has replicated
-        var match_indices = std.ArrayList(u64).init(self.allocator);
+        var match_indices = std.ArrayList(u64){};
         defer match_indices.deinit();
 
         try match_indices.append(self.log.items.len); // Leader's own log

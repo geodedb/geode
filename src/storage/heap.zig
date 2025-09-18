@@ -8,7 +8,7 @@ pub const Value = union(enum) {
 };
 
 pub fn encodeValue(ally: std.mem.Allocator, v: Value) ![]u8 {
-    var buf = std.ArrayList(u8).init(ally);
+    var buf = std.ArrayList(u8){};
     switch (v) {
         .Null => {
             try buf.append(0x00);

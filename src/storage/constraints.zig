@@ -88,8 +88,8 @@ pub const SchemaConstraints = struct {
             .allocator = allocator,
             .node_constraints = std.StringHashMap(NodeConstraints).init(allocator),
             .edge_constraints = std.StringHashMap(EdgeConstraints).init(allocator),
-            .unique_indexes = std.ArrayList(UniqueIndex).init(allocator),
-            .check_constraints = std.ArrayList(CheckConstraint).init(allocator),
+            .unique_indexes = std.ArrayList(UniqueIndex){},
+            .check_constraints = std.ArrayList(CheckConstraint){},
         };
     }
 

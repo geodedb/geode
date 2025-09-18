@@ -116,7 +116,7 @@ pub const ShardManager = struct {
         const total_nodes = self.getTotalNodeCount();
         const ideal_per_shard = total_nodes / self.shards.count();
 
-        var migrations = std.ArrayList(Migration).init(self.allocator);
+        var migrations = std.ArrayList(Migration){};
         defer migrations.deinit();
 
         // Identify shards that need rebalancing
@@ -261,7 +261,7 @@ pub const ShardManager = struct {
 
     // Query routing for distributed queries
     pub fn routeQuery(self: *ShardManager, query: Query) !QueryPlan {
-        var affected_shards = std.ArrayList(u64).init(self.allocator);
+        var affected_shards = std.ArrayList(u64){};
         defer affected_shards.deinit();
 
         // Determine which shards are affected by the query
@@ -470,7 +470,7 @@ pub const ConsistentHash = struct {
     pub fn init(allocator: Allocator, virtual_nodes: u32, hash_fn: HashFunction) ConsistentHash {
         return .{
             .allocator = allocator,
-            .ring = std.ArrayList(Node).init(allocator),
+            .ring = std.ArrayList(Node){},
             .virtual_nodes = virtual_nodes,
             .hash_fn = hash_fn,
         };
@@ -558,7 +558,7 @@ pub const ConsistentHash = struct {
         if (self.ring.items.len == 0) return &[_]Node{};
 
         const max_count = @min(count, self.ring.items.len / self.virtual_nodes);
-        var nodes = std.ArrayList(Node).init(self.allocator);
+        var nodes = std.ArrayList(Node){};
         var seen_ids = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_ids.deinit();
 
@@ -721,7 +721,7 @@ pub const ShardManager = struct {
 
     pub fn getReplicas(self: *ShardManager, key: []const u8) ![]Shard {
         const nodes = try self.consistent_hash.getNodes(key, self.replication_factor);
-        var replicas = std.ArrayList(Shard).init(self.allocator);
+        var replicas = std.ArrayList(Shard){};
 
         for (nodes) |node| {
             var iter = self.shards.iterator();
@@ -839,9 +839,9 @@ pub const ShardManager = struct {
         const threshold = avg_size / 2; // 50% deviation threshold
 
         // Find shards that need splitting or merging
-        var to_split = std.ArrayList(u64).init(self.allocator);
+        var to_split = std.ArrayList(u64){};
         defer to_split.deinit();
-        var to_merge = std.ArrayList(u64).init(self.allocator);
+        var to_merge = std.ArrayList(u64){};
         defer to_merge.deinit();
 
         iter = self.shards.iterator();

@@ -127,7 +127,7 @@ pub const Aggregator = struct {
         pub fn init(allocator: Allocator, function: AggregateFunction) AggregateState {
             return .{
                 .function = function,
-                .values = std.ArrayList(Value).init(allocator),
+                .values = std.ArrayList(Value){},
             };
         }
 
@@ -458,7 +458,7 @@ pub const GraphMutator = struct {
         // Update index
         const gop = try self.graph.node_index.getOrPut(create.labels);
         if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList(u64).init(self.allocator);
+            gop.value_ptr.* = std.ArrayList(u64){};
         }
         try gop.value_ptr.append(id);
     }
@@ -482,7 +482,7 @@ pub const GraphMutator = struct {
         // Update index
         const gop = try self.graph.edge_index.getOrPut(source_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList(u64).init(self.allocator);
+            gop.value_ptr.* = std.ArrayList(u64){};
         }
         try gop.value_ptr.append(id);
     }

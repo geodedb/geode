@@ -76,7 +76,7 @@ fn scaleAlign(coeff: i128, from: u8, to: u8) !i128 {
 
 pub fn run(ally: std.mem.Allocator) !void {
     // Build a small set of decimals with varying scales and coefficients.
-    var vals = std.ArrayList(geode.eval.Value).init(ally);
+    var vals = std.ArrayList(geode.eval.Value){};
     defer vals.deinit();
     var i: usize = 0;
     while (i < 128) : (i += 1) {

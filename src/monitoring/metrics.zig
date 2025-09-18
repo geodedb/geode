@@ -111,7 +111,7 @@ pub const MetricsCollector = struct {
         pub fn init(allocator: Allocator) Histogram {
             return .{
                 .allocator = allocator,
-                .samples = std.ArrayList(f64).init(allocator),
+                .samples = std.ArrayList(f64){},
                 .mutex = .{},
                 .count = 0,
                 .sum = 0,
@@ -473,7 +473,7 @@ pub const QueryProfiler = struct {
             .start_time = std.time.nanoTimestamp(),
             .end_time = null,
             .plan = plan,
-            .operators = std.ArrayList(Profile.OperatorProfile).init(self.allocator),
+            .operators = std.ArrayList(Profile.OperatorProfile){},
             .memory_usage = .{
                 .peak_usage = 0,
                 .allocations = 0,

@@ -11,7 +11,7 @@ test "parse integers" {
     const input = "123 67 89,99";
     const ally = std.testing.allocator;
 
-    var list = std.ArrayList(u32).init(ally);
+    var list = std.ArrayList(u32){};
     // Ensure the list is freed at scope exit.
     // Try commenting out this line!
     defer list.deinit();

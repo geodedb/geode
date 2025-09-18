@@ -62,7 +62,7 @@ pub const Tracer = struct {
     pub fn init(allocator: Allocator, service_name: []const u8) Tracer {
         return .{
             .allocator = allocator,
-            .spans = std.ArrayList(Span).init(allocator),
+            .spans = std.ArrayList(Span){},
             .active_span = null,
             .service_name = service_name,
         };
@@ -102,8 +102,8 @@ pub const Tracer = struct {
             .end_time = null,
             .status = .unset,
             .attributes = std.StringHashMap(Attribute).init(self.allocator),
-            .events = std.ArrayList(Event).init(self.allocator),
-            .links = std.ArrayList(Link).init(self.allocator),
+            .events = std.ArrayList(Event){},
+            .links = std.ArrayList(Link){},
         };
         
         try self.spans.append(span);

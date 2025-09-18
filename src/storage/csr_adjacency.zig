@@ -34,8 +34,8 @@ pub const CSRAdjacency = struct {
         return .{
             .allocator = allocator,
             .page_manager = page_manager,
-            .offsets = std.ArrayList(u64).init(allocator),
-            .neighbors = std.ArrayList(EdgeEntry).init(allocator),
+            .offsets = std.ArrayList(u64){},
+            .neighbors = std.ArrayList(EdgeEntry){},
             .node_count = 0,
             .edge_count = 0,
             .metadata_page_id = null,
@@ -236,7 +236,7 @@ pub const CSRAdjacency = struct {
         // In a production system, you'd want incremental updates
 
         // Collect existing edges
-        var edges = std.ArrayList(struct { from: u64, to: u64, edge_id: u64, edge_type: u32 }).init(self.allocator);
+        var edges = std.ArrayList(struct { from: u64, to: u64, edge_id: u64, edge_type: u32 }){};
         defer edges.deinit();
 
         for (0..self.node_count) |node_id| {

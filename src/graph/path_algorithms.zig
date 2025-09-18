@@ -64,7 +64,7 @@ pub const PathAlgorithms = struct {
 
             if (item.node == end) {
                 // Reconstruct path
-                var path_nodes = std.ArrayList(u64).init(self.allocator);
+                var path_nodes = std.ArrayList(u64){};
                 var current = end;
                 while (current != start) {
                     try path_nodes.append(current);
@@ -167,7 +167,7 @@ pub const PathAlgorithms = struct {
         }
 
         // Convert to results
-        var results = std.ArrayList(CentralityResult).init(self.allocator);
+        var results = std.ArrayList(CentralityResult){};
         var it = ranks.iterator();
         while (it.next()) |entry| {
             try results.append(.{

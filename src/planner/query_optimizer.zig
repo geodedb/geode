@@ -221,7 +221,7 @@ pub const QueryOptimizer = struct {
 
     // Generate possible plans for a query
     fn generatePlans(self: *QueryOptimizer, query: ast.Query) ![]Plan {
-        var plans = std.ArrayList(Plan).init(self.allocator);
+        var plans = std.ArrayList(Plan){};
 
         // Generate access paths
         const access_paths = try self.generateAccessPaths(query);
@@ -243,7 +243,7 @@ pub const QueryOptimizer = struct {
     // Generate access paths (sequential scan, index scan, etc.)
     fn generateAccessPaths(self: *QueryOptimizer, query: ast.Query) ![]AccessPath {
         _ = query;
-        var paths = std.ArrayList(AccessPath).init(self.allocator);
+        var paths = std.ArrayList(AccessPath){};
 
         // For each table in the query
         var table_it = self.statistics.table_stats.iterator();
@@ -289,7 +289,7 @@ pub const QueryOptimizer = struct {
     // Generate join orders using dynamic programming
     fn generateJoinOrders(self: *QueryOptimizer, query: ast.Query) ![]JoinOrder {
         _ = query;
-        var orders = std.ArrayList(JoinOrder).init(self.allocator);
+        var orders = std.ArrayList(JoinOrder){};
 
         // For now, return a simple left-deep join order
         // TODO: Implement full dynamic programming approach

@@ -504,7 +504,7 @@ pub const Wal = struct {
         // txn table
         var txn_map = std.AutoHashMap(u64, struct { committed: bool, last_lsn: u64 }).init(self.ally);
         defer txn_map.deinit();
-        var records = std.ArrayList(Record).init(self.ally);
+        var records = std.ArrayList(Record){};
         defer records.deinit();
         var buf: [HeaderLen]u8 = undefined;
         // Find last checkpoint offset (linear scan; future: index).
@@ -553,7 +553,7 @@ pub const Wal = struct {
             var verify_header: [HeaderLen]u8 = undefined;
             @memcpy(verify_header[0..HeaderLen], buf[0..HeaderLen]);
             std.mem.writeInt(u32, verify_header[29..33], 0, .little);
-            var cs_buf2 = std.ArrayList(u8).init(self.ally);
+            var cs_buf2 = std.ArrayList(u8){};
             defer cs_buf2.deinit();
             cs_buf2.appendSlice(verify_header[0..HeaderLen]) catch {};
             cs_buf2.appendSlice(payload_slice) catch {};

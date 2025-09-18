@@ -144,13 +144,13 @@ pub const ConstraintManager = struct {
     pub fn init(allocator: Allocator) ConstraintManager {
         return .{
             .allocator = allocator,
-            .node_constraints = std.ArrayList(NodeConstraint).init(allocator),
-            .relationship_constraints = std.ArrayList(RelationshipConstraint).init(allocator),
+            .node_constraints = std.ArrayList(NodeConstraint){},
+            .relationship_constraints = std.ArrayList(RelationshipConstraint){},
             .property_constraints = std.StringHashMap(PropertyConstraint).init(allocator),
-            .unique_constraints = std.ArrayList(UniqueConstraint).init(allocator),
-            .existence_constraints = std.ArrayList(ExistenceConstraint).init(allocator),
-            .key_constraints = std.ArrayList(KeyConstraint).init(allocator),
-            .cardinality_constraints = std.ArrayList(CardinalityConstraint).init(allocator),
+            .unique_constraints = std.ArrayList(UniqueConstraint){},
+            .existence_constraints = std.ArrayList(ExistenceConstraint){},
+            .key_constraints = std.ArrayList(KeyConstraint){},
+            .cardinality_constraints = std.ArrayList(CardinalityConstraint){},
         };
     }
     
@@ -207,7 +207,7 @@ pub const ConstraintManager = struct {
         label: []const u8,
         properties: std.StringHashMap(Value),
     ) ![]ValidationError {
-        var errors = std.ArrayList(ValidationError).init(self.allocator);
+        var errors = std.ArrayList(ValidationError){};
         
         // Check node constraints
         for (self.node_constraints.items) |constraint| {

@@ -59,7 +59,7 @@ pub const PartitionAwarePlanner = struct {
         defer self.allocator.free(accessed_keys);
 
         // Determine which partitions are needed
-        var partitions = std.ArrayList(Partition).init(self.allocator);
+        var partitions = std.ArrayList(Partition){};
 
         for (accessed_keys) |key| {
             if (self.shard_manager.getShard(key)) |shard| {
@@ -89,7 +89,7 @@ pub const PartitionAwarePlanner = struct {
 
     fn extractAccessedKeys(self: *PartitionAwarePlanner, query: []const u8) ![][]const u8 {
         // Simplified: extract node IDs from query
-        var keys = std.ArrayList([]const u8).init(self.allocator);
+        var keys = std.ArrayList([]const u8){};
 
         // In real implementation, parse query AST
         if (std.mem.indexOf(u8, query, "MATCH") != null) {
@@ -157,7 +157,7 @@ pub const DistributedCoordinator = struct {
             .config = config,
             .raft_node = null,
             .twophase_coordinator = null,
-            .shard_map = std.ArrayList(ShardInfo).init(allocator),
+            .shard_map = std.ArrayList(ShardInfo){},
             .send_raft_message_callback = null,
             .send_2pc_message_callback = null,
         };

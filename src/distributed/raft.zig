@@ -103,7 +103,7 @@ pub const RaftNode = struct {
             .config = config,
             .current_term = 0,
             .voted_for = null,
-            .log = std.ArrayList(LogEntry).init(allocator),
+            .log = std.ArrayList(LogEntry){},
             .state = .follower,
             .commit_index = 0,
             .last_applied = 0,
@@ -323,7 +323,7 @@ pub const RaftNode = struct {
                     0;
 
                 // Get entries to send
-                var entries = std.ArrayList(LogEntry).init(self.allocator);
+                var entries = std.ArrayList(LogEntry){};
                 defer entries.deinit();
 
                 if (next_idx <= self.log.items.len) {
@@ -563,7 +563,7 @@ pub const RaftNode = struct {
 
     fn updateCommitIndex(self: *RaftNode) !void {
         // Find the highest index that is replicated on a majority of servers
-        var indices = std.ArrayList(u64).init(self.allocator);
+        var indices = std.ArrayList(u64){};
         defer indices.deinit();
 
         // Add leader's match index

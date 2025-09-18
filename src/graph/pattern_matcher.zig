@@ -73,7 +73,7 @@ pub const PatternMatcher = struct {
     }
     
     pub fn match(self: *PatternMatcher, pattern: Pattern) ![]MatchResult {
-        var results = std.ArrayList(MatchResult).init(self.allocator);
+        var results = std.ArrayList(MatchResult){};
         defer results.deinit();
         
         // Start with node patterns
@@ -110,7 +110,7 @@ pub const PatternMatcher = struct {
         
         // Apply WHERE clause filtering
         if (pattern.where_clause) |where| {
-            var filtered = std.ArrayList(MatchResult).init(self.allocator);
+            var filtered = std.ArrayList(MatchResult){};
             for (results.items) |result| {
                 if (try self.evaluateWhere(result, where)) {
                     try filtered.append(result);
@@ -124,7 +124,7 @@ pub const PatternMatcher = struct {
     }
     
     fn findNodes(self: *PatternMatcher, pattern: NodePattern) ![]Node {
-        var nodes = std.ArrayList(Node).init(self.allocator);
+        var nodes = std.ArrayList(Node){};
         
         // Query graph for nodes matching labels and properties
         const all_nodes = try self.graph.getNodesByLabel(pattern.labels);
@@ -152,7 +152,7 @@ pub const PatternMatcher = struct {
     }
     
     fn findEdges(self: *PatternMatcher, source: Node, pattern: EdgePattern) ![]Edge {
-        var edges = std.ArrayList(Edge).init(self.allocator);
+        var edges = std.ArrayList(Edge){};
         
         // Get edges from source node
         const all_edges = try self.graph.getEdgesFrom(source.id);

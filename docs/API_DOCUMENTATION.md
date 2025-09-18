@@ -9,6 +9,13 @@
 6. [Indexing](#indexing)
 7. [Monitoring & Metrics](#monitoring--metrics)
 8. [Distributed Operations](#distributed-operations)
+9. [Advanced Features](#advanced-features)
+   - [Multi-Graph Support](#multi-graph-support)
+   - [Machine Learning](#machine-learning)
+   - [Change Data Capture](#change-data-capture)
+   - [Time-Travel Queries](#time-travel-queries)
+   - [GPU Acceleration](#gpu-acceleration)
+   - [Encryption](#encryption)
 
 ## Overview
 
@@ -20,6 +27,11 @@ Geode is a high-performance, distributed graph database that implements the ISO/
 - **Distributed**: Raft consensus and 2PC for distributed transactions
 - **High Performance**: QUIC transport, B-tree indexes, cost-based optimizer
 - **Monitoring**: Built-in metrics, query profiling, and tracing
+- **Multi-Graph**: Isolated graph namespaces for multi-tenancy
+- **Machine Learning**: Built-in graph algorithms and embeddings
+- **Time-Travel**: Query historical data with AS OF syntax
+- **Encryption**: AES-256-GCM at rest with key rotation
+- **GPU Acceleration**: CUDA/OpenCL support for graph algorithms
 
 ## Connection Management
 
@@ -736,3 +748,316 @@ WHERE account.id = $accountId
     transfer.timestamp > timestamp() - duration('PT1H'))
 RETURN path, destination
 ```
+
+## Advanced Features
+
+### Multi-Graph Support
+
+#### Create and Manage Graphs
+```gql
+-- Create a new graph
+CREATE GRAPH social_network;
+
+-- Create graph with specific isolation level
+CREATE GRAPH analytics WITH ISOLATION LEVEL SERIALIZABLE;
+
+-- Switch to a graph
+USE GRAPH social_network;
+
+-- List all graphs
+SHOW GRAPHS;
+
+-- Drop a graph
+DROP GRAPH temp_graph CASCADE;
+```
+
+#### Connect to Specific Graph
+```go
+// Connect to specific graph via DSN
+client, err := gql.Connect("quic://localhost:7567/social_network")
+
+// Or switch graph after connection
+err = client.UseGraph("analytics")
+```
+
+### Machine Learning
+
+#### Node Embeddings with Node2Vec
+```gql
+-- Generate node embeddings
+CALL gds.node2vec.stream({
+  dimensions: 128,
+  walkLength: 80,
+  numWalks: 10,
+  p: 1.0,
+  q: 1.0
+}) YIELD nodeId, embedding
+RETURN nodeId, embedding
+LIMIT 10;
+```
+
+#### Link Prediction
+```gql
+-- Predict likelihood of connection
+CALL gds.linkPrediction.mutate(
+  sourceNodeId: 100,
+  targetNodeId: 200,
+  method: 'cosine'
+) YIELD score
+RETURN score;
+```
+
+#### Community Detection
+```gql
+-- Detect communities using Louvain
+CALL gds.louvain.stream({
+  resolution: 1.0
+}) YIELD nodeId, communityId
+RETURN communityId, collect(nodeId) AS members
+ORDER BY size(members) DESC;
+```
+
+#### PageRank
+```gql
+-- Calculate PageRank
+CALL gds.pagerank.stream({
+  dampingFactor: 0.85,
+  iterations: 20
+}) YIELD nodeId, score
+RETURN nodeId, score
+ORDER BY score DESC
+LIMIT 10;
+```
+
+### Change Data Capture (CDC)
+
+#### Start CDC
+```gql
+-- Enable change data capture
+CALL db.cdc.start();
+
+-- Check CDC status
+CALL db.cdc.status() YIELD isRunning, eventsCaptured, subscribers;
+
+-- Stop CDC
+CALL db.cdc.stop();
+```
+
+#### Subscribe to Changes
+```go
+// Subscribe to change events
+err := client.CDCSubscribe(func(event gql.ChangeEvent) error {
+    fmt.Printf("Change: %s on %s %d\n", 
+        event.Type, event.ObjectType, event.ObjectID)
+    return nil
+})
+
+// Filter specific changes
+err = client.CDCSubscribeFiltered(
+    "object_type = 'node' AND graph_id = 1",
+    handler,
+)
+```
+
+#### Configure CDC Sinks
+```gql
+-- Configure Kafka sink
+CALL db.cdc.configureSink({
+  type: 'kafka',
+  brokers: 'localhost:9092',
+  topic: 'graph_changes',
+  compression: 'snappy'
+});
+
+-- Configure webhook sink
+CALL db.cdc.configureSink({
+  type: 'webhook',
+  url: 'https://api.example.com/changes',
+  headers: {Authorization: 'Bearer token'}
+});
+```
+
+### Time-Travel Queries
+
+#### Query Historical Data
+```gql
+-- Query as of specific timestamp
+MATCH (n:Person)
+AS OF TIMESTAMP '2024-01-01T00:00:00Z'
+WHERE n.name = 'Alice'
+RETURN n;
+
+-- Query as of transaction ID
+MATCH (n:Product)
+AS OF TRANSACTION 12345
+RETURN n.price;
+
+-- Query as of system time (milliseconds ago)
+MATCH (n:Order)
+AS OF SYSTEM TIME 3600000  -- 1 hour ago
+RETURN count(n);
+```
+
+#### Version History
+```gql
+-- Get all versions of a node
+MATCH (n:Document {id: 100})
+VERSIONS BETWEEN '2024-01-01' AND '2024-12-31'
+RETURN n.version, n.validFrom, n.validTo, n.content;
+
+-- Find when a property changed
+MATCH (n:Price {productId: 'SKU123'})
+VERSIONS ALL
+WHERE n.value <> n.previousValue
+RETURN n.validFrom, n.value, n.previousValue;
+```
+
+#### Configure Retention
+```gql
+-- Set retention policy
+ALTER DATABASE SET temporal.retention = '90 DAYS';
+
+-- Manual vacuum
+CALL db.temporal.vacuum();
+```
+
+### GPU Acceleration
+
+#### Enable GPU
+```gql
+-- Check GPU availability
+CALL db.gpu.status() YIELD backend, devices;
+
+-- Enable GPU acceleration
+SET gpu.enabled = true;
+SET gpu.backend = 'cuda';
+SET gpu.device = 0;
+```
+
+#### GPU-Accelerated Algorithms
+```gql
+-- BFS with GPU
+CALL gds.bfs.gpu({
+  sourceNode: 1,
+  targetNode: 1000
+}) YIELD path, distance;
+
+-- PageRank with GPU (10x+ faster)
+CALL gds.pagerank.gpu({
+  iterations: 100
+}) YIELD nodeId, rank;
+
+-- Shortest path with GPU
+CALL gds.shortestPath.gpu({
+  sourceNode: 1,
+  targetNode: 100,
+  algorithm: 'dijkstra'
+}) YIELD path, totalCost;
+```
+
+#### Benchmark GPU Performance
+```gql
+-- Compare CPU vs GPU performance
+CALL db.gpu.benchmark('pagerank') 
+YIELD algorithm, cpuTimeMs, gpuTimeMs, speedup;
+```
+
+### Encryption
+
+#### Configure Encryption
+```bash
+# Generate new encryption key
+./key_rotate generate --output master.key
+
+# Enable encryption at startup
+export GEODE_ENCRYPTION_ENABLED=true
+export GEODE_ENCRYPTION_KEY_FILE=/path/to/master.key
+./geoded --data-dir /encrypted/data
+```
+
+#### Key Rotation
+```bash
+# Rotate encryption keys online
+./key_rotate rotate \
+  --input /data/geode.db \
+  --output /data/geode.rotated.db \
+  --old-key /keys/old.key \
+  --new-key /keys/new.key
+
+# Verify encryption
+./key_rotate verify --file /data/geode.db --key /keys/master.key
+```
+
+#### KMS Integration
+```gql
+-- Configure AWS KMS
+ALTER DATABASE SET encryption.kms = 'aws';
+ALTER DATABASE SET encryption.kms.region = 'us-east-1';
+ALTER DATABASE SET encryption.kms.key_id = 'arn:aws:kms:...';
+
+-- Rotate keys via KMS
+CALL db.encryption.rotateKeys();
+```
+
+### Streaming Queries
+
+#### Window Functions
+```gql
+-- Tumbling window aggregation
+CREATE STREAM node_activity AS
+SELECT 
+  window_start,
+  window_end,
+  count(*) as events,
+  avg(value) as avg_value
+FROM changes
+WINDOW TUMBLING (SIZE '5 MINUTES')
+GROUP BY window_start, window_end;
+
+-- Sliding window
+CREATE STREAM moving_average AS
+SELECT 
+  timestamp,
+  avg(value) OVER (
+    ORDER BY timestamp 
+    RANGE BETWEEN INTERVAL '1 HOUR' PRECEDING AND CURRENT ROW
+  ) as hourly_avg
+FROM metrics;
+```
+
+#### Real-time Alerts
+```gql
+-- Create alert on pattern
+CREATE ALERT high_activity
+WHEN (
+  SELECT count(*) 
+  FROM changes 
+  WINDOW TUMBLING (SIZE '1 MINUTE')
+) > 1000
+CALL webhook.notify('https://alerts.example.com/high-activity');
+```
+
+## Performance Considerations
+
+### GPU Acceleration Guidelines
+- Use GPU for graphs with >1M edges
+- Batch operations for better GPU utilization
+- CSR format automatically used for GPU algorithms
+- Memory limit: 8GB per GPU device by default
+
+### Encryption Overhead
+- ~5-10% performance impact with AES-256-GCM
+- Key rotation can be performed online
+- Use KMS for production key management
+
+### Multi-Graph Best Practices
+- Limit to 100 graphs per instance
+- Use connection pooling per graph
+- Consider sharding large graphs
+- Monitor per-graph resource usage
+
+### CDC Performance
+- Event queue limited to 1M events by default
+- Retention period affects memory usage
+- Use filtering to reduce event volume
+- Batch events for sink efficiency

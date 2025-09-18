@@ -129,7 +129,7 @@ pub const FullTextIndex = struct {
         }
 
         // Convert to results
-        var results = std.ArrayList(SearchResult).init(self.allocator);
+        var results = std.ArrayList(SearchResult){};
         var score_it = scores.iterator();
         while (score_it.next()) |entry| {
             try results.append(.{
@@ -153,7 +153,7 @@ pub const FullTextIndex = struct {
 
     // Helper functions
     fn tokenize(self: *FullTextIndex, text: []const u8) ![]Token {
-        var tokens = std.ArrayList(Token).init(self.allocator);
+        var tokens = std.ArrayList(Token){};
         var i: usize = 0;
 
         while (i < text.len) {

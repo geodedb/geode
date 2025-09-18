@@ -963,8 +963,8 @@ pub const HashAggregator = struct {
         }
     }
 
-    fn serializeKey(self: *HashAggregator, key_values: []const BindingValue) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.allocator);
+    fn serializeKey(_: *HashAggregator, key_values: []const BindingValue) ![]const u8 {
+        var buf = std.ArrayList(u8){};
         defer buf.deinit();
 
         for (key_values, 0..) |val, i| {
@@ -1058,7 +1058,7 @@ pub const HashAggregator = struct {
     }
 
     pub fn getResults(self: *HashAggregator) ![]const []const BindingValue {
-        var results = std.ArrayList([]const BindingValue).init(self.allocator);
+        var results = std.ArrayList([]const BindingValue){};
         defer results.deinit();
 
         var iter = self.groups.iterator();

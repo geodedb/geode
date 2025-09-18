@@ -59,8 +59,8 @@ pub const PathExpand = struct {
         pub fn init(allocator: std.mem.Allocator) BFSState {
             return .{
                 .visited = std.AutoHashMap(u64, void).init(allocator),
-                .queue = std.ArrayList(struct { node_id: u64, path: []const u64 }).init(allocator),
-                .results = std.ArrayList(PathResult).init(allocator),
+                .queue = std.ArrayList(struct { node_id: u64, path: []const u64 }){},
+                .results = std.ArrayList(PathResult){},
                 .allocator = allocator,
             };
         }

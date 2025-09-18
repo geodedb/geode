@@ -225,6 +225,73 @@ pub fn build(b: *std.Build) void {
         .name = "key_rotate",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/key_rotate.zig"), .target = target, .optimize = optimize }),
     });
+    const crypto_mod = b.createModule(.{ .root_source_file = b.path("src/storage/crypto_simple.zig"), .target = target, .optimize = optimize });
+    key_rotate_exe.root_module.addImport("crypto", crypto_mod);
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
+    
+    // Add new test modules
+    const tde_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("tests/e2e_tde_encryption.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&tde_test.step);
+    
+    const multi_graph_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("tests/e2e_multi_graph.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&multi_graph_test.step);
+    
+    // Add unit tests for new modules
+    const crypto_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/storage/crypto.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&crypto_test.step);
+    
+    const ml_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/ml/integration.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&ml_test.step);
+    
+    const streaming_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/streaming/cdc.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&streaming_test.step);
+    
+    const temporal_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/temporal/time_travel.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&temporal_test.step);
+    
+    const gpu_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/gpu/acceleration.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    test_step.dependOn(&gpu_test.step);
 }

@@ -462,7 +462,7 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
         }
 
         pub fn range(self: *Self, min_key: Key, max_key: Key) ![]struct { key: Key, value: Value } {
-            var results = std.ArrayList(struct { key: Key, value: Value }).init(self.allocator);
+            var results = std.ArrayList(struct { key: Key, value: Value }){};
             if (self.root) |root| {
                 try self.rangeHelper(root, min_key, max_key, &results);
             }

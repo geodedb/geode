@@ -234,7 +234,7 @@ pub const WalCompactor = struct {
     }
 
     fn getSegments(self: *WalCompactor) ![]WalSegment {
-        var segments = std.ArrayList(WalSegment).init(self.allocator);
+        var segments = std.ArrayList(WalSegment){};
         defer segments.deinit();
 
         var dir = try std.fs.openDirAbsolute(self.wal_dir, .{ .iterate = true });

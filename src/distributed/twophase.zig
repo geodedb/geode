@@ -109,13 +109,13 @@ pub const Transaction = struct {
         return .{
             .id = try allocator.dupe(u8, id),
             .coordinator_id = try allocator.dupe(u8, coordinator_id),
-            .participants = std.ArrayList(Participant).init(allocator),
+            .participants = std.ArrayList(Participant){},
             .state = .active,
             .start_time = std.time.timestamp(),
             .timeout_ms = 30000, // 30 seconds default
-            .operations = std.ArrayList(Operation).init(allocator),
+            .operations = std.ArrayList(Operation){},
             .isolation_level = .read_committed,
-            .savepoints = std.ArrayList(Savepoint).init(allocator),
+            .savepoints = std.ArrayList(Savepoint){},
         };
     }
 
@@ -140,8 +140,8 @@ pub const Transaction = struct {
             .state = .active,
             .last_message_time = std.time.timestamp(),
             .prepare_response = null,
-            .undo_log = std.ArrayList(UndoEntry).init(allocator),
-            .redo_log = std.ArrayList(RedoEntry).init(allocator),
+            .undo_log = std.ArrayList(UndoEntry){},
+            .redo_log = std.ArrayList(RedoEntry){},
         };
         try self.participants.append(participant);
     }
@@ -419,7 +419,7 @@ pub const ParticipantNode = struct {
                 result.value_ptr.* = .{
                     .holder = transaction_id,
                     .lock_type = lock_type,
-                    .waiters = std.ArrayList([]const u8).init(self.locks.allocator),
+                    .waiters = std.ArrayList([]const u8){},
                 };
                 return true;
             }
@@ -478,10 +478,10 @@ pub const ParticipantNode = struct {
             .id = transaction_id,
             .coordinator_id = "", // Will be set by coordinator
             .state = .preparing,
-            .operations = std.ArrayList(Operation).init(self.allocator),
-            .undo_log = std.ArrayList(UndoEntry).init(self.allocator),
-            .redo_log = std.ArrayList(RedoEntry).init(self.allocator),
-            .locks = std.ArrayList(Lock).init(self.allocator),
+            .operations = std.ArrayList(Operation){},
+            .undo_log = std.ArrayList(UndoEntry){},
+            .redo_log = std.ArrayList(RedoEntry){},
+            .locks = std.ArrayList(Lock){},
         };
 
         // Try to acquire locks for all operations

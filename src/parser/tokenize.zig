@@ -43,7 +43,7 @@ const TokenKind = enum {
 };
 
 pub fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
-    var tokens = std.ArrayList(Token).init(allocator);
+    var tokens = std.ArrayList(Token){};
     var it = std.mem.tokenizeAny(u8, input, " \n\r\t{}[]():,=\"", .{});
     var line: usize = 1;
     var column: usize = 1;

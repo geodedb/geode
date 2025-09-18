@@ -115,7 +115,7 @@ pub const IndexManager = struct {
             .allocator = allocator,
             .property_indexes = std.StringHashMap(PropertyIndex).init(allocator),
             .label_indexes = std.StringHashMap(LabelIndex).init(allocator),
-            .composite_indexes = std.ArrayList(CompositeIndex).init(allocator),
+            .composite_indexes = std.ArrayList(CompositeIndex){},
             .fulltext_indexes = std.StringHashMap(fulltext.FullTextIndex).init(allocator),
             .statistics = .{
                 .total_indexes = 0,
@@ -218,7 +218,7 @@ pub const IndexManager = struct {
             .name = try self.allocator.dupe(u8, name),
             .label = try self.allocator.dupe(u8, label),
             .type = if (use_bitmap) .bitmap else .hash,
-            .node_ids = std.ArrayList(u64).init(self.allocator),
+            .node_ids = std.ArrayList(u64){},
             .bitmap = if (use_bitmap) blk: {
                 const bm = BitMap{
                     .bits = try self.allocator.alloc(u64, 1024),
@@ -467,7 +467,7 @@ pub const IndexManager = struct {
     fn createHashIndex(self: *IndexManager, bucket_count: usize) !HashIndex {
         var buckets = try self.allocator.alloc(HashIndex.Bucket, bucket_count);
         for (buckets) |*bucket| {
-            bucket.entries = std.ArrayList(HashIndex.Entry).init(self.allocator);
+            bucket.entries = std.ArrayList(HashIndex.Entry){};
         }
 
         return HashIndex{

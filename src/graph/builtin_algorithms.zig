@@ -36,7 +36,7 @@ pub const BuiltinAlgorithms = struct {
             edge: ?u64,
         };
 
-        var queue = std.ArrayList(QueueItem).init(self.allocator);
+        var queue = std.ArrayList(QueueItem){};
         defer queue.deinit();
 
         const QueueItem = struct {
@@ -91,7 +91,7 @@ pub const BuiltinAlgorithms = struct {
         relationship_types: ?[]const []const u8,
         direction: graph_exec.Direction,
     ) ![]graph_exec.Path {
-        var paths = std.ArrayList(graph_exec.Path).init(self.allocator);
+        var paths = std.ArrayList(graph_exec.Path){};
 
         // Multi-source BFS to find all shortest paths
         var visited = std.AutoHashMap(u64, u32).init(self.allocator);
@@ -111,7 +111,7 @@ pub const BuiltinAlgorithms = struct {
             edge: ?u64,
         };
 
-        var queue = std.ArrayList(QueueItem).init(self.allocator);
+        var queue = std.ArrayList(QueueItem){};
         defer queue.deinit();
 
         const QueueItem = struct {
@@ -161,7 +161,7 @@ pub const BuiltinAlgorithms = struct {
                     // Add parent
                     const result = try parents.getOrPut(neighbor.node);
                     if (!result.found_existing) {
-                        result.value_ptr.* = std.ArrayList(PathInfo).init(self.allocator);
+                        result.value_ptr.* = std.ArrayList(PathInfo){};
                     }
                     try result.value_ptr.append(.{
                         .node = current.node,
@@ -188,7 +188,7 @@ pub const BuiltinAlgorithms = struct {
         const target_nodes = nodes orelse try self.graph.getAllNodes();
         defer if (nodes == null) self.allocator.free(target_nodes);
 
-        var results = std.ArrayList(CentralityResult).init(self.allocator);
+        var results = std.ArrayList(CentralityResult){};
 
         for (target_nodes) |node| {
             const degree = switch (direction) {
@@ -219,7 +219,7 @@ pub const BuiltinAlgorithms = struct {
         const target_nodes = nodes orelse try self.graph.getAllNodes();
         defer if (nodes == null) self.allocator.free(target_nodes);
 
-        var results = std.ArrayList(CentralityResult).init(self.allocator);
+        var results = std.ArrayList(CentralityResult){};
 
         for (target_nodes) |node| {
             var total_distance: f64 = 0;
@@ -329,7 +329,7 @@ pub const BuiltinAlgorithms = struct {
         }
 
         // Convert to results
-        var results = std.ArrayList(CentralityResult).init(self.allocator);
+        var results = std.ArrayList(CentralityResult){};
         var it = eigenvector.iterator();
         while (it.next()) |entry| {
             try results.append(.{
@@ -415,7 +415,7 @@ pub const BuiltinAlgorithms = struct {
         while (it.next()) |entry| {
             const result = try community_nodes.getOrPut(entry.value_ptr.*);
             if (!result.found_existing) {
-                result.value_ptr.* = std.ArrayList(u64).init(self.allocator);
+                result.value_ptr.* = std.ArrayList(u64){};
             }
             try result.value_ptr.append(entry.key_ptr.*);
         }
@@ -425,7 +425,7 @@ pub const BuiltinAlgorithms = struct {
         const m = @as(f64, @floatFromInt(total_edges));
 
         // Convert to Community structs
-        var results = std.ArrayList(Community).init(self.allocator);
+        var results = std.ArrayList(Community){};
         var comm_it = community_nodes.iterator();
         var comm_id: u64 = 0;
 
@@ -492,7 +492,7 @@ pub const BuiltinAlgorithms = struct {
     ) ![]Neighbor {
         _ = relationship_types; // TODO: Filter by relationship type
 
-        var neighbors = std.ArrayList(Neighbor).init(self.allocator);
+        var neighbors = std.ArrayList(Neighbor){};
 
         switch (direction) {
             .outgoing => {
@@ -533,8 +533,8 @@ pub const BuiltinAlgorithms = struct {
         end: u64,
         parent: *std.AutoHashMap(u64, PathInfo),
     ) !graph_exec.Path {
-        var nodes = std.ArrayList(u64).init(self.allocator);
-        var edges = std.ArrayList(u64).init(self.allocator);
+        var nodes = std.ArrayList(u64){};
+        var edges = std.ArrayList(u64){};
 
         var current = end;
         try nodes.append(current);
@@ -570,7 +570,7 @@ pub const BuiltinAlgorithms = struct {
         paths: *std.ArrayList(graph_exec.Path),
     ) !void {
         // Recursive path reconstruction for multiple parents
-        var current_path = std.ArrayList(u64).init(self.allocator);
+        var current_path = std.ArrayList(u64){};
         defer current_path.deinit();
 
         try self.reconstructAllPathsRecursive(start, end, parents, &current_path, paths);
@@ -616,7 +616,7 @@ pub const BuiltinAlgorithms = struct {
 
     fn computeDistances(self: *BuiltinAlgorithms, start: u64) !std.AutoHashMap(u64, u32) {
         var distances = std.AutoHashMap(u64, u32).init(self.allocator);
-        var queue = std.ArrayList(struct { node: u64, dist: u32 }).init(self.allocator);
+        var queue = std.ArrayList(struct { node: u64, dist: u32 }){};
         defer queue.deinit();
 
         try distances.put(start, 0);
