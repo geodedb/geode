@@ -4,6 +4,8 @@ const planner = @import("planner.zig");
 const printer = @import("gql/print.zig");
 const eval = @import("eval.zig");
 const stdx = std;
+const auth = @import("security/auth.zig");
+const rls = @import("security/rls.zig");
 /// Tuning knobs for set-ops implementations.
 pub const SetOpsTuning = struct {
     /// For UNION DISTINCT: if total input rows >= this, prefer hash-based dedup then sort; else sort+unique directly.

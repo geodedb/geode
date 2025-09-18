@@ -1,5 +1,5 @@
 const std = @import("std");
-const iface = @import("interface.zig");
+const iface = @import("interface");
 
 pub const InMemory = struct {
     allocator: std.mem.Allocator,
@@ -14,7 +14,7 @@ pub const InMemory = struct {
 
     pub fn deinit(self: *InMemory) void {
         var it = self.adj.valueIterator();
-        while (it.next()) |lst| lst.*.deinit();
+        while (it.next()) |lst| lst.*.deinit(self.allocator);
         self.adj.deinit();
         var itl = self.labels.valueIterator();
         while (itl.next()) |m| m.*.deinit();

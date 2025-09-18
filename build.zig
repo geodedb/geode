@@ -198,6 +198,40 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(doccheck_exe);
     const doccheck_run = b.addRunArtifact(doccheck_exe);
+    
+    // User authentication and management CLI
+    const user_auth_exe = b.addExecutable(.{
+        .name = "geode-auth",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/user_auth.zig"), .target = target, .optimize = optimize }),
+    });
+    
+    // Create separate modules for security components
+    const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth.zig"), .target = target, .optimize = optimize });
+    
+    const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls.zig"), .target = target, .optimize = optimize });
+    rls_mod.addImport("auth", auth_mod);
+    
+    const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
+    
+    const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
+    user_manager_mod.addImport("auth", auth_mod);
+    user_manager_mod.addImport("rls", rls_mod);
+    user_manager_mod.addImport("interface", storage_interface_mod);
+    
+    // Create a new inmemory storage module that imports interface
+    const storage_inmemory_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
+    storage_inmemory_mod.addImport("interface", storage_interface_mod);
+    
+    user_auth_exe.root_module.addImport("auth", auth_mod);
+    user_auth_exe.root_module.addImport("rls", rls_mod);
+    user_auth_exe.root_module.addImport("user_manager", user_manager_mod);
+    user_auth_exe.root_module.addImport("storage/inmemory", storage_inmemory_mod);
+    user_auth_exe.root_module.addImport("interface", storage_interface_mod);
+    
+    b.installArtifact(user_auth_exe);
+    const user_auth_run = b.addRunArtifact(user_auth_exe);
+    const user_auth_step = b.step("auth", "User authentication and management CLI");
+    user_auth_step.dependOn(&user_auth_run.step);
     const doccheck_step = b.step("doccheck", "Validate documentation conformance tables");
     doccheck_step.dependOn(&doccheck_run.step);
 
@@ -294,4 +328,34 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&gpu_test.step);
+    
+    // Security and RLS tests
+    const auth_test = b.addTest(.{
+        .root_module = auth_mod,
+    });
+    test_step.dependOn(&auth_test.step);
+    
+    const rls_test = b.addTest(.{
+        .root_module = rls_mod,
+    });
+    test_step.dependOn(&rls_test.step);
+    
+    const user_manager_test = b.addTest(.{
+        .root_module = user_manager_mod,
+    });
+    test_step.dependOn(&user_manager_test.step);
+    
+    const e2e_rls_test = b.addTest(.{
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("tests/e2e_rls_security.zig"), 
+            .target = target, 
+            .optimize = optimize 
+        }),
+    });
+    e2e_rls_test.root_module.addImport("auth", auth_mod);
+    e2e_rls_test.root_module.addImport("rls", rls_mod);
+    e2e_rls_test.root_module.addImport("user_manager", user_manager_mod);
+    e2e_rls_test.root_module.addImport("storage/inmemory", storage_inmemory_mod);
+    e2e_rls_test.root_module.addImport("interface", storage_interface_mod);
+    test_step.dependOn(&e2e_rls_test.step);
 }
