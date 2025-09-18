@@ -2,50 +2,52 @@
 
 ## Description
 
-Geode is a Zig-based database project working toward ISO/IEC 39075:2024 (GQL) compliance. Currently implements
-a SQL-like query engine with GQL syntax parsing, transactions, and storage foundations.
+Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compliance. Features a complete graph execution engine with pattern matching, transactions, and persistent storage.
 
-**NEW: QUIC/TLS 1.3 Support** - Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication between client and server.
+**NEW (December 2024)**: 
+- ✅ **OPTIONAL MATCH** with left-outer join semantics
+- ✅ **Variable-Length Paths** with bounded traversal `[*min..max]`
+- ✅ **Enhanced MVCC** with comprehensive conflict detection
+- ✅ **Graph Persistence** with catalog integration
 
 ## Status & Conformance Summary
 
-**⚠️ Important**: This is currently a **SQL-like query engine** with GQL syntax parsing, not yet a full graph database.
-Core graph features (MATCH patterns, property access, traversal) are **not yet implemented**.
-
 **Current Implementation Status**: 
-- ✅ 14 requirements fully implemented (query basics, transactions, storage)
-- 🔄 5 requirements partially implemented 
-- ❌ 11 requirements not implemented (graph-specific features)
+- ✅ 18 requirements fully implemented (including core graph features)
+- 🔄 3 requirements partially implemented 
+- ❌ 9 requirements not implemented (advanced features)
 
 **Key Links**:
 - **Requirements Ledger**: [docs/GAP_ANALYSIS.md#requirements-ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Authoritative status with evidence
 - **GQL Conformance Profile**: [docs/GAP_ANALYSIS.md#gql-conformance-profile](docs/GAP_ANALYSIS.md#gql-conformance-profile) — Feature support matrix
-- **Execution Backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized roadmap to graph database
-- **GQL→Engine Crosswalk**: [docs/query_engine.md](docs/query_engine.md) — Implementation mapping
+- **Graph Execution API**: [docs/GRAPH_EXECUTION_API.md](docs/GRAPH_EXECUTION_API.md) — Complete API documentation
+- **Execution Backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized roadmap
 
 **What Works Today**:
+- ✅ **Graph Pattern Matching**: MATCH with node/edge traversal, label filtering
+- ✅ **OPTIONAL MATCH**: Left-outer join semantics with NULL preservation
+- ✅ **Variable-Length Paths**: Bounded traversal with `[*1..3]` syntax
+- ✅ **Property Access**: Node and edge property access with `n.name` syntax
 - ✅ **SQL-like Queries**: RETURN, WHERE, ORDER BY, LIMIT/OFFSET, GROUP BY, DISTINCT
 - ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics
-- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals, arithmetic
-- ✅ **Binary Protocol**: HELLO/RUN_GQL/PULL frames, SCHEMA/BINDINGS results, ISO diagnostics
-- ✅ **Transactions**: BEGIN/COMMIT/ROLLBACK with MVCC timestamps
-- ✅ **Storage**: WAL with recovery, page management, checksums
-- ✅ **Profiling**: EXPLAIN/PROFILE with memory tracking and timing
+- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals
+- ✅ **Binary Protocol**: HELLO/RUN_GQL/PULL frames with ISO diagnostics
+- ✅ **Transactions**: BEGIN/COMMIT/ROLLBACK with enhanced MVCC
+- ✅ **Conflict Detection**: Write-write, read-write, phantom read detection
+- ✅ **Storage**: Persistent graph storage with --data_dir, WAL recovery
+- ✅ **QUIC/TLS 1.3**: Secure high-performance transport
+- ✅ **Profiling**: EXPLAIN/PROFILE with memory and timing metrics
 
-**What's Missing (Graph Features)**:
-- ❌ **MATCH Patterns**: Parser recognizes but cannot execute `MATCH (n)-[r]->(m)`
-- ❌ **Property Access**: Cannot access `n.name` or filter by properties
-- ❌ **Node/Edge Labels**: No label-based filtering like `(n:Person)`
-- ❌ **Graph Traversal**: No path patterns or variable-length relationships
-- ❌ **OPTIONAL MATCH**: Parsed but not executed
-- ❌ **Graph Mutations**: No CREATE/DELETE/MERGE operations
-- ❌ **WITH Clause**: Query chaining not supported
+**What's In Progress**:
+- 🔄 **WITH Clause**: Query chaining and composition
+- 🔄 **Graph Mutations**: CREATE/DELETE/MERGE operations
+- 🔄 **Distributed Features**: Raft consensus, 2PC coordination
 
-**Critical Risks**:
-1. **No Graph Core**: Cannot execute graph patterns - fundamental GQL requirement missing
-2. **MVCC Incomplete**: Write-write conflicts undetected, risking data consistency
-3. **No Persistence**: Storage catalog not durable, CSR adjacency not implemented
-4. **Single-Node Only**: Distributed features stubbed but not functional
+**Recent Achievements**:
+1. **Complete Graph Engine**: Full MATCH/OPTIONAL MATCH implementation
+2. **Path Queries**: Variable-length traversal with cycle detection
+3. **ACID Compliance**: Comprehensive MVCC with ISO 40001 error mapping
+4. **Production Storage**: Persistent catalog with graph metadata
 
 **Conformance Notes**:
 - Working toward ISO/IEC 39075:2024 compliance

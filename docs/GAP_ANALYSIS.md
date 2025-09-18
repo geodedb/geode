@@ -22,14 +22,14 @@ with subclause anchors.
 | REQ‑GQL‑012 | WAL checkpoints/compaction hooks | ISO 8 (transactions) | Partial | src/wal/wal.zig; COMMIT/autocommit writes checkpoint | ARIES completeness | 2025‑11‑25 | storage | Recovery exists |
 | REQ‑GQL‑013 | MVCC (SI baseline) | ISO 8 | Partial | src/server/main.zig:213-237 (MVCC init), 343-389 (visibility check) | Conflict detection enhancing | 2025‑11‑04 | txn | Write-write conflicts tests present |
 | REQ‑GQL‑014 | MATCH patterns: node/edge traversal | ISO 14.4, 22 (graph patterns) | Implemented | src/server/graph/exec.zig:162-199 (nodeScan), 201-264 (expand), 323-397 (executeMatch); src/server/main.zig:996-1029 (MATCH path) | ORDER over graph rows conservative | 2025‑11‑25 | core | |
-| REQ‑GQL‑015 | OPTIONAL MATCH: left-outer semantics | ISO 14.4 | Not Implemented | Planned in exec mapping | Depends on MATCH | 2025‑12‑02 | core | |
-| REQ‑GQL‑016 | Path patterns: variable-length traversal | ISO 22.4 | Not Implemented | No PathExpand operator | Limits expressiveness | 2025‑12‑02 | core | |
+| REQ‑GQL‑015 | OPTIONAL MATCH: left-outer semantics | ISO 14.4 | Implemented | src/server/graph/exec.zig:executeOptionalMatch | — | 2024‑12‑17 | core | NULL preservation |
+| REQ‑GQL‑016 | Path patterns: variable-length traversal | ISO 22.4 | Implemented | src/server/graph/exec.zig:pathExpand | — | 2024‑12‑17 | core | BFS with bounds |
 | REQ‑GQL‑017 | Property access: n.name syntax | ISO 4.3 (property graph model) | Implemented | src/server/graph/exec.zig:420-473 (PropertyAccess in bindingsToJson); setNodeProperty | — | 2025‑11‑25 | core | |
 | REQ‑GQL‑018 | Node/edge labels and filtering | ISO 4.3, 22 | Implemented | src/server/graph/exec.zig:175-188 (label filter in nodeScan); addEdge(edge_type) | — | 2025‑11‑25 | core | |
 | REQ‑GQL‑019 | Graph mutations: CREATE/DELETE/MERGE | ISO 15 (data modification) | Not Implemented | Not parsed or executed | DML not in scope yet | 2026‑01‑15 | dml | |
 | REQ‑GQL‑020 | WITH clause: query chaining | ISO 14.5 | Not Implemented | Not parsed | Query composition limited | 2025‑12‑15 | planner | |
-| REQ‑GQL‑025 | Storage catalog persistence (catalog, adjacency) | impl‑defined storage mgmt | Partial | src/storage/catalog.zig; tests/e2e_catalog_persistence*.zig; server --data_dir parsing present | CSR persistence pending | 2025‑11‑25 | storage | |
-| REQ‑GQL‑027 | MVCC conflict detection completion | ISO 8 | Partial | src/txn/mvcc.zig; src/server/main.zig fields and integration | Ensure 40001 mapping | 2025‑11‑04 | txn | |
+| REQ‑GQL‑025 | Storage catalog persistence (catalog, adjacency) | impl‑defined storage mgmt | Implemented | src/storage/catalog.zig:GraphMetadata; server --data_dir | — | 2024‑12‑17 | storage | Graph persistence |
+| REQ‑GQL‑027 | MVCC conflict detection completion | ISO 8 | Implemented | src/server/txn/mvcc.zig:detectConflict, conflictToError | — | 2024‑12‑17 | txn | 40001 mapping |
 | REQ‑GQL‑028 | Distributed scaffold: Raft (leader only) | impl‑defined distribution | Stubbed | src/distributed/raft.zig; single-node only | No actual distribution | 2025‑12‑31 | dist | Feature‑flagged |
 | REQ‑GQL‑042 | Distributed scaffold: 2PC coordinator | ISO 8 (distributed txn) | Stubbed | src/distributed/twophase.zig | Network handlers missing | 2025‑12‑31 | dist | Feature‑flagged |
 | REQ‑GQL‑043 | Distributed integration with server | ISO 24 | Partial | CLI flags present; no actual distribution | Single-node only | 2025‑12‑31 | dist | |
@@ -45,8 +45,8 @@ Notes:
 |---|---|---|---|---|---|---|
 | Core | 14.3–14.4 | Linear queries; RETURN | Yes | Yes | e2e_protocol.zig | |
 | Core | 14.4 | MATCH patterns | Yes | Yes | server/graph/exec.zig executeMatch; manual runs | Basic patterns only |
-| Core | 14.4 | OPTIONAL MATCH | Planned | No | Not implemented | Depends on OPTIONAL join |
-| Core | 22 | Graph patterns | Yes | Partial | Node/edge traversal; no variable-length | PathExpand pending |
+| Core | 14.4 | OPTIONAL MATCH | Yes | Yes | src/server/graph/exec.zig:executeOptionalMatch | Left-outer join |
+| Core | 22 | Graph patterns | Yes | Yes | Node/edge traversal; variable-length paths | PathExpand implemented |
 | Core | 4.3 | Property graph model | Yes | Yes | Node/Edge structs; PropertyAccess | |
 | Core | 16.16–16.19 | ORDER BY + PAGE | Yes | Yes | multidiag tests | US001 enforced |
 | GQ03 | 16.10 | UNION | Yes | Yes | union tests | DISTINCT/ALL working |

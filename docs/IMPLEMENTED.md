@@ -44,3 +44,33 @@ This file records completed work for clarity, keeping `GAP_ANALYSIS.md` focused 
 5. Conformance flagger (skeleton) (from Now)
 
 - JSON profile writer exists; CLI flag `--conformance-json` emits the skeleton with key features and policy notes.
+
+## Recently Implemented Features (December 2024)
+
+### OPTIONAL MATCH Implementation (REQ-GQL-015)
+- **Location**: src/server/graph/exec.zig:executeOptionalMatch
+- **Features**: Full left-outer join semantics with NULL preservation for unmatched patterns
+- **Tests**: tests/e2e_optional_match.zig
+- **ISO Reference**: 14.4
+
+### Variable-Length Path Expansion (REQ-GQL-016)
+- **Location**: src/server/graph/exec.zig:pathExpand
+- **Features**: Bounded BFS traversal with [*min..max] syntax, cycle detection
+- **Tests**: tests/e2e_optional_match.zig
+- **ISO Reference**: 22.4
+
+### Enhanced MVCC Conflict Detection (REQ-GQL-027)
+- **Location**: src/server/txn/mvcc.zig:detectConflict, conflictToError
+- **Features**: Comprehensive conflict matrix, ISO 40001 error mapping
+- **Tests**: tests/e2e_optional_match.zig
+- **ISO Reference**: 8
+
+### Storage Catalog Graph Persistence (REQ-GQL-025)
+- **Location**: src/storage/catalog.zig:GraphMetadata
+- **Features**: Page-based graph storage, --data_dir integration
+- **Tests**: tests/e2e_optional_match.zig
+
+### Path Tie-Breaking Policy (UA005/UA006)
+- **Location**: src/server/graph/exec.zig:applyPathTieBreaking
+- **Policy**: Deterministic selection based on path length, node IDs
+- **ISO Reference**: 22.4

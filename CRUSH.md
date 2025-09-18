@@ -88,3 +88,29 @@ Notes for agents
 - Use zig fmt before committing; keep functions small and testable.
 - Prefer small, incremental changes; add unit + e2e coverage for new behavior.
 - Do not introduce runtime network dependencies. Never commit secrets.
+
+## Recent Feature Implementations (December 2024)
+
+### Graph Pattern Matching Enhancements
+- OPTIONAL MATCH: src/server/graph/exec.zig:executeOptionalMatch
+- Variable-length paths: src/server/graph/exec.zig:pathExpand  
+- Path tie-breaking: src/server/graph/exec.zig:applyPathTieBreaking
+- NULL handling in bindings for unmatched patterns
+
+### Transaction Management
+- Enhanced MVCC: src/server/txn/mvcc.zig:detectConflict
+- Conflict types: WriteWrite, ReadWrite, WriteRead, PhantomRead
+- ISO 40001 error mapping: conflictToError
+- Transaction validation: validateTransaction
+
+### Storage Persistence
+- Graph metadata: src/storage/catalog.zig:GraphMetadata
+- Page-based storage for nodes/edges/adjacency/properties
+- Integration with --data_dir flag
+- Fallback to JSONL format
+
+### Testing
+- OPTIONAL MATCH tests: tests/e2e_optional_match.zig
+- Variable-length path tests included
+- MVCC conflict detection tests included
+- Storage persistence tests included

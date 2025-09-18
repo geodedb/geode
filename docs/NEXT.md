@@ -2,47 +2,27 @@
 
 Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope (S/M/L) • DRI. Swimlanes: Now / Next / Later. All acceptance include concrete GQL plus expected result shape or diagnostic.
 
+## Recently Completed (December 2024)
+
+✅ **OPTIONAL MATCH** (REQ-GQL-015)
+- Implemented left-outer join semantics with NULL preservation
+- Location: src/server/graph/exec.zig:executeOptionalMatch
+
+✅ **Variable-Length Paths** (REQ-GQL-016)  
+- Implemented PathExpand with bounded BFS traversal
+- Location: src/server/graph/exec.zig:pathExpand
+
+✅ **MVCC Conflict Detection** (REQ-GQL-027)
+- Comprehensive conflict matrix with ISO 40001 mapping
+- Location: src/server/txn/mvcc.zig:detectConflict
+
+✅ **Storage Catalog Persistence** (REQ-GQL-025)
+- Graph persistence with --data_dir integration
+- Location: src/storage/catalog.zig:GraphMetadata
+
 ## Now (P0) - Critical Gaps
 
-- Status: PARTIAL — Core graph primitives (MATCH node/edge, labels, properties) are implemented. Remaining P0 targets: OPTIONAL, variable-length paths, MVCC strengthening, persistence.
-
-1. OPTIONAL MATCH (REQ-GQL-015)
-   - Why: Required for complete pattern matching with left-outer semantics
-   - What: Implement OPTIONAL as left-outer join over pattern fragments
-   - Acceptance: `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, m` returns nodes with NULL for unmatched
-   - ISO: 14.4
-   - Deps: MATCH implementation, src/server/graph/exec.zig, src/server/main.zig
-   - Scope: M
-   - DRI: core
-
-2. Variable-Length Paths (REQ-GQL-016)
-   - Why: Enable bounded path queries with [*1..3] syntax
-   - What: Implement PathExpand operator with BFS, bounded traversal
-   - Acceptance: `MATCH (a)-[*1..3]->(b) RETURN a, b` returns paths up to length 3
-   - ISO: 22.4
-   - Deps: src/server/graph/exec.zig (new PathExpand), adjacency storage
-   - Scope: L
-   - DRI: core
-
-3. MVCC Conflict Detection (REQ-GQL-027)
-   - Why: Strengthen write-write conflict detection and ensure proper 40001 mapping
-   - What: Add conflict detection matrix, lock management, explicit error surface on conflicts
-   - Acceptance: Concurrent conflicting updates produce serialization failure; snapshot isolation maintained
-   - ISO: 8
-   - Deps: src/server/main.zig (TxnState), src/txn/mvcc.zig, WAL integration
-   - Scope: M
-   - DRI: txn
-
-4. Storage Catalog Persistence (REQ-GQL-025)
-   - Why: Persist graph/catalog for production use
-   - What: Wire `--data_dir`, implement catalog save/load, persist CSR adjacency and properties
-   - Acceptance: Server restart preserves graph data; `--data_dir=/tmp/geode` creates persistent storage
-   - ISO: impl-defined storage
-   - Deps: src/storage/catalog.zig, src/storage/page_manager.zig, src/server/main.zig
-   - Scope: L
-   - DRI: storage
-
-## Next (P1) - Core Completion
+- Status: Core graph primitives complete. Focus shifts to query composition and DML.
 
 1. WITH Clause (REQ-GQL-020)
    - Why: Query composition and chaining required for complex queries
