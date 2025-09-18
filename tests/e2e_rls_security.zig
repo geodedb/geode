@@ -205,7 +205,7 @@ test "Row-Level Security (RLS) policies" {
     try rls_engine.createPolicy(policy);
 
     // Create test data row
-    var row = std.StringHashMap(rls.RLSEngine.Value).init(allocator);
+    var row = std.StringHashMap(rls.Value).init(allocator);
     defer row.deinit();
     try row.put("owner_id", .{ .integer = 1 });
     try row.put("data", .{ .string = "sensitive information" });

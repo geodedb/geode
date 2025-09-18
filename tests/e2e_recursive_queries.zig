@@ -1,8 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const recursive = @import("../src/planner/recursive.zig");
-const ast = @import("../src/ast.zig");
-const exec = @import("../src/exec.zig");
+const geode = @import("geode");
 
 test "recursive query - WITH RECURSIVE for transitive closure" {
     const allocator = testing.allocator;
