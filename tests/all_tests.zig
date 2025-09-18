@@ -21,6 +21,8 @@ const _e2e_order_policy_toggle = @import("e2e_order_policy_toggle.zig");
 const _e2e_explain_setops = @import("e2e_explain_setops.zig");
 const _e2e_catalog_persistence_disk = @import("e2e_catalog_persistence_disk.zig");
 const _e2e_quic_basic = @import("e2e_quic_basic.zig");
+const _e2e_with_clause = @import("e2e_with_clause.zig");
+const _unit_shortest_path_tiebreak = @import("unit_shortest_path_tiebreak.zig");
 
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.

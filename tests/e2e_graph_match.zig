@@ -86,4 +86,3 @@ test "MATCH traversal with edge type filter" {
     defer ally.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"SCHEMA\"") != null);
 }
-

@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 // Aggregation operators for GROUP BY clauses
 pub const Aggregator = struct {
     allocator: Allocator,
-    
+
     pub const AggregateFunction = enum {
         count,
         sum,
@@ -15,10 +15,10 @@ pub const Aggregator = struct {
         stdev,
         variance,
     };
-    
+
     pub const GroupKey = struct {
         expressions: []Expression,
-        
+
         pub fn hash(self: GroupKey) u64 {
             var hasher = std.hash.Wyhash.init(0);
             for (self.expressions) |expr| {
@@ -27,7 +27,7 @@ pub const Aggregator = struct {
             }
             return hasher.final();
         }
-        
+
         pub fn eql(a: GroupKey, b: GroupKey) bool {
             if (a.expressions.len != b.expressions.len) return false;
             for (a.expressions, b.expressions) |ae, be| {
@@ -36,7 +36,7 @@ pub const Aggregator = struct {
             return true;
         }
     };
-    
+
     pub const Expression = union(enum) {
         column: []const u8,
         literal: Value,
@@ -44,7 +44,7 @@ pub const Aggregator = struct {
             name: AggregateFunction,
             args: []Expression,
         },
-        
+
         pub fn eql(a: Expression, b: Expression) bool {
             return switch (a) {
                 .column => |ac| b == .column and std.mem.eql(u8, ac, b.column),
@@ -53,7 +53,7 @@ pub const Aggregator = struct {
             };
         }
     };
-    
+
     pub const Value = union(enum) {
         null,
         boolean: bool,
@@ -61,7 +61,7 @@ pub const Aggregator = struct {
         float: f64,
         string: []const u8,
         list: []Value,
-        
+
         pub fn eql(a: Value, b: Value) bool {
             return switch (a) {
                 .null => b == .null,
@@ -72,7 +72,7 @@ pub const Aggregator = struct {
                 .list => false, // Simplified for now
             };
         }
-        
+
         pub fn add(a: Value, b: Value) !Value {
             return switch (a) {
                 .integer => |av| switch (b) {
@@ -88,7 +88,7 @@ pub const Aggregator = struct {
                 else => error.TypeMismatch,
             };
         }
-        
+
         pub fn divide(a: Value, count: usize) !Value {
             const divisor = @as(f64, @floatFromInt(count));
             return switch (a) {
@@ -97,7 +97,7 @@ pub const Aggregator = struct {
                 else => error.TypeMismatch,
             };
         }
-        
+
         pub fn lessThan(a: Value, b: Value) bool {
             return switch (a) {
                 .integer => |av| switch (b) {
@@ -115,7 +115,7 @@ pub const Aggregator = struct {
             };
         }
     };
-    
+
     pub const AggregateState = struct {
         function: AggregateFunction,
         count: usize = 0,
@@ -123,21 +123,21 @@ pub const Aggregator = struct {
         min: ?Value = null,
         max: ?Value = null,
         values: std.ArrayList(Value),
-        
+
         pub fn init(allocator: Allocator, function: AggregateFunction) AggregateState {
             return .{
                 .function = function,
                 .values = std.ArrayList(Value).init(allocator),
             };
         }
-        
+
         pub fn deinit(self: *AggregateState) void {
             self.values.deinit();
         }
-        
+
         pub fn update(self: *AggregateState, value: Value) !void {
             self.count += 1;
-            
+
             switch (self.function) {
                 .count => {},
                 .sum, .avg => {
@@ -173,7 +173,7 @@ pub const Aggregator = struct {
                 },
             }
         }
-        
+
         pub fn finalize(self: *AggregateState) !Value {
             return switch (self.function) {
                 .count => .{ .integer = @intCast(self.count) },
@@ -186,10 +186,10 @@ pub const Aggregator = struct {
                 .variance => try self.calculateVariance(),
             };
         }
-        
+
         fn calculateVariance(self: *AggregateState) !Value {
             if (self.values.items.len == 0) return .null;
-            
+
             // Calculate mean
             var sum: f64 = 0;
             for (self.values.items) |v| {
@@ -200,7 +200,7 @@ pub const Aggregator = struct {
                 };
             }
             const mean = sum / @as(f64, @floatFromInt(self.values.items.len));
-            
+
             // Calculate variance
             var variance: f64 = 0;
             for (self.values.items) |v| {
@@ -212,10 +212,10 @@ pub const Aggregator = struct {
                 const diff = val - mean;
                 variance += diff * diff;
             }
-            
+
             return .{ .float = variance / @as(f64, @floatFromInt(self.values.items.len)) };
         }
-        
+
         fn calculateStdev(self: *AggregateState) !Value {
             const variance = try self.calculateVariance();
             return switch (variance) {
@@ -224,16 +224,16 @@ pub const Aggregator = struct {
             };
         }
     };
-    
+
     pub const GroupedResult = struct {
         groups: std.AutoHashMap(GroupKey, GroupState),
-        
+
         pub fn init(allocator: Allocator) GroupedResult {
             return .{
                 .groups = std.AutoHashMap(GroupKey, GroupState).init(allocator),
             };
         }
-        
+
         pub fn deinit(self: *GroupedResult) void {
             var iter = self.groups.iterator();
             while (iter.next()) |entry| {
@@ -242,18 +242,18 @@ pub const Aggregator = struct {
             self.groups.deinit();
         }
     };
-    
+
     pub const GroupState = struct {
         key: GroupKey,
         aggregates: std.StringHashMap(AggregateState),
-        
+
         pub fn init(allocator: Allocator, key: GroupKey) GroupState {
             return .{
                 .key = key,
                 .aggregates = std.StringHashMap(AggregateState).init(allocator),
             };
         }
-        
+
         pub fn deinit(self: *GroupState) void {
             var iter = self.aggregates.iterator();
             while (iter.next()) |entry| {
@@ -262,13 +262,13 @@ pub const Aggregator = struct {
             self.aggregates.deinit();
         }
     };
-    
+
     pub fn init(allocator: Allocator) Aggregator {
         return .{
             .allocator = allocator,
         };
     }
-    
+
     pub fn groupBy(
         self: *Aggregator,
         rows: []const Row,
@@ -277,39 +277,39 @@ pub const Aggregator = struct {
     ) !GroupedResult {
         var result = GroupedResult.init(self.allocator);
         errdefer result.deinit();
-        
+
         for (rows) |row| {
             // Evaluate group key
             var key_values = try self.allocator.alloc(Expression, group_exprs.len);
             defer self.allocator.free(key_values);
-            
+
             for (group_exprs, 0..) |expr, i| {
                 key_values[i] = .{ .literal = try self.evaluateExpression(row, expr) };
             }
-            
+
             const key = GroupKey{ .expressions = key_values };
-            
+
             // Get or create group state
             const gop = try result.groups.getOrPut(key);
             if (!gop.found_existing) {
                 gop.value_ptr.* = GroupState.init(self.allocator, key);
             }
-            
+
             // Update aggregates
             for (agg_exprs) |agg_expr| {
                 const agg_gop = try gop.value_ptr.aggregates.getOrPut(agg_expr.alias);
                 if (!agg_gop.found_existing) {
                     agg_gop.value_ptr.* = AggregateState.init(self.allocator, agg_expr.function);
                 }
-                
+
                 const value = try self.evaluateExpression(row, agg_expr.expression);
                 try agg_gop.value_ptr.update(value);
             }
         }
-        
+
         return result;
     }
-    
+
     fn evaluateExpression(self: *Aggregator, row: Row, expr: Expression) !Value {
         _ = self;
         return switch (expr) {
@@ -318,9 +318,9 @@ pub const Aggregator = struct {
             .function => error.CannotEvaluateAggregateHere,
         };
     }
-    
+
     pub const Row = std.StringHashMap(Value);
-    
+
     pub const AggregateExpression = struct {
         function: AggregateFunction,
         expression: Expression,
@@ -332,7 +332,7 @@ pub const Aggregator = struct {
 pub const GraphMutator = struct {
     allocator: Allocator,
     graph: *Graph,
-    
+
     pub const MutationType = enum {
         create_node,
         create_edge,
@@ -343,7 +343,7 @@ pub const GraphMutator = struct {
         merge_node,
         merge_edge,
     };
-    
+
     pub const Mutation = union(MutationType) {
         create_node: CreateNode,
         create_edge: CreateEdge,
@@ -354,13 +354,13 @@ pub const GraphMutator = struct {
         merge_node: MergeNode,
         merge_edge: MergeEdge,
     };
-    
+
     pub const CreateNode = struct {
         variable: ?[]const u8,
         labels: []const u8,
         properties: ?PropertyMap,
     };
-    
+
     pub const CreateEdge = struct {
         variable: ?[]const u8,
         source: []const u8,
@@ -368,28 +368,28 @@ pub const GraphMutator = struct {
         type: []const u8,
         properties: ?PropertyMap,
     };
-    
+
     pub const UpdateNode = struct {
         variable: []const u8,
         properties: PropertyMap,
         mode: UpdateMode = .set,
     };
-    
+
     pub const UpdateEdge = struct {
         variable: []const u8,
         properties: PropertyMap,
         mode: UpdateMode = .set,
     };
-    
+
     pub const DeleteNode = struct {
         variable: []const u8,
         detach: bool = false, // If true, also delete connected edges
     };
-    
+
     pub const DeleteEdge = struct {
         variable: []const u8,
     };
-    
+
     pub const MergeNode = struct {
         variable: ?[]const u8,
         labels: []const u8,
@@ -397,7 +397,7 @@ pub const GraphMutator = struct {
         on_create: ?PropertyMap,
         on_match: ?PropertyMap,
     };
-    
+
     pub const MergeEdge = struct {
         variable: ?[]const u8,
         source: []const u8,
@@ -407,31 +407,31 @@ pub const GraphMutator = struct {
         on_create: ?PropertyMap,
         on_match: ?PropertyMap,
     };
-    
+
     pub const UpdateMode = enum {
         set, // Replace all properties
         add, // Add/update specific properties
         remove, // Remove specific properties
     };
-    
+
     pub const PropertyMap = std.StringHashMap(Value);
     pub const Value = Aggregator.Value;
-    
+
     const Graph = @import("pattern_matcher.zig").Graph;
-    
+
     pub fn init(allocator: Allocator, graph: *Graph) GraphMutator {
         return .{
             .allocator = allocator,
             .graph = graph,
         };
     }
-    
+
     pub fn execute(self: *GraphMutator, mutations: []const Mutation) !void {
         for (mutations) |mutation| {
             try self.executeMutation(mutation);
         }
     }
-    
+
     fn executeMutation(self: *GraphMutator, mutation: Mutation) !void {
         switch (mutation) {
             .create_node => |cn| try self.createNode(cn),
@@ -444,7 +444,7 @@ pub const GraphMutator = struct {
             .merge_edge => |me| try self.mergeEdge(me),
         }
     }
-    
+
     fn createNode(self: *GraphMutator, create: CreateNode) !void {
         const id = self.graph.generateNodeId();
         var node = Node{
@@ -452,9 +452,9 @@ pub const GraphMutator = struct {
             .labels = create.labels,
             .properties = create.properties orelse PropertyMap.init(self.allocator),
         };
-        
+
         try self.graph.nodes.put(id, node);
-        
+
         // Update index
         const gop = try self.graph.node_index.getOrPut(create.labels);
         if (!gop.found_existing) {
@@ -462,12 +462,12 @@ pub const GraphMutator = struct {
         }
         try gop.value_ptr.append(id);
     }
-    
+
     fn createEdge(self: *GraphMutator, create: CreateEdge) !void {
         // Resolve source and target node IDs
         const source_id = try self.resolveNodeVariable(create.source);
         const target_id = try self.resolveNodeVariable(create.target);
-        
+
         const id = self.graph.generateEdgeId();
         var edge = Edge{
             .id = id,
@@ -476,9 +476,9 @@ pub const GraphMutator = struct {
             .type = create.type,
             .properties = create.properties orelse PropertyMap.init(self.allocator),
         };
-        
+
         try self.graph.edges.put(id, edge);
-        
+
         // Update index
         const gop = try self.graph.edge_index.getOrPut(source_id);
         if (!gop.found_existing) {
@@ -486,11 +486,11 @@ pub const GraphMutator = struct {
         }
         try gop.value_ptr.append(id);
     }
-    
+
     fn updateNode(self: *GraphMutator, update: UpdateNode) !void {
         const node_id = try self.resolveNodeVariable(update.variable);
         var node = self.graph.nodes.getPtr(node_id) orelse return error.NodeNotFound;
-        
+
         switch (update.mode) {
             .set => {
                 node.properties.deinit();
@@ -510,11 +510,11 @@ pub const GraphMutator = struct {
             },
         }
     }
-    
+
     fn updateEdge(self: *GraphMutator, update: UpdateEdge) !void {
         const edge_id = try self.resolveEdgeVariable(update.variable);
         var edge = self.graph.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
-        
+
         switch (update.mode) {
             .set => {
                 edge.properties.deinit();
@@ -534,10 +534,10 @@ pub const GraphMutator = struct {
             },
         }
     }
-    
+
     fn deleteNode(self: *GraphMutator, delete: DeleteNode) !void {
         const node_id = try self.resolveNodeVariable(delete.variable);
-        
+
         if (delete.detach) {
             // Delete all connected edges
             if (self.graph.edge_index.get(node_id)) |edges| {
@@ -552,7 +552,7 @@ pub const GraphMutator = struct {
                 return error.NodeHasEdges;
             }
         }
-        
+
         // Remove from node index
         if (self.graph.nodes.get(node_id)) |node| {
             if (self.graph.node_index.getPtr(node.labels)) |list| {
@@ -564,13 +564,13 @@ pub const GraphMutator = struct {
                 }
             }
         }
-        
+
         _ = self.graph.nodes.remove(node_id);
     }
-    
+
     fn deleteEdge(self: *GraphMutator, delete: DeleteEdge) !void {
         const edge_id = try self.resolveEdgeVariable(delete.variable);
-        
+
         // Remove from edge index
         if (self.graph.edges.get(edge_id)) |edge| {
             if (self.graph.edge_index.getPtr(edge.source)) |list| {
@@ -582,15 +582,15 @@ pub const GraphMutator = struct {
                 }
             }
         }
-        
+
         _ = self.graph.edges.remove(edge_id);
     }
-    
+
     fn mergeNode(self: *GraphMutator, merge: MergeNode) !void {
         // Try to find existing node
         const nodes = try self.graph.getNodesByLabel(merge.labels);
         var found: ?*Node = null;
-        
+
         for (nodes) |*node| {
             var matches = true;
             var iter = merge.match_properties.iterator();
@@ -606,7 +606,7 @@ pub const GraphMutator = struct {
                 break;
             }
         }
-        
+
         if (found) |node| {
             // Node exists - apply on_match properties
             if (merge.on_match) |props| {
@@ -618,13 +618,13 @@ pub const GraphMutator = struct {
         } else {
             // Node doesn't exist - create with on_create properties
             var properties = PropertyMap.init(self.allocator);
-            
+
             // Add match properties
             var iter = merge.match_properties.iterator();
             while (iter.next()) |entry| {
                 try properties.put(entry.key_ptr.*, entry.value_ptr.*);
             }
-            
+
             // Add on_create properties
             if (merge.on_create) |props| {
                 var create_iter = props.iterator();
@@ -632,7 +632,7 @@ pub const GraphMutator = struct {
                     try properties.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
             }
-            
+
             try self.createNode(.{
                 .variable = merge.variable,
                 .labels = merge.labels,
@@ -640,20 +640,20 @@ pub const GraphMutator = struct {
             });
         }
     }
-    
+
     fn mergeEdge(self: *GraphMutator, merge: MergeEdge) !void {
         const source_id = try self.resolveNodeVariable(merge.source);
         const target_id = try self.resolveNodeVariable(merge.target);
-        
+
         // Try to find existing edge
         const edges = try self.graph.getEdgesFrom(source_id);
         var found: ?*Edge = null;
-        
+
         for (edges) |*edge| {
             if (edge.target != target_id or !std.mem.eql(u8, edge.type, merge.type)) {
                 continue;
             }
-            
+
             var matches = true;
             var iter = merge.match_properties.iterator();
             while (iter.next()) |entry| {
@@ -668,7 +668,7 @@ pub const GraphMutator = struct {
                 break;
             }
         }
-        
+
         if (found) |edge| {
             // Edge exists - apply on_match properties
             if (merge.on_match) |props| {
@@ -680,13 +680,13 @@ pub const GraphMutator = struct {
         } else {
             // Edge doesn't exist - create with on_create properties
             var properties = PropertyMap.init(self.allocator);
-            
+
             // Add match properties
             var iter = merge.match_properties.iterator();
             while (iter.next()) |entry| {
                 try properties.put(entry.key_ptr.*, entry.value_ptr.*);
             }
-            
+
             // Add on_create properties
             if (merge.on_create) |props| {
                 var create_iter = props.iterator();
@@ -694,7 +694,7 @@ pub const GraphMutator = struct {
                     try properties.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
             }
-            
+
             try self.createEdge(.{
                 .variable = merge.variable,
                 .source = merge.source,
@@ -704,20 +704,20 @@ pub const GraphMutator = struct {
             });
         }
     }
-    
+
     fn resolveNodeVariable(self: *GraphMutator, variable: []const u8) !u64 {
         _ = self;
         // In a real implementation, this would resolve the variable from the current binding context
         // For now, we'll parse it as an integer ID
         return try std.fmt.parseInt(u64, variable, 10);
     }
-    
+
     fn resolveEdgeVariable(self: *GraphMutator, variable: []const u8) !u64 {
         _ = self;
         // In a real implementation, this would resolve the variable from the current binding context
         return try std.fmt.parseInt(u64, variable, 10);
     }
-    
+
     const Node = @import("pattern_matcher.zig").Node;
     const Edge = @import("pattern_matcher.zig").Edge;
 };

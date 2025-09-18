@@ -54,7 +54,7 @@ test "concurrent UPDATE_VALUE conflicts yield 40001 on one commit" {
             const o = try send(a, addr, "COMMIT");
             ptr.* = o;
         }
-    }.run, .{ &a_commit });
+    }.run, .{&a_commit});
 
     // Client B: delay slightly; BEGIN; UPDATE; COMMIT (should conflict with A)
     std.time.sleep(100 * std.time.ms_per_s);

@@ -16,8 +16,8 @@ pub const Timestamp = u64;
 // Lock modes for concurrency control
 pub const LockMode = enum {
     None,
-    Shared,      // Read lock
-    Exclusive,   // Write lock
+    Shared, // Read lock
+    Exclusive, // Write lock
     IntentShared,
     IntentExclusive,
 };
@@ -34,8 +34,8 @@ pub const LockRequest = struct {
 // Transaction state
 pub const TxnState = enum {
     Active,
-    Preparing,   // For 2PC
-    Prepared,    // For 2PC
+    Preparing, // For 2PC
+    Prepared, // For 2PC
     Committing,
     Committed,
     Aborting,
@@ -58,19 +58,19 @@ pub const Transaction = struct {
     start_timestamp: Timestamp,
     commit_timestamp: ?Timestamp,
     snapshot_timestamp: Timestamp, // For MVCC
-    
+
     // Locks held by this transaction
     locks_held: std.ArrayList(LockRequest),
-    
+
     // Write set for conflict detection
     write_set: std.ArrayList(WriteOp),
-    
+
     // Read set for validation
     read_set: std.ArrayList(u64), // Resource IDs read
-    
+
     // Conflict tracking
     conflicts_detected: std.ArrayList(ConflictInfo),
-    
+
     pub fn init(allocator: std.mem.Allocator, id: TxnId, timestamp: Timestamp, isolation: IsolationLevel) Transaction {
         return .{
             .id = id,
@@ -85,7 +85,7 @@ pub const Transaction = struct {
             .conflicts_detected = std.ArrayList(ConflictInfo).initCapacity(allocator, 0) catch unreachable,
         };
     }
-    
+
     pub fn deinit(self: *Transaction) void {
         self.locks_held.deinit();
         self.write_set.deinit();
@@ -104,23 +104,23 @@ pub const ConflictInfo = struct {
 
 // Types of conflicts that can occur
 pub const ConflictType = enum {
-    WriteWrite,     // Two transactions writing same resource
-    WriteRead,      // Write-read conflict (dirty read prevention)
-    ReadWrite,      // Read-write conflict (lost update prevention)
-    PhantomRead,    // Phantom read conflict
-    Deadlock,       // Deadlock detected
+    WriteWrite, // Two transactions writing same resource
+    WriteRead, // Write-read conflict (dirty read prevention)
+    ReadWrite, // Read-write conflict (lost update prevention)
+    PhantomRead, // Phantom read conflict
+    Deadlock, // Deadlock detected
 };
 
 // Lock manager for concurrency control
 pub const LockManager = struct {
     // Lock table: resource_id -> list of lock requests
     lock_table: std.AutoHashMap(u64, std.ArrayList(LockRequest)),
-    
+
     // Wait-for graph for deadlock detection
     wait_for: std.AutoHashMap(TxnId, TxnId),
-    
+
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) LockManager {
         return .{
             .lock_table = std.AutoHashMap(u64, std.ArrayList(LockRequest)).init(allocator),
@@ -128,7 +128,7 @@ pub const LockManager = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *LockManager) void {
         var iter = self.lock_table.iterator();
         while (iter.next()) |entry| {
@@ -137,7 +137,7 @@ pub const LockManager = struct {
         self.lock_table.deinit();
         self.wait_for.deinit();
     }
-    
+
     // Request a lock
     pub fn requestLock(self: *LockManager, txn: *Transaction, resource_id: u64, mode: LockMode) !bool {
         // Check for lock compatibility
@@ -146,7 +146,7 @@ pub const LockManager = struct {
             try self.lock_table.put(resource_id, list);
             break :blk self.lock_table.get(resource_id).?;
         };
-        
+
         // Check if we already hold a lock on this resource
         for (requests.items) |req| {
             if (req.txn_id == txn.id and req.granted) {
@@ -158,7 +158,7 @@ pub const LockManager = struct {
                 return true; // Already have sufficient lock
             }
         }
-        
+
         // Check compatibility with existing locks
         var can_grant = true;
         for (requests.items) |req| {
@@ -166,7 +166,7 @@ pub const LockManager = struct {
                 can_grant = false;
                 // Add to wait-for graph
                 try self.wait_for.put(txn.id, req.txn_id);
-                
+
                 // Check for deadlock
                 if (try self.detectDeadlock(txn.id)) {
                     return false; // Deadlock detected, abort
@@ -174,7 +174,7 @@ pub const LockManager = struct {
                 break;
             }
         }
-        
+
         // Create lock request
         const lock_req = LockRequest{
             .txn_id = txn.id,
@@ -183,13 +183,13 @@ pub const LockManager = struct {
             .granted = can_grant,
             .waiting_since = if (!can_grant) @intCast(std.time.timestamp()) else null,
         };
-        
+
         try requests.append(self.allocator, lock_req);
         try txn.locks_held.append(self.allocator, lock_req);
-        
+
         return can_grant;
     }
-    
+
     // Release all locks held by a transaction
     pub fn releaseLocks(self: *LockManager, txn: *Transaction) !void {
         for (txn.locks_held.items) |lock| {
@@ -203,7 +203,7 @@ pub const LockManager = struct {
                         i += 1;
                     }
                 }
-                
+
                 // Grant waiting locks if possible
                 for (requests.items) |*req| {
                     if (!req.granted) {
@@ -222,18 +222,18 @@ pub const LockManager = struct {
                 }
             }
         }
-        
+
         // Clear wait-for entries
         _ = self.wait_for.remove(txn.id);
-        
+
         txn.locks_held.clearRetainingCapacity();
     }
-    
+
     // Simple cycle detection for deadlock
     fn detectDeadlock(self: *LockManager, start_txn: TxnId) !bool {
         var visited = std.AutoHashMap(TxnId, void).init(self.allocator);
         defer visited.deinit();
-        
+
         var current = start_txn;
         while (self.wait_for.get(current)) |next| {
             if (next == start_txn) {
@@ -245,10 +245,10 @@ pub const LockManager = struct {
             try visited.put(current, {});
             current = next;
         }
-        
+
         return false;
     }
-    
+
     fn isCompatible(mode1: LockMode, mode2: LockMode) bool {
         // Lock compatibility matrix
         return switch (mode1) {
@@ -259,7 +259,7 @@ pub const LockManager = struct {
             .IntentExclusive => mode2 == .None or mode2 == .IntentShared,
         };
     }
-    
+
     fn isStrongerLock(new: LockMode, existing: LockMode) bool {
         // Lock strength ordering: None < IS < S < IX < X
         const strength = [_]u8{ 0, 2, 4, 1, 3 }; // None, S, X, IS, IX
@@ -272,19 +272,19 @@ pub const MVCCManager = struct {
     current_timestamp: Timestamp,
     active_transactions: std.AutoHashMap(TxnId, *Transaction),
     lock_manager: LockManager,
-    
+
     // Version chain for MVCC (simplified - in practice would be per-record)
     versions: std.AutoHashMap(u64, std.ArrayList(Version)),
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Version = struct {
         timestamp: Timestamp,
         txn_id: TxnId,
         data: []const u8,
         deleted: bool = false,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) MVCCManager {
         return .{
             .current_timestamp = 1,
@@ -294,29 +294,29 @@ pub const MVCCManager = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *MVCCManager) void {
         self.active_transactions.deinit();
         self.lock_manager.deinit();
-        
+
         var iter = self.versions.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
         self.versions.deinit();
     }
-    
+
     pub fn beginTransaction(self: *MVCCManager, isolation: IsolationLevel) !*Transaction {
         const txn_id = self.current_timestamp;
         self.current_timestamp += 1;
-        
+
         const txn = try self.allocator.create(Transaction);
         txn.* = Transaction.init(self.allocator, txn_id, txn_id, isolation);
-        
+
         try self.active_transactions.put(txn_id, txn);
         return txn;
     }
-    
+
     pub fn read(self: *MVCCManager, txn: *Transaction, resource_id: u64) !?[]const u8 {
         // Acquire shared lock for repeatable read
         if (txn.isolation_level == .RepeatableRead or txn.isolation_level == .Serializable) {
@@ -324,10 +324,10 @@ pub const MVCCManager = struct {
                 return error.LockTimeout;
             }
         }
-        
+
         // Track read for validation
         try txn.read_set.append(self.allocator, resource_id);
-        
+
         // Find visible version
         if (self.versions.get(resource_id)) |version_chain| {
             // Find the latest version visible to this transaction
@@ -339,22 +339,22 @@ pub const MVCCManager = struct {
                     }
                 }
             }
-            
+
             if (visible_version) |ver| {
                 if (ver.deleted) return null;
                 return ver.data;
             }
         }
-        
+
         return null;
     }
-    
+
     pub fn write(self: *MVCCManager, txn: *Transaction, resource_id: u64, data: []const u8) !void {
         // Acquire exclusive lock
         if (!try self.lock_manager.requestLock(txn, resource_id, .Exclusive)) {
             return error.WriteConflict;
         }
-        
+
         // Check for write-write conflicts
         if (self.versions.get(resource_id)) |version_chain| {
             for (version_chain.items) |ver| {
@@ -366,7 +366,7 @@ pub const MVCCManager = struct {
                 }
             }
         }
-        
+
         // Add to write set
         try txn.write_set.append(self.allocator, .{
             .resource_id = resource_id,
@@ -374,14 +374,14 @@ pub const MVCCManager = struct {
             .new_value = data,
         });
     }
-    
+
     pub fn commitTransaction(self: *MVCCManager, txn: *Transaction) !void {
         if (txn.state != .Active) {
             return error.InvalidTransactionState;
         }
-        
+
         txn.state = .Committing;
-        
+
         // Validate read set for serializable isolation
         if (txn.isolation_level == .Serializable) {
             for (txn.read_set.items) |resource_id| {
@@ -396,50 +396,50 @@ pub const MVCCManager = struct {
                 }
             }
         }
-        
+
         // Apply writes
         const commit_timestamp = self.current_timestamp;
         self.current_timestamp += 1;
-        
+
         for (txn.write_set.items) |write_op| {
             var version_chain = self.versions.get(write_op.resource_id) orelse blk: {
                 const chain = std.ArrayList(Version).initCapacity(self.allocator, 0) catch unreachable;
                 try self.versions.put(write_op.resource_id, chain);
                 break :blk self.versions.get(write_op.resource_id).?;
             };
-            
+
             try version_chain.append(self.allocator, .{
                 .timestamp = commit_timestamp,
                 .txn_id = txn.id,
                 .data = write_op.new_value,
             });
         }
-        
+
         txn.commit_timestamp = commit_timestamp;
         txn.state = .Committed;
-        
+
         // Release locks
         try self.lock_manager.releaseLocks(txn);
-        
+
         // Remove from active transactions
         _ = self.active_transactions.remove(txn.id);
     }
-    
+
     pub fn abortTransaction(self: *MVCCManager, txn: *Transaction) !void {
         txn.state = .Aborting;
-        
+
         // Release all locks
         try self.lock_manager.releaseLocks(txn);
-        
+
         // Clear write set (nothing to undo in MVCC)
         txn.write_set.clearRetainingCapacity();
-        
+
         txn.state = .Aborted;
-        
+
         // Remove from active transactions
         _ = self.active_transactions.remove(txn.id);
     }
-    
+
     // Garbage collection of old versions
     pub fn garbageCollect(self: *MVCCManager) !void {
         // Find minimum snapshot timestamp of active transactions
@@ -450,7 +450,7 @@ pub const MVCCManager = struct {
                 min_snapshot = entry.value_ptr.*.snapshot_timestamp;
             }
         }
-        
+
         // Remove versions older than min_snapshot (keeping at least one)
         var version_iter = self.versions.iterator();
         while (version_iter.next()) |entry| {
@@ -468,7 +468,7 @@ pub const MVCCManager = struct {
             }
         }
     }
-    
+
     // Enhanced conflict detection matrix
     pub fn detectConflict(self: *MVCCManager, txn: *Transaction, resource_id: u64, operation: enum { Read, Write }) !?ConflictInfo {
         // Check against all active transactions
@@ -476,7 +476,7 @@ pub const MVCCManager = struct {
         while (iter.next()) |entry| {
             const other_txn = entry.value_ptr.*;
             if (other_txn.id == txn.id) continue;
-            
+
             // Check write-write conflicts
             if (operation == .Write) {
                 for (other_txn.write_set.items) |write_op| {
@@ -492,7 +492,7 @@ pub const MVCCManager = struct {
                         return conflict;
                     }
                 }
-                
+
                 // Check read-write conflicts (lost update prevention)
                 for (other_txn.read_set.items) |read_id| {
                     if (read_id == resource_id and other_txn.start_timestamp < txn.start_timestamp) {
@@ -507,13 +507,14 @@ pub const MVCCManager = struct {
                     }
                 }
             }
-            
+
             // Check write-read conflicts (dirty read prevention)
             if (operation == .Read) {
                 for (other_txn.write_set.items) |write_op| {
-                    if (write_op.resource_id == resource_id and 
+                    if (write_op.resource_id == resource_id and
                         other_txn.state != .Committed and
-                        txn.isolation_level != .ReadUncommitted) {
+                        txn.isolation_level != .ReadUncommitted)
+                    {
                         const conflict = ConflictInfo{
                             .conflicting_txn = other_txn.id,
                             .resource_id = resource_id,
@@ -526,25 +527,21 @@ pub const MVCCManager = struct {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     // Map conflict to ISO SQL error code 40001 (serialization failure)
     pub fn conflictToError(conflict: ConflictInfo) !@import("protocol").DiagnosticInfo {
         const protocol = @import("protocol");
         return protocol.DiagnosticInfo{
             .status_class = "40",
             .status_subclass = "001",
-            .message = try std.fmt.allocPrint(
-                std.heap.page_allocator,
-                "Serialization failure: {s} conflict on resource {} with transaction {}",
-                .{ @tagName(conflict.conflict_type), conflict.resource_id, conflict.conflicting_txn }
-            ),
+            .message = try std.fmt.allocPrint(std.heap.page_allocator, "Serialization failure: {s} conflict on resource {} with transaction {}", .{ @tagName(conflict.conflict_type), conflict.resource_id, conflict.conflicting_txn }),
             .anchor = null,
         };
     }
-    
+
     // Validate transaction at commit time
     pub fn validateTransaction(self: *MVCCManager, txn: *Transaction) !bool {
         // For snapshot isolation, check for write-write conflicts
@@ -557,11 +554,12 @@ pub const MVCCManager = struct {
                     const other_txn = entry.value_ptr.*;
                     if (other_txn.id == txn.id) continue;
                     if (other_txn.state != .Committed) continue;
-                    
+
                     for (other_txn.write_set.items) |other_write| {
                         if (other_write.resource_id == write_op.resource_id and
                             other_write.timestamp > txn.snapshot_timestamp and
-                            other_write.timestamp < self.current_timestamp) {
+                            other_write.timestamp < self.current_timestamp)
+                        {
                             // Conflict detected - abort transaction
                             const conflict = ConflictInfo{
                                 .conflicting_txn = other_txn.id,
@@ -576,13 +574,13 @@ pub const MVCCManager = struct {
                 }
             }
         }
-        
+
         // For serializable, also check for phantom reads
         if (txn.isolation_level == .Serializable) {
             // Additional validation for phantom reads would go here
             // This requires tracking predicate locks and range queries
         }
-        
+
         return true;
     }
 };

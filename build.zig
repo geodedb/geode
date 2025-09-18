@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     });
     // Expose project root as a module so submodules can import by name
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
-    
+
     // Create a single shared storage_page_manager module to avoid duplicates
     const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
@@ -158,7 +158,7 @@ pub fn build(b: *std.Build) void {
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
-    
+
     // Add geoded (server) and geodec (client) executables for protocol tests
     const geoded_exe = b.addExecutable(.{
         .name = "geoded",

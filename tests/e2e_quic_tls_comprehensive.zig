@@ -12,14 +12,14 @@ test "QUIC TLS configuration structure" {
         verify: bool,
         ca_path: ?[]const u8,
     };
-    
+
     const config = TLSConfig{
         .cert_path = "certs/server.crt",
         .key_path = "certs/server.key",
         .verify = true,
         .ca_path = null,
     };
-    
+
     try testing.expect(config.verify == true);
     try testing.expectEqualStrings(config.cert_path, "certs/server.crt");
 }
@@ -31,14 +31,14 @@ test "QUIC connection parameters" {
         max_streams: u32,
         idle_timeout_ms: u64,
     };
-    
+
     const params = QUICParams{
         .address = "127.0.0.1",
         .port = 7567,
         .max_streams = 100,
         .idle_timeout_ms = 30000,
     };
-    
+
     try testing.expectEqual(@as(u16, 7567), params.port);
     try testing.expectEqual(@as(u32, 100), params.max_streams);
 }
@@ -49,26 +49,26 @@ test "QUIC vs TCP performance metrics structure" {
         latency_ms: f64,
         throughput_mbps: f64,
         connections_per_sec: u64,
-        
+
         pub fn ratio(self: @This(), other: @This()) f64 {
             return self.latency_ms / other.latency_ms;
         }
     };
-    
+
     const quic_metrics = PerformanceMetrics{
         .protocol = .QUIC,
         .latency_ms = 10.5,
         .throughput_mbps = 950.0,
         .connections_per_sec = 1000,
     };
-    
+
     const tcp_metrics = PerformanceMetrics{
         .protocol = .TCP,
         .latency_ms = 8.2,
         .throughput_mbps = 980.0,
         .connections_per_sec = 1200,
     };
-    
+
     const latency_ratio = quic_metrics.ratio(tcp_metrics);
     try testing.expect(latency_ratio > 1.0 and latency_ratio < 2.0);
 }
@@ -80,12 +80,12 @@ test "QUIC multiplexed streams management" {
         bytes_sent: u64,
         bytes_received: u64,
     };
-    
+
     const Connection = struct {
         allocator: std.mem.Allocator,
         streams: std.ArrayList(Stream),
         max_streams: u32,
-        
+
         pub fn init(allocator: std.mem.Allocator, max: u32) @This() {
             return .{
                 .allocator = allocator,
@@ -93,11 +93,11 @@ test "QUIC multiplexed streams management" {
                 .max_streams = max,
             };
         }
-        
+
         pub fn deinit(self: *@This()) void {
             self.streams.deinit(self.allocator);
         }
-        
+
         pub fn addStream(self: *@This(), stream: Stream) !void {
             if (self.streams.items.len >= self.max_streams) {
                 return error.TooManyStreams;
@@ -105,17 +105,17 @@ test "QUIC multiplexed streams management" {
             try self.streams.append(self.allocator, stream);
         }
     };
-    
+
     var conn = Connection.init(testing.allocator, 10);
     defer conn.deinit();
-    
+
     try conn.addStream(.{
         .id = 1,
         .state = .Open,
         .bytes_sent = 0,
         .bytes_received = 0,
     });
-    
+
     try testing.expectEqual(@as(usize, 1), conn.streams.items.len);
 }
 
@@ -127,7 +127,7 @@ test "QUIC error handling" {
         InvalidCertificate,
         NetworkUnreachable,
     };
-    
+
     const handleError = struct {
         fn handle(err: QUICError) []const u8 {
             return switch (err) {
@@ -139,7 +139,7 @@ test "QUIC error handling" {
             };
         }
     }.handle;
-    
+
     const msg = handleError(error.TLSHandshakeFailed);
     try testing.expectEqualStrings("TLS handshake failed", msg);
 }
@@ -151,35 +151,35 @@ test "QUIC connection recovery simulation" {
         Reconnecting,
         Failed,
     };
-    
+
     const ConnectionManager = struct {
         state: ConnectionState,
         retry_count: u32,
         max_retries: u32,
-        
+
         pub fn attemptReconnect(self: *@This()) !void {
             if (self.state == .Disconnected) {
                 self.state = .Reconnecting;
                 self.retry_count += 1;
-                
+
                 if (self.retry_count > self.max_retries) {
                     self.state = .Failed;
                     return error.MaxRetriesExceeded;
                 }
-                
+
                 // Simulate successful reconnection
                 self.state = .Connected;
                 self.retry_count = 0;
             }
         }
     };
-    
+
     var manager = ConnectionManager{
         .state = .Disconnected,
         .retry_count = 0,
         .max_retries = 3,
     };
-    
+
     try manager.attemptReconnect();
     try testing.expectEqual(ConnectionState.Connected, manager.state);
     try testing.expectEqual(@as(u32, 0), manager.retry_count);

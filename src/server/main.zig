@@ -229,7 +229,7 @@ fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
     if (g_mvcc_manager) |mgr| {
         return mgr;
     }
-    
+
     const mgr = ally.create(mvcc.MVCCManager) catch unreachable;
     mgr.* = mvcc.MVCCManager.init(ally);
     g_mvcc_manager = mgr;
@@ -262,7 +262,10 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
             if (parsed.value != .object) continue;
             const obj = parsed.value.object;
             const idv = obj.get("id") orelse continue;
-            const id: u64 = switch (idv) { .integer => |iv| @intCast(iv), else => 0 };
+            const id: u64 = switch (idv) {
+                .integer => |iv| @intCast(iv),
+                else => 0,
+            };
             if (id == 0) continue;
             var labels: []const []const u8 = &.{};
             if (obj.get("labels")) |lv| if (lv == .array) {
@@ -305,9 +308,18 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
             const sv = obj.get("source") orelse continue;
             const tv = obj.get("target") orelse continue;
             const tyv = obj.get("type") orelse continue;
-            const sid: u64 = switch (sv) { .integer => |iv| @intCast(iv), else => 0 };
-            const tid: u64 = switch (tv) { .integer => |iv| @intCast(iv), else => 0 };
-            const ety: []const u8 = switch (tyv) { .string => |s| s, else => "" };
+            const sid: u64 = switch (sv) {
+                .integer => |iv| @intCast(iv),
+                else => 0,
+            };
+            const tid: u64 = switch (tv) {
+                .integer => |iv| @intCast(iv),
+                else => 0,
+            };
+            const ety: []const u8 = switch (tyv) {
+                .string => |s| s,
+                else => "",
+            };
             if (sid == 0 or tid == 0) continue;
             const eid = try g.addEdge(ally, sid, tid, ety);
             if (obj.get("properties")) |pv| {
@@ -334,14 +346,14 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
 
 fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
     std.fs.cwd().makePath(dir_path) catch return;
-    
+
     // Save nodes
     const nodes_path = std.mem.concat(ally, u8, &.{ dir_path, "/nodes.jsonl" }) catch return;
     defer ally.free(nodes_path);
-    
+
     var nodes_content = std.ArrayList(u8).initCapacity(ally, 0) catch return;
     defer nodes_content.deinit(ally);
-    
+
     var it = g.nodes.iterator();
     while (it.next()) |entry| {
         const node = entry.value_ptr.*;
@@ -369,22 +381,22 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
         }
         nodes_content.appendSlice(ally, "}}\n") catch {};
     }
-    
+
     std.fs.cwd().writeFile(.{ .sub_path = nodes_path, .data = nodes_content.items }) catch {};
-    
+
     // Save edges
     const edges_path = std.mem.concat(ally, u8, &.{ dir_path, "/edges.jsonl" }) catch return;
     defer ally.free(edges_path);
-    
+
     var edges_content = std.ArrayList(u8).initCapacity(ally, 0) catch return;
     defer edges_content.deinit(ally);
-    
+
     var i: usize = 0;
     while (i < g.edges.items.len) : (i += 1) {
         const e = g.edges.items[i];
         std.fmt.format(edges_content.writer(ally), "{{\"source\":{d},\"target\":{d},\"type\":\"{s}\",\"properties\":{{}}}}\n", .{ e.source, e.target, e.edge_type }) catch {};
     }
-    
+
     std.fs.cwd().writeFile(.{ .sub_path = edges_path, .data = edges_content.items }) catch {};
 }
 
@@ -393,22 +405,22 @@ fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorag
     try graph.addNode(ally, 1, &.{"Person"});
     try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
     try graph.setNodeProperty(1, "age", .{ .Int = 30 });
-    
+
     try graph.addNode(ally, 2, &.{"Person"});
     try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
     try graph.setNodeProperty(2, "age", .{ .Int = 25 });
-    
+
     try graph.addNode(ally, 3, &.{"Person"});
     try graph.setNodeProperty(3, "name", .{ .String = "Charlie" });
     try graph.setNodeProperty(3, "age", .{ .Int = 35 });
-    
+
     // Add sample edges
     const e1 = try graph.addEdge(ally, 1, 2, "KNOWS");
     try graph.setEdgeProperty(e1, "since", .{ .Int = 2020 });
-    
+
     const e2 = try graph.addEdge(ally, 2, 3, "KNOWS");
     try graph.setEdgeProperty(e2, "since", .{ .Int = 2021 });
-    
+
     const e3 = try graph.addEdge(ally, 1, 3, "WORKS_WITH");
     try graph.setEdgeProperty(e3, "department", .{ .String = "Engineering" });
 }
@@ -1134,13 +1146,18 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         // Initialize graph storage (for now, use a global singleton)
         // In production, this would be loaded from persistent storage
         const graph = getOrCreateGraphStorage(ally);
-        
+
         // Execute MATCH pattern
-        const bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause);
-        
+        var bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause);
+
+        // Apply WITH clause if present
+        if (q.with_clause) |with| {
+            bindings = try graph_exec.executeWith(ally, bindings, with, q.where_clause, graph);
+        }
+
         // Convert bindings to JSON rows
         const rows = try graph_exec.bindingsToJson(ally, bindings, q.ret.items, graph);
-        
+
         // Build column metadata
         var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
         for (q.ret.items, 0..) |item, i| {
@@ -1148,7 +1165,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             cols[i] = .{ .name = alias, .type = "MIXED" }; // Type will be determined at runtime
         }
         cols_out.* = cols;
-        
+
         // Handle ORDER BY if present
         if (q.order_by) |ob| {
             // TODO: Implement ordering for graph results
@@ -1160,10 +1177,10 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 }
             }
         }
-        
+
         return rows;
     }
-    
+
     // Original implementation for non-MATCH queries
     // Build rows
     var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
@@ -2143,7 +2160,7 @@ pub fn main() !void {
         if (catalog_create_name) |tname| {
             catalog.createTable(tname, &.{}) catch {};
         }
-        
+
         // Try to load graph from catalog
         if (g_graph_storage == null) {
             // For now, just use JSONL files
@@ -2154,12 +2171,8 @@ pub fn main() !void {
                 if (catalog.graph_metadata == null) {
                     catalog.initGraphMetadata() catch {};
                 }
-                catalog.saveGraphMetadata(
-                    @intCast(lg.nodes.count()),
-                    @intCast(lg.edges.items.len),
-                    0, // max_node_id - would need to calculate
-                    if (lg.edges.items.len > 0) lg.edges.items.len - 1 else 0
-                ) catch {};
+                catalog.saveGraphMetadata(@intCast(lg.nodes.count()), @intCast(lg.edges.items.len), 0, // max_node_id - would need to calculate
+                    if (lg.edges.items.len > 0) lg.edges.items.len - 1 else 0) catch {};
             }
         }
     }
@@ -2335,13 +2348,13 @@ pub fn main() !void {
                     state.txn_id = t.id;
                     // Capture snapshot timestamp (current global commit ts)
                     state.session_snapshot_ts = state.global_commit_ts;
-                    
+
                     // Initialize MVCC transaction for conflict detection
                     if (state.mvcc_manager == null) {
                         state.mvcc_manager = getOrCreateMVCCManager(gpa);
                     }
                     state.current_mvcc_txn = state.mvcc_manager.?.beginTransaction(.SnapshotIsolation) catch null;
-                    
+
                     // Return success with status_class 00000
                     const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_BEGIN\",\"txn_id\":{}}}}}\n", .{t.id});
                     defer gpa.free(success_json);
@@ -2373,7 +2386,7 @@ pub fn main() !void {
                     _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx = state.active_txn.?;
-                    
+
                     // Try to commit MVCC transaction first for conflict detection
                     var mvcc_commit_success = true;
                     if (state.current_mvcc_txn) |mvcc_txn| {
@@ -2387,7 +2400,7 @@ pub fn main() !void {
                             const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction rolled back due to concurrent update\"}}]}}\n", .{err_msg});
                             defer gpa.free(err_json);
                             _ = stdout_file.write(err_json) catch {};
-                            
+
                             // Clean up transaction state
                             state.current_mvcc_txn = null;
                             state.active_txn = null;
@@ -2396,11 +2409,11 @@ pub fn main() !void {
                         };
                         state.current_mvcc_txn = null;
                     }
-                    
+
                     if (!mvcc_commit_success) {
                         return;
                     }
-                    
+
                     state.txn_manager.commit(&tx) catch |err| {
                         // Handle commit failure (e.g., serialization failure)
                         const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{@errorName(err)});
@@ -2457,13 +2470,13 @@ pub fn main() !void {
                     _ = stdout_file.write(err_json) catch {};
                 } else {
                     var tx2 = state.active_txn.?;
-                    
+
                     // Abort MVCC transaction
                     if (state.current_mvcc_txn) |mvcc_txn| {
                         state.mvcc_manager.?.abortTransaction(mvcc_txn) catch {};
                         state.current_mvcc_txn = null;
                     }
-                    
+
                     // Mark uncommitted inserts for this txn as aborted
                     var ia: usize = 0;
                     while (ia < state.inserted_values.items.len) : (ia += 1) {
@@ -2595,7 +2608,10 @@ pub fn main() !void {
                             const rid: u64 = hasher.final();
                             const mv = if (val_s.len > 0) val_s else "";
                             state.mvcc_manager.?.write(state.current_mvcc_txn.?, rid, mv) catch |err| {
-                                const err_msg = switch (err) { error.SerializationFailure => "Write-write conflict detected", else => @errorName(err) };
+                                const err_msg = switch (err) {
+                                    error.SerializationFailure => "Write-write conflict detected",
+                                    else => @errorName(err),
+                                };
                                 const ej = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\"}}\n", .{err_msg});
                                 defer gpa.free(ej);
                                 _ = stdout_file.write(ej) catch {};
@@ -3899,15 +3915,11 @@ pub fn main() !void {
         if (g_graph_storage) |gg| {
             // Save to JSONL files
             saveGraphToDir(gpa, gg, ddir);
-            
+
             // Update catalog metadata if initialized
             if (catalog_inited) {
-                catalog.saveGraphMetadata(
-                    @intCast(gg.nodes.count()),
-                    @intCast(gg.edges.items.len),
-                    0, // max_node_id - would need to calculate
-                    if (gg.edges.items.len > 0) gg.edges.items.len - 1 else 0
-                ) catch |err| {
+                catalog.saveGraphMetadata(@intCast(gg.nodes.count()), @intCast(gg.edges.items.len), 0, // max_node_id - would need to calculate
+                    if (gg.edges.items.len > 0) gg.edges.items.len - 1 else 0) catch |err| {
                     std.log.warn("Failed to save graph metadata to catalog: {}", .{err});
                 };
             }
