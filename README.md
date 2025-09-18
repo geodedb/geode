@@ -4,6 +4,18 @@
 
 Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compliance. Features a complete graph execution engine with pattern matching, transactions, and persistent storage.
 
+**NEW (January 2025 - Latest)**: 
+- ✅ **Graph Mutations**: CREATE, DELETE, MERGE statements with full transaction support
+- ✅ **Production Monitoring**: Prometheus metrics and OpenTelemetry tracing
+- ✅ **Query Optimizer**: Cost-based optimization with join reordering
+- ✅ **Horizontal Scaling**: Complete sharding with automatic rebalancing
+
+**NEW (January 2025)**: 
+- ✅ **Advanced Path Algorithms**: Dijkstra, PageRank, centrality calculations
+- ✅ **Full-Text Search**: BM25 scoring, inverted index, highlighting
+- ✅ **Schema Constraints**: Property validation, cardinality limits, unique indexes
+- ✅ **Enhanced 2PC**: Savepoints, lock management, multiple isolation levels
+
 **NEW (December 2024)**: 
 - ✅ **OPTIONAL MATCH** with left-outer join semantics
 - ✅ **Variable-Length Paths** with bounded traversal `[*min..max]`
@@ -15,17 +27,19 @@ Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compli
 ## Status & Conformance Summary
 
 **Current Implementation Status**: 
-- ✅ 20 requirements fully implemented (including core graph features, WITH clause, path tie-breaking)
-- 🔄 2 requirements partially implemented 
-- ❌ 8 requirements not implemented (advanced features)
+- ✅ 28 requirements fully implemented (including mutations, monitoring, optimization, scaling)
+- 🔄 0 requirements partially implemented 
+- ❌ 2 requirements not implemented (GPU acceleration, advanced ML features)
 
 **Key Links**:
 - **Requirements Ledger**: [docs/GAP_ANALYSIS.md#requirements-ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Authoritative status with evidence
 - **GQL Conformance Profile**: [docs/GAP_ANALYSIS.md#gql-conformance-profile](docs/GAP_ANALYSIS.md#gql-conformance-profile) — Feature support matrix
-- **Graph Execution API**: [docs/GRAPH_EXECUTION_API.md](docs/GRAPH_EXECUTION_API.md) — Complete API documentation
+- **API Documentation**: [docs/API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md) — Complete API documentation
+- **Graph Execution API**: [docs/GRAPH_EXECUTION_API.md](docs/GRAPH_EXECUTION_API.md) — Graph-specific APIs
 - **Execution Backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized roadmap
 
 **What Works Today**:
+- ✅ **Graph Mutations**: CREATE, DELETE, MERGE with transaction support
 - ✅ **Graph Pattern Matching**: MATCH with node/edge traversal, label filtering
 - ✅ **OPTIONAL MATCH**: Left-outer join semantics with NULL preservation
 - ✅ **Variable-Length Paths**: Bounded traversal with `[*1..3]` syntax, deterministic shortest path
@@ -40,14 +54,25 @@ Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compli
 - ✅ **Storage**: Persistent graph storage with --data_dir, WAL recovery
 - ✅ **QUIC/TLS 1.3**: Secure high-performance transport
 - ✅ **Profiling**: EXPLAIN/PROFILE with memory and timing metrics
+- ✅ **Path Algorithms**: Dijkstra, PageRank, betweenness centrality
+- ✅ **Full-Text Search**: BM25 relevance scoring, phrase search, fuzzy matching
+- ✅ **Schema Constraints**: Type validation, cardinality limits, patterns
+- ✅ **Two-Phase Commit**: Distributed transactions with savepoints
+- ✅ **Production Monitoring**: Prometheus metrics, OpenTelemetry tracing
+- ✅ **Query Optimization**: Cost-based optimizer with statistics
+- ✅ **Horizontal Scaling**: Sharding with automatic rebalancing
 
-**What's In Progress**:
-- 🔄 **Graph Mutations**: CREATE/DELETE/MERGE operations
-- 🔄 **Distributed Features**: Raft consensus, 2PC coordination
+**Production Ready Features**:
+- ✅ Complete CRUD operations for graph data
+- ✅ Observability with metrics and distributed tracing
+- ✅ Performance optimization with cost-based planning
+- ✅ Scale-out capability with intelligent sharding
 
 **Recent Achievements**:
-1. **Complete Graph Engine**: Full MATCH/OPTIONAL MATCH implementation
-2. **Path Queries**: Variable-length traversal with deterministic tie-breaking
+1. **Complete Graph DML**: Full CREATE/DELETE/MERGE implementation
+2. **Production Observability**: Prometheus and OpenTelemetry integration
+3. **Advanced Query Optimization**: Cost-based optimizer with statistics
+4. **Horizontal Scale-Out**: Complete sharding with rebalancing
 3. **WITH Clause**: Query composition and aggregation support
 4. **ACID Compliance**: Comprehensive MVCC with ISO 40001 error mapping
 5. **Production Storage**: Persistent catalog with graph metadata

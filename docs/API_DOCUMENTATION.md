@@ -328,6 +328,40 @@ fmt.Printf("Unique Values: %d\n", stats.UniqueValues)
 fmt.Printf("Selectivity: %.2f\n", stats.Selectivity)
 ```
 
+### Full-Text Search Index
+```go
+// Create full-text index
+err := client.CreateFullTextIndex("content_idx", gql.FullTextOptions{
+    Fields: []string{"title", "description", "content"},
+    Language: "english",
+    Stopwords: gql.DefaultStopwords,
+})
+
+// Search using full-text index
+results, err := client.FullTextSearch("content_idx", "graph database", gql.SearchOptions{
+    MaxResults: 10,
+    Highlight: true,
+    ScoreThreshold: 0.5,
+})
+
+for _, result := range results {
+    fmt.Printf("Score: %.2f, Doc: %s\n", result.Score, result.DocumentID)
+    for _, highlight := range result.Highlights {
+        fmt.Printf("  Match: %s at position %d\n", highlight.Text, highlight.Position)
+    }
+}
+
+// Phrase search
+results, err := client.PhraseSearch("content_idx", "graph database technology", 
+    gql.SearchOptions{MaxResults: 5})
+
+// Fuzzy search with edit distance
+results, err := client.FuzzySearch("content_idx", "grph", gql.FuzzyOptions{
+    MaxEditDistance: 2,
+    MaxResults: 10,
+})
+```
+
 ## Monitoring & Metrics
 
 ### Query Profiling
@@ -414,6 +448,201 @@ result, err := client.QueryWithConsistency(
 ```go
 // Get cluster status
 status, err := client.ClusterStatus()
+fmt.Printf("Leader: %s\n", status.LeaderID)
+fmt.Printf("Nodes: %d\n", len(status.Nodes))
+
+// Add node to cluster
+err = client.AddNode("node4", "192.168.1.4:7567")
+
+// Remove node from cluster
+err = client.RemoveNode("node3")
+```
+
+## Advanced Path Algorithms
+
+### Dijkstra's Shortest Path
+```go
+// Find shortest weighted path
+path, err := client.DijkstraPath(
+    startNodeID, 
+    endNodeID,
+    gql.PathOptions{
+        EdgeWeights: map[string]float64{
+            "KNOWS": 1.0,
+            "WORKS_WITH": 0.5,
+            "RELATED_TO": 2.0,
+        },
+    },
+)
+
+fmt.Printf("Path length: %.2f\n", path.Weight)
+for _, node := range path.Nodes {
+    fmt.Printf("-> %d ", node)
+}
+```
+
+### PageRank Calculation
+```go
+// Calculate PageRank for all nodes
+rankings, err := client.PageRank(gql.PageRankOptions{
+    DampingFactor: 0.85,
+    MaxIterations: 100,
+    Tolerance: 0.0001,
+})
+
+// Get top 10 nodes by PageRank
+for i, result := range rankings[:10] {
+    fmt.Printf("%d. Node %d: score %.4f\n", i+1, result.NodeID, result.Score)
+}
+```
+
+### Betweenness Centrality
+```go
+// Calculate betweenness centrality
+centrality, err := client.BetweennessCentrality(gql.CentralityOptions{
+    SampleSize: 1000, // Sample 1000 nodes for large graphs
+    Normalized: true,
+})
+
+// Find most central nodes (important connectors)
+for _, result := range centrality[:5] {
+    fmt.Printf("Node %d: centrality %.4f\n", result.NodeID, result.Score)
+}
+```
+
+### Community Detection
+```go
+// Detect communities using Louvain algorithm
+communities, err := client.LouvainCommunities(gql.CommunityOptions{
+    Resolution: 1.0, // Higher values create more communities
+})
+
+for _, community := range communities {
+    fmt.Printf("Community %d: %d nodes, modularity %.3f\n", 
+        community.ID, len(community.Nodes), community.Modularity)
+}
+```
+
+## Schema Constraints
+
+### Define Node Constraints
+```gql
+-- Create node constraint with required properties
+CREATE CONSTRAINT person_constraint ON Person
+REQUIRE (name STRING NOT NULL, age INTEGER NOT NULL)
+CHECK (age >= 0 AND age <= 150)
+
+-- Add unique constraint
+CREATE CONSTRAINT person_email_unique ON Person
+REQUIRE (email STRING) UNIQUE
+
+-- Pattern constraint for property
+CREATE CONSTRAINT email_format ON Person
+REQUIRE (email STRING)
+CHECK (email MATCHES '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+```
+
+### Define Edge Constraints
+```gql
+-- Edge constraint with cardinality
+CREATE CONSTRAINT knows_constraint ON KNOWS
+FROM Person TO Person
+CARDINALITY (0, 500)  -- Max 500 KNOWS relationships per person
+
+-- Edge with required properties
+CREATE CONSTRAINT works_at ON WORKS_AT
+FROM Person TO Company
+REQUIRE (start_date DATE NOT NULL, position STRING NOT NULL)
+```
+
+### Validate Schema
+```go
+// Validate node against constraints
+err := client.ValidateNode(node)
+if err != nil {
+    if validationErr, ok := err.(*gql.ValidationError); ok {
+        fmt.Printf("Validation failed: %s\n", validationErr.Message)
+        fmt.Printf("Constraint: %s\n", validationErr.ConstraintType)
+    }
+}
+
+// Check cardinality constraints
+violations, err := client.CheckCardinality("Person", "KNOWS")
+for _, violation := range violations {
+    fmt.Printf("Node %d exceeds cardinality limit\n", violation.NodeID)
+}
+```
+
+## Enhanced Distributed Transactions
+
+### Two-Phase Commit with Savepoints
+```go
+// Start distributed transaction with enhanced options
+dtx, err := client.BeginDistributedTx(ctx, gql.DTxOptions{
+    Participants: []string{"shard1", "shard2", "shard3"},
+    IsolationLevel: gql.Serializable,
+    Timeout: 30 * time.Second,
+})
+
+// Create savepoint
+dtx.CreateSavepoint("before_bulk_insert")
+
+// Bulk operations
+for _, data := range bulkData {
+    err := dtx.Query(fmt.Sprintf("CREATE (p:Person %s)", data))
+    if err != nil {
+        // Rollback to savepoint on error
+        dtx.RollbackToSavepoint("before_bulk_insert")
+        break
+    }
+}
+
+// Two-phase commit
+if dtx.Prepare() {
+    err = dtx.Commit()
+} else {
+    dtx.Abort()
+}
+```
+
+### Lock Management
+```go
+// Acquire locks explicitly
+lock, err := client.AcquireLock(gql.LockRequest{
+    ResourceID: nodeID,
+    LockType: gql.ExclusiveLock,
+    Timeout: 5 * time.Second,
+})
+defer lock.Release()
+
+// Check lock status
+status, err := client.LockStatus(nodeID)
+fmt.Printf("Lock held by: %s\n", status.Holder)
+fmt.Printf("Waiters: %d\n", len(status.Waiters))
+```
+
+### Recovery and Fault Tolerance
+```go
+// Enable automatic recovery
+client.EnableRecovery(gql.RecoveryOptions{
+    LogFile: "/var/log/geode/recovery.log",
+    CheckpointInterval: 5 * time.Minute,
+    MaxRetries: 3,
+})
+
+// Manual recovery from log
+err := client.RecoverFromLog("/var/log/geode/recovery.log")
+
+// Check transaction status after crash
+status, err := client.GetTransactionStatus(txID)
+switch status {
+case gql.Committed:
+    fmt.Println("Transaction was committed")
+case gql.Aborted:
+    fmt.Println("Transaction was aborted")
+case gql.InDoubt:
+    fmt.Println("Transaction in doubt, manual resolution needed")
+}
 for _, node := range status.Nodes {
     fmt.Printf("Node %s: %s\n", node.ID, node.State)
 }

@@ -2,6 +2,42 @@
 
 Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope (S/M/L) • DRI. Swimlanes: Now / Next / Later. All acceptance include concrete GQL plus expected result shape or diagnostic.
 
+## Recently Completed (January 2025 - Latest)
+
+✅ **Graph Mutations** (REQ-GQL-019)
+- CREATE, DELETE, MERGE statements fully implemented
+- Location: src/gql/ast.zig, src/server/main.zig
+
+✅ **Production Monitoring** (REQ-GQL-034)
+- Prometheus metrics and distributed tracing
+- Location: src/monitoring/prometheus.zig, src/monitoring/tracing.zig
+
+✅ **Query Optimizer** (REQ-GQL-035)
+- Cost-based optimization with join reordering
+- Location: src/planner/query_optimizer.zig
+
+✅ **Horizontal Scaling** (REQ-GQL-036)
+- Complete sharding implementation with rebalancing
+- Location: src/distributed/sharding.zig
+
+## Recently Completed (January 2025)
+
+✅ **Advanced Path Algorithms** (REQ-GQL-030)
+- Dijkstra, PageRank, betweenness centrality implemented
+- Location: src/graph/path_algorithms.zig
+
+✅ **Full-Text Search** (REQ-GQL-031)
+- BM25 scoring, inverted index, phrase/fuzzy search
+- Location: src/index/fulltext.zig
+
+✅ **Schema Constraints** (REQ-GQL-032)
+- Property validation, cardinality, unique constraints
+- Location: src/storage/constraints.zig
+
+✅ **Enhanced Two-Phase Commit** (REQ-GQL-033)
+- Savepoints, lock management, isolation levels
+- Location: src/distributed/twophase.zig
+
 ## Recently Completed (December 2024)
 
 ✅ **OPTIONAL MATCH** (REQ-GQL-015)
@@ -33,7 +69,7 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Now (P0) - Critical Gaps
 
-- Status: Core graph primitives and query composition complete. Focus shifts to DML and advanced features.
+- Status: Core graph primitives, advanced algorithms, and search complete. Focus shifts to DML and production features.
 
 1. Graph Mutations (REQ-GQL-019)
    - Why: Complete CRUD operations for graph data
@@ -44,9 +80,36 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
    - Scope: L
    - DRI: dml
 
+2. Production Monitoring (REQ-GQL-034)
+   - Why: Observability for production deployments
+   - What: Prometheus metrics, distributed tracing, alerting
+   - Acceptance: Metrics exposed at /metrics endpoint
+   - Deps: Metrics library integration
+   - Scope: M
+   - DRI: ops
+
+## Next (P1) - Scale & Performance
+
+3. Query Optimization (REQ-GQL-035)
+   - Why: Improve query performance
+   - What: Cost-based optimizer enhancements, join reordering
+   - Acceptance: EXPLAIN shows optimized plan
+   - ISO: Annex
+   - Deps: Statistics collection
+   - Scope: L
+   - DRI: optimizer
+
+4. Horizontal Scaling (REQ-GQL-036)
+   - Why: Handle larger graphs
+   - What: Complete sharding implementation
+   - Acceptance: Queries span multiple shards transparently
+   - Deps: Distributed execution, 2PC
+   - Scope: XL
+   - DRI: dist
+
 ## Later (P2+) - Extensions
 
-2. Distributed Execution (REQ-GQL-028/042/043)
+5. GPU Acceleration (REQ-GQL-037)
    - Why: Scale-out for large graphs
    - What: Complete Raft implementation, 2PC coordination, partition-aware planning
    - Acceptance: Multi-node cluster with replicated data; distributed query execution

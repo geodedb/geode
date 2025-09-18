@@ -95,3 +95,107 @@ This file records completed work for clarity, keeping `GAP_ANALYSIS.md` focused 
   - Ensures consistent results across multiple executions
 - **Tests**: tests/unit_shortest_path_tiebreak.zig
 - **ISO Reference**: 22.4, UA005/UA006
+
+## Recently Implemented Features (January 2025)
+
+### Graph Mutations (REQ-GQL-019)
+- **Location**: src/gql/ast.zig (AST structures), src/gql/parser.zig (parsing), src/server/main.zig (execution)
+- **Features**:
+  - CREATE statement for creating nodes and relationships
+  - DELETE statement with DETACH option for cascading deletes
+  - MERGE statement with ON CREATE/ON MATCH clauses
+  - Full transaction integration with autocommit support
+- **Tests**: tests/e2e_production_features.zig
+- **ISO Reference**: 15 (data modification)
+
+### Production Monitoring (REQ-GQL-034)
+- **Location**: src/monitoring/prometheus.zig
+- **Features**:
+  - Prometheus-compatible metrics exporter
+  - Counter, gauge, histogram, and summary metric types
+  - Standard database metrics (queries, connections, transactions, graph stats)
+  - Memory usage tracking
+  - HTTP /metrics endpoint compatible format
+- **Tests**: tests/e2e_production_features.zig
+- **Use Cases**: Production observability, performance monitoring
+
+### Distributed Tracing (REQ-GQL-034)
+- **Location**: src/monitoring/tracing.zig
+- **Features**:
+  - OpenTelemetry-compatible distributed tracing
+  - W3C Trace Context propagation
+  - Span creation with attributes and events
+  - JSON export format for trace data
+  - Service mesh integration ready
+- **Tests**: tests/e2e_production_features.zig
+- **Use Cases**: Request tracing, performance analysis, debugging
+
+### Query Optimizer Enhancements (REQ-GQL-035)
+- **Location**: src/planner/query_optimizer.zig
+- **Features**:
+  - Cost-based optimization with configurable cost model
+  - Multiple access path generation (sequential, index, bitmap scans)
+  - Join order optimization with dynamic programming
+  - Predicate pushdown and filter merging
+  - Parallel query consideration
+  - Statistics-based cardinality estimation
+- **Tests**: tests/e2e_production_features.zig
+- **ISO Reference**: Annex (optimization)
+
+### Horizontal Scaling (REQ-GQL-036)
+- **Location**: src/distributed/sharding.zig (enhanced)
+- **Features**:
+  - Advanced shard management with automatic rebalancing
+  - Multiple partition strategies (hash, range, graph-aware, geo-distributed)
+  - Shard splitting and merging operations
+  - Replica management with automatic failover
+  - Query routing with execution strategy selection
+  - Migration support for topology changes
+- **Tests**: tests/e2e_production_features.zig
+- **Use Cases**: Scale-out deployments, large graph handling
+
+### Advanced Path Algorithms (REQ-GQL-030)
+- **Location**: src/graph/path_algorithms.zig
+- **Features**:
+  - Dijkstra's shortest path algorithm with edge weights
+  - PageRank algorithm for node importance calculation
+  - Support for centrality calculations
+  - Community detection foundations
+- **Tests**: tests/e2e_advanced_features.zig
+- **Use Cases**: Graph analytics, pathfinding, node ranking
+
+### Full-Text Search Index (REQ-GQL-031)
+- **Location**: src/index/fulltext.zig
+- **Features**:
+  - BM25 scoring algorithm for relevance ranking
+  - Inverted index for efficient text searching
+  - Tokenization with stopword filtering
+  - TF-IDF scoring for document relevance
+  - Highlighting of matched terms in results
+- **Tests**: tests/e2e_advanced_features.zig
+- **Use Cases**: Property search, content discovery, relevance ranking
+
+### Schema Constraints System (REQ-GQL-032)
+- **Location**: src/storage/constraints.zig
+- **Features**:
+  - Node and edge constraints with required/optional properties
+  - Property type validation (boolean, integer, float, string, datetime, list, map)
+  - Range constraints with min/max values
+  - Cardinality constraints for relationships
+  - Unique property enforcement
+  - Custom check constraints with error messages
+- **Tests**: tests/e2e_advanced_features.zig
+- **ISO Reference**: 23.x (diagnostics)
+
+### Enhanced Two-Phase Commit Protocol (REQ-GQL-033)
+- **Location**: src/distributed/twophase.zig
+- **Features**:
+  - Full two-phase commit coordinator and participant implementation
+  - Undo/redo logging for crash recovery
+  - Savepoint support for partial rollbacks
+  - Lock management with deadlock prevention
+  - Multiple isolation levels (read uncommitted, read committed, repeatable read, serializable)
+  - Recovery from log files for fault tolerance
+  - Resource manager with lock compatibility matrix
+- **Tests**: tests/e2e_advanced_features.zig
+- **ISO Reference**: 8 (transactions)
