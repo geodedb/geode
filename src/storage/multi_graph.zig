@@ -277,57 +277,57 @@ pub const ShowGraphsStatement = struct {
 
 test "multi-graph creation and management" {
     const allocator = std.testing.allocator;
-    
+
     var meta_catalog = try catalog.Catalog.init(allocator);
     defer meta_catalog.deinit();
-    
+
     var mgr = try MultiGraphManager.init(allocator, &meta_catalog);
     defer mgr.deinit();
-    
+
     // Create graphs
     const graph1_id = try mgr.createGraph("graph1", .{});
     const graph2_id = try mgr.createGraph("graph2", .{});
-    
+
     try std.testing.expect(graph1_id != graph2_id);
-    
+
     // Use graph
     try mgr.useGraph("graph1");
     const current = try mgr.getCurrentGraph();
     try std.testing.expectEqualStrings("graph1", current.name);
-    
+
     // List graphs
     const graphs = try mgr.listGraphs(allocator);
     defer allocator.free(graphs);
     try std.testing.expect(graphs.len == 2);
-    
+
     // Drop graph
     try mgr.dropGraph("graph2", .{});
-    
+
     // Verify graph2 is gone
     try std.testing.expectError(error.GraphNotFound, mgr.getGraph("graph2"));
 }
 
 test "graph isolation" {
     const allocator = std.testing.allocator;
-    
+
     var meta_catalog = try catalog.Catalog.init(allocator);
     defer meta_catalog.deinit();
-    
+
     var mgr = try MultiGraphManager.init(allocator, &meta_catalog);
     defer mgr.deinit();
-    
+
     // Create graphs with different isolation levels
     _ = try mgr.createGraph("serializable_graph", .{
         .isolation_level = .serializable,
     });
-    
+
     _ = try mgr.createGraph("read_committed_graph", .{
         .isolation_level = .read_committed,
     });
-    
+
     const graph1 = try mgr.getGraph("serializable_graph");
     try std.testing.expectEqual(GraphIsolationLevel.serializable, graph1.isolation_level);
-    
+
     const graph2 = try mgr.getGraph("read_committed_graph");
     try std.testing.expectEqual(GraphIsolationLevel.read_committed, graph2.isolation_level);
 }

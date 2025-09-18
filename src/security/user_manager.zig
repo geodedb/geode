@@ -10,9 +10,9 @@ pub const UserManager = struct {
     security_manager: *auth.SecurityManager,
     rls_engine: *rls.RLSEngine,
     storage_backend: storage.StorageEngine,
-    
+
     const Self = @This();
-    
+
     pub fn init(
         allocator: Allocator,
         security_manager: *auth.SecurityManager,
@@ -26,11 +26,11 @@ pub const UserManager = struct {
             .storage_backend = storage_backend,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         _ = self;
     }
-    
+
     // User CRUD Operations
     pub const CreateUserRequest = struct {
         username: []const u8,
@@ -40,7 +40,7 @@ pub const UserManager = struct {
         attributes: ?std.json.Value = null,
         metadata: ?std.json.Value = null,
     };
-    
+
     pub const CreateUserResponse = struct {
         user_id: auth.UserId,
         username: []const u8,
@@ -48,7 +48,7 @@ pub const UserManager = struct {
         created_at: i64,
         roles: []const []const u8,
     };
-    
+
     pub fn createUser(self: *Self, request: CreateUserRequest) !CreateUserResponse {
         // Create the user
         const user = try self.security_manager.createUser(
@@ -56,7 +56,7 @@ pub const UserManager = struct {
             request.email,
             request.password,
         );
-        
+
         // Assign roles if specified
         if (request.roles) |roles| {
             for (roles) |role_name| {
@@ -69,13 +69,13 @@ pub const UserManager = struct {
                         break;
                     }
                 }
-                
+
                 if (role_id) |id| {
                     try self.security_manager.assignRole(user.id, id);
                 }
             }
         }
-        
+
         // Set attributes if provided
         if (request.attributes) |attrs| {
             if (attrs == .object) {
@@ -90,15 +90,15 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         // Set metadata if provided
         if (request.metadata) |meta| {
             user.metadata = meta;
         }
-        
+
         // Persist to storage
         try self.persistUser(user.*);
-        
+
         // Build response
         var response_roles = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
         if (self.security_manager.rbac.user_roles.get(user.id)) |user_roles| {
@@ -108,7 +108,7 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         return CreateUserResponse{
             .user_id = user.id,
             .username = user.username,
@@ -117,7 +117,7 @@ pub const UserManager = struct {
             .roles = try response_roles.toOwnedSlice(self.allocator),
         };
     }
-    
+
     pub const UpdateUserRequest = struct {
         user_id: auth.UserId,
         email: ?[]const u8 = null,
@@ -127,25 +127,25 @@ pub const UserManager = struct {
         attributes: ?std.json.Value = null,
         metadata: ?std.json.Value = null,
     };
-    
+
     pub fn updateUser(self: *Self, request: UpdateUserRequest) !void {
         const user = self.security_manager.users.getPtr(request.user_id) orelse
             return error.UserNotFound;
-        
+
         // Update fields
         if (request.email) |email| {
             user.email = try self.allocator.dupe(u8, email);
         }
-        
+
         if (request.password) |password| {
             try self.security_manager.validatePassword(password);
             user.password_hash = try self.security_manager.hashPassword(password);
         }
-        
+
         if (request.is_active) |is_active| {
             user.is_active = is_active;
         }
-        
+
         if (request.mfa_enabled) |mfa_enabled| {
             user.mfa_enabled = mfa_enabled;
             if (mfa_enabled and user.mfa_secret == null) {
@@ -153,7 +153,7 @@ pub const UserManager = struct {
                 user.mfa_secret = try self.generateMFASecret();
             }
         }
-        
+
         if (request.attributes) |attrs| {
             user.attributes.clearRetainingCapacity();
             if (attrs == .object) {
@@ -168,17 +168,17 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         if (request.metadata) |meta| {
             user.metadata = meta;
         }
-        
+
         user.updated_at = std.time.milliTimestamp();
-        
+
         // Persist changes
         try self.persistUser(user.*);
     }
-    
+
     pub fn deleteUser(self: *Self, user_id: auth.UserId) !void {
         // Remove user roles
         if (self.security_manager.rbac.user_roles.get(user_id)) |roles| {
@@ -186,22 +186,22 @@ pub const UserManager = struct {
                 try self.security_manager.revokeRole(user_id, role_id);
             }
         }
-        
+
         // Remove from storage
         try self.removeUserFromStorage(user_id);
-        
+
         // Remove from memory
         _ = self.security_manager.users.remove(user_id);
     }
-    
+
     pub fn getUser(self: *Self, user_id: auth.UserId) !auth.User {
         return self.security_manager.users.get(user_id) orelse
             error.UserNotFound;
     }
-    
+
     pub fn listUsers(self: *Self, filter: ?UserFilter) ![]auth.User {
         var users = std.ArrayList(auth.User).initCapacity(self.allocator, 0) catch unreachable;
-        
+
         var it = self.security_manager.users.iterator();
         while (it.next()) |entry| {
             if (filter) |f| {
@@ -209,10 +209,10 @@ pub const UserManager = struct {
             }
             try users.append(self.allocator, entry.value_ptr.*);
         }
-        
+
         return try users.toOwnedSlice(self.allocator);
     }
-    
+
     pub const UserFilter = struct {
         is_active: ?bool = null,
         is_superuser: ?bool = null,
@@ -221,24 +221,24 @@ pub const UserManager = struct {
         created_after: ?i64 = null,
         created_before: ?i64 = null,
     };
-    
+
     fn matchesFilter(self: *Self, user: auth.User, filter: UserFilter) bool {
         if (filter.is_active) |is_active| {
             if (user.is_active != is_active) return false;
         }
-        
+
         if (filter.is_superuser) |is_superuser| {
             if (user.is_superuser != is_superuser) return false;
         }
-        
+
         if (filter.has_mfa) |has_mfa| {
             if (user.mfa_enabled != has_mfa) return false;
         }
-        
+
         if (filter.role_name) |role_name| {
             const user_roles = self.security_manager.rbac.user_roles.get(user.id) orelse
                 return false;
-            
+
             var has_role = false;
             for (user_roles.items) |role_id| {
                 if (self.security_manager.roles.get(role_id)) |role| {
@@ -250,18 +250,18 @@ pub const UserManager = struct {
             }
             if (!has_role) return false;
         }
-        
+
         if (filter.created_after) |after| {
             if (user.created_at < after) return false;
         }
-        
+
         if (filter.created_before) |before| {
             if (user.created_at > before) return false;
         }
-        
+
         return true;
     }
-    
+
     // Role Management
     pub const CreateRoleRequest = struct {
         name: []const u8,
@@ -270,13 +270,13 @@ pub const UserManager = struct {
         parent_role: ?[]const u8 = null,
         priority: ?u32 = null,
     };
-    
+
     pub fn createRole(self: *Self, request: CreateRoleRequest) !auth.RoleId {
         const role = try self.security_manager.createRole(
             request.name,
             request.description,
         );
-        
+
         // Set parent role if specified
         if (request.parent_role) |parent_name| {
             var it = self.security_manager.roles.iterator();
@@ -287,12 +287,12 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         // Set priority if specified
         if (request.priority) |priority| {
             role.priority = priority;
         }
-        
+
         // Grant permissions if specified
         if (request.permissions) |permissions| {
             for (permissions) |perm_name| {
@@ -305,13 +305,13 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         // Persist to storage
         try self.persistRole(role.*);
-        
+
         return role.id;
     }
-    
+
     pub fn updateRole(
         self: *Self,
         role_id: auth.RoleId,
@@ -320,26 +320,26 @@ pub const UserManager = struct {
     ) !void {
         const role = self.security_manager.roles.getPtr(role_id) orelse
             return error.RoleNotFound;
-        
+
         if (description) |desc| {
             role.description = try self.allocator.dupe(u8, desc);
         }
-        
+
         if (priority) |pri| {
             role.priority = pri;
         }
-        
+
         try self.persistRole(role.*);
     }
-    
+
     pub fn deleteRole(self: *Self, role_id: auth.RoleId) !void {
         const role = self.security_manager.roles.get(role_id) orelse
             return error.RoleNotFound;
-        
+
         if (role.is_system) {
             return error.CannotDeleteSystemRole;
         }
-        
+
         // Remove role from all users
         var it = self.security_manager.rbac.user_roles.iterator();
         while (it.next()) |entry| {
@@ -352,14 +352,14 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         // Remove from storage
         try self.removeRoleFromStorage(role_id);
-        
+
         // Remove from memory
         _ = self.security_manager.roles.remove(role_id);
     }
-    
+
     // Permission Management
     pub const CreatePermissionRequest = struct {
         name: []const u8,
@@ -367,23 +367,23 @@ pub const UserManager = struct {
         action: auth.Action,
         conditions: ?[]const u8 = null,
     };
-    
+
     pub fn createPermission(self: *Self, request: CreatePermissionRequest) !auth.PermissionId {
         const permission = try self.security_manager.createPermission(
             request.name,
             request.resource,
             request.action,
         );
-        
+
         if (request.conditions) |conditions| {
             permission.conditions = try self.allocator.dupe(u8, conditions);
         }
-        
+
         try self.persistPermission(permission.*);
-        
+
         return permission.id;
     }
-    
+
     // RLS Policy Management
     pub const CreatePolicyRequest = struct {
         name: []const u8,
@@ -399,7 +399,7 @@ pub const UserManager = struct {
         data_classification: ?rls.RLSEngine.DataClassification = null,
         audit_level: rls.RLSEngine.AuditLevel = .denials,
     };
-    
+
     pub fn createPolicy(self: *Self, request: CreatePolicyRequest) !u64 {
         // Convert role names to IDs
         var role_ids = std.ArrayList(auth.RoleId).initCapacity(self.allocator, 0) catch unreachable;
@@ -412,9 +412,9 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         const policy_id = @as(u64, @intCast(std.time.milliTimestamp()));
-        
+
         const policy = rls.RLSEngine.Policy{
             .id = policy_id,
             .name = try self.allocator.dupe(u8, request.name),
@@ -444,13 +444,13 @@ pub const UserManager = struct {
             .data_classification = request.data_classification,
             .audit_level = request.audit_level,
         };
-        
+
         try self.rls_engine.createPolicy(policy);
         try self.persistPolicy(policy);
-        
+
         return policy_id;
     }
-    
+
     pub fn updatePolicy(
         self: *Self,
         policy_id: u64,
@@ -461,7 +461,7 @@ pub const UserManager = struct {
         // Find the policy
         var found_policy: ?rls.RLSEngine.Policy = null;
         var policy_key: ?rls.RLSEngine.PolicyKey = null;
-        
+
         var it = self.rls_engine.policies.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items) |policy| {
@@ -472,14 +472,14 @@ pub const UserManager = struct {
                 }
             }
         }
-        
+
         var policy = found_policy orelse return error.PolicyNotFound;
-        
+
         // Update fields
         if (enabled) |e| {
             policy.enabled = e;
         }
-        
+
         if (using_clause) |clause| {
             policy.using_expr = rls.RLSEngine.Expression{
                 .raw = try self.allocator.dupe(u8, clause),
@@ -488,7 +488,7 @@ pub const UserManager = struct {
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
             };
         }
-        
+
         if (check_clause) |clause| {
             policy.check_expr = rls.RLSEngine.Expression{
                 .raw = try self.allocator.dupe(u8, clause),
@@ -497,59 +497,59 @@ pub const UserManager = struct {
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
             };
         }
-        
+
         try self.rls_engine.updatePolicy(policy_id, policy);
         try self.persistPolicy(policy);
     }
-    
+
     pub fn deletePolicy(self: *Self, policy_id: u64) !void {
         try self.rls_engine.deletePolicy(policy_id);
         try self.removePolicyFromStorage(policy_id);
     }
-    
+
     // Storage persistence
     fn persistUser(self: *Self, user: auth.User) !void {
         _ = self;
         _ = user;
         // TODO: Implement actual persistence to storage backend
     }
-    
+
     fn removeUserFromStorage(self: *Self, user_id: auth.UserId) !void {
         _ = self;
         _ = user_id;
         // TODO: Implement removal from storage backend
     }
-    
+
     fn persistRole(self: *Self, role: auth.Role) !void {
         _ = self;
         _ = role;
         // TODO: Implement actual persistence to storage backend
     }
-    
+
     fn removeRoleFromStorage(self: *Self, role_id: auth.RoleId) !void {
         _ = self;
         _ = role_id;
         // TODO: Implement removal from storage backend
     }
-    
+
     fn persistPermission(self: *Self, permission: auth.Permission) !void {
         _ = self;
         _ = permission;
         // TODO: Implement actual persistence to storage backend
     }
-    
+
     fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy) !void {
         _ = self;
         _ = policy;
         // TODO: Implement actual persistence to storage backend
     }
-    
+
     fn removePolicyFromStorage(self: *Self, policy_id: u64) !void {
         _ = self;
         _ = policy_id;
         // TODO: Implement removal from storage backend
     }
-    
+
     fn generateMFASecret(self: *Self) ![]const u8 {
         var secret: [32]u8 = undefined;
         std.crypto.random.bytes(&secret);
@@ -565,17 +565,17 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
-    
+
     if (args.len < 2) {
         try printHelp();
         return;
     }
-    
+
     const command = args[1];
-    
+
     if (std.mem.eql(u8, command, "user")) {
         if (args.len < 3) {
             try printUserHelp();

@@ -113,7 +113,7 @@ pub const TemporalStorage = struct {
     ) !void {
         const txn_id = self.current_transaction_id.fetchAdd(1, .monotonic);
         const timestamp = std.time.milliTimestamp();
-        
+
         const node = try self.allocator.create(TemporalNode);
         node.* = TemporalNode{
             .id = id,
@@ -138,7 +138,7 @@ pub const TemporalStorage = struct {
 
         try node.versions.append(self.allocator, node.created_at);
         try self.nodes.put(id, node);
-        
+
         // Log transaction
         try self.logTransaction(txn_id, timestamp, .create_node, id);
     }
@@ -149,7 +149,7 @@ pub const TemporalStorage = struct {
         properties: std.StringHashMap([]const u8),
     ) !void {
         const node = self.nodes.get(id) orelse return error.NodeNotFound;
-        
+
         const txn_id = self.current_transaction_id.fetchAdd(1, .monotonic);
         const timestamp = std.time.milliTimestamp();
         const version = TemporalVersion{
@@ -161,17 +161,17 @@ pub const TemporalStorage = struct {
         var prop_it = properties.iterator();
         while (prop_it.next()) |entry| {
             const old_value = node.properties.get(entry.key_ptr.*);
-            
+
             const new_versioned = VersionedValue{
                 .value = entry.value_ptr.*,
                 .version = version,
                 .previous_version = if (old_value) |_| try self.allocator.create(VersionedValue) else null,
             };
-            
+
             if (new_versioned.previous_version) |prev| {
                 prev.* = old_value.?;
             }
-            
+
             try node.properties.put(entry.key_ptr.*, new_versioned);
         }
 
@@ -181,28 +181,28 @@ pub const TemporalStorage = struct {
 
     pub fn deleteNode(self: *Self, id: u64) !void {
         const node = self.nodes.get(id) orelse return error.NodeNotFound;
-        
+
         const txn_id = self.current_transaction_id.fetchAdd(1, .monotonic);
         const timestamp = std.time.milliTimestamp();
-        
+
         node.deleted_at = TemporalVersion{
             .transaction_id = txn_id,
             .timestamp = timestamp,
             .is_deleted = true,
         };
-        
+
         try node.versions.append(self.allocator, node.deleted_at.?);
         try self.logTransaction(txn_id, timestamp, .delete_node, id);
     }
 
     pub fn getNodeAsOf(self: *Self, id: u64, as_of: AsOfClause) ?*TemporalNode {
         const node = self.nodes.get(id) orelse return null;
-        
+
         // Check if node existed at the specified time
         if (!self.wasValidAt(node.created_at, node.deleted_at, as_of)) {
             return null;
         }
-        
+
         // Return node with properties as of the specified time
         // TODO: Filter properties to show only values valid at that time
         return node;
@@ -220,7 +220,7 @@ pub const TemporalStorage = struct {
         as_of: AsOfClause,
     ) bool {
         _ = self;
-        
+
         const as_of_time = switch (as_of) {
             .timestamp => |t| t,
             .transaction_id => |tid| blk: {
@@ -230,17 +230,17 @@ pub const TemporalStorage = struct {
             },
             .system_time => |t| t,
         };
-        
+
         if (created.timestamp > as_of_time) {
             return false;
         }
-        
+
         if (deleted) |del| {
             if (del.timestamp <= as_of_time) {
                 return false;
             }
         }
-        
+
         return true;
     }
 
@@ -262,13 +262,13 @@ pub const TemporalStorage = struct {
     pub fn vacuum(self: *Self) !void {
         // Remove old versions based on retention policy
         const cutoff_time = std.time.milliTimestamp() - self.retention_policy.retention_period_ms;
-        
+
         var node_it = self.nodes.iterator();
         while (node_it.next()) |entry| {
             const node = entry.value_ptr.*;
             try self.vacuumNodeVersions(node, cutoff_time);
         }
-        
+
         // Cleanup transaction log
         var i: usize = 0;
         while (i < self.transaction_log.items.len) {
@@ -282,12 +282,12 @@ pub const TemporalStorage = struct {
 
     fn vacuumNodeVersions(self: *Self, node: *TemporalNode, cutoff_time: i64) !void {
         _ = self;
-        
+
         // Keep at least one version
         if (node.versions.items.len <= 1) {
             return;
         }
-        
+
         // Remove old versions
         var i: usize = 0;
         while (i < node.versions.items.len - 1) {
@@ -337,10 +337,10 @@ pub const TemporalQueryExecutor = struct {
 
     pub fn executeAsOf(self: *Self, query: []const u8, as_of: AsOfClause) !QueryResult {
         _ = query;
-        
+
         // Execute query with temporal filter
         var results = std.ArrayList(TemporalBinding){};
-        
+
         // Example: Get all nodes as of the specified time
         var it = self.storage.nodes.iterator();
         while (it.next()) |entry| {
@@ -352,7 +352,7 @@ pub const TemporalQueryExecutor = struct {
                 });
             }
         }
-        
+
         return QueryResult{
             .bindings = results.items,
             .as_of = as_of,
@@ -369,7 +369,7 @@ pub const TemporalQueryExecutor = struct {
         _ = query;
         _ = start;
         _ = end;
-        
+
         // Execute query for time range
         return QueryResult{
             .bindings = &[_]TemporalBinding{},
@@ -381,7 +381,7 @@ pub const TemporalQueryExecutor = struct {
         _ = self;
         _ = query;
         _ = versions;
-        
+
         // Return all versions of matching objects
         return QueryResult{
             .bindings = &[_]TemporalBinding{},
@@ -403,24 +403,24 @@ pub const TemporalBinding = struct {
 
 test "temporal storage basic operations" {
     const allocator = std.testing.allocator;
-    
+
     var storage = try TemporalStorage.init(allocator, .{});
     defer storage.deinit();
-    
+
     // Create a node
     var props = std.StringHashMap([]const u8).init(allocator);
     defer props.deinit();
     try props.put("name", "Alice");
-    
+
     try storage.createNode(1, &[_][]const u8{"Person"}, props);
-    
+
     // Update the node
     var new_props = std.StringHashMap([]const u8).init(allocator);
     defer new_props.deinit();
     try new_props.put("name", "Alice Smith");
-    
+
     try storage.updateNode(1, new_props);
-    
+
     // Get versions
     const versions = try storage.getNodeVersions(1);
     try std.testing.expect(versions.len == 2);
@@ -428,23 +428,23 @@ test "temporal storage basic operations" {
 
 test "time travel query" {
     const allocator = std.testing.allocator;
-    
+
     var storage = try TemporalStorage.init(allocator, .{});
     defer storage.deinit();
-    
+
     // Create a node
     var props = std.StringHashMap([]const u8).init(allocator);
     defer props.deinit();
     try props.put("name", "Bob");
-    
+
     const before = std.time.milliTimestamp();
     try storage.createNode(2, &[_][]const u8{"Person"}, props);
     const after = std.time.milliTimestamp();
-    
+
     // Query as of before creation
     const node_before = storage.getNodeAsOf(2, .{ .timestamp = before - 1 });
     try std.testing.expect(node_before == null);
-    
+
     // Query as of after creation
     const node_after = storage.getNodeAsOf(2, .{ .timestamp = after + 1 });
     try std.testing.expect(node_after != null);
@@ -452,28 +452,28 @@ test "time travel query" {
 
 test "vacuum old versions" {
     const allocator = std.testing.allocator;
-    
+
     var storage = try TemporalStorage.init(allocator, .{
         .retention_period_ms = 1000, // 1 second for testing
     });
     defer storage.deinit();
-    
+
     // Create and update a node
     var props = std.StringHashMap([]const u8).init(allocator);
     defer props.deinit();
     try props.put("value", "v1");
-    
+
     try storage.createNode(3, &[_][]const u8{"Test"}, props);
-    
+
     // Wait and update
     std.Thread.sleep(1100 * std.time.ns_per_ms);
-    
+
     try props.put("value", "v2");
     try storage.updateNode(3, props);
-    
+
     // Vacuum should keep only the latest version
     try storage.vacuum();
-    
+
     const versions = try storage.getNodeVersions(3);
     try std.testing.expect(versions.len >= 1);
 }

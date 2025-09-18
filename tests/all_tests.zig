@@ -25,6 +25,12 @@ const _e2e_with_clause = @import("e2e_with_clause.zig");
 const _unit_shortest_path_tiebreak = @import("unit_shortest_path_tiebreak.zig");
 const _e2e_mutations = @import("e2e_mutations.zig");
 
+// New advanced feature tests
+const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
+const _e2e_recursive_queries = @import("e2e_recursive_queries.zig");
+const _e2e_materialized_views = @import("e2e_materialized_views.zig");
+const _e2e_rls_enhanced = @import("e2e_rls_enhanced.zig");
+
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 

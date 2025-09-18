@@ -56,10 +56,10 @@ fn printUsage() !void {
 
 fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     _ = allocator;
-    
+
     var output_path: ?[]const u8 = null;
     var algorithm: crypto.EncryptionAlgorithm = .aes_256_gcm;
-    
+
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--output")) {
@@ -76,11 +76,11 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             }
         }
     }
-    
+
     // Generate random key
     var key_data: [32]u8 = undefined;
     std.crypto.random.bytes(&key_data);
-    
+
     const key = crypto.EncryptionKey{
         .data = key_data,
         .algorithm = algorithm,
@@ -92,11 +92,11 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             .version = 1,
         },
     };
-    
+
     if (output_path) |path| {
         const file = try std.fs.cwd().createFile(path, .{ .mode = 0o600 });
         defer file.close();
-        
+
         try file.writeAll(&key_data);
         std.debug.print("Key generated and saved to {s}\n", .{path});
     } else {
@@ -107,7 +107,7 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         }
         std.debug.print("\n", .{});
     }
-    
+
     _ = key;
 }
 
@@ -116,7 +116,7 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     var output_path: ?[]const u8 = null;
     var old_key_path: ?[]const u8 = null;
     var new_key_path: ?[]const u8 = null;
-    
+
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--input")) {
@@ -141,19 +141,19 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             }
         }
     }
-    
+
     if (input_path == null or output_path == null or old_key_path == null or new_key_path == null) {
         std.debug.print("Error: Missing required arguments\n", .{});
         try printUsage();
         return;
     }
-    
+
     // Read old key
     const old_key_file = try std.fs.cwd().openFile(old_key_path.?, .{});
     defer old_key_file.close();
     var old_key_data: [32]u8 = undefined;
     _ = try old_key_file.read(&old_key_data);
-    
+
     const old_key = crypto.EncryptionKey{
         .data = old_key_data,
         .algorithm = .aes_256_gcm,
@@ -165,13 +165,13 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             .version = 1,
         },
     };
-    
+
     // Read new key
     const new_key_file = try std.fs.cwd().openFile(new_key_path.?, .{});
     defer new_key_file.close();
     var new_key_data: [32]u8 = undefined;
     _ = try new_key_file.read(&new_key_data);
-    
+
     const new_key = crypto.EncryptionKey{
         .data = new_key_data,
         .algorithm = .aes_256_gcm,
@@ -183,30 +183,30 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             .version = 2,
         },
     };
-    
+
     // Initialize crypto engines
     var old_crypto = try crypto.PageCrypto.init(allocator, old_key, null);
     defer old_crypto.deinit();
-    
+
     var new_crypto = try crypto.PageCrypto.init(allocator, new_key, null);
     defer new_crypto.deinit();
-    
+
     // Create rotation tool
     var rotation_tool = crypto.KeyRotationTool.init(allocator, &old_crypto, &new_crypto);
     rotation_tool.progress_callback = printProgress;
-    
+
     // Perform rotation
     try rotation_tool.rotateDataFile(input_path.?, output_path.?);
-    
+
     std.debug.print("\nKey rotation completed successfully\n", .{});
 }
 
 fn verifyEncryption(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     _ = allocator;
-    
+
     var file_path: ?[]const u8 = null;
     var key_path: ?[]const u8 = null;
-    
+
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--file")) {
@@ -221,23 +221,23 @@ fn verifyEncryption(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             }
         }
     }
-    
+
     if (file_path == null or key_path == null) {
         std.debug.print("Error: Missing required arguments\n", .{});
         try printUsage();
         return;
     }
-    
+
     // Verify file is encrypted
     const file = try std.fs.cwd().openFile(file_path.?, .{});
     defer file.close();
-    
+
     var header: [28]u8 = undefined;
     _ = try file.read(&header);
-    
+
     // Check for encryption header (nonce + tag)
     const is_encrypted = header[0] != 0 or header[1] != 0;
-    
+
     if (is_encrypted) {
         std.debug.print("File appears to be encrypted (AES-256-GCM)\n", .{});
     } else {

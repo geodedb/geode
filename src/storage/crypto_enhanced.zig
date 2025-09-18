@@ -92,7 +92,7 @@ pub const CryptoManager = struct {
         crypto.utils.secureZero(u8, &self.current_key.master_key);
         crypto.utils.secureZero(u8, &self.current_key.data_key);
         crypto.utils.secureZero(u8, &self.current_key.key_encryption_key);
-        
+
         var it = self.key_cache.iterator();
         while (it.next()) |entry| {
             crypto.utils.secureZero(u8, &entry.value_ptr.master_key);
@@ -124,13 +124,13 @@ pub const CryptoManager = struct {
         // In production, this would use AWS SDK
         var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         const random = prng.random();
-        
+
         // Generate master key (in reality, fetched from KMS)
         random.bytes(&self.current_key.master_key);
-        
+
         // Derive DEK from master key
         try self.deriveDataKey();
-        
+
         self.current_key.provenance = .{
             .source = .kms,
             .key_id = try self.allocator.dupe(u8, config.key_id),
@@ -148,7 +148,7 @@ pub const CryptoManager = struct {
         const random = prng.random();
         random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
-        
+
         self.current_key.provenance = .{
             .source = .kms,
             .key_id = try self.allocator.dupe(u8, "azure-key-vault"),
@@ -166,7 +166,7 @@ pub const CryptoManager = struct {
         const random = prng.random();
         random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
-        
+
         self.current_key.provenance = .{
             .source = .kms,
             .key_id = try self.allocator.dupe(u8, "hashicorp-vault"),
@@ -184,7 +184,7 @@ pub const CryptoManager = struct {
         const random = prng.random();
         random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
-        
+
         self.current_key.provenance = .{
             .source = .kms,
             .key_id = try self.allocator.dupe(u8, "google-cloud-kms"),
@@ -198,10 +198,10 @@ pub const CryptoManager = struct {
     fn generateLocalKeys(self: *Self) !void {
         var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         const random = prng.random();
-        
+
         random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
-        
+
         self.current_key.provenance = .{
             .source = .local_file,
             .key_id = try self.allocator.dupe(u8, "local-generated"),
@@ -215,13 +215,13 @@ pub const CryptoManager = struct {
     fn deriveDataKey(self: *Self) !void {
         // Derive DEK and KEK from master key using HKDF
         var hkdf = crypto.kdf.hkdf.HkdfSha256;
-        
+
         const dek_info = "geode-data-encryption-key";
         const kek_info = "geode-key-encryption-key";
-        
+
         hkdf.expand(&self.current_key.data_key, &self.current_key.master_key, dek_info);
         hkdf.expand(&self.current_key.key_encryption_key, &self.current_key.master_key, kek_info);
-        
+
         // Wrap DEK with KEK for storage
         try self.wrapDataKey();
     }
@@ -229,16 +229,16 @@ pub const CryptoManager = struct {
     fn wrapDataKey(self: *Self) !void {
         // Use AES-GCM to wrap the DEK with KEK
         var wrapped: [48]u8 = undefined; // 32 bytes key + 16 bytes tag
-        
+
         var nonce: [12]u8 = undefined;
         crypto.random.bytes(&nonce);
-        
+
         // In production, use proper AES-GCM wrapping
         // For now, XOR as placeholder
         for (self.current_key.data_key, 0..) |byte, i| {
             wrapped[i] = byte ^ self.current_key.key_encryption_key[i % 32];
         }
-        
+
         self.current_key.wrapped_dek = wrapped;
     }
 
@@ -248,34 +248,34 @@ pub const CryptoManager = struct {
         }
 
         const encrypted = try self.allocator.alloc(u8, page_data.len + 28); // +12 nonce +16 tag
-        
+
         var nonce: [12]u8 = undefined;
         crypto.random.bytes(&nonce);
-        
+
         // Add page_id to nonce for uniqueness
         std.mem.writeInt(u64, nonce[4..12], page_id, .little);
-        
+
         if (self.algorithm == .aes_256_gcm) {
             try self.encryptAES256GCM(page_data, encrypted, nonce, page_id);
         } else {
             return error.UnsupportedAlgorithm;
         }
-        
+
         return encrypted;
     }
 
     fn encryptAES256GCM(self: *Self, plaintext: []const u8, ciphertext: []u8, nonce: [12]u8, page_id: u64) !void {
         // Store nonce at beginning
         @memcpy(ciphertext[0..12], &nonce);
-        
+
         // Create additional authenticated data
         var aad: [8]u8 = undefined;
         std.mem.writeInt(u64, &aad, page_id, .little);
-        
+
         // Perform AES-GCM encryption
         const gcm = crypto.aead.aes_gcm.Aes256Gcm;
         const tag_location = ciphertext.len - 16;
-        
+
         gcm.encrypt(
             ciphertext[12..tag_location],
             ciphertext[tag_location..],
@@ -296,17 +296,17 @@ pub const CryptoManager = struct {
         }
 
         const plaintext = try self.allocator.alloc(u8, encrypted_data.len - 28);
-        
+
         const nonce = encrypted_data[0..12];
-        const ciphertext = encrypted_data[12..encrypted_data.len - 16];
-        const tag = encrypted_data[encrypted_data.len - 16..];
-        
+        const ciphertext = encrypted_data[12 .. encrypted_data.len - 16];
+        const tag = encrypted_data[encrypted_data.len - 16 ..];
+
         if (self.algorithm == .aes_256_gcm) {
             try self.decryptAES256GCM(ciphertext, tag, plaintext, nonce.*, page_id);
         } else {
             return error.UnsupportedAlgorithm;
         }
-        
+
         return plaintext;
     }
 
@@ -314,10 +314,10 @@ pub const CryptoManager = struct {
         // Create additional authenticated data
         var aad: [8]u8 = undefined;
         std.mem.writeInt(u64, &aad, page_id, .little);
-        
+
         // Perform AES-GCM decryption
         const gcm = crypto.aead.aes_gcm.Aes256Gcm;
-        
+
         gcm.decrypt(
             plaintext,
             ciphertext,
@@ -332,28 +332,28 @@ pub const CryptoManager = struct {
         if (self.rotation_in_progress) {
             return error.RotationInProgress;
         }
-        
+
         self.rotation_in_progress = true;
         defer self.rotation_in_progress = false;
-        
+
         // Save old key for re-encryption
         const old_key = self.current_key;
-        
+
         // Generate or fetch new key
         if (self.kms_config) |kms| {
             try self.fetchFromKMS(kms);
         } else {
             try self.generateLocalKeys();
         }
-        
+
         // Update provenance
         self.current_key.provenance.rotated_at = std.time.milliTimestamp();
         self.current_key.provenance.version += 1;
-        
+
         // Cache old key for gradual re-encryption
         const key_version = try std.fmt.allocPrint(self.allocator, "v{}", .{old_key.provenance.version});
         try self.key_cache.put(key_version, old_key);
-        
+
         // Log rotation event
         if (self.audit_logger) |logger| {
             try logger.logKeyRotation(old_key.provenance, self.current_key.provenance);
@@ -364,9 +364,9 @@ pub const CryptoManager = struct {
         // Find old key
         const key_version = try std.fmt.allocPrint(self.allocator, "v{}", .{old_version});
         defer self.allocator.free(key_version);
-        
+
         const old_key = self.key_cache.get(key_version) orelse return error.OldKeyNotFound;
-        
+
         // Decrypt with old key
         const temp_manager = CryptoManager{
             .allocator = self.allocator,
@@ -377,10 +377,10 @@ pub const CryptoManager = struct {
             .rotation_in_progress = false,
             .audit_logger = self.audit_logger,
         };
-        
+
         const plaintext = try temp_manager.decryptPage(encrypted_data, page_id);
         defer self.allocator.free(plaintext);
-        
+
         // Re-encrypt with current key
         return try self.encryptPage(plaintext, page_id);
     }
@@ -395,7 +395,7 @@ pub const AuditLogger = struct {
             try std.fs.cwd().createFile(path, .{ .truncate = false })
         else
             null;
-            
+
         return AuditLogger{
             .allocator = allocator,
             .log_file = file,
@@ -410,13 +410,9 @@ pub const AuditLogger = struct {
 
     pub fn logKeyRotation(self: *AuditLogger, old: KeyProvenance, new: KeyProvenance) !void {
         const timestamp = std.time.milliTimestamp();
-        const message = try std.fmt.allocPrint(
-            self.allocator,
-            "[{}] KEY_ROTATION: {} v{} -> {} v{}\n",
-            .{ timestamp, old.key_id, old.version, new.key_id, new.version }
-        );
+        const message = try std.fmt.allocPrint(self.allocator, "[{}] KEY_ROTATION: {} v{} -> {} v{}\n", .{ timestamp, old.key_id, old.version, new.key_id, new.version });
         defer self.allocator.free(message);
-        
+
         if (self.log_file) |file| {
             _ = try file.write(message);
         }
@@ -454,16 +450,16 @@ pub const ReencryptionTool = struct {
     pub fn reencryptAll(self: *Self, storage: *PageStorage) !void {
         const total = self.pages_to_reencrypt.items.len;
         var processed: u64 = 0;
-        
+
         for (self.pages_to_reencrypt.items) |page_id| {
             const page = try storage.readPage(page_id);
             defer self.allocator.free(page);
-            
+
             const reencrypted = try self.crypto_manager.reencryptPage(page, page_id, 1); // Assume old version 1
             defer self.allocator.free(reencrypted);
-            
+
             try storage.writePage(page_id, reencrypted);
-            
+
             processed += 1;
             if (self.progress_callback) |callback| {
                 callback(processed, total);
@@ -476,21 +472,21 @@ pub const ReencryptionTool = struct {
         while (self.pages_to_reencrypt.items.len > 0) {
             const batch_end = @min(self.batch_size, self.pages_to_reencrypt.items.len);
             const batch = self.pages_to_reencrypt.items[0..batch_end];
-            
+
             for (batch) |page_id| {
                 // Acquire page lock
                 try storage.lockPage(page_id);
                 defer storage.unlockPage(page_id);
-                
+
                 const page = try storage.readPage(page_id);
                 defer self.allocator.free(page);
-                
+
                 const reencrypted = try self.crypto_manager.reencryptPage(page, page_id, 1);
                 defer self.allocator.free(reencrypted);
-                
+
                 try storage.writePage(page_id, reencrypted);
             }
-            
+
             // Remove processed pages
             _ = self.pages_to_reencrypt.orderedRemove(0);
         }
@@ -504,18 +500,18 @@ const PageStorage = struct {
         _ = page_id;
         return error.NotImplemented;
     }
-    
+
     pub fn writePage(self: *PageStorage, page_id: u64, data: []const u8) !void {
         _ = self;
         _ = page_id;
         _ = data;
     }
-    
+
     pub fn lockPage(self: *PageStorage, page_id: u64) !void {
         _ = self;
         _ = page_id;
     }
-    
+
     pub fn unlockPage(self: *PageStorage, page_id: u64) void {
         _ = self;
         _ = page_id;
@@ -524,39 +520,39 @@ const PageStorage = struct {
 
 test "AES-256-GCM encryption and decryption" {
     const allocator = std.testing.allocator;
-    
+
     var crypto_mgr = try CryptoManager.init(allocator, .aes_256_gcm, null);
     defer crypto_mgr.deinit();
-    
+
     const plaintext = "Hello, World! This is a test page.";
     const page_id: u64 = 42;
-    
+
     const encrypted = try crypto_mgr.encryptPage(plaintext, page_id);
     defer allocator.free(encrypted);
-    
+
     const decrypted = try crypto_mgr.decryptPage(encrypted, page_id);
     defer allocator.free(decrypted);
-    
+
     try std.testing.expectEqualStrings(plaintext, decrypted);
 }
 
 test "Key rotation" {
     const allocator = std.testing.allocator;
-    
+
     var crypto_mgr = try CryptoManager.init(allocator, .aes_256_gcm, null);
     defer crypto_mgr.deinit();
-    
+
     const old_version = crypto_mgr.current_key.provenance.version;
-    
+
     try crypto_mgr.rotateKeys();
-    
+
     try std.testing.expect(crypto_mgr.current_key.provenance.version == old_version + 1);
     try std.testing.expect(crypto_mgr.current_key.provenance.rotated_at != null);
 }
 
 test "KMS integration simulation" {
     const allocator = std.testing.allocator;
-    
+
     const kms_config = KMSConfig{
         .provider = .aws_kms,
         .endpoint = "https://kms.us-east-1.amazonaws.com",
@@ -564,9 +560,9 @@ test "KMS integration simulation" {
         .region = "us-east-1",
         .auth_token = null,
     };
-    
+
     var crypto_mgr = try CryptoManager.init(allocator, .aes_256_gcm, kms_config);
     defer crypto_mgr.deinit();
-    
+
     try std.testing.expect(crypto_mgr.current_key.provenance.source == .kms);
 }

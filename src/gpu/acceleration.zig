@@ -213,12 +213,12 @@ pub const GPUAccelerator = struct {
         _ = grid_size;
         _ = block_size;
         _ = args;
-        
+
         const kernel = self.kernels.get(kernel_name) orelse return error.KernelNotFound;
         if (kernel.compiled == null) {
             return error.KernelNotCompiled;
         }
-        
+
         // Would launch kernel with cudaLaunchKernel() or equivalent
     }
 
@@ -247,31 +247,31 @@ pub const GPUGraphAlgorithms = struct {
         start_node: u64,
     ) ![]u32 {
         const num_nodes = adjacency_list.len;
-        
+
         // Prepare data for GPU
         const csr = try self.convertToCSR(adjacency_list);
         defer self.allocator.free(csr.row_offsets);
         defer self.allocator.free(csr.col_indices);
-        
+
         // Allocate GPU buffers
         const row_buffer = try self.accelerator.allocateBuffer(
             csr.row_offsets.len * @sizeOf(u32),
             false,
         );
         defer self.accelerator.freeBuffer(row_buffer);
-        
+
         const col_buffer = try self.accelerator.allocateBuffer(
             csr.col_indices.len * @sizeOf(u32),
             false,
         );
         defer self.accelerator.freeBuffer(col_buffer);
-        
+
         const distance_buffer = try self.accelerator.allocateBuffer(
             num_nodes * @sizeOf(u32),
             true,
         );
         defer self.accelerator.freeBuffer(distance_buffer);
-        
+
         // Copy data to GPU
         try self.accelerator.copyToDevice(
             std.mem.sliceAsBytes(csr.row_offsets),
@@ -281,30 +281,30 @@ pub const GPUGraphAlgorithms = struct {
             std.mem.sliceAsBytes(csr.col_indices),
             col_buffer,
         );
-        
+
         // Launch BFS kernel
         const grid_size = [3]u32{ @intCast((num_nodes + 255) / 256), 1, 1 };
         const block_size = [3]u32{ 256, 1, 1 };
-        
+
         try self.accelerator.launchKernel(
             "bfs",
             grid_size,
             block_size,
             &[_]*GPUBuffer{ row_buffer, col_buffer, distance_buffer },
         );
-        
+
         try self.accelerator.synchronize();
-        
+
         // Copy results back
         const distances = try self.allocator.alloc(u32, num_nodes);
         try self.accelerator.copyFromDevice(
             distance_buffer,
             std.mem.sliceAsBytes(distances),
         );
-        
+
         // Initialize with start node
         distances[@intCast(start_node)] = 0;
-        
+
         return distances;
     }
 
@@ -315,21 +315,21 @@ pub const GPUGraphAlgorithms = struct {
         iterations: u32,
     ) ![]f32 {
         const num_nodes = adjacency_list.len;
-        
+
         // Initialize PageRank values
         const initial_value = 1.0 / @as(f32, @floatFromInt(num_nodes));
         const pagerank_values = try self.allocator.alloc(f32, num_nodes);
         for (pagerank_values) |*val| {
             val.* = initial_value;
         }
-        
+
         // GPU acceleration would go here
         // For now, simple CPU implementation
         var iter: u32 = 0;
         while (iter < iterations) : (iter += 1) {
             const new_values = try self.allocator.alloc(f32, num_nodes);
             defer self.allocator.free(new_values);
-            
+
             for (new_values, 0..) |*val, i| {
                 var sum: f32 = 0;
                 for (adjacency_list, 0..) |neighbors, j| {
@@ -341,10 +341,10 @@ pub const GPUGraphAlgorithms = struct {
                 }
                 val.* = (1.0 - damping_factor) / @as(f32, @floatFromInt(num_nodes)) + damping_factor * sum;
             }
-            
+
             @memcpy(pagerank_values, new_values);
         }
-        
+
         return pagerank_values;
     }
 
@@ -353,10 +353,10 @@ pub const GPUGraphAlgorithms = struct {
         for (adjacency_list) |neighbors| {
             total_edges += neighbors.len;
         }
-        
+
         const row_offsets = try self.allocator.alloc(u32, adjacency_list.len + 1);
         const col_indices = try self.allocator.alloc(u32, total_edges);
-        
+
         var offset: u32 = 0;
         for (adjacency_list, 0..) |neighbors, i| {
             row_offsets[i] = offset;
@@ -366,7 +366,7 @@ pub const GPUGraphAlgorithms = struct {
             offset += @intCast(neighbors.len);
         }
         row_offsets[adjacency_list.len] = offset;
-        
+
         return CSRGraph{
             .row_offsets = row_offsets,
             .col_indices = col_indices,
@@ -438,28 +438,28 @@ pub fn benchmarkGPU(
 ) !BenchmarkResult {
     var gpu_accel = try GPUAccelerator.init(allocator, .cuda);
     defer gpu_accel.deinit();
-    
+
     var gpu_algos = GPUGraphAlgorithms.init(allocator, &gpu_accel);
-    
+
     // Count edges
     var num_edges: usize = 0;
     for (adjacency_list) |neighbors| {
         num_edges += neighbors.len;
     }
-    
+
     // Benchmark BFS
     const cpu_start = std.time.milliTimestamp();
     // CPU BFS implementation would go here
     const cpu_end = std.time.milliTimestamp();
-    
+
     const gpu_start = std.time.milliTimestamp();
     const distances = try gpu_algos.bfs(adjacency_list, 0);
     defer allocator.free(distances);
     const gpu_end = std.time.milliTimestamp();
-    
+
     const cpu_time = @as(u64, @intCast(cpu_end - cpu_start));
     const gpu_time = @as(u64, @intCast(gpu_end - gpu_start));
-    
+
     return BenchmarkResult{
         .algorithm = "bfs",
         .cpu_time_ms = cpu_time,
@@ -472,47 +472,47 @@ pub fn benchmarkGPU(
 
 test "GPU device detection" {
     const allocator = std.testing.allocator;
-    
+
     var accelerator = try GPUAccelerator.init(allocator, .none);
     defer accelerator.deinit();
-    
+
     try std.testing.expect(accelerator.is_initialized);
 }
 
 test "GPU buffer allocation" {
     const allocator = std.testing.allocator;
-    
+
     var accelerator = try GPUAccelerator.init(allocator, .cuda);
     defer accelerator.deinit();
-    
+
     if (accelerator.devices.items.len > 0) {
         const buffer = try accelerator.allocateBuffer(1024, true);
         defer accelerator.freeBuffer(buffer);
-        
+
         try std.testing.expectEqual(@as(usize, 1024), buffer.size);
     }
 }
 
 test "PageRank computation" {
     const allocator = std.testing.allocator;
-    
+
     var accelerator = try GPUAccelerator.init(allocator, .none);
     defer accelerator.deinit();
-    
+
     var gpu_algos = GPUGraphAlgorithms.init(allocator, &accelerator);
-    
+
     // Simple graph: 0 -> 1 -> 2 -> 0
     const adjacency_list = [_][]const u64{
         &[_]u64{1},
         &[_]u64{2},
         &[_]u64{0},
     };
-    
+
     const pagerank = try gpu_algos.pagerank(&adjacency_list, 0.85, 10);
     defer allocator.free(pagerank);
-    
+
     try std.testing.expect(pagerank.len == 3);
-    
+
     // All nodes should have similar PageRank in a cycle
     const avg = (pagerank[0] + pagerank[1] + pagerank[2]) / 3.0;
     for (pagerank) |pr| {

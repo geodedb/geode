@@ -67,11 +67,11 @@ pub const PageCrypto = struct {
         _ = self;
         _ = page_id;
         _ = additional_data;
-        
+
         if (plaintext.len > ciphertext.len) {
             return error.BufferTooSmall;
         }
-        
+
         // Simple XOR encryption for demonstration
         for (plaintext, 0..) |byte, i| {
             ciphertext[i] = byte ^ 0x42;
@@ -82,11 +82,11 @@ pub const PageCrypto = struct {
         _ = self;
         _ = page_id;
         _ = additional_data;
-        
+
         if (ciphertext.len > plaintext.len) {
             return error.BufferTooSmall;
         }
-        
+
         // Simple XOR decryption
         for (ciphertext, 0..) |byte, i| {
             plaintext[i] = byte ^ 0x42;
@@ -117,11 +117,11 @@ pub const WALCrypto = struct {
     pub fn encryptRecord(self: *Self, record: []const u8, encrypted: []u8, lsn: u64) !void {
         _ = self;
         _ = lsn;
-        
+
         if (record.len > encrypted.len) {
             return error.BufferTooSmall;
         }
-        
+
         // Simple XOR
         for (record, 0..) |byte, i| {
             encrypted[i] = byte ^ 0x42;
@@ -130,11 +130,11 @@ pub const WALCrypto = struct {
 
     pub fn decryptRecord(self: *Self, encrypted: []const u8, record: []u8) !void {
         _ = self;
-        
+
         if (encrypted.len > record.len) {
             return error.BufferTooSmall;
         }
-        
+
         // Simple XOR
         for (encrypted, 0..) |byte, i| {
             record[i] = byte ^ 0x42;
@@ -173,17 +173,17 @@ pub const KeyRotationTool = struct {
         const stat = try input_file.stat();
         const page_size: usize = 4096;
         const total_pages = stat.size / page_size;
-        
+
         var buffer = try self.allocator.alloc(u8, page_size * 2);
         defer self.allocator.free(buffer);
-        
+
         const encrypted_page = buffer[0..page_size];
         const decrypted_page = buffer[page_size..];
 
         var pages_processed: u64 = 0;
         while (pages_processed < total_pages) : (pages_processed += 1) {
             _ = try input_file.read(encrypted_page);
-            
+
             const page_id: u32 = @intCast(pages_processed);
             try self.old_crypto.decryptPage(
                 page_id,
@@ -191,16 +191,16 @@ pub const KeyRotationTool = struct {
                 decrypted_page,
                 &[_]u8{},
             );
-            
+
             try self.new_crypto.encryptPage(
                 page_id,
                 decrypted_page,
                 encrypted_page,
                 &[_]u8{},
             );
-            
+
             _ = try output_file.write(encrypted_page);
-            
+
             if (self.progress_callback) |callback| {
                 callback(pages_processed + 1, total_pages);
             }

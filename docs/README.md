@@ -2,7 +2,15 @@
 
 ## Overview
 
-Geode v0.15.0 is a full ACID property-graph database implementing ISO/IEC 39075:2024 (GQL) with advanced features for production use. This documentation covers all implemented features, architecture details, and usage patterns.
+Geode v0.16.0 is a production-ready ACID property-graph database implementing ISO/IEC 39075:2024 (GQL) with enterprise features including high availability, advanced query optimization, and comprehensive security. This documentation covers all implemented features, architecture details, and usage patterns.
+
+### Latest Updates (January 2025)
+
+- **Distributed Consensus**: Full Raft implementation with automatic failover
+- **Adaptive Query Execution**: Runtime optimization with plan caching
+- **Recursive Queries**: WITH RECURSIVE support for graph traversals
+- **Materialized Views**: Incremental refresh with dependency tracking
+- **Enhanced Security**: Hierarchical multi-tenant RLS with ABAC
 
 ## Quick Start
 
@@ -105,6 +113,36 @@ cd clients/go/gql && go run example/main.go
 - **EXCEPT/EXCEPT ALL**: Find differences
 - **Optimizations**: Sort-merge and hash-based implementations
 
+#### Recursive Queries (NEW)
+- **WITH RECURSIVE**: Transitive closure and hierarchical queries
+- **Cycle Detection**: Multiple strategies (hash-based, DFS, union-find, topological)
+- **Path Enumeration**: Find all paths with depth limits
+- **Memory Management**: Automatic spill to disk for large result sets
+- **Search Clauses**: Breadth-first and depth-first traversal options
+
+#### Materialized Views (NEW)
+- **CREATE MATERIALIZED VIEW**: Cache expensive query results
+- **Refresh Strategies**:
+  - Complete refresh: Full recomputation
+  - Incremental refresh: Process only changes
+  - Differential refresh: Apply deltas
+  - Continuous refresh: Near real-time updates
+- **Dependency Tracking**: Automatic invalidation and refresh
+- **Query Rewriting**: Automatic optimization to use views
+- **Storage Options**: Heap, columnar, in-memory, hybrid
+
+### Query Optimization
+
+#### Adaptive Query Execution (NEW)
+- **Runtime Optimization**: Adjust plans during execution
+- **Plan Caching**: Reuse compiled plans with parameter sensitivity
+- **Statistics Collection**: 
+  - Table and column statistics with histograms
+  - Index statistics with selectivity estimates
+  - Correlation statistics between columns
+- **Reoptimization Triggers**: Cardinality errors, memory pressure, data skew
+- **Workload Analysis**: Query patterns and optimization opportunities
+
 ### Storage Engine
 
 #### Page Management
@@ -139,13 +177,21 @@ cd clients/go/gql && go run example/main.go
 - **Retries**: Automatic on serialization failures
 - **Monitoring**: Transaction metrics and profiling
 
-### Distributed Features (Foundation)
+### Distributed Features (Production-Ready)
 
-#### Raft Consensus
-- **Leader Election**: Automatic failover
-- **Log Replication**: Consistent state across nodes
-- **Membership Changes**: Dynamic cluster management
-- **Single-leader Mode**: Current implementation
+#### Raft Consensus (Enhanced)
+- **Leader Election**: Automatic failover with configurable timeouts
+- **Log Replication**: Consistent state across nodes with snapshots
+- **Cluster Management**: 3-node clusters with automatic failover
+- **Health Monitoring**: Node failure detection and recovery
+- **Commands**: Graph mutations, schema changes, configuration updates
+
+#### Cluster Coordination
+- **Node Management**: Dynamic node addition/removal
+- **Shard Distribution**: Automatic shard assignment and rebalancing
+- **Replica Management**: Configurable replication factor maintenance
+- **Failover Handling**: Automatic promotion of replicas on node failure
+- **Network Transport**: Message queue with connection management
 
 #### Two-Phase Commit
 - **Coordinator**: Transaction coordination logic
@@ -154,10 +200,32 @@ cd clients/go/gql && go run example/main.go
 - **Timeout Handling**: Configurable timeouts
 
 #### Sharding
-- **Consistent Hashing**: Even data distribution
-- **Shard Maps**: Metadata management
-- **Rebalancing**: Manual triggers (future: automatic)
+- **Strategies**: Hash-based, range-based, graph-based
+- **Shard Maps**: Metadata management with key ranges
+- **Rebalancing**: Automatic shard rebalancing on topology changes
 - **Cross-shard Queries**: Distributed execution planning
+
+### Security
+
+#### Row-Level Security (Enhanced)
+- **Policy Engine**: Fine-grained access control per graph/table
+- **Policy Types**:
+  - USING expressions for SELECT/DELETE
+  - CHECK expressions for INSERT/UPDATE
+  - Permissive (OR) and restrictive (AND) policies
+- **Temporal Constraints**: Time-based access with recurrence rules
+- **Hierarchical Multi-tenant**: Parent tenants can access child data
+- **Attribute-Based Access Control (ABAC)**:
+  - Dynamic attribute evaluation
+  - User, resource, and environment attributes
+  - Custom validators and transformers
+- **Audit Logging**: Comprehensive security event tracking
+
+#### Authentication & Authorization
+- **Methods**: Password, certificate, token-based
+- **Role-Based Access**: Hierarchical role system
+- **Permissions**: Fine-grained operation control
+- **Session Management**: Secure session handling
 
 ### Monitoring and Observability
 

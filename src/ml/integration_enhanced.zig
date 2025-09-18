@@ -47,11 +47,11 @@ pub const GraphSAGEParams = struct {
 };
 
 pub const LinkPredictionParams = struct {
-    method: enum { 
-        hadamard, 
-        l1, 
-        l2, 
-        average, 
+    method: enum {
+        hadamard,
+        l1,
+        l2,
+        average,
         cosine,
         adamic_adar,
         jaccard,
@@ -64,9 +64,9 @@ pub const LinkPredictionParams = struct {
 };
 
 pub const NodeClassificationParams = struct {
-    algorithm: enum { 
-        logistic_regression, 
-        random_forest, 
+    algorithm: enum {
+        logistic_regression,
+        random_forest,
         neural_network,
         svm,
         knn,
@@ -103,9 +103,9 @@ pub const MLEngine = struct {
     graph: *GraphData,
     embeddings: std.AutoHashMap(NodeId, Embedding),
     models: std.StringHashMap(*anyopaque),
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: Allocator, graph: *GraphData) Self {
         return Self{
             .allocator = allocator,
@@ -114,7 +114,7 @@ pub const MLEngine = struct {
             .models = std.StringHashMap(*anyopaque).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         var it = self.embeddings.iterator();
         while (it.next()) |entry| {
@@ -123,16 +123,16 @@ pub const MLEngine = struct {
         self.embeddings.deinit();
         self.models.deinit();
     }
-    
+
     // Node2Vec implementation
     pub fn node2vec(self: *Self, params: Node2VecParams) !std.AutoHashMap(NodeId, Embedding) {
         var result = std.AutoHashMap(NodeId, Embedding).init(self.allocator);
         errdefer result.deinit();
-        
+
         // Initialize random walk sampler
         var walker = try RandomWalker.init(self.allocator, self.graph, params.p, params.q);
         defer walker.deinit();
-        
+
         // Generate walks for each node
         var walks = std.ArrayList([]NodeId).init(self.allocator);
         defer {
@@ -141,18 +141,18 @@ pub const MLEngine = struct {
             }
             walks.deinit();
         }
-        
+
         var node_it = self.graph.nodes.iterator();
         while (node_it.next()) |entry| {
             const node_id = entry.key_ptr.*;
-            
+
             var i: u32 = 0;
             while (i < params.num_walks) : (i += 1) {
                 const walk = try walker.walk(node_id, params.walk_length);
                 try walks.append(walk);
             }
         }
-        
+
         // Train Skip-gram model
         var skipgram = try SkipGram.init(
             self.allocator,
@@ -161,9 +161,9 @@ pub const MLEngine = struct {
             params.learning_rate,
         );
         defer skipgram.deinit();
-        
+
         try skipgram.train(walks.items, params.iterations);
-        
+
         // Extract embeddings
         node_it = self.graph.nodes.iterator();
         while (node_it.next()) |entry| {
@@ -173,19 +173,19 @@ pub const MLEngine = struct {
             @memcpy(embedding_copy, embedding);
             try result.put(node_id, embedding_copy);
         }
-        
+
         return result;
     }
-    
+
     // PageRank implementation
     pub fn pagerank(self: *Self, params: PageRankParams) !std.AutoHashMap(NodeId, f32) {
         var scores = std.AutoHashMap(NodeId, f32).init(self.allocator);
         var new_scores = std.AutoHashMap(NodeId, f32).init(self.allocator);
         defer new_scores.deinit();
-        
+
         const num_nodes = self.graph.nodes.count();
         const initial_score = 1.0 / @as(f32, @floatFromInt(num_nodes));
-        
+
         // Initialize scores
         var node_it = self.graph.nodes.iterator();
         while (node_it.next()) |entry| {
@@ -196,17 +196,17 @@ pub const MLEngine = struct {
                 try scores.put(node_id, initial_score);
             }
         }
-        
+
         // Iterative computation
         var iteration: u32 = 0;
         while (iteration < params.max_iterations) : (iteration += 1) {
             var max_diff: f32 = 0.0;
-            
+
             node_it = self.graph.nodes.iterator();
             while (node_it.next()) |entry| {
                 const node_id = entry.key_ptr.*;
                 var rank_sum: f32 = 0.0;
-                
+
                 // Sum contributions from incoming edges
                 if (self.graph.incoming_edges.get(node_id)) |incoming| {
                     for (incoming.items) |edge_id| {
@@ -216,48 +216,48 @@ pub const MLEngine = struct {
                         rank_sum += source_score / @as(f32, @floatFromInt(out_degree));
                     }
                 }
-                
-                const new_score = (1.0 - params.damping_factor) / @as(f32, @floatFromInt(num_nodes)) + 
-                                 params.damping_factor * rank_sum;
-                
+
+                const new_score = (1.0 - params.damping_factor) / @as(f32, @floatFromInt(num_nodes)) +
+                    params.damping_factor * rank_sum;
+
                 const old_score = scores.get(node_id).?;
                 max_diff = @max(max_diff, @abs(new_score - old_score));
-                
+
                 try new_scores.put(node_id, new_score);
             }
-            
+
             // Swap scores
             const temp = scores;
             scores = new_scores;
             new_scores = temp;
             new_scores.clearRetainingCapacity();
-            
+
             if (max_diff < params.tolerance) {
                 break;
             }
         }
-        
+
         return scores;
     }
-    
+
     // Link prediction
     pub fn linkPrediction(self: *Self, params: LinkPredictionParams) !LinkPredictionResult {
         var predictions = std.ArrayList(EdgePrediction).init(self.allocator);
         defer predictions.deinit();
-        
+
         var node_it = self.graph.nodes.iterator();
         while (node_it.next()) |entry1| {
             const node1 = entry1.key_ptr.*;
-            
+
             var node_it2 = self.graph.nodes.iterator();
             while (node_it2.next()) |entry2| {
                 const node2 = entry2.key_ptr.*;
-                
+
                 if (node1 >= node2) continue; // Avoid duplicates
                 if (self.graph.hasEdge(node1, node2)) continue; // Skip existing edges
-                
+
                 const score = try self.computeLinkScore(node1, node2, params);
-                
+
                 if (score >= params.threshold) {
                     try predictions.append(EdgePrediction{
                         .source = node1,
@@ -267,15 +267,15 @@ pub const MLEngine = struct {
                 }
             }
         }
-        
+
         // Sort by score
         std.sort.pdq(EdgePrediction, predictions.items, {}, EdgePrediction.compareScore);
-        
+
         return LinkPredictionResult{
             .predictions = try predictions.toOwnedSlice(),
         };
     }
-    
+
     fn computeLinkScore(self: *Self, node1: NodeId, node2: NodeId, params: LinkPredictionParams) !f32 {
         switch (params.method) {
             .hadamard => {
@@ -315,12 +315,12 @@ pub const MLEngine = struct {
             else => return 0.0,
         }
     }
-    
+
     fn adamicAdarScore(self: *Self, node1: NodeId, node2: NodeId) f32 {
         var score: f32 = 0.0;
         const neighbors1 = self.graph.getNeighbors(node1);
         const neighbors2 = self.graph.getNeighbors(node2);
-        
+
         for (neighbors1) |n1| {
             for (neighbors2) |n2| {
                 if (n1 == n2) {
@@ -331,32 +331,32 @@ pub const MLEngine = struct {
                 }
             }
         }
-        
+
         return score;
     }
-    
+
     fn jaccardScore(self: *Self, node1: NodeId, node2: NodeId) f32 {
         const neighbors1 = self.graph.getNeighbors(node1);
         const neighbors2 = self.graph.getNeighbors(node2);
-        
+
         var intersection: u32 = 0;
         for (neighbors1) |n1| {
             for (neighbors2) |n2| {
                 if (n1 == n2) intersection += 1;
             }
         }
-        
+
         const union_size = neighbors1.len + neighbors2.len - intersection;
         if (union_size == 0) return 0.0;
-        
+
         return @as(f32, @floatFromInt(intersection)) / @as(f32, @floatFromInt(union_size));
     }
-    
+
     fn resourceAllocationScore(self: *Self, node1: NodeId, node2: NodeId) f32 {
         var score: f32 = 0.0;
         const neighbors1 = self.graph.getNeighbors(node1);
         const neighbors2 = self.graph.getNeighbors(node2);
-        
+
         for (neighbors1) |n1| {
             for (neighbors2) |n2| {
                 if (n1 == n2) {
@@ -367,16 +367,16 @@ pub const MLEngine = struct {
                 }
             }
         }
-        
+
         return score;
     }
-    
+
     // Community detection using Louvain algorithm
     pub fn louvain(self: *Self, params: LouvainParams) !CommunityDetectionResult {
         var communities = std.AutoHashMap(NodeId, u32).init(self.allocator);
         var community_weights = std.AutoHashMap(u32, f32).init(self.allocator);
         defer community_weights.deinit();
-        
+
         // Initialize each node in its own community
         var community_id: u32 = 0;
         var node_it = self.graph.nodes.iterator();
@@ -386,61 +386,61 @@ pub const MLEngine = struct {
             try community_weights.put(community_id, 1.0);
             community_id += 1;
         }
-        
+
         var improved = true;
         var iteration: u32 = 0;
-        
+
         while (improved and iteration < params.max_iterations) : (iteration += 1) {
             improved = false;
-            
+
             // Phase 1: Local optimization
             node_it = self.graph.nodes.iterator();
             while (node_it.next()) |entry| {
                 const node_id = entry.key_ptr.*;
                 const current_community = communities.get(node_id).?;
-                
+
                 var best_community = current_community;
                 var best_gain: f32 = 0.0;
-                
+
                 // Check neighboring communities
                 const neighbors = self.graph.getNeighbors(node_id);
                 for (neighbors) |neighbor| {
                     const neighbor_community = communities.get(neighbor).?;
                     if (neighbor_community == current_community) continue;
-                    
+
                     const gain = self.modularityGain(node_id, neighbor_community, &communities);
                     if (gain > best_gain) {
                         best_gain = gain;
                         best_community = neighbor_community;
                     }
                 }
-                
+
                 if (best_community != current_community) {
                     try communities.put(node_id, best_community);
                     improved = true;
                 }
             }
         }
-        
+
         // Calculate final modularity
         const modularity = try self.calculateModularity(&communities);
-        
+
         // Count communities
         var unique_communities = std.AutoHashMap(u32, void).init(self.allocator);
         defer unique_communities.deinit();
-        
+
         var comm_it = communities.iterator();
         while (comm_it.next()) |entry| {
             try unique_communities.put(entry.value_ptr.*, {});
         }
-        
+
         return CommunityDetectionResult{
             .communities = communities,
             .modularity = modularity,
             .num_communities = unique_communities.count(),
         };
     }
-    
+
     fn modularityGain(self: *Self, node: NodeId, community: u32, communities: *std.AutoHashMap(NodeId, u32)) f32 {
         _ = self;
         _ = node;
@@ -449,7 +449,7 @@ pub const MLEngine = struct {
         // Simplified modularity gain calculation
         return std.crypto.random.float(f32) * 0.1; // Placeholder
     }
-    
+
     fn calculateModularity(self: *Self, communities: *std.AutoHashMap(NodeId, u32)) !f32 {
         _ = self;
         _ = communities;
@@ -464,7 +464,7 @@ const RandomWalker = struct {
     graph: *GraphData,
     p: f64,
     q: f64,
-    
+
     pub fn init(allocator: Allocator, graph: *GraphData, p: f64, q: f64) !RandomWalker {
         return RandomWalker{
             .allocator = allocator,
@@ -473,32 +473,32 @@ const RandomWalker = struct {
             .q = q,
         };
     }
-    
+
     pub fn deinit(self: *RandomWalker) void {
         _ = self;
     }
-    
+
     pub fn walk(self: *RandomWalker, start: NodeId, length: u32) ![]NodeId {
         var path = try self.allocator.alloc(NodeId, length);
         path[0] = start;
-        
+
         var i: u32 = 1;
         var current = start;
         var previous: ?NodeId = null;
-        
+
         while (i < length) : (i += 1) {
             const neighbors = self.graph.getNeighbors(current);
             if (neighbors.len == 0) break;
-            
+
             const next = self.sampleNext(current, previous, neighbors);
             path[i] = next;
             previous = current;
             current = next;
         }
-        
+
         return path[0..i];
     }
-    
+
     fn sampleNext(self: *RandomWalker, current: NodeId, previous: ?NodeId, neighbors: []NodeId) NodeId {
         _ = self;
         _ = current;
@@ -515,7 +515,7 @@ const SkipGram = struct {
     window_size: u32,
     learning_rate: f32,
     embeddings: std.AutoHashMap(NodeId, []f32),
-    
+
     pub fn init(allocator: Allocator, dimensions: u32, window_size: u32, learning_rate: f32) !SkipGram {
         return SkipGram{
             .allocator = allocator,
@@ -525,7 +525,7 @@ const SkipGram = struct {
             .embeddings = std.AutoHashMap(NodeId, []f32).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *SkipGram) void {
         var it = self.embeddings.iterator();
         while (it.next()) |entry| {
@@ -533,10 +533,10 @@ const SkipGram = struct {
         }
         self.embeddings.deinit();
     }
-    
+
     pub fn train(self: *SkipGram, walks: [][]NodeId, iterations: u32) !void {
         _ = iterations;
-        
+
         // Initialize embeddings randomly
         for (walks) |walk| {
             for (walk) |node| {
@@ -549,13 +549,13 @@ const SkipGram = struct {
                 }
             }
         }
-        
+
         // Training loop (simplified)
         for (walks) |walk| {
             for (walk, 0..) |node, i| {
                 const start = if (i > self.window_size) i - self.window_size else 0;
                 const end = @min(i + self.window_size + 1, walk.len);
-                
+
                 for (walk[start..end], 0..) |context_node, j| {
                     if (start + j == i) continue; // Skip self
                     try self.updateEmbeddings(node, context_node);
@@ -563,11 +563,11 @@ const SkipGram = struct {
             }
         }
     }
-    
+
     fn updateEmbeddings(self: *SkipGram, target: NodeId, context: NodeId) !void {
         const target_emb = self.embeddings.get(target).?;
         const context_emb = self.embeddings.get(context).?;
-        
+
         // Simplified gradient update
         for (target_emb, context_emb) |*t, *c| {
             const gradient = (t.* - c.*) * self.learning_rate;
@@ -575,7 +575,7 @@ const SkipGram = struct {
             c.* += gradient;
         }
     }
-    
+
     pub fn getEmbedding(self: *SkipGram, node: NodeId) ![]f32 {
         return self.embeddings.get(node) orelse return error.NodeNotFound;
     }
@@ -585,7 +585,7 @@ const EdgePrediction = struct {
     source: NodeId,
     target: NodeId,
     score: f32,
-    
+
     pub fn compareScore(context: void, a: EdgePrediction, b: EdgePrediction) bool {
         _ = context;
         return a.score > b.score;
@@ -602,26 +602,26 @@ const GraphData = struct {
     edges: std.AutoHashMap(EdgeId, Edge),
     outgoing_edges: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
     incoming_edges: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
-    
+
     const Edge = struct {
         source: NodeId,
         target: NodeId,
         weight: f32 = 1.0,
     };
-    
+
     pub fn getNeighbors(self: *GraphData, node: NodeId) []NodeId {
         _ = self;
         _ = node;
         return &[_]NodeId{}; // Placeholder
     }
-    
+
     pub fn getOutDegree(self: *GraphData, node: NodeId) u32 {
         if (self.outgoing_edges.get(node)) |edges| {
             return @intCast(edges.items.len);
         }
         return 0;
     }
-    
+
     pub fn hasEdge(self: *GraphData, source: NodeId, target: NodeId) bool {
         _ = self;
         _ = source;
@@ -634,13 +634,13 @@ fn cosineSimilarity(a: []const f32, b: []const f32) f32 {
     var dot: f32 = 0.0;
     var norm_a: f32 = 0.0;
     var norm_b: f32 = 0.0;
-    
+
     for (a, b) |va, vb| {
         dot += va * vb;
         norm_a += va * va;
         norm_b += vb * vb;
     }
-    
+
     if (norm_a == 0.0 or norm_b == 0.0) return 0.0;
     return dot / (@sqrt(norm_a) * @sqrt(norm_b));
 }
@@ -688,7 +688,7 @@ fn executeLinkPrediction(allocator: Allocator, graph: *GraphData, params: anytyp
 
 test "Node2Vec basic" {
     const allocator = std.testing.allocator;
-    
+
     var graph = GraphData{
         .nodes = std.AutoHashMap(NodeId, void).init(allocator),
         .edges = std.AutoHashMap(EdgeId, Edge).init(allocator),
@@ -701,15 +701,15 @@ test "Node2Vec basic" {
         graph.outgoing_edges.deinit();
         graph.incoming_edges.deinit();
     }
-    
+
     // Add some nodes
     try graph.nodes.put(1, {});
     try graph.nodes.put(2, {});
     try graph.nodes.put(3, {});
-    
+
     var ml_engine = MLEngine.init(allocator, &graph);
     defer ml_engine.deinit();
-    
+
     const params = Node2VecParams{};
     const embeddings = try ml_engine.node2vec(params);
     defer {
@@ -719,13 +719,13 @@ test "Node2Vec basic" {
         }
         embeddings.deinit();
     }
-    
+
     try std.testing.expect(embeddings.count() > 0);
 }
 
 test "PageRank computation" {
     const allocator = std.testing.allocator;
-    
+
     var graph = GraphData{
         .nodes = std.AutoHashMap(NodeId, void).init(allocator),
         .edges = std.AutoHashMap(EdgeId, Edge).init(allocator),
@@ -738,25 +738,25 @@ test "PageRank computation" {
         graph.outgoing_edges.deinit();
         graph.incoming_edges.deinit();
     }
-    
+
     // Add nodes
     try graph.nodes.put(1, {});
     try graph.nodes.put(2, {});
     try graph.nodes.put(3, {});
-    
+
     var ml_engine = MLEngine.init(allocator, &graph);
     defer ml_engine.deinit();
-    
+
     const params = PageRankParams{};
     const scores = try ml_engine.pagerank(params);
     defer scores.deinit();
-    
+
     try std.testing.expect(scores.count() == 3);
 }
 
 test "Community detection" {
     const allocator = std.testing.allocator;
-    
+
     var graph = GraphData{
         .nodes = std.AutoHashMap(NodeId, void).init(allocator),
         .edges = std.AutoHashMap(EdgeId, Edge).init(allocator),
@@ -769,19 +769,19 @@ test "Community detection" {
         graph.outgoing_edges.deinit();
         graph.incoming_edges.deinit();
     }
-    
+
     // Add nodes
     for (1..10) |i| {
         try graph.nodes.put(i, {});
     }
-    
+
     var ml_engine = MLEngine.init(allocator, &graph);
     defer ml_engine.deinit();
-    
+
     const params = LouvainParams{};
     const result = try ml_engine.louvain(params);
     defer result.communities.deinit();
-    
+
     try std.testing.expect(result.num_communities > 0);
     try std.testing.expect(result.modularity >= 0.0 and result.modularity <= 1.0);
 }

@@ -198,36 +198,36 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(doccheck_exe);
     const doccheck_run = b.addRunArtifact(doccheck_exe);
-    
+
     // User authentication and management CLI
     const user_auth_exe = b.addExecutable(.{
         .name = "geode-auth",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/user_auth.zig"), .target = target, .optimize = optimize }),
     });
-    
+
     // Create separate modules for security components
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth.zig"), .target = target, .optimize = optimize });
-    
+
     const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls.zig"), .target = target, .optimize = optimize });
     rls_mod.addImport("auth", auth_mod);
-    
+
     const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
-    
+
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("auth", auth_mod);
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("interface", storage_interface_mod);
-    
+
     // Create a new inmemory storage module that imports interface
     const storage_inmemory_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
     storage_inmemory_mod.addImport("interface", storage_interface_mod);
-    
+
     user_auth_exe.root_module.addImport("auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);
     user_auth_exe.root_module.addImport("user_manager", user_manager_mod);
     user_auth_exe.root_module.addImport("storage/inmemory", storage_inmemory_mod);
     user_auth_exe.root_module.addImport("interface", storage_interface_mod);
-    
+
     b.installArtifact(user_auth_exe);
     const user_auth_run = b.addRunArtifact(user_auth_exe);
     const user_auth_step = b.step("auth", "User authentication and management CLI");
@@ -263,94 +263,62 @@ pub fn build(b: *std.Build) void {
     key_rotate_exe.root_module.addImport("crypto", crypto_mod);
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
-    
+
     // Add new test modules
     const tde_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("tests/e2e_tde_encryption.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_tde_encryption.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&tde_test.step);
-    
+
     const multi_graph_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("tests/e2e_multi_graph.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&multi_graph_test.step);
-    
+
     // Add unit tests for new modules
     const crypto_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/storage/crypto.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&crypto_test.step);
-    
+
     const ml_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/ml/integration.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&ml_test.step);
-    
+
     const streaming_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/streaming/cdc.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&streaming_test.step);
-    
+
     const temporal_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/temporal/time_travel.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/temporal/time_travel.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&temporal_test.step);
-    
+
     const gpu_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/gpu/acceleration.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&gpu_test.step);
-    
+
     // Security and RLS tests
     const auth_test = b.addTest(.{
         .root_module = auth_mod,
     });
     test_step.dependOn(&auth_test.step);
-    
+
     const rls_test = b.addTest(.{
         .root_module = rls_mod,
     });
     test_step.dependOn(&rls_test.step);
-    
+
     const user_manager_test = b.addTest(.{
         .root_module = user_manager_mod,
     });
     test_step.dependOn(&user_manager_test.step);
-    
+
     const e2e_rls_test = b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("tests/e2e_rls_security.zig"), 
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_rls_security.zig"), .target = target, .optimize = optimize }),
     });
     e2e_rls_test.root_module.addImport("auth", auth_mod);
     e2e_rls_test.root_module.addImport("rls", rls_mod);

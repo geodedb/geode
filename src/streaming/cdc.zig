@@ -17,7 +17,7 @@ pub const ChangeEvent = struct {
     object_type: enum { node, edge, property },
     object_id: u64,
     before: ?[]const u8, // JSON representation
-    after: ?[]const u8,  // JSON representation
+    after: ?[]const u8, // JSON representation
     metadata: std.StringHashMap([]const u8),
 };
 
@@ -115,7 +115,7 @@ pub const CDCEngine = struct {
         if (self.is_running.load(.acquire)) {
             return error.AlreadyRunning;
         }
-        
+
         self.is_running.store(true, .release);
         self.worker_thread = try std.Thread.spawn(.{}, workerLoop, .{self});
     }
@@ -124,7 +124,7 @@ pub const CDCEngine = struct {
         if (!self.is_running.load(.acquire)) {
             return;
         }
-        
+
         self.is_running.store(false, .release);
         if (self.worker_thread) |thread| {
             thread.join();
@@ -160,7 +160,7 @@ pub const CDCEngine = struct {
         };
 
         try self.event_queue.append(self.allocator, event);
-        
+
         // Notify subscribers
         for (self.subscribers.items) |subscriber| {
             try subscriber.onEvent(event);
@@ -186,12 +186,12 @@ pub const CDCEngine = struct {
             self.processEvents() catch |err| {
                 std.log.err("CDC worker error: {}", .{err});
             };
-            
+
             // Clean up old events
             self.cleanupOldEvents() catch |err| {
                 std.log.err("CDC cleanup error: {}", .{err});
             };
-            
+
             std.Thread.sleep(100 * std.time.ns_per_ms);
         }
     }
@@ -209,7 +209,7 @@ pub const CDCEngine = struct {
     fn cleanupOldEvents(self: *Self) !void {
         const now = std.time.milliTimestamp();
         const cutoff = now - @as(i64, @intCast(self.config.retention_period_ms));
-        
+
         var i: usize = 0;
         while (i < self.event_queue.items.len) {
             if (self.event_queue.items[i].timestamp < cutoff) {
@@ -302,7 +302,7 @@ pub const StreamingEngine = struct {
 
     pub fn start(self: *Self) !void {
         self.is_running.store(true, .release);
-        
+
         var it = self.queries.iterator();
         while (it.next()) |entry| {
             try entry.value_ptr.*.start();
@@ -311,7 +311,7 @@ pub const StreamingEngine = struct {
 
     pub fn stop(self: *Self) void {
         self.is_running.store(false, .release);
-        
+
         var it = self.queries.iterator();
         while (it.next()) |entry| {
             entry.value_ptr.*.stop();
@@ -355,7 +355,7 @@ pub const StreamingQuery = struct {
         _ = event;
         // Process event through window
         try self.window_state.addEvent();
-        
+
         // Check if window should trigger
         if (self.window_state.shouldTrigger()) {
             try self.computeAndEmit();
@@ -453,13 +453,13 @@ fn defaultEventHandler(event: ChangeEvent) anyerror!void {
 
 test "CDC engine basic operations" {
     const allocator = std.testing.allocator;
-    
+
     var engine = try CDCEngine.init(allocator, .{ .enabled = true });
     defer engine.deinit();
-    
+
     try engine.start();
     defer engine.stop();
-    
+
     // Capture a change
     try engine.captureChange(
         .insert,
@@ -469,16 +469,16 @@ test "CDC engine basic operations" {
         null,
         "{ \"id\": 100, \"label\": \"Person\" }",
     );
-    
+
     try std.testing.expect(engine.event_queue.items.len == 1);
 }
 
 test "streaming query registration" {
     const allocator = std.testing.allocator;
-    
+
     var engine = try StreamingEngine.init(allocator);
     defer engine.deinit();
-    
+
     const query = StreamQuery{
         .query = "MATCH (n) WHERE n.timestamp > $window_start RETURN count(n)",
         .window_type = .tumbling,
@@ -486,7 +486,7 @@ test "streaming query registration" {
         .aggregations = &[_]Aggregation{.count},
         .output_mode = .append,
     };
-    
+
     try engine.registerQuery("node_count", query);
     try std.testing.expect(engine.queries.count() == 1);
 }

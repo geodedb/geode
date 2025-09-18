@@ -7,27 +7,27 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
-    
+
     if (args.len < 2) {
         try printUsage();
         return;
     }
-    
+
     const command = args[1];
-    
+
     // Initialize managers
     var security_manager = try auth.SecurityManager.init(allocator);
     defer security_manager.deinit();
-    
+
     var rls_engine = try rls.RLSEngine.init(allocator);
     defer rls_engine.deinit();
-    
+
     var inmem_storage = @import("storage/inmemory").InMemory.init(allocator);
     defer inmem_storage.deinit();
-    
+
     // Create a storage engine interface
     const storage_iface = @import("interface");
     const storage_backend = storage_iface.StorageEngine{
@@ -53,7 +53,7 @@ pub fn main() !void {
             }.csrNeighbors,
         },
     };
-    
+
     var mgr = try user_manager.UserManager.init(
         allocator,
         &security_manager,
@@ -61,7 +61,7 @@ pub fn main() !void {
         storage_backend,
     );
     defer mgr.deinit();
-    
+
     // Handle commands
     if (std.mem.eql(u8, command, "user")) {
         try handleUserCommand(&mgr, args[2..]);
@@ -133,16 +133,16 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         try printUserHelp();
         return;
     }
-    
+
     const subcommand = args[0];
     // Use std.debug.print for CLI output
-    
+
     if (std.mem.eql(u8, subcommand, "create")) {
         if (args.len < 4) {
             std.debug.print("Usage: user create <username> <email> <password>\n", .{});
             return;
         }
-        
+
         const request = user_manager.UserManager.CreateUserRequest{
             .username = args[1],
             .email = args[2],
@@ -151,7 +151,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
             .attributes = null,
             .metadata = null,
         };
-        
+
         const response = try mgr.createUser(request);
         std.debug.print("User created successfully:\n", .{});
         std.debug.print("  ID: {}\n", .{response.user_id});
@@ -162,13 +162,12 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
             std.debug.print("{s} ", .{role});
         }
         std.debug.print("\n", .{});
-        
     } else if (std.mem.eql(u8, subcommand, "delete")) {
         if (args.len < 2) {
             std.debug.print("Usage: user delete <username>\n", .{});
             return;
         }
-        
+
         // Find user by username
         var user_id: ?auth.UserId = null;
         var it = mgr.security_manager.users.iterator();
@@ -178,20 +177,19 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (user_id) |id| {
             try mgr.deleteUser(id);
             std.debug.print("User '{s}' deleted successfully\n", .{args[1]});
         } else {
             std.debug.print("User '{s}' not found\n", .{args[1]});
         }
-        
     } else if (std.mem.eql(u8, subcommand, "list")) {
         const users = try mgr.listUsers(null);
         std.debug.print("Users ({} total):\n", .{users.len});
         std.debug.print("{s:<20} {s:<30} {s:<10} {s:<10}\n", .{ "Username", "Email", "Active", "Superuser" });
         std.debug.print("{s}\n", .{"-" ** 70});
-        
+
         for (users) |user| {
             std.debug.print("{s:<20} {s:<30} {s:<10} {s:<10}\n", .{
                 user.username,
@@ -200,13 +198,12 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 if (user.is_superuser) "Yes" else "No",
             });
         }
-        
     } else if (std.mem.eql(u8, subcommand, "show")) {
         if (args.len < 2) {
             std.debug.print("Usage: user show <username>\n", .{});
             return;
         }
-        
+
         // Find user by username
         var user: ?auth.User = null;
         var it = mgr.security_manager.users.iterator();
@@ -216,7 +213,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (user) |u| {
             std.debug.print("User Details:\n", .{});
             std.debug.print("  ID: {}\n", .{u.id});
@@ -230,7 +227,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
             if (u.last_login) |login| {
                 std.debug.print("  Last Login: {}\n", .{login});
             }
-            
+
             // Show roles
             std.debug.print("  Roles: ", .{});
             if (mgr.security_manager.rbac.user_roles.get(u.id)) |roles| {
@@ -241,7 +238,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 }
             }
             std.debug.print("\n", .{});
-            
+
             // Show attributes
             if (u.attributes.count() > 0) {
                 std.debug.print("  Attributes:\n", .{});
@@ -253,13 +250,12 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         } else {
             std.debug.print("User '{s}' not found\n", .{args[1]});
         }
-        
     } else if (std.mem.eql(u8, subcommand, "enable")) {
         if (args.len < 2) {
             std.debug.print("Usage: user enable <username>\n", .{});
             return;
         }
-        
+
         // Find and enable user
         var found = false;
         var it = mgr.security_manager.users.iterator();
@@ -271,19 +267,18 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (found) {
             std.debug.print("User '{s}' enabled\n", .{args[1]});
         } else {
             std.debug.print("User '{s}' not found\n", .{args[1]});
         }
-        
     } else if (std.mem.eql(u8, subcommand, "disable")) {
         if (args.len < 2) {
             std.debug.print("Usage: user disable <username>\n", .{});
             return;
         }
-        
+
         // Find and disable user
         var found = false;
         var it = mgr.security_manager.users.iterator();
@@ -295,19 +290,18 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (found) {
             std.debug.print("User '{s}' disabled\n", .{args[1]});
         } else {
             std.debug.print("User '{s}' not found\n", .{args[1]});
         }
-        
     } else if (std.mem.eql(u8, subcommand, "password")) {
         if (args.len < 3) {
             std.debug.print("Usage: user password <username> <new_password>\n", .{});
             return;
         }
-        
+
         // Find user and update password
         var user_id: ?auth.UserId = null;
         var it = mgr.security_manager.users.iterator();
@@ -317,7 +311,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (user_id) |id| {
             const request = user_manager.UserManager.UpdateUserRequest{
                 .user_id = id,
@@ -328,7 +322,6 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         } else {
             std.debug.print("User '{s}' not found\n", .{args[1]});
         }
-        
     } else {
         try printUserHelp();
     }
@@ -339,16 +332,16 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         try printRoleHelp();
         return;
     }
-    
+
     const subcommand = args[0];
     // Use std.debug.print for CLI output
-    
+
     if (std.mem.eql(u8, subcommand, "create")) {
         if (args.len < 3) {
             std.debug.print("Usage: role create <name> <description>\n", .{});
             return;
         }
-        
+
         const request = user_manager.UserManager.CreateRoleRequest{
             .name = args[1],
             .description = args[2],
@@ -356,19 +349,18 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
             .parent_role = null,
             .priority = null,
         };
-        
+
         const role_id = try mgr.createRole(request);
         std.debug.print("Role created successfully:\n", .{});
         std.debug.print("  ID: {}\n", .{role_id});
         std.debug.print("  Name: {s}\n", .{args[1]});
         std.debug.print("  Description: {s}\n", .{args[2]});
-        
     } else if (std.mem.eql(u8, subcommand, "delete")) {
         if (args.len < 2) {
             std.debug.print("Usage: role delete <name>\n", .{});
             return;
         }
-        
+
         // Find role by name
         var role_id: ?auth.RoleId = null;
         var it = mgr.security_manager.roles.iterator();
@@ -378,19 +370,18 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (role_id) |id| {
             try mgr.deleteRole(id);
             std.debug.print("Role '{s}' deleted successfully\n", .{args[1]});
         } else {
             std.debug.print("Role '{s}' not found\n", .{args[1]});
         }
-        
     } else if (std.mem.eql(u8, subcommand, "list")) {
         std.debug.print("Roles:\n", .{});
         std.debug.print("{s:<20} {s:<40} {s:<10} {s:<10}\n", .{ "Name", "Description", "System", "Priority" });
         std.debug.print("{s}\n", .{"-" ** 80});
-        
+
         var it = mgr.security_manager.roles.iterator();
         while (it.next()) |entry| {
             const role = entry.value_ptr.*;
@@ -401,13 +392,12 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 role.priority,
             });
         }
-        
     } else if (std.mem.eql(u8, subcommand, "show")) {
         if (args.len < 2) {
             std.debug.print("Usage: role show <name>\n", .{});
             return;
         }
-        
+
         // Find role by name
         var role: ?auth.Role = null;
         var it = mgr.security_manager.roles.iterator();
@@ -417,7 +407,7 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                 break;
             }
         }
-        
+
         if (role) |r| {
             std.debug.print("Role Details:\n", .{});
             std.debug.print("  ID: {}\n", .{r.id});
@@ -428,7 +418,7 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
             if (r.parent_role) |parent| {
                 std.debug.print("  Parent Role ID: {}\n", .{parent});
             }
-            
+
             // Show permissions
             if (r.permissions.items.len > 0) {
                 std.debug.print("  Permissions:\n", .{});
@@ -438,7 +428,7 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
                     }
                 }
             }
-            
+
             // Show users with this role
             std.debug.print("  Users with this role:\n", .{});
             var user_it = mgr.security_manager.rbac.user_roles.iterator();
@@ -454,7 +444,6 @@ fn handleRoleCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         } else {
             std.debug.print("Role '{s}' not found\n", .{args[1]});
         }
-        
     } else {
         try printRoleHelp();
     }
@@ -465,21 +454,21 @@ fn handlePolicyCommand(mgr: *user_manager.UserManager, args: []const [:0]const u
         try printPolicyHelp();
         return;
     }
-    
+
     const subcommand = args[0];
     // Use std.debug.print for CLI output
-    
+
     if (std.mem.eql(u8, subcommand, "create")) {
         if (args.len < 4) {
             std.debug.print("Usage: policy create <name> <table> <operation> [options]\n", .{});
             return;
         }
-        
+
         const operation = std.meta.stringToEnum(rls.RLSEngine.Operation, args[3]) orelse {
             std.debug.print("Invalid operation. Use: select, insert, update, delete, or all\n", .{});
             return;
         };
-        
+
         const request = user_manager.UserManager.CreatePolicyRequest{
             .name = args[1],
             .description = "RLS policy",
@@ -494,19 +483,18 @@ fn handlePolicyCommand(mgr: *user_manager.UserManager, args: []const [:0]const u
             .data_classification = null,
             .audit_level = .denials,
         };
-        
+
         const policy_id = try mgr.createPolicy(request);
         std.debug.print("Policy created successfully:\n", .{});
         std.debug.print("  ID: {}\n", .{policy_id});
         std.debug.print("  Name: {s}\n", .{args[1]});
         std.debug.print("  Table: {s}\n", .{args[2]});
         std.debug.print("  Operation: {s}\n", .{@tagName(operation)});
-        
     } else if (std.mem.eql(u8, subcommand, "list")) {
         std.debug.print("RLS Policies:\n", .{});
         std.debug.print("{s:<20} {s:<20} {s:<15} {s:<10} {s:<10}\n", .{ "Name", "Table", "Operation", "Permissive", "Enabled" });
         std.debug.print("{s}\n", .{"-" ** 75});
-        
+
         var it = mgr.rls_engine.policies.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items) |policy| {
@@ -519,7 +507,6 @@ fn handlePolicyCommand(mgr: *user_manager.UserManager, args: []const [:0]const u
                 });
             }
         }
-        
     } else {
         try printPolicyHelp();
     }
@@ -527,17 +514,17 @@ fn handlePolicyCommand(mgr: *user_manager.UserManager, args: []const [:0]const u
 
 fn handleGrantCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8) !void {
     // Use std.debug.print for CLI output
-    
+
     if (args.len < 4) {
         std.debug.print("Usage: grant <type> <name> to <target>\n", .{});
         return;
     }
-    
+
     if (std.mem.eql(u8, args[0], "role") and std.mem.eql(u8, args[2], "to")) {
         // Grant role to user
         const role_name = args[1];
         const username = args[3];
-        
+
         // Find role
         var role_id: ?auth.RoleId = null;
         var it = mgr.security_manager.roles.iterator();
@@ -547,7 +534,7 @@ fn handleGrantCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8
                 break;
             }
         }
-        
+
         // Find user
         var user_id: ?auth.UserId = null;
         var user_it = mgr.security_manager.users.iterator();
@@ -557,20 +544,19 @@ fn handleGrantCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8
                 break;
             }
         }
-        
+
         if (role_id == null) {
             std.debug.print("Role '{s}' not found\n", .{role_name});
             return;
         }
-        
+
         if (user_id == null) {
             std.debug.print("User '{s}' not found\n", .{username});
             return;
         }
-        
+
         try mgr.security_manager.assignRole(user_id.?, role_id.?);
         std.debug.print("Granted role '{s}' to user '{s}'\n", .{ role_name, username });
-        
     } else {
         std.debug.print("Invalid grant command\n", .{});
     }
@@ -578,17 +564,17 @@ fn handleGrantCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8
 
 fn handleRevokeCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8) !void {
     // Use std.debug.print for CLI output
-    
+
     if (args.len < 4) {
         std.debug.print("Usage: revoke <type> <name> from <target>\n", .{});
         return;
     }
-    
+
     if (std.mem.eql(u8, args[0], "role") and std.mem.eql(u8, args[2], "from")) {
         // Revoke role from user
         const role_name = args[1];
         const username = args[3];
-        
+
         // Find role
         var role_id: ?auth.RoleId = null;
         var it = mgr.security_manager.roles.iterator();
@@ -598,7 +584,7 @@ fn handleRevokeCommand(mgr: *user_manager.UserManager, args: []const [:0]const u
                 break;
             }
         }
-        
+
         // Find user
         var user_id: ?auth.UserId = null;
         var user_it = mgr.security_manager.users.iterator();
@@ -608,20 +594,19 @@ fn handleRevokeCommand(mgr: *user_manager.UserManager, args: []const [:0]const u
                 break;
             }
         }
-        
+
         if (role_id == null) {
             std.debug.print("Role '{s}' not found\n", .{role_name});
             return;
         }
-        
+
         if (user_id == null) {
             std.debug.print("User '{s}' not found\n", .{username});
             return;
         }
-        
+
         try mgr.security_manager.revokeRole(user_id.?, role_id.?);
         std.debug.print("Revoked role '{s}' from user '{s}'\n", .{ role_name, username });
-        
     } else {
         std.debug.print("Invalid revoke command\n", .{});
     }

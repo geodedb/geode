@@ -86,20 +86,20 @@ pub const PageCrypto = struct {
 
         // Get or derive data encryption key for this page
         const dek = try self.getDataKey(page_id);
-        
+
         // Generate nonce from page_id and timestamp
         var nonce: [nonce_size]u8 = undefined;
         const timestamp = std.time.milliTimestamp();
         std.mem.writeInt(u32, nonce[0..4], page_id, .little);
         std.mem.writeInt(i64, nonce[4..12], timestamp, .little);
-        
+
         // Encrypt using AES-256-GCM
         // Layout: [nonce(12)][ciphertext][tag(16)]
         @memcpy(ciphertext[0..nonce_size], &nonce);
         const ct_start = nonce_size;
         const ct_end = ct_start + plaintext.len;
         const tag_start = ct_end;
-        
+
         var tag: [tag_size]u8 = undefined;
         Aes256Gcm.encrypt(
             ciphertext[ct_start..ct_end],
@@ -109,7 +109,7 @@ pub const PageCrypto = struct {
             nonce,
             dek.data,
         );
-        @memcpy(ciphertext[tag_start..tag_start + tag_size], &tag);
+        @memcpy(ciphertext[tag_start .. tag_start + tag_size], &tag);
     }
 
     pub fn decryptPage(self: *Self, page_id: u32, ciphertext: []const u8, plaintext: []u8, additional_data: []const u8) !void {
@@ -119,13 +119,13 @@ pub const PageCrypto = struct {
         }
 
         const dek = try self.getDataKey(page_id);
-        
+
         // Extract nonce and tag
         const nonce = ciphertext[0..nonce_size];
         const ct_start = nonce_size;
         const ct_end = ciphertext.len - tag_size;
         const tag = ciphertext[ct_end..];
-        
+
         // Decrypt using AES-256-GCM
         Aes256Gcm.decrypt(
             plaintext,
@@ -141,18 +141,18 @@ pub const PageCrypto = struct {
         if (self.data_keys.get(page_id)) |key| {
             return key;
         }
-        
+
         // Derive key from master key
         var derived_key: EncryptionKey = undefined;
         derived_key.algorithm = self.master_key.algorithm;
         derived_key.provenance = self.master_key.provenance;
-        
+
         // Derive page-specific key using simple hash
         var hasher = crypto.hash.sha2.Sha256.init(.{});
         hasher.update(&self.master_key.data);
         hasher.update(std.mem.asBytes(&page_id));
         hasher.final(&derived_key.data);
-        
+
         try self.data_keys.put(page_id, derived_key);
         return derived_key;
     }
@@ -164,7 +164,7 @@ pub const PageCrypto = struct {
             crypto.secureZero(u8, &entry.value_ptr.data);
         }
         self.data_keys.clearRetainingCapacity();
-        
+
         // Update master key
         crypto.secureZero(u8, &self.master_key.data);
         self.master_key = new_master_key;
@@ -200,17 +200,17 @@ pub const WALCrypto = struct {
 
         const aes = Aes256Gcm.init(self.key.data);
         var tag: [16]u8 = undefined;
-        
+
         // Layout: [nonce][encrypted][tag]
         @memcpy(encrypted[0..12], &nonce);
         aes.encrypt(
-            encrypted[12..12 + record.len],
+            encrypted[12 .. 12 + record.len],
             &tag,
             record,
             &[_]u8{}, // no additional data
             nonce,
         );
-        @memcpy(encrypted[12 + record.len..], &tag);
+        @memcpy(encrypted[12 + record.len ..], &tag);
     }
 
     pub fn decryptRecord(self: *Self, encrypted: []const u8, record: []u8) !void {
@@ -220,8 +220,8 @@ pub const WALCrypto = struct {
         }
 
         const nonce = encrypted[0..12];
-        const tag = encrypted[encrypted.len - 16..];
-        const ciphertext = encrypted[12..encrypted.len - 16];
+        const tag = encrypted[encrypted.len - 16 ..];
+        const ciphertext = encrypted[12 .. encrypted.len - 16];
 
         const aes = Aes256Gcm.init(self.key.data);
         aes.decrypt(
@@ -265,10 +265,10 @@ pub const KeyRotationTool = struct {
         const stat = try input_file.stat();
         const page_size: usize = 4096;
         const total_pages = stat.size / page_size;
-        
+
         var buffer = try self.allocator.alloc(u8, page_size * 2);
         defer self.allocator.free(buffer);
-        
+
         const encrypted_page = buffer[0..page_size];
         const decrypted_page = buffer[page_size..];
 
@@ -276,7 +276,7 @@ pub const KeyRotationTool = struct {
         while (pages_processed < total_pages) : (pages_processed += 1) {
             // Read encrypted page
             _ = try input_file.read(encrypted_page);
-            
+
             // Decrypt with old key
             const page_id: u32 = @intCast(pages_processed);
             try self.old_crypto.decryptPage(
@@ -285,7 +285,7 @@ pub const KeyRotationTool = struct {
                 decrypted_page,
                 &[_]u8{},
             );
-            
+
             // Re-encrypt with new key
             try self.new_crypto.encryptPage(
                 page_id,
@@ -293,10 +293,10 @@ pub const KeyRotationTool = struct {
                 encrypted_page,
                 &[_]u8{},
             );
-            
+
             // Write re-encrypted page
             _ = try output_file.write(encrypted_page);
-            
+
             if (self.progress_callback) |callback| {
                 callback(pages_processed + 1, total_pages);
             }
@@ -380,7 +380,7 @@ pub const KMSClient = struct {
 
 test "AES-256-GCM encryption/decryption" {
     const allocator = std.testing.allocator;
-    
+
     const master_key = EncryptionKey{
         .data = [_]u8{0x42} ** 32,
         .algorithm = .aes_256_gcm,
@@ -392,23 +392,23 @@ test "AES-256-GCM encryption/decryption" {
             .version = 1,
         },
     };
-    
+
     var crypto_engine = try PageCrypto.init(allocator, master_key, null);
     defer crypto_engine.deinit();
-    
+
     const plaintext = "Hello, encrypted world!";
     var ciphertext: [100]u8 = undefined;
     var decrypted: [100]u8 = undefined;
-    
+
     try crypto_engine.encryptPage(1, plaintext, &ciphertext, &[_]u8{});
-    try crypto_engine.decryptPage(1, ciphertext[0..plaintext.len + 28], decrypted[0..plaintext.len], &[_]u8{});
-    
+    try crypto_engine.decryptPage(1, ciphertext[0 .. plaintext.len + 28], decrypted[0..plaintext.len], &[_]u8{});
+
     try std.testing.expectEqualStrings(plaintext, decrypted[0..plaintext.len]);
 }
 
 test "Key rotation" {
     const allocator = std.testing.allocator;
-    
+
     const old_key = EncryptionKey{
         .data = [_]u8{0x11} ** 32,
         .algorithm = .aes_256_gcm,
@@ -420,7 +420,7 @@ test "Key rotation" {
             .version = 1,
         },
     };
-    
+
     const new_key = EncryptionKey{
         .data = [_]u8{0x22} ** 32,
         .algorithm = .aes_256_gcm,
@@ -432,24 +432,24 @@ test "Key rotation" {
             .version = 2,
         },
     };
-    
+
     var old_crypto = try PageCrypto.init(allocator, old_key, null);
     defer old_crypto.deinit();
-    
+
     var new_crypto = try PageCrypto.init(allocator, new_key, null);
     defer new_crypto.deinit();
-    
+
     // Test key rotation
     try old_crypto.rotateKeys(new_key);
-    
+
     // Verify new key is being used
     const test_data = "Test data";
     var encrypted: [100]u8 = undefined;
     try old_crypto.encryptPage(1, test_data, &encrypted, &[_]u8{});
-    
+
     // Should be able to decrypt with new_crypto using same key
     var decrypted: [100]u8 = undefined;
-    try new_crypto.decryptPage(1, encrypted[0..test_data.len + 28], decrypted[0..test_data.len], &[_]u8{});
-    
+    try new_crypto.decryptPage(1, encrypted[0 .. test_data.len + 28], decrypted[0..test_data.len], &[_]u8{});
+
     try std.testing.expectEqualStrings(test_data, decrypted[0..test_data.len]);
 }

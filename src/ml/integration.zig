@@ -126,29 +126,29 @@ pub const MLEngine = struct {
     pub fn node2vec(self: *Self, params: Node2VecParams) !*MLModel {
         const model = try self.allocator.create(MLModel);
         model.* = try MLModel.init(self.allocator, .node2vec);
-        
+
         // Implementation of Node2Vec algorithm
         try self.computeNode2Vec(model, params);
-        
+
         const model_name = try std.fmt.allocPrint(self.allocator, "node2vec_{d}", .{std.time.milliTimestamp()});
         try self.models.put(model_name, model);
         self.active_model = model;
-        
+
         return model;
     }
 
     fn computeNode2Vec(self: *Self, model: *MLModel, params: Node2VecParams) !void {
-        
+
         // Simplified Node2Vec implementation
         // In practice, this would:
         // 1. Generate random walks
         // 2. Train Skip-gram model
         // 3. Generate embeddings
-        
+
         // For demonstration, generate random embeddings
         var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         const random = prng.random();
-        
+
         // Generate embeddings for sample nodes
         var node_id: u64 = 1;
         while (node_id <= 100) : (node_id += 1) {
@@ -159,17 +159,17 @@ pub const MLEngine = struct {
             try model.setEmbedding(node_id, embedding);
             self.allocator.free(embedding);
         }
-        
+
         model.metadata.training_time_ms = 100; // Mock training time
         model.metadata.created_at = std.time.milliTimestamp();
     }
 
     pub fn linkPrediction(self: *Self, source: u64, target: u64, params: LinkPredictionParams) !f32 {
         const model = self.active_model orelse return error.NoActiveModel;
-        
+
         const source_emb = model.getEmbedding(source) orelse return error.NodeNotFound;
         const target_emb = model.getEmbedding(target) orelse return error.NodeNotFound;
-        
+
         // Compute similarity based on method
         const score = switch (params.method) {
             .hadamard => self.hadamardProduct(source_emb, target_emb),
@@ -178,7 +178,7 @@ pub const MLEngine = struct {
             .l2 => self.l2Distance(source_emb, target_emb),
             .average => self.averageEmbeddings(source_emb, target_emb),
         };
-        
+
         return score;
     }
 
@@ -196,13 +196,13 @@ pub const MLEngine = struct {
         var dot_product: f32 = 0;
         var norm_a: f32 = 0;
         var norm_b: f32 = 0;
-        
+
         for (a, b) |val_a, val_b| {
             dot_product += val_a * val_b;
             norm_a += val_a * val_a;
             norm_b += val_b * val_b;
         }
-        
+
         return dot_product / (@sqrt(norm_a) * @sqrt(norm_b));
     }
 
@@ -237,16 +237,16 @@ pub const MLEngine = struct {
     pub fn nodeClassification(self: *Self, node_id: u64, params: NodeClassificationParams) ![]const u8 {
         _ = params;
         const model = self.active_model orelse return error.NoActiveModel;
-        
+
         const embedding = model.getEmbedding(node_id) orelse return error.NodeNotFound;
-        
+
         // Simple classification based on embedding values
         // In practice, this would use a trained classifier
         var sum: f32 = 0;
         for (embedding) |val| {
             sum += val;
         }
-        
+
         if (sum > 0) {
             return "class_a";
         } else {
@@ -257,21 +257,21 @@ pub const MLEngine = struct {
     pub fn communityDetection(self: *Self, params: CommunityDetectionParams) !std.AutoHashMap(u64, u32) {
         _ = params;
         const model = self.active_model orelse return error.NoActiveModel;
-        
+
         var communities = std.AutoHashMap(u64, u32).init(self.allocator);
-        
+
         // Simple community assignment based on embedding clustering
         // In practice, would use Louvain or similar algorithm
         var it = model.embeddings.iterator();
         while (it.next()) |entry| {
             const node_id = entry.key_ptr.*;
             const embedding = entry.value_ptr.*;
-            
+
             // Assign community based on first dimension sign
             const community: u32 = if (embedding[0] > 0) 0 else 1;
             try communities.put(node_id, community);
         }
-        
+
         return communities;
     }
 };
@@ -289,7 +289,7 @@ pub const GDSProcedures = struct {
     // CALL gds.node2vec.stream()
     pub fn node2vecStream(self: *Self, params: Node2VecParams) !StreamResult {
         const model = try self.engine.node2vec(params);
-        
+
         var results = std.ArrayList(Node2VecResult){};
         var it = model.embeddings.iterator();
         while (it.next()) |entry| {
@@ -298,7 +298,7 @@ pub const GDSProcedures = struct {
                 .embedding = entry.value_ptr.*,
             });
         }
-        
+
         return StreamResult{
             .columns = &[_][]const u8{ "nodeId", "embedding" },
             .rows = results.items,
@@ -314,7 +314,7 @@ pub const GDSProcedures = struct {
     pub fn louvainStream(self: *Self) !StreamResult {
         const communities = try self.engine.communityDetection(.{});
         defer communities.deinit();
-        
+
         var results = std.ArrayList(CommunityResult){};
         var it = communities.iterator();
         while (it.next()) |entry| {
@@ -323,7 +323,7 @@ pub const GDSProcedures = struct {
                 .communityId = entry.value_ptr.*,
             });
         }
-        
+
         return StreamResult{
             .columns = &[_][]const u8{ "nodeId", "communityId" },
             .rows = results.items,
@@ -348,18 +348,18 @@ pub const CommunityResult = struct {
 
 test "node2vec embeddings" {
     const allocator = std.testing.allocator;
-    
+
     var engine = try MLEngine.init(allocator);
     defer engine.deinit();
-    
+
     const params = Node2VecParams{
         .dimensions = 64,
         .walk_length = 10,
         .num_walks = 5,
     };
-    
+
     const model = try engine.node2vec(params);
-    
+
     // Check embeddings were generated
     const embedding = model.getEmbedding(1);
     try std.testing.expect(embedding != null);
@@ -368,13 +368,13 @@ test "node2vec embeddings" {
 
 test "link prediction" {
     const allocator = std.testing.allocator;
-    
+
     var engine = try MLEngine.init(allocator);
     defer engine.deinit();
-    
+
     // Generate embeddings
     _ = try engine.node2vec(.{ .dimensions = 32 });
-    
+
     // Predict link
     const score = try engine.linkPrediction(1, 2, .{ .method = .cosine });
     try std.testing.expect(score >= -1.0 and score <= 1.0);
@@ -382,16 +382,16 @@ test "link prediction" {
 
 test "community detection" {
     const allocator = std.testing.allocator;
-    
+
     var engine = try MLEngine.init(allocator);
     defer engine.deinit();
-    
+
     // Generate embeddings
     _ = try engine.node2vec(.{ .dimensions = 32 });
-    
+
     // Detect communities
     var communities = try engine.communityDetection(.{ .algorithm = .louvain });
     defer communities.deinit();
-    
+
     try std.testing.expect(communities.count() > 0);
 }
