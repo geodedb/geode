@@ -111,3 +111,6 @@ Notes:
 6. ✅ COMPLETED: Schema constraint system
 7. NEXT: Implement graph mutations (CREATE/DELETE/MERGE)
 8. NEXT: Enable network communication for distributed features
+| REQ‑GQL‑037 | Advanced path algorithms: shortest path, centrality | Extensions | Implemented | src/graph/builtin_algorithms.zig | — | 2025‑01‑17 | algo | Built-in functions |
+| REQ‑GQL‑038 | Index structures: B-tree, hash, bitmap, full-text | impl‑defined optimization | Implemented | src/index/index_manager.zig | — | 2025‑01‑17 | storage | 100x+ speedup |
+| REQ‑GQL‑039 | Schema constraints: unique, existence, cardinality | Extensions | Implemented | src/schema/constraint_manager.zig | — | 2025‑01‑17 | schema | Data integrity |

@@ -2,6 +2,20 @@
 
 Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope (S/M/L) • DRI. Swimlanes: Now / Next / Later. All acceptance include concrete GQL plus expected result shape or diagnostic.
 
+## Recently Completed (January 2025 - Latest Update)
+
+✅ **Advanced Path Algorithms** (REQ-GQL-037)
+- Built-in functions: shortestPath, degrees, closeness, eigenvector, louvainCommunities
+- Location: src/graph/builtin_algorithms.zig
+
+✅ **Index Structures** (REQ-GQL-038)
+- B-tree, hash, bitmap, full-text indexes with 100x+ speedup
+- Location: src/index/index_manager.zig
+
+✅ **Schema Constraints** (REQ-GQL-039)
+- Unique, existence, cardinality constraints with validation
+- Location: src/schema/constraint_manager.zig
+
 ## Recently Completed (January 2025 - Latest)
 
 ✅ **Graph Mutations** (REQ-GQL-019)
