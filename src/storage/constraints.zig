@@ -9,14 +9,14 @@ pub const SchemaConstraints = struct {
     edge_constraints: std.StringHashMap(EdgeConstraints),
     unique_indexes: std.ArrayList(UniqueIndex),
     check_constraints: std.ArrayList(CheckConstraint),
-    
+
     pub const NodeConstraints = struct {
         label: []const u8,
         required_properties: []PropertyConstraint,
         unique_properties: [][]const u8,
         check_constraints: []CheckConstraint,
     };
-    
+
     pub const EdgeConstraints = struct {
         type: []const u8,
         required_properties: []PropertyConstraint,
@@ -24,7 +24,7 @@ pub const SchemaConstraints = struct {
         target_label: ?[]const u8,
         cardinality: ?Cardinality,
     };
-    
+
     pub const PropertyConstraint = struct {
         name: []const u8,
         type: PropertyType,
@@ -34,7 +34,7 @@ pub const SchemaConstraints = struct {
         max_value: ?Value,
         pattern: ?[]const u8,
     };
-    
+
     pub const PropertyType = enum {
         boolean,
         integer,
@@ -44,35 +44,35 @@ pub const SchemaConstraints = struct {
         list,
         map,
     };
-    
+
     pub const Cardinality = struct {
         min: ?usize,
         max: ?usize,
     };
-    
+
     pub const UniqueIndex = struct {
         label: []const u8,
         properties: [][]const u8,
     };
-    
+
     pub const CheckConstraint = struct {
         name: []const u8,
         expression: []const u8,
         error_message: []const u8,
     };
-    
+
     pub const ValidationError = struct {
         entity_type: EntityType,
         entity_id: u64,
         constraint_type: ConstraintType,
         message: []const u8,
     };
-    
+
     pub const EntityType = enum {
         node,
         edge,
     };
-    
+
     pub const ConstraintType = enum {
         required_property,
         type_mismatch,
@@ -82,7 +82,7 @@ pub const SchemaConstraints = struct {
         pattern,
         range,
     };
-    
+
     pub fn init(allocator: Allocator) SchemaConstraints {
         return .{
             .allocator = allocator,
@@ -92,14 +92,14 @@ pub const SchemaConstraints = struct {
             .check_constraints = std.ArrayList(CheckConstraint).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *SchemaConstraints) void {
         self.node_constraints.deinit();
         self.edge_constraints.deinit();
         self.unique_indexes.deinit();
         self.check_constraints.deinit();
     }
-    
+
     // Add node constraint
     pub fn addNodeConstraint(
         self: *SchemaConstraints,
@@ -108,7 +108,7 @@ pub const SchemaConstraints = struct {
     ) !void {
         try self.node_constraints.put(label, constraints);
     }
-    
+
     // Add edge constraint
     pub fn addEdgeConstraint(
         self: *SchemaConstraints,
@@ -117,7 +117,7 @@ pub const SchemaConstraints = struct {
     ) !void {
         try self.edge_constraints.put(edge_type, constraints);
     }
-    
+
     // Add unique index
     pub fn addUniqueIndex(
         self: *SchemaConstraints,
@@ -129,7 +129,7 @@ pub const SchemaConstraints = struct {
             .properties = properties,
         });
     }
-    
+
     // Validate node
     pub fn validateNode(
         self: *SchemaConstraints,
@@ -138,11 +138,11 @@ pub const SchemaConstraints = struct {
         properties: std.StringHashMap(Value),
     ) !?ValidationError {
         const constraints = self.node_constraints.get(label) orelse return null;
-        
+
         // Check required properties
         for (constraints.required_properties) |prop_constraint| {
             const value = properties.get(prop_constraint.name);
-            
+
             if (value == null and !prop_constraint.nullable) {
                 return ValidationError{
                     .entity_type = .node,
@@ -155,7 +155,7 @@ pub const SchemaConstraints = struct {
                     ),
                 };
             }
-            
+
             if (value) |v| {
                 // Type check
                 if (!self.checkType(v, prop_constraint.type)) {
@@ -170,7 +170,7 @@ pub const SchemaConstraints = struct {
                         ),
                     };
                 }
-                
+
                 // Range check
                 if (prop_constraint.min_value) |min| {
                     if (!self.checkMinValue(v, min)) {
@@ -186,7 +186,7 @@ pub const SchemaConstraints = struct {
                         };
                     }
                 }
-                
+
                 if (prop_constraint.max_value) |max| {
                     if (!self.checkMaxValue(v, max)) {
                         return ValidationError{
@@ -201,7 +201,7 @@ pub const SchemaConstraints = struct {
                         };
                     }
                 }
-                
+
                 // Pattern check for strings
                 if (prop_constraint.pattern) |pattern| {
                     if (!self.checkPattern(v, pattern)) {
@@ -219,7 +219,7 @@ pub const SchemaConstraints = struct {
                 }
             }
         }
-        
+
         // Check unique constraints
         for (constraints.unique_properties) |prop_name| {
             if (properties.get(prop_name)) |value| {
@@ -227,7 +227,7 @@ pub const SchemaConstraints = struct {
                 _ = value;
             }
         }
-        
+
         // Check custom constraints
         for (constraints.check_constraints) |check| {
             if (!self.evaluateCheckConstraint(check, properties)) {
@@ -239,10 +239,10 @@ pub const SchemaConstraints = struct {
                 };
             }
         }
-        
+
         return null;
     }
-    
+
     // Validate edge
     pub fn validateEdge(
         self: *SchemaConstraints,
@@ -253,7 +253,7 @@ pub const SchemaConstraints = struct {
         properties: std.StringHashMap(Value),
     ) !?ValidationError {
         const constraints = self.edge_constraints.get(edge_type) orelse return null;
-        
+
         // Check source/target labels
         if (constraints.source_label) |required_source| {
             if (!std.mem.eql(u8, source_label, required_source)) {
@@ -269,7 +269,7 @@ pub const SchemaConstraints = struct {
                 };
             }
         }
-        
+
         if (constraints.target_label) |required_target| {
             if (!std.mem.eql(u8, target_label, required_target)) {
                 return ValidationError{
@@ -284,11 +284,11 @@ pub const SchemaConstraints = struct {
                 };
             }
         }
-        
+
         // Check required properties
         for (constraints.required_properties) |prop_constraint| {
             const value = properties.get(prop_constraint.name);
-            
+
             if (value == null and !prop_constraint.nullable) {
                 return ValidationError{
                     .entity_type = .edge,
@@ -301,7 +301,7 @@ pub const SchemaConstraints = struct {
                     ),
                 };
             }
-            
+
             if (value) |v| {
                 // Type check
                 if (!self.checkType(v, prop_constraint.type)) {
@@ -318,10 +318,10 @@ pub const SchemaConstraints = struct {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     // Check cardinality constraints
     pub fn checkCardinality(
         self: *SchemaConstraints,
@@ -332,7 +332,7 @@ pub const SchemaConstraints = struct {
     ) !?ValidationError {
         const constraints = self.edge_constraints.get(edge_type) orelse return null;
         const cardinality = constraints.cardinality orelse return null;
-        
+
         if (cardinality.min) |min| {
             if (edge_count < min) {
                 return ValidationError{
@@ -347,7 +347,7 @@ pub const SchemaConstraints = struct {
                 };
             }
         }
-        
+
         if (cardinality.max) |max| {
             if (edge_count > max) {
                 return ValidationError{
@@ -362,10 +362,10 @@ pub const SchemaConstraints = struct {
                 };
             }
         }
-        
+
         return null;
     }
-    
+
     // Helper functions
     fn checkType(self: *SchemaConstraints, value: Value, expected_type: PropertyType) bool {
         _ = self;
@@ -379,7 +379,7 @@ pub const SchemaConstraints = struct {
             .map => value == .map,
         };
     }
-    
+
     fn checkMinValue(self: *SchemaConstraints, value: Value, min: Value) bool {
         _ = self;
         return switch (value) {
@@ -395,7 +395,7 @@ pub const SchemaConstraints = struct {
             else => true,
         };
     }
-    
+
     fn checkMaxValue(self: *SchemaConstraints, value: Value, max: Value) bool {
         _ = self;
         return switch (value) {
@@ -411,7 +411,7 @@ pub const SchemaConstraints = struct {
             else => true,
         };
     }
-    
+
     fn checkPattern(self: *SchemaConstraints, value: Value, pattern: []const u8) bool {
         _ = self;
         _ = pattern;
@@ -424,7 +424,7 @@ pub const SchemaConstraints = struct {
             else => false,
         };
     }
-    
+
     fn evaluateCheckConstraint(
         self: *SchemaConstraints,
         constraint: CheckConstraint,

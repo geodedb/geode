@@ -40,6 +40,8 @@ with subclause anchors.
 | REQ‑GQL‑033 | Enhanced 2PC: savepoints, locks, isolation | ISO 8 (transactions) | Implemented | src/distributed/twophase.zig; tests/e2e_advanced_features.zig | — | 2025‑01‑17 | dist | Full protocol implementation |
 | REQ‑GQL‑042 | Distributed scaffold: 2PC coordinator | ISO 8 (distributed txn) | Implemented | src/distributed/twophase.zig:Coordinator | Recovery from log | 2025‑01‑17 | dist | Savepoints, lock management |
 | REQ‑GQL‑043 | Distributed integration with server | ISO 24 | Partial | CLI flags present; no actual distribution | Single-node only | 2025‑12‑31 | dist | |
+| REQ‑GQL‑046 | Transparent data encryption (pages+WAL; key rotation) | Security (impl‑defined) | Implemented | src/storage/page_manager.zig; src/wal/wal.zig; tests/unit_page_crypto.zig; src/tools/key_rotate.zig | Experimental cipher; harden to AES‑GCM | 2025‑11‑30 | security | TDE v0 (experimental) |
+| REQ‑GQL‑047 | Multi‑graph catalog (CREATE/DROP/USE GRAPH; isolation) | ISO 4.3, 14 | Planned | docs/NEXT.md | Planner/catalog namespaces | 2025‑11‑07 | catalog | Multi‑tenant P1 |
 | REQ‑GQL‑050 | Text format output for SCHEMA/BINDINGS/EXPLAIN/PROFILE | ISO 4.3.6 (binding tables) | Implemented | src/client/main.zig text paths; tests in e2e_protocol.zig | Text profile parity later | 2025‑10‑21 | cli | |
 
 Notes: 
@@ -90,7 +92,8 @@ Notes:
 ✅ **ALL RESOLVED** - No critical risks remaining
 
 ### High Risks (P1)
-✅ **ALL RESOLVED** - No high-priority risks remaining
+- Database encryption at rest (TDE) design and key rotation
+- Multi-graph catalog isolation semantics and planner routing
 
 ### Medium Risks (P2)
 ✅ **ALL RESOLVED** - Core features complete
@@ -118,10 +121,7 @@ Notes:
 12. ✅ Built-in graph algorithm functions
 
 ### Next Steps
-1. Deploy to production environments
-2. Performance benchmarking and tuning
-3. Consider GPU acceleration for large-scale analytics
-4. Explore ML integration opportunities
-| REQ‑GQL‑037 | Advanced path algorithms: shortest path, centrality | Extensions | Implemented | src/graph/builtin_algorithms.zig | — | 2025‑01‑17 | algo | Built-in functions |
-| REQ‑GQL‑038 | Index structures: B-tree, hash, bitmap, full-text | impl‑defined optimization | Implemented | src/index/index_manager.zig | — | 2025‑01‑17 | storage | 100x+ speedup |
-| REQ‑GQL‑039 | Schema constraints: unique, existence, cardinality | Extensions | Implemented | src/schema/constraint_manager.zig | — | 2025‑01‑17 | schema | Data integrity |
+1. Database encryption at rest (pages+WAL) with key rotation (P1)
+2. Multi-graph catalog and planner/executor isolation (P1)
+3. Deploy to production environments
+4. Performance benchmarking and tuning

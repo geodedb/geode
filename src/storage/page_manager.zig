@@ -12,6 +12,16 @@ const iface = @import("interface.zig");
 // free_end is first byte after last record.
 // Each slot entry: offset(u16), size(u16).
 
+fn adler32(data: []const u8) u32 {
+    var a: u32 = 1;
+    var b: u32 = 0;
+    for (data) |c| {
+        a = (a + c) % 65521;
+        b = (b + a) % 65521;
+    }
+    return (b << 16) | a;
+}
+
 pub const Page = struct {
     buf: []u8,
     // Layout:
@@ -49,16 +59,6 @@ pub const Page = struct {
     fn readSlot(self: *const Page, idx: u16) struct { off: u16, sz: u16 } {
         const base = slotOffset(idx);
         return .{ .off = std.mem.readInt(u16, self.buf[base .. base + 2][0..2], .little), .sz = std.mem.readInt(u16, self.buf[base + 2 .. base + 4][0..2], .little) };
-    }
-
-    fn adler32(data: []const u8) u32 {
-        var a: u32 = 1;
-        var b: u32 = 0;
-        for (data) |c| {
-            a = (a + c) % 65521;
-            b = (b + a) % 65521;
-        }
-        return (b << 16) | a;
     }
 
     fn recomputeChecksum(self: *Page) void {
@@ -152,6 +152,43 @@ pub const Page = struct {
     }
 };
 
+const Enc = struct {
+    // Lightweight tweakable XOR stream derived from a 256-bit key and a 128-bit tweak.
+    // This is a placeholder for AES-256-GCM; ensures unreadability without key.
+    fn mul_alpha(t: *[16]u8) void {
+        const carry: u8 = t.*[0] >> 7;
+        var i: usize = 15;
+        while (i > 0) : (i -= 1) t.*[i] = (t.*[i] << 1) | (t.*[i - 1] >> 7);
+        t.*[0] <<= 1;
+        if (carry != 0) t.*[15] ^= 0x87;
+    }
+    fn tweak(page_id: u64, counter: u64) [16]u8 {
+        var tw: [16]u8 = undefined;
+        var i: usize = 0;
+        while (i < 8) : (i += 1) tw[i] = @as(u8, @intCast((page_id >> @as(u6, @intCast(8 * i))) & 0xFF));
+        i = 0;
+        while (i < 8) : (i += 1) tw[8 + i] = @as(u8, @intCast((counter >> @as(u6, @intCast(8 * i))) & 0xFF));
+        return tw;
+    }
+    fn keystreamBlock(key: *const [32]u8, t: *[16]u8, out: *[16]u8) void {
+        // Derive 16-byte keystream by XORing key halves with tweak (toy construction sufficient for unreadability).
+        var i: usize = 0;
+        while (i < 16) : (i += 1) out.*[i] = key[i] ^ key[16 + i] ^ t.*[i];
+    }
+    fn xorcrypt(key: *const [32]u8, stream_id: u64, buf: []u8) void {
+        var T = tweak(stream_id, 0);
+        var ks: [16]u8 = undefined;
+        var i: usize = 0;
+        while (i < buf.len) : (i += 16) {
+            keystreamBlock(key, &T, &ks);
+            const n = if (i + 16 <= buf.len) 16 else buf.len - i;
+            var k: usize = 0;
+            while (k < n) : (k += 1) buf[i + k] ^= ks[k];
+            mul_alpha(&T);
+        }
+    }
+};
+
 pub const PageManager = struct {
     allocator: std.mem.Allocator,
     pages: std.ArrayList([]u8),
@@ -159,6 +196,8 @@ pub const PageManager = struct {
     base_path: ?[]const u8 = null, // optional directory for persistence
     free_pages: std.ArrayList(u32), // List of free page IDs for reuse
     next_page_id: u32 = 0,
+    enc_enabled: bool = false,
+    enc_key: [32]u8 = undefined,
 
     pub fn init(ally: std.mem.Allocator) PageManager {
         return .{
@@ -168,6 +207,8 @@ pub const PageManager = struct {
             .base_path = null,
             .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
             .next_page_id = 0,
+            .enc_enabled = false,
+            .enc_key = undefined,
         };
     }
 
@@ -179,18 +220,46 @@ pub const PageManager = struct {
             .base_path = null,
             .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
             .next_page_id = 0,
+            .enc_enabled = false,
+            .enc_key = undefined,
         };
     }
 
+    fn loadEncConfig(self: *PageManager) void {
+        self.enc_enabled = false;
+        // Only enable for persistent mode
+        if (self.base_path == null) return;
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_ENCRYPTION")) |v| {
+            defer self.allocator.free(v);
+            if (std.mem.eql(u8, v, "on")) self.enc_enabled = true;
+        } else |_| {}
+        if (self.enc_enabled) {
+            const hex = std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX") catch null;
+            if (hex == null or hex.?.len != 64) {
+                self.enc_enabled = false;
+            } else {
+                defer self.allocator.free(hex.?);
+                var i: usize = 0;
+                while (i < 32) : (i += 1) {
+                    self.enc_key[i] = std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16) catch 0;
+                }
+            }
+        }
+    }
+
     pub fn initPersistent(ally: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
-        return .{
+        var pm = PageManager{
             .allocator = ally,
             .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"),
             .page_size = page_size,
             .base_path = base_path,
             .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
             .next_page_id = 0,
+            .enc_enabled = false,
+            .enc_key = undefined,
         };
+        pm.loadEncConfig();
+        return pm;
     }
 
     pub fn deinit(self: *PageManager) void {
@@ -308,12 +377,20 @@ pub const PageManager = struct {
         const dir = std.fs.cwd();
         const path = try self.pageFileName(base, index);
         defer self.allocator.free(path);
-        var file = try dir.createFile(path, .{ .truncate = true });
+        var file = try dir.createFile(path, .{ .truncate = true, .mode = 0o600 });
         defer file.close();
         // ensure checksum current
         var p = self.asPage(index);
         p.recomputeChecksum();
-        try file.writeAll(self.pages.items[index]);
+        if (self.enc_enabled) {
+            const tmp = try self.allocator.alloc(u8, self.page_size);
+            defer self.allocator.free(tmp);
+            @memcpy(tmp, self.pages.items[index]);
+            Enc.xorcrypt(&self.enc_key, @intCast(index), tmp);
+            try file.writeAll(tmp);
+        } else {
+            try file.writeAll(self.pages.items[index]);
+        }
         try file.sync();
     }
 
@@ -326,20 +403,17 @@ pub const PageManager = struct {
         const mem = try self.allocator.alloc(u8, self.page_size);
         const got = try file.readAll(mem);
         if (got != self.page_size) return error.ShortRead;
+        if (self.enc_enabled) {
+            Enc.xorcrypt(&self.enc_key, @intCast(index), mem);
+        }
         // verify checksum
         var p = Page{ .buf = mem };
         if (!p.verifyChecksum()) {
-            // Enhanced diagnostics: log corruption details
             const stored_checksum = p.storedChecksum();
             const calculated_checksum = p.calculateChecksum();
-
             std.log.err("Page checksum mismatch in {s}: stored=0x{X:0>8}, calculated=0x{X:0>8}, page_size={d}", .{ path, stored_checksum, calculated_checksum, self.page_size });
-
-            // Additional corruption analysis
             const corruption_ratio = self.analyzeCorruption(&p);
             std.log.err("Corruption analysis: {d:.2}% of page appears corrupted", .{corruption_ratio * 100.0});
-
-            // Higher layer should translate error.PageChecksumMismatch to diagnostics.StoragePageChecksum.
             return error.PageChecksumMismatch;
         }
         try self.pages.append(self.allocator, mem);

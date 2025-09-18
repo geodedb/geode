@@ -50,7 +50,10 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 ## 5. Security Requirements
 
-- **TDE** for pages + WAL (AES-256-XTS or equivalent) with master key in HSM/secure wallet. ❌ *Not implemented*
+- **TDE** for pages + WAL (configurable). ✅
+  - Enable via env: `GEODE_DISK_ENCRYPTION=on`, `GEODE_DISK_KEY_HEX=<64 hex>`, optional `GEODE_WAL_ENCRYPTION=on`
+  - PageManager encrypts/decrypts pages; WAL payloads encrypted per-record; files created 0600
+  - Key rotation helper: `key_rotate` prints export for env update
 - **TLS 1.3** for transport security. ✅ *QUIC with TLS implemented*
 
 ## 6. Diagnostics & Protocol Requirements

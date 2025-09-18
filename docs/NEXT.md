@@ -10,16 +10,25 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 
 ## Next (P1) - Enhancements
 
-1. **GPU Acceleration** (REQ-GQL-040)
-   - Why: Massive parallelization for graph algorithms
-   - What: CUDA/OpenCL integration for path algorithms and analytics
-   - Acceptance: 10x+ speedup on large graph traversals
-   - ISO: impl-defined optimization
-   - Deps: GPU libraries, memory management
-   - Scope: XL
-   - DRI: gpu
+1. **TDE Hardening (At Rest)** (REQ-GQL-046)
+   - Why: Strengthen crypto and compliance; production readiness
+   - What: Upgrade cipher to AES-256-GCM; add online/offline re-encryption tool; optional KMS integration and key provenance
+   - Acceptance: AES-256-GCM used for pages+WAL; rotation without data exposure; recovery validated with encrypted WAL
+   - ISO: Security (impl-defined)
+   - Deps: Page manager/WAL crypto layer, key management interface
+   - Scope: M
+   - DRI: security
 
-2. **Machine Learning Integration** (REQ-GQL-041)
+2. **Multi-Graph Support** (REQ-GQL-047)
+   - Why: Multi-tenant and workload isolation; modeling separate graph spaces
+   - What: Catalog-level multiple graphs; `CREATE GRAPH`, `DROP GRAPH`, `USE GRAPH` semantics; isolation in planner/executor
+   - Acceptance: Graph selection via CLI/DSN; isolation validated by E2E tests
+   - ISO: 4.3 (graph model), 14 (semantics)
+   - Deps: Catalog, planner context, storage namespaces
+   - Scope: M
+   - DRI: catalog
+
+3. **Machine Learning Integration** (REQ-GQL-041)
    - Why: Graph neural networks and embeddings
    - What: Built-in ML operators for node classification, link prediction
    - Acceptance: `CALL gds.node2vec.stream()` returns embeddings
@@ -28,7 +37,7 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
    - Scope: XL
    - DRI: ml
 
-3. **Streaming and CDC** (REQ-GQL-042)
+4. **Streaming and CDC** (REQ-GQL-042)
    - Why: Real-time data processing
    - What: Change data capture, streaming queries, Kafka integration
    - Acceptance: `CALL db.cdc.start()` enables change streaming
@@ -37,9 +46,27 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
    - Scope: L
    - DRI: streaming
 
+5. **Time-Travel Queries** (REQ-GQL-045)
+   - Why: Historical analysis and auditing
+   - What: Temporal versioning, AS OF queries
+   - Acceptance: `MATCH (n) AS OF TIMESTAMP '2024-01-01'` returns historical state
+   - ISO: Temporal extensions
+   - Deps: Temporal storage, MVCC extensions
+   - Scope: L
+   - DRI: temporal
+
+6. **GPU Acceleration** (REQ-GQL-040)
+   - Why: Massive parallelization for graph algorithms
+   - What: CUDA/OpenCL integration for path algorithms and analytics
+   - Acceptance: 10x+ speedup on large graph traversals
+   - ISO: impl-defined optimization
+   - Deps: GPU libraries, memory management
+   - Scope: XL
+   - DRI: gpu
+
 ## Later (P2+) - Future Extensions
 
-4. **Graph Visualization** (REQ-GQL-043)
+1. **Graph Visualization** (REQ-GQL-043)
    - Why: Interactive exploration of graph data
    - What: Built-in visualization server with WebGL rendering
    - Acceptance: Web UI shows interactive graph visualization
@@ -48,7 +75,7 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
    - Scope: L
    - DRI: viz
 
-5. **Multi-Model Support** (REQ-GQL-044)
+2. **Multi-Model Support** (REQ-GQL-044)
    - Why: Support document and key-value workloads
    - What: JSON document storage, key-value API
    - Acceptance: Store and query JSON documents alongside graph
@@ -56,15 +83,6 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
    - Deps: Storage layer extensions
    - Scope: XL
    - DRI: multimodel
-
-6. **Time-Travel Queries** (REQ-GQL-045)
-   - Why: Historical analysis and auditing
-   - What: Temporal versioning, AS OF queries
-   - Acceptance: `MATCH (n) AS OF TIMESTAMP '2024-01-01'` returns historical state
-   - ISO: Temporal extensions
-   - Deps: Temporal storage, MVCC extensions
-   - Scope: L
-   - DRI: temporal
 
 ## Documentation Sync Policy
 

@@ -172,7 +172,7 @@ pub const Transaction = struct {
 
     pub fn prepare(self: *Transaction) !bool {
         self.state = .preparing;
-        
+
         // Send prepare messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .preparing;
@@ -180,7 +180,7 @@ pub const Transaction = struct {
             // For now, simulate vote
             participant.prepare_response = .vote_commit;
         }
-        
+
         // Check all votes
         for (self.participants.items) |participant| {
             if (participant.prepare_response != .vote_commit) {
@@ -188,7 +188,7 @@ pub const Transaction = struct {
                 return false;
             }
         }
-        
+
         self.state = .prepared;
         return true;
     }
@@ -197,22 +197,22 @@ pub const Transaction = struct {
         if (self.state != .prepared) {
             return error.InvalidState;
         }
-        
+
         self.state = .committing;
-        
+
         // Send commit messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .committing;
             // TODO: Send actual commit message
             participant.state = .committed;
         }
-        
+
         self.state = .committed;
     }
 
     pub fn abort(self: *Transaction) !void {
         self.state = .aborting;
-        
+
         // Send abort messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .aborting;
@@ -224,7 +224,7 @@ pub const Transaction = struct {
             }
             participant.state = .aborted;
         }
-        
+
         self.state = .aborted;
     }
 
@@ -244,7 +244,7 @@ pub const Coordinator = struct {
 
     pub const LogWriter = struct {
         file: std.fs.File,
-        
+
         pub fn writeEntry(self: *LogWriter, entry: LogEntry) !void {
             const json = try std.json.stringify(entry, .{}, self.file.writer());
             try self.file.writer().writeByte('\n');
@@ -288,7 +288,7 @@ pub const Coordinator = struct {
     pub fn beginTransaction(self: *Coordinator, transaction_id: []const u8) !*Transaction {
         const txn = try Transaction.init(self.allocator, transaction_id, self.node_id);
         try self.transactions.put(transaction_id, txn);
-        
+
         // Log transaction start
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
@@ -298,16 +298,16 @@ pub const Coordinator = struct {
                 .data = "",
             });
         }
-        
+
         return self.transactions.getPtr(transaction_id).?;
     }
 
     pub fn executeTransaction(self: *Coordinator, transaction_id: []const u8) !bool {
         const txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
-        
+
         // Phase 1: Prepare
         const can_commit = try txn.prepare();
-        
+
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
                 .timestamp = std.time.timestamp(),
@@ -316,14 +316,14 @@ pub const Coordinator = struct {
                 .data = "",
             });
         }
-        
+
         // Phase 2: Commit or Abort
         if (can_commit) {
             try txn.commit();
         } else {
             try txn.abort();
         }
-        
+
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
                 .timestamp = std.time.timestamp(),
@@ -332,23 +332,23 @@ pub const Coordinator = struct {
                 .data = "",
             });
         }
-        
+
         return can_commit;
     }
 
     pub fn recoverFromLog(self: *Coordinator, log_file: []const u8) !void {
         const file = try std.fs.cwd().openFile(log_file, .{});
         defer file.close();
-        
+
         var buf_reader = std.io.bufferedReader(file.reader());
         var reader = buf_reader.reader();
-        
+
         var line_buf: [4096]u8 = undefined;
         while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
             // Parse log entry
             const entry = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
             defer entry.deinit();
-            
+
             // Recover transaction state
             switch (entry.value.event_type) {
                 .transaction_start => {
@@ -406,13 +406,13 @@ pub const ParticipantNode = struct {
 
     pub const ResourceManager = struct {
         locks: std.AutoHashMap(u64, LockInfo),
-        
+
         pub const LockInfo = struct {
             holder: ?[]const u8,
             lock_type: LockType,
             waiters: std.ArrayList([]const u8),
         };
-        
+
         pub fn acquireLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8, lock_type: LockType) !bool {
             const result = try self.locks.getOrPut(resource_id);
             if (!result.found_existing) {
@@ -423,19 +423,19 @@ pub const ParticipantNode = struct {
                 };
                 return true;
             }
-            
+
             // Check compatibility
             if (result.value_ptr.holder == null) {
                 result.value_ptr.holder = transaction_id;
                 result.value_ptr.lock_type = lock_type;
                 return true;
             }
-            
+
             // Add to waiters
             try result.value_ptr.waiters.append(transaction_id);
             return false;
         }
-        
+
         pub fn releaseLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8) !void {
             if (self.locks.getPtr(resource_id)) |lock_info| {
                 if (lock_info.holder) |holder| {
@@ -483,82 +483,82 @@ pub const ParticipantNode = struct {
             .redo_log = std.ArrayList(RedoEntry).init(self.allocator),
             .locks = std.ArrayList(Lock).init(self.allocator),
         };
-        
+
         // Try to acquire locks for all operations
         for (operations) |op| {
             const resource_id = switch (op) {
                 .create_node, .update_node, .delete_node => |node_op| node_op.node_id,
                 .create_edge, .update_edge, .delete_edge => |edge_op| edge_op.edge_id,
             };
-            
+
             const lock_acquired = try self.resource_manager.acquireLock(
                 resource_id,
                 transaction_id,
                 .exclusive,
             );
-            
+
             if (!lock_acquired) {
                 // Cannot acquire lock, vote abort
                 local_txn.state = .aborting;
                 try self.transactions.put(transaction_id, local_txn);
                 return .vote_abort;
             }
-            
+
             try local_txn.locks.append(.{
                 .resource_id = resource_id,
                 .lock_type = .exclusive,
                 .acquired_at = std.time.timestamp(),
             });
-            
+
             try local_txn.operations.append(op);
         }
-        
+
         // All locks acquired, prepare transaction
         local_txn.state = .prepared;
         try self.transactions.put(transaction_id, local_txn);
-        
+
         return .vote_commit;
     }
 
     pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
         const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
-        
+
         if (local_txn.state != .prepared) {
             return error.InvalidState;
         }
-        
+
         local_txn.state = .committing;
-        
+
         // Apply operations
         for (local_txn.operations.items) |op| {
             // TODO: Actually apply the operation to storage
             _ = op;
         }
-        
+
         // Release locks
         for (local_txn.locks.items) |lock| {
             try self.resource_manager.releaseLock(lock.resource_id, transaction_id);
         }
-        
+
         local_txn.state = .committed;
     }
 
     pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
         const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
-        
+
         local_txn.state = .aborting;
-        
+
         // Apply undo log
         while (local_txn.undo_log.popOrNull()) |undo_entry| {
             // TODO: Apply undo operation
             _ = undo_entry;
         }
-        
+
         // Release locks
         for (local_txn.locks.items) |lock| {
             try self.resource_manager.releaseLock(lock.resource_id, transaction_id);
         }
-        
+
         local_txn.state = .aborted;
     }
 };

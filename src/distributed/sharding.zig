@@ -9,7 +9,7 @@ pub const ShardManager = struct {
     shards: std.AutoHashMap(u64, Shard),
     replication_factor: u32,
     partition_strategy: PartitionStrategy,
-    
+
     pub const Shard = struct {
         id: u64,
         primary: ShardNode,
@@ -18,7 +18,7 @@ pub const ShardManager = struct {
         status: ShardStatus,
         statistics: ShardStatistics,
     };
-    
+
     pub const ShardNode = struct {
         id: u64,
         address: net.Address,
@@ -26,20 +26,20 @@ pub const ShardManager = struct {
         status: NodeStatus,
         last_heartbeat: i64,
     };
-    
+
     pub const NodeRole = enum {
         primary,
         replica,
         candidate,
     };
-    
+
     pub const NodeStatus = enum {
         healthy,
         degraded,
         unavailable,
         recovering,
     };
-    
+
     pub const ShardStatus = enum {
         active,
         migrating,
@@ -47,12 +47,12 @@ pub const ShardManager = struct {
         merging,
         offline,
     };
-    
+
     pub const KeyRange = struct {
         start: []const u8,
         end: []const u8,
     };
-    
+
     pub const ShardStatistics = struct {
         node_count: u64,
         edge_count: u64,
@@ -61,14 +61,14 @@ pub const ShardManager = struct {
         write_qps: f64,
         last_updated: i64,
     };
-    
+
     pub const PartitionStrategy = enum {
         hash,
         range,
         graph_aware,
         geo_distributed,
     };
-    
+
     pub fn init(allocator: Allocator, replication_factor: u32, strategy: PartitionStrategy) ShardManager {
         return .{
             .allocator = allocator,
@@ -78,16 +78,16 @@ pub const ShardManager = struct {
             .partition_strategy = strategy,
         };
     }
-    
+
     pub fn deinit(self: *ShardManager) void {
         self.consistent_hash.deinit();
         self.shards.deinit();
     }
-    
+
     // Add a new shard to the cluster
     pub fn addShard(self: *ShardManager, shard: Shard) !void {
         try self.shards.put(shard.id, shard);
-        
+
         // Add to consistent hash ring
         try self.consistent_hash.addNode(.{
             .id = shard.id,
@@ -97,7 +97,7 @@ pub const ShardManager = struct {
             .metadata = null,
         });
     }
-    
+
     // Get shard for a given key
     pub fn getShardForKey(self: *ShardManager, key: []const u8) !*Shard {
         const shard_id = switch (self.partition_strategy) {
@@ -106,25 +106,25 @@ pub const ShardManager = struct {
             .graph_aware => self.getGraphAwareShardId(key),
             .geo_distributed => self.getGeoShardId(key),
         };
-        
+
         return self.shards.getPtr(shard_id) orelse error.ShardNotFound;
     }
-    
+
     // Rebalance shards when topology changes
     pub fn rebalance(self: *ShardManager) !void {
         // Calculate ideal distribution
         const total_nodes = self.getTotalNodeCount();
         const ideal_per_shard = total_nodes / self.shards.count();
-        
+
         var migrations = std.ArrayList(Migration).init(self.allocator);
         defer migrations.deinit();
-        
+
         // Identify shards that need rebalancing
         var it = self.shards.iterator();
         while (it.next()) |entry| {
             const shard = entry.value_ptr;
             const deviation = @as(i64, @intCast(shard.statistics.node_count)) - @as(i64, @intCast(ideal_per_shard));
-            
+
             if (@abs(deviation) > @as(i64, @intCast(ideal_per_shard / 10))) { // 10% threshold
                 try migrations.append(.{
                     .source_shard = shard.id,
@@ -133,31 +133,31 @@ pub const ShardManager = struct {
                 });
             }
         }
-        
+
         // Execute migrations
         for (migrations.items) |migration| {
             try self.executeMigration(migration);
         }
     }
-    
+
     // Split a shard when it grows too large
     pub fn splitShard(self: *ShardManager, shard_id: u64) !void {
         const shard = self.shards.getPtr(shard_id) orelse return error.ShardNotFound;
-        
+
         if (shard.status != .active) {
             return error.ShardNotActive;
         }
-        
+
         shard.status = .splitting;
-        
+
         // Create new shard
         const new_shard_id = self.generateShardId();
         const split_point = try self.findSplitPoint(shard);
-        
+
         // Allocate nodes for new shard
         const new_primary = try self.allocateNode();
         const new_replicas = try self.allocateReplicas(self.replication_factor - 1);
-        
+
         const new_shard = Shard{
             .id = new_shard_id,
             .primary = new_primary,
@@ -176,65 +176,65 @@ pub const ShardManager = struct {
                 .last_updated = std.time.timestamp(),
             },
         };
-        
+
         // Update original shard's range
         if (shard.key_range) |*range| {
             range.end = split_point;
         }
-        
+
         // Add new shard
         try self.addShard(new_shard);
-        
+
         // Migrate data
         try self.migrateData(shard_id, new_shard_id, split_point);
-        
+
         shard.status = .active;
     }
-    
+
     // Merge two shards
     pub fn mergeShards(self: *ShardManager, shard1_id: u64, shard2_id: u64) !void {
         const shard1 = self.shards.getPtr(shard1_id) orelse return error.ShardNotFound;
         const shard2 = self.shards.get(shard2_id) orelse return error.ShardNotFound;
-        
+
         if (shard1.status != .active or shard2.status != .active) {
             return error.ShardsNotActive;
         }
-        
+
         shard1.status = .merging;
-        
+
         // Migrate all data from shard2 to shard1
         try self.migrateAllData(shard2_id, shard1_id);
-        
+
         // Update shard1's range to include shard2's range
         if (shard1.key_range) |*range1| {
             if (shard2.key_range) |range2| {
                 range1.end = range2.end;
             }
         }
-        
+
         // Update statistics
         shard1.statistics.node_count += shard2.statistics.node_count;
         shard1.statistics.edge_count += shard2.statistics.edge_count;
         shard1.statistics.size_bytes += shard2.statistics.size_bytes;
-        
+
         // Remove shard2
         _ = self.shards.remove(shard2_id);
         self.consistent_hash.removeNode(shard2_id);
-        
+
         shard1.status = .active;
     }
-    
+
     // Handle shard failure
     pub fn handleShardFailure(self: *ShardManager, shard_id: u64) !void {
         const shard = self.shards.getPtr(shard_id) orelse return error.ShardNotFound;
-        
+
         shard.status = .offline;
-        
+
         // Promote a replica to primary
         if (shard.replicas.len > 0) {
             var best_replica: ?*ShardNode = null;
             var best_score: i64 = std.math.minInt(i64);
-            
+
             for (shard.replicas) |*replica| {
                 if (replica.status == .healthy) {
                     const score = std.time.timestamp() - replica.last_heartbeat;
@@ -244,7 +244,7 @@ pub const ShardManager = struct {
                     }
                 }
             }
-            
+
             if (best_replica) |replica| {
                 // Swap primary and replica
                 const old_primary = shard.primary;
@@ -253,17 +253,17 @@ pub const ShardManager = struct {
                 replica.* = old_primary;
                 replica.role = .replica;
                 replica.status = .recovering;
-                
+
                 shard.status = .active;
             }
         }
     }
-    
+
     // Query routing for distributed queries
     pub fn routeQuery(self: *ShardManager, query: Query) !QueryPlan {
         var affected_shards = std.ArrayList(u64).init(self.allocator);
         defer affected_shards.deinit();
-        
+
         // Determine which shards are affected by the query
         switch (query.type) {
             .point_lookup => {
@@ -287,36 +287,36 @@ pub const ShardManager = struct {
                 }
             },
         }
-        
+
         return QueryPlan{
             .shards = try affected_shards.toOwnedSlice(),
             .execution_strategy = self.determineExecutionStrategy(query, affected_shards.items.len),
         };
     }
-    
+
     const Query = struct {
         type: enum { point_lookup, range_scan, broadcast },
         key: []const u8,
         range: ?KeyRange,
     };
-    
+
     const QueryPlan = struct {
         shards: []u64,
         execution_strategy: ExecutionStrategy,
     };
-    
+
     const ExecutionStrategy = enum {
         sequential,
         parallel,
         map_reduce,
     };
-    
+
     const Migration = struct {
         source_shard: u64,
         target_shard: u64,
         key_range: KeyRange,
     };
-    
+
     // Helper functions
     fn getTotalNodeCount(self: *ShardManager) u64 {
         var total: u64 = 0;
@@ -326,11 +326,11 @@ pub const ShardManager = struct {
         }
         return total;
     }
-    
+
     fn findTargetShard(self: *ShardManager, exclude_id: u64) u64 {
         var min_nodes: u64 = std.math.maxInt(u64);
         var target_id: u64 = 0;
-        
+
         var it = self.shards.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* != exclude_id) {
@@ -340,10 +340,10 @@ pub const ShardManager = struct {
                 }
             }
         }
-        
+
         return target_id;
     }
-    
+
     fn calculateMigrationRange(self: *ShardManager, shard: *Shard, nodes_to_migrate: i64) KeyRange {
         _ = self;
         _ = nodes_to_migrate;
@@ -353,25 +353,25 @@ pub const ShardManager = struct {
         }
         return .{ .start = "", .end = "" };
     }
-    
+
     fn executeMigration(self: *ShardManager, migration: Migration) !void {
         _ = self;
         _ = migration;
         // TODO: Implement actual data migration
     }
-    
+
     fn generateShardId(self: *ShardManager) u64 {
         _ = self;
         return @intCast(std.time.timestamp());
     }
-    
+
     fn findSplitPoint(self: *ShardManager, shard: *Shard) ![]const u8 {
         _ = self;
         _ = shard;
         // TODO: Find optimal split point based on data distribution
         return "midpoint";
     }
-    
+
     fn allocateNode(self: *ShardManager) !ShardNode {
         _ = self;
         return ShardNode{
@@ -382,7 +382,7 @@ pub const ShardManager = struct {
             .last_heartbeat = std.time.timestamp(),
         };
     }
-    
+
     fn allocateReplicas(self: *ShardManager, count: u32) ![]ShardNode {
         var replicas = try self.allocator.alloc(ShardNode, count);
         for (replicas, 0..) |*replica, i| {
@@ -396,7 +396,7 @@ pub const ShardManager = struct {
         }
         return replicas;
     }
-    
+
     fn migrateData(self: *ShardManager, source_id: u64, target_id: u64, split_point: []const u8) !void {
         _ = self;
         _ = source_id;
@@ -404,21 +404,21 @@ pub const ShardManager = struct {
         _ = split_point;
         // TODO: Implement data migration
     }
-    
+
     fn migrateAllData(self: *ShardManager, source_id: u64, target_id: u64) !void {
         _ = self;
         _ = source_id;
         _ = target_id;
         // TODO: Implement full data migration
     }
-    
+
     fn rangeOverlaps(self: *ShardManager, range1: ?KeyRange, range2: ?KeyRange) bool {
         _ = self;
         if (range1 == null or range2 == null) return false;
         // TODO: Implement range overlap check
         return true;
     }
-    
+
     fn determineExecutionStrategy(self: *ShardManager, query: Query, shard_count: usize) ExecutionStrategy {
         _ = self;
         _ = query;
@@ -426,19 +426,19 @@ pub const ShardManager = struct {
         if (shard_count <= 3) return .parallel;
         return .map_reduce;
     }
-    
+
     fn getRangeShardId(self: *ShardManager, key: []const u8) u64 {
         _ = key;
         // TODO: Implement range-based sharding
         return self.shards.iterator().next().?.key_ptr.*;
     }
-    
+
     fn getGraphAwareShardId(self: *ShardManager, key: []const u8) u64 {
         _ = key;
         // TODO: Implement graph-aware sharding (minimize edge cuts)
         return self.shards.iterator().next().?.key_ptr.*;
     }
-    
+
     fn getGeoShardId(self: *ShardManager, key: []const u8) u64 {
         _ = key;
         // TODO: Implement geo-distributed sharding
