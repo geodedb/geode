@@ -123,7 +123,7 @@ pub const GraphStorage = struct {
     // Set a property on an edge
     pub fn setEdgeProperty(self: *GraphStorage, edge_id: EdgeId, key: []const u8, value: PropertyValue) !void {
         if (edge_id < self.edges.items.len) {
-            try self.edges.items[edge_id].properties.put(key, value);
+            try self.edges.items[@intCast(edge_id)].properties.put(key, value);
         }
     }
 };
@@ -248,7 +248,7 @@ pub fn expand(
 
         if (edge_ids) |edges| {
             for (edges.items) |edge_id| {
-                const edge = graph.edges.items[edge_id];
+                const edge = graph.edges.items[@intCast(edge_id)];
                 if (edge_types.len > 0) {
                     var matches = false;
                     for (edge_types) |required_type| {
@@ -521,7 +521,7 @@ pub fn executeMatch(
                                 };
                                 if (edge_ids) |edges| {
                                     for (edges.items) |eid| {
-                                        const e = graph.edges.items[eid];
+                                        const e = graph.edges.items[@intCast(eid)];
                                         if (hop.rel.types.len > 0) {
                                             var matches = false;
                                             for (hop.rel.types) |t| {
@@ -1058,7 +1058,7 @@ pub fn pathExpand(
 
                 if (edge_ids) |edges| {
                     for (edges.items) |edge_id| {
-                        const edge = graph.edges.items[edge_id];
+                        const edge = graph.edges.items[@intCast(edge_id)];
 
                         // Check edge type filter
                         if (edge_types.len > 0) {

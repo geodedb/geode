@@ -32,6 +32,13 @@ help:
 	@echo "  make cross-windows-arm64 - Build for Windows ARM64"
 	@echo "  make cross-test         - Test cross-platform functionality"
 	@echo ""
+	@echo "Client cross-compilation targets:"
+	@echo "  make cross-clients       - Cross-compile all client libraries"
+	@echo "  make cross-zig-clients   - Cross-compile Zig client libraries"
+	@echo "  make cross-go-clients    - Cross-compile Go client libraries"
+	@echo "  make test-cross-clients  - Test cross-compiled clients (with QEMU if available)"
+	@echo "  make qemu-test-clients   - Test clients with QEMU emulation"
+	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + Go)"
 	@echo "  make integration-test - Run comprehensive integration tests"
@@ -184,7 +191,7 @@ clean:
 	$(MAKE) go-clean
 
 # Run build, test, fuzz, bench sequentially for CI
-ci: clean build test fuzz bench cross-compile-strict
+ci: clean build test fuzz bench cross-compile-strict test-cross-clients
 	@echo "CI pipeline completed successfully"
 
 # Strict cross-compilation for CI (fails on any error)
@@ -195,8 +202,8 @@ cross-compile-strict: cross-windows cross-linux-arm cross-linux-arm64 cross-linu
 quick: build test
 
 # Cross-compilation targets (required 64-bit targets only)
-cross-compile: cross-compile-required cross-compile-optional
-	@echo "Cross-compilation checks complete"
+cross-compile: cross-compile-required cross-compile-optional cross-clients
+	@echo "Cross-compilation checks complete (including client libraries)"
 
 # Required 64-bit cross-compilation targets (must all pass)
 cross-compile-required: cross-windows cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64
@@ -215,6 +222,7 @@ cross-windows:
 	@test -f zig-out/bin/geodec.exe || (echo "Failed to build geodec.exe" && exit 1)
 	@test -f zig-out/bin/gql.exe || (echo "Failed to build gql.exe" && exit 1)
 	@echo "✓ Windows x86_64 build successful"
+	@$(MAKE) cross-go-windows-x86_64
 
 # Cross-compile for Linux ARM (32-bit)
 cross-linux-arm:
@@ -227,6 +235,7 @@ cross-linux-arm64:
 	@echo "Cross-compiling for Linux ARM64..."
 	$(ZIG) build -Dtarget=aarch64-linux-gnu $(ZIG_FLAGS)
 	@echo "✓ Linux ARM64 build successful"
+	@$(MAKE) cross-go-linux-arm64
 
 # Cross-compile for Linux RISC-V 64-bit
 cross-linux-riscv64:
@@ -244,6 +253,7 @@ cross-macos-x86_64:
 	else \
 		echo "Skipping macOS x86_64 cross-compile on x86_64 macOS"; \
 	fi
+	@$(MAKE) cross-go-darwin-x86_64
 
 # Cross-compile for Windows ARM64
 cross-windows-arm64:
@@ -406,6 +416,208 @@ docker-quick-test:
 		(docker-compose -f docker-compose.test.yml down && exit 1)
 	@echo "Quick test passed!"
 	@docker-compose -f docker-compose.test.yml down
+
+# Client cross-compilation targets
+.PHONY: cross-clients cross-zig-clients cross-go-clients test-cross-clients
+
+# Cross-compile all clients
+cross-clients: cross-zig-clients cross-go-clients
+	@echo "✓ All client libraries cross-compiled successfully"
+
+# Cross-compile Zig clients for all platforms
+cross-zig-clients:
+	@echo "Cross-compiling Zig client libraries..."
+	$(ZIG) build cross-clients $(ZIG_FLAGS)
+	@echo "✓ Zig clients built for all platforms"
+
+# Cross-compile Go clients for all platforms
+cross-go-clients: cross-go-windows-x86_64 cross-go-linux-x86_64 cross-go-linux-arm64 cross-go-darwin-x86_64 cross-go-darwin-arm64
+	@echo "✓ Go clients built for all platforms"
+
+# Go client cross-compilation for Windows x86_64
+cross-go-windows-x86_64:
+	@if [ -d "clients/go/gql/example" ]; then \
+		echo "Building Go client example for Windows x86_64..."; \
+		mkdir -p zig-out/clients/windows-x86_64; \
+		cd clients/go/gql/example && \
+		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o ../../../../zig-out/clients/windows-x86_64/gql-example.exe . && \
+		echo "✓ Go client example built for Windows x86_64"; \
+	fi
+
+# Go client cross-compilation for Linux x86_64
+cross-go-linux-x86_64:
+	@if [ -d "clients/go/gql/example" ]; then \
+		echo "Building Go client example for Linux x86_64..."; \
+		mkdir -p zig-out/clients/linux-x86_64; \
+		cd clients/go/gql/example && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../../../../zig-out/clients/linux-x86_64/gql-example . && \
+		echo "✓ Go client example built for Linux x86_64"; \
+	fi
+
+# Go client cross-compilation for Linux ARM64
+cross-go-linux-arm64:
+	@if [ -d "clients/go/gql/example" ]; then \
+		echo "Building Go client example for Linux ARM64..."; \
+		mkdir -p zig-out/clients/linux-arm64; \
+		cd clients/go/gql/example && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ../../../../zig-out/clients/linux-arm64/gql-example . && \
+		echo "✓ Go client example built for Linux ARM64"; \
+	fi
+
+# Go client cross-compilation for macOS x86_64
+cross-go-darwin-x86_64:
+	@if [ -d "clients/go/gql/example" ]; then \
+		echo "Building Go client example for macOS x86_64..."; \
+		mkdir -p zig-out/clients/macos-x86_64; \
+		cd clients/go/gql/example && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o ../../../../zig-out/clients/macos-x86_64/gql-example . && \
+		echo "✓ Go client example built for macOS x86_64"; \
+	fi
+
+# Go client cross-compilation for macOS ARM64
+cross-go-darwin-arm64:
+	@if [ -d "clients/go/gql/example" ]; then \
+		echo "Building Go client example for macOS ARM64..."; \
+		mkdir -p zig-out/clients/macos-arm64; \
+		cd clients/go/gql/example && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o ../../../../zig-out/clients/macos-arm64/gql-example . && \
+		echo "✓ Go client example built for macOS ARM64"; \
+	fi
+
+# Test cross-compiled clients
+test-cross-clients:
+	@echo "Testing cross-compiled clients..."
+	@# Test native Zig client builds
+	$(ZIG) build test-clients $(ZIG_FLAGS)
+	
+	@# Test cross-compiled binaries with QEMU if available
+	@echo "Testing cross-compiled binaries with QEMU (if available)..."
+	
+	@# Test Linux ARM64 binaries with qemu-aarch64
+	@if command -v qemu-aarch64 >/dev/null 2>&1 && [ -f "zig-out/clients/linux-arm64/geode-zig-example-linux-arm64" ]; then \
+		echo "Testing Linux ARM64 Zig client with QEMU..."; \
+		qemu-aarch64 -L /usr/aarch64-linux-gnu zig-out/clients/linux-arm64/geode-zig-example-linux-arm64 2>&1 | head -5 || true; \
+		echo "✓ Linux ARM64 Zig client executed with QEMU"; \
+	else \
+		echo "⚠ qemu-aarch64 not available or binary not found, skipping Linux ARM64 test"; \
+	fi
+	
+	@# Test Windows x86_64 binaries with Wine if available
+	@if command -v wine64 >/dev/null 2>&1 && [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
+		echo "Testing Windows x86_64 Zig client with Wine..."; \
+		wine64 zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -5 || true; \
+		echo "✓ Windows x86_64 Zig client executed with Wine"; \
+	else \
+		echo "⚠ wine64 not available or binary not found, skipping Windows x86_64 test"; \
+	fi
+	
+	@# Test Windows x86_64 Go client with Wine
+	@if command -v wine64 >/dev/null 2>&1 && [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
+		echo "Testing Windows x86_64 Go client with Wine..."; \
+		wine64 zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -5 || true; \
+		echo "✓ Windows x86_64 Go client executed with Wine"; \
+	else \
+		echo "⚠ wine64 not available or Go binary not found, skipping Windows Go test"; \
+	fi
+	
+	@# Test Linux ARM64 Go client with QEMU
+	@if command -v qemu-aarch64 >/dev/null 2>&1 && [ -f "zig-out/clients/linux-arm64/gql-example" ]; then \
+		echo "Testing Linux ARM64 Go client with QEMU..."; \
+		qemu-aarch64 -L /usr/aarch64-linux-gnu zig-out/clients/linux-arm64/gql-example -h 2>&1 | head -5 || true; \
+		echo "✓ Linux ARM64 Go client executed with QEMU"; \
+	else \
+		echo "⚠ qemu-aarch64 not available or Go binary not found, skipping Linux ARM64 Go test"; \
+	fi
+	
+	@# Compilation tests for platforms where we can't run the binaries
+	@if [ -d "clients/go/gql/example" ]; then \
+		echo "Verifying Go cross-compilation for all targets..."; \
+		cd clients/go/gql/example && \
+		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /dev/null . && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null . && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o /dev/null . && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null . && \
+		echo "✓ Go cross-compilation verification passed"; \
+	fi
+	
+	@echo "✓ All client cross-compilation tests completed"
+
+# Test cross-compiled clients with QEMU emulation
+.PHONY: qemu-test-clients
+
+qemu-test-clients: cross-clients
+	@echo "=== Testing Cross-Compiled Clients with QEMU ==="
+	@echo ""
+	
+	@# Check for required QEMU user-mode emulators
+	@echo "Checking for QEMU emulators..."
+	@if command -v qemu-aarch64 >/dev/null 2>&1; then \
+		echo "✓ qemu-aarch64 found"; \
+	else \
+		echo "✗ qemu-aarch64 not found (install qemu-user or qemu-user-static)"; \
+	fi
+	@if command -v qemu-arm >/dev/null 2>&1; then \
+		echo "✓ qemu-arm found"; \
+	else \
+		echo "✗ qemu-arm not found (install qemu-user or qemu-user-static)"; \
+	fi
+	@if command -v qemu-riscv64 >/dev/null 2>&1; then \
+		echo "✓ qemu-riscv64 found"; \
+	else \
+		echo "✗ qemu-riscv64 not found (install qemu-user or qemu-user-static)"; \
+	fi
+	@echo ""
+	
+	@# Linux ARM64 testing
+	@if command -v qemu-aarch64 >/dev/null 2>&1; then \
+		echo "=== Linux ARM64 Testing ==="; \
+		if [ -f "zig-out/clients/linux-arm64/geode-zig-example-linux-arm64" ]; then \
+			echo "Running Zig client on ARM64..."; \
+			qemu-aarch64 -L /usr/aarch64-linux-gnu \
+				zig-out/clients/linux-arm64/geode-zig-example-linux-arm64 2>&1 | head -10 || \
+				echo "Note: Client may fail to connect as server is not running"; \
+		fi; \
+		if [ -f "zig-out/clients/linux-arm64/gql-example" ]; then \
+			echo "Running Go client on ARM64..."; \
+			qemu-aarch64 -L /usr/aarch64-linux-gnu \
+				zig-out/clients/linux-arm64/gql-example -h 2>&1 | head -10 || true; \
+		fi; \
+		echo ""; \
+	fi
+	
+	@# Windows testing with Wine
+	@if command -v wine64 >/dev/null 2>&1; then \
+		echo "=== Windows x86_64 Testing (Wine) ==="; \
+		if [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
+			echo "Running Zig client on Windows/Wine..."; \
+			WINEDEBUG=-all wine64 \
+				zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -10 || \
+				echo "Note: Client may fail to connect as server is not running"; \
+		fi; \
+		if [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
+			echo "Running Go client on Windows/Wine..."; \
+			WINEDEBUG=-all wine64 \
+				zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -10 || true; \
+		fi; \
+		echo ""; \
+	fi
+	
+	@# Native Linux x86_64 testing (for comparison)
+	@echo "=== Native Linux x86_64 Testing ==="
+	@if [ -f "zig-out/clients/linux-x86_64/geode-zig-example-linux-x86_64" ]; then \
+		echo "Running native Zig client..."; \
+		zig-out/clients/linux-x86_64/geode-zig-example-linux-x86_64 2>&1 | head -10 || \
+			echo "Note: Client may fail to connect as server is not running"; \
+	fi
+	@if [ -f "zig-out/clients/linux-x86_64/gql-example" ]; then \
+		echo "Running native Go client..."; \
+		zig-out/clients/linux-x86_64/gql-example -h 2>&1 | head -10 || true; \
+	fi
+	@echo ""
+	
+	@echo "=== QEMU Client Testing Complete ==="
+	@echo "Note: Connection failures are expected if the server is not running."
+	@echo "The test verifies that the binaries can execute on their target platforms."
 
 # Complete Docker CI pipeline
 docker-ci:

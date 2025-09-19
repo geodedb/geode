@@ -215,11 +215,11 @@ pub const Client = struct {
     fn sendMessage(self: *Self, message: anytype) !void {
         if (self.stream == null) return error.NotConnected;
 
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
+        defer buffer.deinit(self.allocator);
 
-        try json.stringify(message, .{}, buffer.writer());
-        try buffer.append('\n');
+        try std.json.stringify(message, .{}, buffer.writer());
+        try buffer.append(self.allocator, '\n');
 
         _ = try self.stream.?.write(buffer.items);
     }
@@ -227,8 +227,8 @@ pub const Client = struct {
     fn receiveMessage(self: *Self) !json.Value {
         if (self.stream == null) return error.NotConnected;
 
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
+        defer buffer.deinit(self.allocator);
 
         // Read until newline
         while (true) {
@@ -534,7 +534,7 @@ pub const Client = struct {
     }
 
     fn parseNode(self: *Self, value: Value) Node {
-        _ = self;
+        _ = value;
         // Implementation would parse node from Value
         return Node{
             .id = 0,
@@ -544,7 +544,7 @@ pub const Client = struct {
     }
 
     fn parseEdge(self: *Self, value: Value) Edge {
-        _ = self;
+        _ = value;
         // Implementation would parse edge from Value
         return Edge{
             .id = 0,

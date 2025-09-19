@@ -326,4 +326,96 @@ pub fn build(b: *std.Build) void {
     e2e_rls_test.root_module.addImport("storage/inmemory", storage_inmemory_mod);
     e2e_rls_test.root_module.addImport("interface", storage_interface_mod);
     test_step.dependOn(&e2e_rls_test.step);
+
+    // Client builds
+    const client_step = b.step("clients", "Build client libraries");
+    
+    // Zig client library
+    const zig_client_lib = b.addLibrary(.{
+        .name = "geode-client",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("clients/zig/client_minimal.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .linkage = .static,
+    });
+    b.installArtifact(zig_client_lib);
+    client_step.dependOn(&zig_client_lib.step);
+
+    // Zig client example
+    const zig_client_example = b.addExecutable(.{
+        .name = "geode-zig-example",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("clients/zig/example_minimal.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(zig_client_example);
+    client_step.dependOn(&zig_client_example.step);
+
+    // Cross-compilation step for clients
+    const cross_clients_step = b.step("cross-clients", "Cross-compile client libraries for all platforms");
+    
+    // Define cross-compilation targets for clients
+    const client_targets = [_]struct {
+        name: []const u8,
+        triple: std.Target.Query,
+    }{
+        .{ .name = "windows-x86_64", .triple = .{ .cpu_arch = .x86_64, .os_tag = .windows } },
+        .{ .name = "linux-x86_64", .triple = .{ .cpu_arch = .x86_64, .os_tag = .linux } },
+        .{ .name = "linux-arm64", .triple = .{ .cpu_arch = .aarch64, .os_tag = .linux } },
+        .{ .name = "macos-x86_64", .triple = .{ .cpu_arch = .x86_64, .os_tag = .macos } },
+        .{ .name = "macos-arm64", .triple = .{ .cpu_arch = .aarch64, .os_tag = .macos } },
+    };
+
+    // Build Zig clients for each platform
+    for (client_targets) |client_target| {
+        const target_triple = b.resolveTargetQuery(client_target.triple);
+        
+        const client_lib = b.addLibrary(.{
+            .name = b.fmt("geode-client-{s}", .{client_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("clients/zig/client_minimal.zig"),
+                .target = target_triple,
+                .optimize = .ReleaseSafe,
+            }),
+            .linkage = .static,
+        });
+        
+        const client_exe = b.addExecutable(.{
+            .name = b.fmt("geode-zig-example-{s}", .{client_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("clients/zig/example_minimal.zig"),
+                .target = target_triple,
+                .optimize = .ReleaseSafe,
+            }),
+        });
+        
+        // Install to platform-specific directories
+        const install_lib = b.addInstallArtifact(client_lib, .{
+            .dest_dir = .{ .override = .{ .custom = b.fmt("clients/{s}", .{client_target.name}) } },
+        });
+        const install_exe = b.addInstallArtifact(client_exe, .{
+            .dest_dir = .{ .override = .{ .custom = b.fmt("clients/{s}", .{client_target.name}) } },
+        });
+        
+        cross_clients_step.dependOn(&install_lib.step);
+        cross_clients_step.dependOn(&install_exe.step);
+    }
+
+    // Test clients step  
+    const test_clients_step = b.step("test-clients", "Test client libraries");
+    
+    // Zig client tests
+    const zig_client_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("clients/zig/client_minimal.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_zig_client_tests = b.addRunArtifact(zig_client_tests);
+    test_clients_step.dependOn(&run_zig_client_tests.step);
 }
