@@ -20,17 +20,11 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         zig: ['0.15.1']
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
         with:
-          fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.GH_ACCESS_TOKEN }}
-
-      - name: Setup Zig 0.15.1
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.1
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Zig version
         run: zig version
       - name: Build and Test
@@ -42,40 +36,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.repository.name }}-${{ runner.os }}-zig-${{ matrix.zig }}
-          path: |
-            zig-out/bin/
-            zig-out/lib/
-            include/
-          retention-days: 7
-
-  build-linux-xdp:
-    name: Build (ubuntu-latest, zig ${{ matrix.zig }}, -Dxdp=true)
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        zig: ['0.15.1']
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.GH_ACCESS_TOKEN }}
-
-      - name: Setup Zig 0.15.1
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.1
-      - name: Zig version
-        run: zig version
-      - name: Build (xdp)
-        run: make build ZIG_FLAGS='-Dxdp=true'
-      - name: Upload artifacts (xdp)
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-ubuntu-xdp-zig-${{ matrix.zig }}
           path: |
             zig-out/bin/
             zig-out/lib/
