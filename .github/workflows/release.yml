@@ -75,6 +75,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          token: ${{ secrets.GH_ACCESS_TOKEN }}
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
@@ -167,6 +168,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          token: ${{ secrets.GH_ACCESS_TOKEN }}
 
 
       - name: Download packaged artifacts
