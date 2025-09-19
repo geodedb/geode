@@ -1,5 +1,20 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const quic_transport = @import("../transport/quic.zig");
+
+fn getStdOut() std.fs.File {
+    return if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+}
+
+fn getStdErr() std.fs.File {
+    return if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+}
 
 fn readLineAlloc(ally: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
@@ -119,7 +134,10 @@ pub fn main() !void {
             const ack = try stream.readLine(1 << 16);
             defer gpa.free(ack);
             if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
-                const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+                const stderr_file = if (builtin.os.tag == .windows)
+                    std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+                else
+                    std.fs.File{ .handle = std.posix.STDERR_FILENO };
                 try stderr_file.writeAll(ack);
                 try stderr_file.writeAll("\n");
                 std.process.exit(2);
@@ -143,13 +161,19 @@ pub fn main() !void {
         defer gpa.free(line1);
 
         if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = if (builtin.os.tag == .windows)
+                std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+            else
+                std.fs.File{ .handle = std.posix.STDERR_FILENO };
             try stderr_file.writeAll(line1);
             try stderr_file.writeAll("\n");
             std.process.exit(2);
         }
 
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const stdout_file = if (builtin.os.tag == .windows)
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        else
+            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         if (fmt_txt) {
             // Text format handling would go here
             try stdout_file.writeAll(line1);
@@ -230,7 +254,7 @@ pub fn main() !void {
         const ack = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(ack);
         if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = getStdErr();
             try stderr_file.writeAll(ack);
             try stderr_file.writeAll("\n");
             if (child.stdin) |s| {
@@ -261,7 +285,7 @@ pub fn main() !void {
     const line1 = readLineAlloc(gpa, child.stdout.?, 1 << 16) catch |e| {
         if (e == error.EndOfStream) {
             // Server closed before emitting any response (treat as error)
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = getStdErr();
             stderr_file.writeAll("no response from server\n") catch {};
             std.process.exit(2);
         }
@@ -269,7 +293,7 @@ pub fn main() !void {
     };
     defer gpa.free(line1);
     if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
-        const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        const stderr_file = getStdErr();
         try stderr_file.writeAll(line1);
         try stderr_file.writeAll("\n");
         if (child.stdin) |s| {
@@ -283,12 +307,12 @@ pub fn main() !void {
     // Print or translate SCHEMA line and request PULL
     var schema_columns: [][]const u8 = &.{};
     if (!fmt_txt) {
-        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const out_file = getStdOut();
         try out_file.writeAll(line1);
         try out_file.writeAll("\n");
     } else {
         const parsed = std.json.parseFromSlice(std.json.Value, gpa, line1, .{}) catch {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = getStdErr();
             try stderr_file.writeAll("schema parse error\n");
             try stderr_file.writeAll("schema parse error\n");
             std.process.exit(2);
@@ -310,7 +334,7 @@ pub fn main() !void {
             if (name_v != .string) std.process.exit(2);
             schema_columns[ci] = try gpa.dupe(u8, name_v.string);
         }
-        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const out_file = getStdOut();
         var hi: usize = 0;
         while (hi < schema_columns.len) : (hi += 1) {
             if (hi > 0) try out_file.writeAll("\t");
@@ -326,12 +350,12 @@ pub fn main() !void {
     const line2 = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
     defer gpa.free(line2);
     if (!fmt_txt) {
-        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const out_file = getStdOut();
         try out_file.writeAll(line2);
         try out_file.writeAll("\n");
     } else {
         const parsedB = std.json.parseFromSlice(std.json.Value, gpa, line2, .{}) catch {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = getStdErr();
             try stderr_file.writeAll("bindings parse error\n");
             try stderr_file.writeAll("bindings parse error\n");
             std.process.exit(2);
@@ -344,7 +368,7 @@ pub fn main() !void {
         const rows_v = resultB.object.get("rows") orelse std.process.exit(2);
         if (rows_v != .array) std.process.exit(2);
         const rows_arr = rows_v.array.items;
-        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const out_file = getStdOut();
         var ri: usize = 0;
         while (ri < rows_arr.len) : (ri += 1) {
             const rv = rows_arr[ri];
@@ -380,7 +404,7 @@ pub fn main() !void {
             try child_stdin_file.writeAll("}\n");
             const more = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
             defer gpa.free(more);
-            const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const out_file = getStdOut();
             try out_file.writeAll(more);
             try out_file.writeAll("\n");
             keep = std.mem.indexOf(u8, more, "\"final\":false") != null;
@@ -395,7 +419,7 @@ pub fn main() !void {
         try child_stdin_file.writeAll("}\n");
         const extra = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(extra);
-        const out_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const out_file = getStdOut();
         try out_file.writeAll(extra);
         try out_file.writeAll("\n");
     }
@@ -407,7 +431,7 @@ pub fn main() !void {
         const ackc = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(ackc);
         if (std.mem.indexOf(u8, ackc, "\"type\":\"ERROR\"") != null) {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = getStdErr();
             try stderr_file.writeAll(ackc);
             try stderr_file.writeAll("\n");
             if (child.stdin) |s| {
@@ -422,7 +446,7 @@ pub fn main() !void {
         const ackr = try readLineAlloc(gpa, child.stdout.?, 1 << 16);
         defer gpa.free(ackr);
         if (std.mem.indexOf(u8, ackr, "\"type\":\"ERROR\"") != null) {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = getStdErr();
             try stderr_file.writeAll(ackr);
             try stderr_file.writeAll("\n");
             if (child.stdin) |s| {

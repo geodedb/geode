@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const protocol = @import("protocol");
 const diagnostics = @import("geode").diagnostics;
@@ -2269,10 +2270,16 @@ pub fn main() !void {
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
 
-    const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin_file = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
-    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout_file = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var line_storage: [65536]u8 = undefined;
 
     // Robust line loop: handle EOF with partial line, ignore blank lines, no spin.

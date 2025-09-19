@@ -19,6 +19,7 @@ const _e2e_setops_all = @import("e2e_setops_all.zig");
 const _e2e_setops_mixed_nulls = @import("e2e_setops_mixed_nulls.zig");
 const _e2e_order_policy_toggle = @import("e2e_order_policy_toggle.zig");
 const _e2e_explain_setops = @import("e2e_explain_setops.zig");
+const _test_cross_platform_stdio = @import("test_cross_platform_stdio.zig");
 const _e2e_catalog_persistence_disk = @import("e2e_catalog_persistence_disk.zig");
 const _e2e_quic_basic = @import("e2e_quic_basic.zig");
 const _e2e_with_clause = @import("e2e_with_clause.zig");
