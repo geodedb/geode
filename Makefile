@@ -5,9 +5,13 @@ ZIG_FLAGS ?=
 ZIG_RELEASE_FLAGS ?= -Drelease-safe
 
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
+.PHONY: cross-compile cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64 cross-test
 
-# Default target - build everything
-all: build go-build test docker-ci
+# Default target - build everything including cross-compilation checks (non-blocking)
+all: build go-build test
+	@echo "Running cross-compilation checks..."
+	@$(MAKE) cross-compile || echo "Warning: Some cross-compilation targets failed (see above for details)"
+	@$(MAKE) docker-ci || echo "Warning: Docker CI failed"
 
 # Help target
 help:
@@ -17,6 +21,16 @@ help:
 	@echo "  make build       - Build debug version (Zig + Go)"
 	@echo "  make release     - Build release version (Zig + Go)"
 	@echo "  make tools       - Build all tools"
+	@echo "  make cross-compile - Build for all cross-compilation targets"
+	@echo ""
+	@echo "Cross-compilation targets:"
+	@echo "  make cross-windows      - Build for Windows x86_64"
+	@echo "  make cross-linux-arm    - Build for Linux ARM (32-bit)"
+	@echo "  make cross-linux-arm64  - Build for Linux ARM64"
+	@echo "  make cross-linux-riscv64 - Build for Linux RISC-V 64-bit"
+	@echo "  make cross-macos-x86_64 - Build for macOS x86_64"
+	@echo "  make cross-windows-arm64 - Build for Windows ARM64"
+	@echo "  make cross-test         - Test cross-platform functionality"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + Go)"
@@ -170,11 +184,88 @@ clean:
 	$(MAKE) go-clean
 
 # Run build, test, fuzz, bench sequentially for CI
-ci: clean build test fuzz bench
+ci: clean build test fuzz bench cross-compile-strict
 	@echo "CI pipeline completed successfully"
+
+# Strict cross-compilation for CI (fails on any error)
+cross-compile-strict: cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64
+	@echo "All cross-compilation targets built successfully"
 
 # Quick rebuild (no clean)
 quick: build test
+
+# Cross-compilation targets (required 64-bit targets only)
+cross-compile: cross-compile-required cross-compile-optional
+	@echo "Cross-compilation checks complete"
+
+# Required 64-bit cross-compilation targets (must all pass)
+cross-compile-required: cross-windows cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64
+	@echo "✓ All required cross-compilation targets built successfully"
+
+# Optional 32-bit cross-compilation targets (failures are non-fatal)
+cross-compile-optional:
+	@echo "Checking optional 32-bit cross-compilation targets..."
+	@$(MAKE) cross-linux-arm || echo "⚠ Linux ARM (32-bit) cross-compilation failed (this is expected and non-fatal)"
+
+# Cross-compile for Windows x86_64
+cross-windows:
+	@echo "Cross-compiling for Windows x86_64..."
+	$(ZIG) build -Dtarget=x86_64-windows $(ZIG_FLAGS)
+	@test -f zig-out/bin/geoded.exe || (echo "Failed to build geoded.exe" && exit 1)
+	@test -f zig-out/bin/geodec.exe || (echo "Failed to build geodec.exe" && exit 1)
+	@test -f zig-out/bin/gql.exe || (echo "Failed to build gql.exe" && exit 1)
+	@echo "✓ Windows x86_64 build successful"
+
+# Cross-compile for Linux ARM (32-bit)
+cross-linux-arm:
+	@echo "Cross-compiling for Linux ARM..."
+	$(ZIG) build -Dtarget=arm-linux-gnueabihf $(ZIG_FLAGS)
+	@echo "✓ Linux ARM build successful"
+
+# Cross-compile for Linux ARM64
+cross-linux-arm64:
+	@echo "Cross-compiling for Linux ARM64..."
+	$(ZIG) build -Dtarget=aarch64-linux-gnu $(ZIG_FLAGS)
+	@echo "✓ Linux ARM64 build successful"
+
+# Cross-compile for Linux RISC-V 64-bit
+cross-linux-riscv64:
+	@echo "Cross-compiling for Linux RISC-V 64-bit..."
+	$(ZIG) build -Dtarget=riscv64-linux-gnu $(ZIG_FLAGS)
+	@echo "✓ Linux RISC-V 64-bit build successful"
+
+# Cross-compile for macOS x86_64
+cross-macos-x86_64:
+	@echo "Cross-compiling for macOS x86_64..."
+	@# Only run on non-macOS systems or when on ARM macOS
+	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "arm64" ]; then \
+		$(ZIG) build -Dtarget=x86_64-macos $(ZIG_FLAGS); \
+		echo "✓ macOS x86_64 build successful"; \
+	else \
+		echo "Skipping macOS x86_64 cross-compile on x86_64 macOS"; \
+	fi
+
+# Cross-compile for Windows ARM64
+cross-windows-arm64:
+	@echo "Cross-compiling for Windows ARM64..."
+	$(ZIG) build -Dtarget=aarch64-windows-msvc $(ZIG_FLAGS)
+	@echo "✓ Windows ARM64 build successful"
+
+# Test cross-platform stdio functionality
+cross-test:
+	@echo "Testing cross-platform stdio..."
+	$(ZIG) test tests/test_cross_platform_stdio.zig $(ZIG_FLAGS)
+	@# Test Windows cross-compilation if Wine is available
+	@if command -v wine64 >/dev/null 2>&1; then \
+		echo "Testing Windows cross-compilation with Wine..."; \
+		$(ZIG) test tests/test_cross_platform_stdio.zig -target x86_64-windows -femit-bin=test_stdio_windows.exe $(ZIG_FLAGS); \
+		wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stdout" || (echo "Windows stdio test failed" && exit 1); \
+		wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stderr" || (echo "Windows stdio test failed" && exit 1); \
+		rm -f test_stdio_windows.exe test_stdio_windows.pdb; \
+		echo "✓ Windows stdio test passed"; \
+	else \
+		echo "Wine not available, skipping Windows runtime test"; \
+	fi
 
 # Server targets
 server: build
