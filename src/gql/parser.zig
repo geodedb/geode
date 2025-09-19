@@ -1130,19 +1130,57 @@ pub const Parser = struct {
             return n == 1 and argIsNumericLike(args[0]);
         }
         if (ts_enabled) {
+            // Core time-series functions
             if (std.ascii.eqlIgnoreCase(name, "last_value")) {
                 if (n != 1) return false;
-                return argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member;
+                return argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]);
             }
             if (std.ascii.eqlIgnoreCase(name, "value_at")) {
                 if (n != 2) return false;
-                return (argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member) and argIsNumericLike(args[1]);
+                return (argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0])) and argIsNumericLike(args[1]);
             }
             if (std.ascii.eqlIgnoreCase(name, "sample_by")) {
-                if (n != 2 and n != 3) return false;
-                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member)) return false;
+                if (n < 2 or n > 5) return false; // series, interval, [start_ts, end_ts, aggregation]
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]))) return false;
+                if (!argIsNumericLike(args[1])) return false;
+                if (n >= 3 and !argIsNumericLike(args[2])) return false;
+                if (n >= 4 and !argIsNumericLike(args[3])) return false;
+                if (n == 5 and !(argIsStringLike(args[4]) or args[4] == .Ident)) return false;
+                return true;
+            }
+            // Advanced time-series functions
+            if (std.ascii.eqlIgnoreCase(name, "interpolate")) {
+                if (n < 2 or n > 3) return false; // series, timestamp, [method]
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]))) return false;
                 if (!argIsNumericLike(args[1])) return false;
                 if (n == 3 and !(argIsStringLike(args[2]) or args[2] == .Ident)) return false;
+                return true;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "moving_avg")) {
+                if (n != 3) return false; // series, window_ms, step_ms
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]))) return false;
+                if (!argIsNumericLike(args[1])) return false;
+                if (!argIsNumericLike(args[2])) return false;
+                return true;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "rate")) {
+                if (n != 2) return false; // series, interval_ms
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]))) return false;
+                if (!argIsNumericLike(args[1])) return false;
+                return true;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "derivative")) {
+                if (n < 1 or n > 2) return false; // series, [order]
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]))) return false;
+                if (n == 2 and !argIsNumericLike(args[1])) return false;
+                return true;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "time_bucket")) {
+                if (n != 4) return false; // series, bucket_ms, start_ts, end_ts
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member or argIsStringLike(args[0]))) return false;
+                if (!argIsNumericLike(args[1])) return false;
+                if (!argIsNumericLike(args[2])) return false;
+                if (!argIsNumericLike(args[3])) return false;
                 return true;
             }
         }

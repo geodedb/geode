@@ -1,0 +1,156 @@
+-- Time-Series Demo Queries for Geode v0.16.0
+-- These queries demonstrate the new time-series functionality
+
+-- ============================================
+-- 1. Basic Time-Series Functions
+-- ============================================
+
+-- Get the last value from a temperature sensor
+RETURN last_value('device:1:temperature') AS current_temp;
+
+-- Get the value at a specific timestamp (Unix ms)
+RETURN value_at('device:1:temperature', 1703001600000) AS temp_at_timestamp;
+
+-- ============================================
+-- 2. Downsampling and Aggregation
+-- ============================================
+
+-- Sample temperature data every hour with average aggregation
+-- interval: 3600000ms (1 hour), from Dec 19 00:00 to Dec 19 23:59
+RETURN sample_by('device:1:temperature', 3600000, 1703001600000, 1703087999000, 'avg') AS hourly_avg;
+
+-- Get min/max values in 6-hour windows
+RETURN sample_by('device:1:temperature', 21600000, 1703001600000, 1703087999000, 'min') AS six_hour_min;
+RETURN sample_by('device:1:temperature', 21600000, 1703001600000, 1703087999000, 'max') AS six_hour_max;
+
+-- Count data points per hour
+RETURN sample_by('device:1:temperature', 3600000, 1703001600000, 1703087999000, 'count') AS points_per_hour;
+
+-- ============================================
+-- 3. Interpolation
+-- ============================================
+
+-- Linear interpolation at a specific timestamp
+RETURN interpolate('device:1:temperature', 1703044800000, 'linear') AS interpolated_temp;
+
+-- Step interpolation (uses previous value)
+RETURN interpolate('device:1:temperature', 1703044800000, 'step') AS step_temp;
+
+-- Nearest neighbor interpolation
+RETURN interpolate('device:1:temperature', 1703044800000, 'nearest') AS nearest_temp;
+
+-- ============================================
+-- 4. Analytics Functions
+-- ============================================
+
+-- Calculate 5-minute moving average with 1-minute steps
+RETURN moving_avg('device:1:temperature', 300000, 60000) AS moving_avg_5min;
+
+-- Calculate rate of change (per second)
+RETURN rate('device:1:temperature', 1000) AS temp_rate_per_sec;
+
+-- Calculate first-order derivative
+RETURN derivative('device:1:temperature', 1) AS temp_derivative;
+
+-- ============================================
+-- 5. Time Bucketing
+-- ============================================
+
+-- Create hourly buckets for a day's worth of data
+RETURN time_bucket('device:1:temperature', 3600000, 1703001600000, 1703087999000) AS hourly_buckets;
+
+-- ============================================
+-- 6. Combining with Graph Queries
+-- ============================================
+
+-- Find all sensors connected to a specific gateway and get their last values
+MATCH (gateway:Gateway {id: 'gw-001'})-[:CONNECTS]->(sensor:Sensor)
+RETURN 
+    sensor.id AS sensor_id,
+    sensor.type AS sensor_type,
+    last_value(sensor.id + ':' + sensor.metric) AS last_reading;
+
+-- Get temperature anomalies (values > 2 std dev from moving average)
+WITH moving_avg('device:1:temperature', 3600000, 60000) AS baseline
+MATCH (reading:Reading)
+WHERE reading.value > baseline.avg + 2 * baseline.stdev
+RETURN reading.timestamp, reading.value AS anomaly_value;
+
+-- ============================================
+-- 7. Multi-Series Queries
+-- ============================================
+
+-- Compare multiple sensors
+WITH 
+    last_value('device:1:temperature') AS temp1,
+    last_value('device:2:temperature') AS temp2,
+    last_value('device:3:temperature') AS temp3
+RETURN 
+    temp1.value AS sensor1,
+    temp2.value AS sensor2,
+    temp3.value AS sensor3,
+    (temp1.value + temp2.value + temp3.value) / 3 AS avg_temp;
+
+-- Correlation between temperature and humidity
+WITH
+    sample_by('device:1:temperature', 3600000, 1703001600000, 1703087999000, 'avg') AS temp_samples,
+    sample_by('device:1:humidity', 3600000, 1703001600000, 1703087999000, 'avg') AS humidity_samples
+RETURN 
+    temp_samples.ts AS timestamp,
+    temp_samples.value AS temperature,
+    humidity_samples.value AS humidity,
+    temp_samples.value * humidity_samples.value AS temp_humidity_product;
+
+-- ============================================
+-- 8. Alerting Queries
+-- ============================================
+
+-- Check if temperature exceeded threshold in last hour
+WITH 
+    sample_by('device:1:temperature', 60000, 
+              timestamp() - 3600000, timestamp(), 'max') AS max_temps
+WHERE max_temps.value > 30.0
+RETURN 
+    'ALERT' AS status,
+    max_temps.ts AS alert_time,
+    max_temps.value AS max_temperature;
+
+-- Detect rapid changes (rate > 5 degrees per minute)
+WITH rate('device:1:temperature', 60000) AS temp_rate
+WHERE abs(temp_rate.value) > 5.0
+RETURN 
+    'RAPID_CHANGE' AS alert_type,
+    temp_rate.ts AS timestamp,
+    temp_rate.value AS rate_of_change;
+
+-- ============================================
+-- 9. Historical Analysis
+-- ============================================
+
+-- Daily aggregates for the past week
+RETURN sample_by('device:1:temperature', 
+                 86400000,  -- 24 hours in ms
+                 timestamp() - 604800000,  -- 7 days ago
+                 timestamp(),
+                 'avg') AS daily_averages;
+
+-- Peak detection - find local maxima
+WITH derivative('device:1:temperature', 1) AS d1,
+     derivative('device:1:temperature', 2) AS d2
+WHERE d1.value = 0 AND d2.value < 0
+RETURN d1.ts AS peak_time, value_at('device:1:temperature', d1.ts) AS peak_value;
+
+-- ============================================
+-- 10. Data Quality Checks
+-- ============================================
+
+-- Find gaps in time-series data (> 5 minutes between points)
+WITH sample_by('device:1:temperature', 60000, 
+               timestamp() - 3600000, timestamp(), 'count') AS minute_counts
+WHERE minute_counts.value = 0
+RETURN minute_counts.ts AS gap_start;
+
+-- Validate sensor readings are within expected range
+WITH last_value('device:1:temperature') AS current
+WHERE current.value < -50 OR current.value > 150
+RETURN 'OUT_OF_RANGE' AS status, current.value AS invalid_reading;

@@ -133,6 +133,11 @@ type Conn struct {
 	useQUIC bool
 }
 
+func (db *DB) Close() error {
+	// Nothing to close for DB itself
+	return nil
+}
+
 func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 	if db.path == "" && db.addr == "" { return nil, fmt.Errorf("invalid config") }
 	
