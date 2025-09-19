@@ -31,6 +31,8 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Time-series module (initial in-memory scaffold)
+pub const timeseries = @import("timeseries/timeseries.zig");
 // Re-export storage submodules needed across server modules (CSR adjacency)
 pub const storage = struct {
     // Note: CSR is available to the server binary via build.zig module injection; tests import it directly.
