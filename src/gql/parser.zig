@@ -16,6 +16,8 @@ pub const Parser = struct {
     forbid_orderby_calls: bool = false,
     // Optional: when true, path aliases are forbidden in ORDER BY keys.
     forbid_orderby_paths: bool = false,
+    // TS extensions (SERIES UDFs) allowed when true
+    ts_extensions: bool = false,
     // Last error context message (static or source-backed slice).
     last_error: ?[]const u8 = null,
     // Path alias names collected from the last parsed graph pattern (MATCH or pattern comprehension).
@@ -852,7 +854,7 @@ pub const Parser = struct {
                     // Convert []*Expr -> []Expr view for existing validator: pass dereferenced copies into a temp arraylist
                     var flat = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     for (args_slice) |p| try flat.append(self.arena.allocator(), p.*);
-                    if (!validateBuiltinCall(name, try flat.toOwnedSlice(self.arena.allocator()))) return self.unexpected("invalid builtin function call");
+                    if (!validateBuiltinCall(name, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions)) return self.unexpected("invalid builtin function call");
                 }
                 base = .{ .Call = .{ .callee = cp, .args = args_slice } };
                 continue;
@@ -1096,7 +1098,7 @@ pub const Parser = struct {
         };
     }
 
-    fn validateBuiltinCall(name: []const u8, args: []ast.Expr) bool {
+    fn validateBuiltinCall(name: []const u8, args: []ast.Expr, ts_enabled: bool) bool {
         const n = args.len;
         // Table of builtins: name, min_arity, max_arity (usize max means unbounded), validator
         if (std.ascii.eqlIgnoreCase(name, "exists")) {
@@ -1126,6 +1128,23 @@ pub const Parser = struct {
         }
         if (std.ascii.eqlIgnoreCase(name, "abs")) {
             return n == 1 and argIsNumericLike(args[0]);
+        }
+        if (ts_enabled) {
+            if (std.ascii.eqlIgnoreCase(name, "last_value")) {
+                if (n != 1) return false;
+                return argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "value_at")) {
+                if (n != 2) return false;
+                return (argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member) and argIsNumericLike(args[1]);
+            }
+            if (std.ascii.eqlIgnoreCase(name, "sample_by")) {
+                if (n != 2 and n != 3) return false;
+                if (!(argIsPropertyLike(args[0]) or args[0] == .Ident or args[0] == .Member)) return false;
+                if (!argIsNumericLike(args[1])) return false;
+                if (n == 3 and !(argIsStringLike(args[2]) or args[2] == .Ident)) return false;
+                return true;
+            }
         }
         // Unknown functions: allow any arity for now
         return true;

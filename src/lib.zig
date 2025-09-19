@@ -18,6 +18,7 @@ pub const ParseOptions = struct {
     ident_order_only: bool = false,
     forbid_orderby_calls: bool = false,
     forbid_orderby_paths: bool = false,
+    ts_extensions: bool = false,
 };
 
 // Re-export printer module so binaries can import through the geode module
@@ -61,7 +62,7 @@ pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     var lx = Lexer{ .src = src };
-    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = try p.parseProgram();
     return .{ .program = program, .arena = arena, .last_error = p.last_error };
 }
@@ -76,7 +77,7 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     //
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };
-    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = p.parseProgram() catch {
         const msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;

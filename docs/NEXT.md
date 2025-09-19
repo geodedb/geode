@@ -2,6 +2,52 @@
 
 Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope (S/M/L) • DRI. Swimlanes: Now / Next / Later. All acceptance include concrete GQL plus expected result shape or diagnostic.
 
+## Now (P0) — Time-Series Integration (Phase 1)
+
+1. Time-Series core (in‑memory scaffold -> storage)
+   - Why: Unify graph + time-series; enable immediate API/tests
+   - What: Finalize TS API in Zig (Store), unit + e2e tests; wire minimal GQL UDFs: last_value(series), value_at(series,t), sample_by(series, interval)
+   - Acceptance: `zig test` passes TS tests; docs updated; functions callable in queries (parser hooks behind feature flag)
+   - ISO: impl-defined extensions; diagnostics §23 for errors
+   - Deps: src/timeseries/timeseries.zig
+   - Scope: M
+   - DRI: engine
+
+2. Chunked on‑disk storage + compression
+   - Why: Performance and retention
+   - What: Columnar chunk format (Gorilla-like), chunk index by (series_id, start_ts), retention job
+   - Acceptance: Write/read path with pruning; ≥8 B/value mixed workloads (bench harness)
+   - ISO: storage impl-defined; retention policy documented
+   - Deps: storage/page_manager, wal
+   - Scope: L
+   - DRI: storage
+
+4. docs/grey-cardinal/
+   - Why: Track P0 execution tasks and decision logs for TS rollout
+   - What: Living backlog, design notes, risk logs under docs/grey-cardinal/
+   - Acceptance: Directory populated with index and per-epic notes
+   - Deps: docs
+   - Scope: S
+   - DRI: pm
+
+5. **Backup and Restore** (REQ-GQL-057)
+   - Why: Disaster recovery and data protection
+   - What: Point-in-time recovery, incremental backups
+   - Acceptance: Restore to any point within retention window
+   - ISO: impl-defined backup
+   - Deps: WAL, snapshot mechanism
+   - Scope: L
+   - DRI: storage
+
+6. **Federated Queries** (REQ-GQL-053)
+   - Why: Query across multiple Geode instances
+   - What: Distributed query planning and execution
+   - Acceptance: JOIN across remote graphs
+   - ISO: Extensions
+   - Deps: Network protocol, distributed planner
+   - Scope: XL
+   - DRI: federation
+
 ## Completed (January 2025)
 
 The following P1 production hardening features have been completed:

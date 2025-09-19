@@ -42,7 +42,11 @@ with subclause anchors.
 | REQ‑GQL‑043 | Distributed integration with server | ISO 24 | Partial | CLI flags present; no actual distribution | Single-node only | 2025‑12‑31 | dist | |
 | REQ‑GQL‑046 | Transparent data encryption (pages+WAL; key rotation) | Security (impl‑defined) | Implemented | src/storage/page_manager.zig; src/wal/wal.zig; tests/unit_page_crypto.zig; src/tools/key_rotate.zig | Experimental cipher; harden to AES‑GCM | 2025‑11‑30 | security | TDE v0 (experimental) |
 | REQ‑GQL‑047 | Multi‑graph catalog (CREATE/DROP/USE GRAPH; isolation) | ISO 4.3, 14 | Planned | docs/NEXT.md | Planner/catalog namespaces | 2025‑11‑07 | catalog | Multi‑tenant P1 |
-| REQ‑GQL‑050 | Text format output for SCHEMA/BINDINGS/EXPLAIN/PROFILE | ISO 4.3.6 (binding tables) | Implemented | src/client/main.zig text paths; tests in e2e_protocol.zig | Text profile parity later | 2025‑10‑21 | cli | |
+| REQ‑GQL‑TS‑001 | Time-Series in-memory API (Store; insertMany, last, valueBefore, timeBucketAvg) | I.D. TS design | Implemented (beta) | src/timeseries/timeseries.zig; README “Latest Updates” | Lacks persistence/compression | 2025‑10‑28 | engine | Scaffold for docs acceptance |
+| REQ‑GQL‑TS‑002 | Chunked on-disk TS storage + compression + pruning | I.D. storage | Planned | docs/TIMESERIES-GEODE.md §4.3 | Implement & benchmark | 2025‑11‑30 | storage | Gorilla-like encoding |
+| REQ‑GQL‑TS‑003 | Protocol TS_EXTENSIONS + columnar frames | I.D. protocol | Planned | docs/TIMESERIES-GEODE.md §4.7 | Backward compat gating | 2025‑11‑15 | wire | Columnar (ts,value) |
+| REQ‑GQL‑TS‑004 | GQL extensions/UDFs (SERIES BETWEEN, ASOF, SAMPLE_BY) | ISO 14 (ext) | Planned | docs/TIMESERIES-GEODE.md §4.2 | Feature-flag; planner pushdowns | 2025‑11‑22 | front-end | |
+| REQ‑GQL‑TS‑005 | Continuous aggregates (rollups) + CDC | I.D. streaming | Planned | docs/TIMESERIES-GEODE.md §4.8 | Late data correction policy | 2025‑12‑10 | streaming | |
 
 Notes: 
 - I: implementation‑defined; U: implementation‑dependent

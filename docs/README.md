@@ -6,6 +6,7 @@ Geode v0.16.0 is a production-ready ACID property-graph database implementing IS
 
 ### Latest Updates (January 2025)
 
+- **Time-Series (beta)**: Native TS scaffold (in-memory Store: insertMany, last, valueBefore, timeBucketAvg); full chunked storage, GQL functions, and protocol support planned. See TIMESERIES-GEODE.md.
 - **Distributed Consensus**: Full Raft implementation with automatic failover
 - **Adaptive Query Execution**: Runtime optimization with plan caching
 - **Recursive Queries**: WITH RECURSIVE support for graph traversals
@@ -290,6 +291,7 @@ cd clients/go/gql && go run example/main.go
 - [NUMERIC_PROMOTION.md](NUMERIC_PROMOTION.md) - Type system
 - [PROFILING.md](PROFILING.md) - Performance analysis
 - [query_engine.md](query_engine.md) - Query architecture
+- [TIMESERIES-GEODE.md](TIMESERIES-GEODE.md) - Time-series research & design
 
 ### Development
 - [FILE_INVENTORY.md](FILE_INVENTORY.md) - Code organization

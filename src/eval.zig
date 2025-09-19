@@ -509,6 +509,15 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             const p = try evalExpr(ally, rm.pattern.*, env);
             return try evalRegex(v, p, ally);
         },
+        .Call => |c| blk_call: {
+            if (c.callee.* == .Ident) {
+                const nm = c.callee.*.Ident;
+                if (std.ascii.eqlIgnoreCase(nm, "last_value") or std.ascii.eqlIgnoreCase(nm, "value_at") or std.ascii.eqlIgnoreCase(nm, "sample_by")) {
+                    break :blk_call Value{ .Null = {} };
+                }
+            }
+            return Value{ .Null = {} };
+        },
         .In => |iv| {
             const v = try evalExpr(ally, iv.value.*, env);
             return try inList(v, iv.set, ally, env);
