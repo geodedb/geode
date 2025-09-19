@@ -2,7 +2,7 @@
 
 ZIG ?= zig
 ZIG_FLAGS ?=
-ZIG_RELEASE_FLAGS ?= -Drelease-safe
+ZIG_RELEASE_FLAGS ?= -Doptimize=ReleaseSafe
 
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64 cross-test

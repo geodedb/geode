@@ -4,107 +4,89 @@
 
 Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compliance. Features a complete graph execution engine with pattern matching, transactions, and persistent storage.
 
-**NEW (January 2025 - Latest Update)**: 
-- ✅ **Advanced Path Algorithms**: Built-in functions for shortest path, centrality, community detection
-- ✅ **Index Structures**: B-tree, hash, bitmap, and full-text indexes with 100x+ speedup
-- ✅ **Schema Constraints**: Comprehensive validation with unique, existence, cardinality constraints
+## Key Features
 
-**NEW (January 2025 - Latest)**: 
+### Graph Operations
+- ✅ **Pattern Matching**: MATCH and OPTIONAL MATCH with left-outer join semantics
 - ✅ **Graph Mutations**: CREATE, DELETE, MERGE statements with full transaction support
-- ✅ **Production Monitoring**: Prometheus metrics and OpenTelemetry tracing
-- ✅ **Query Optimizer**: Cost-based optimization with join reordering
-- ✅ **Horizontal Scaling**: Complete sharding with automatic rebalancing
+- ✅ **Variable-Length Paths**: Bounded traversal with `[*min..max]` syntax
+- ✅ **Path Algorithms**: Shortest path (Dijkstra), PageRank, centrality calculations
+- ✅ **WITH Clause**: Query composition and multi-stage aggregation
 
-**NEW (January 2025)**: 
-- ✅ **Advanced Path Algorithms**: Dijkstra, PageRank, centrality calculations
-- ✅ **Full-Text Search**: BM25 scoring, inverted index, highlighting
-- ✅ **Schema Constraints**: Property validation, cardinality limits, unique indexes
-- ✅ **Enhanced 2PC**: Savepoints, lock management, multiple isolation levels
+### Performance & Indexing
+- ✅ **Index Structures**: B-tree, hash, bitmap, and full-text indexes
+- ✅ **Query Optimizer**: Cost-based optimization with join reordering and statistics
+- ✅ **Full-Text Search**: BM25 scoring, inverted index, phrase search, highlighting
 
-**NEW (December 2024)**: 
-- ✅ **OPTIONAL MATCH** with left-outer join semantics
-- ✅ **Variable-Length Paths** with bounded traversal `[*min..max]`
-- ✅ **Enhanced MVCC** with comprehensive conflict detection
-- ✅ **Graph Persistence** with catalog integration
-- ✅ **WITH Clause** for query composition and aggregation
-- ✅ **Deterministic Path Selection** with tie-breaking policy
-
-## Status & Conformance Summary
-
-**Current Implementation Status**: 
-- ✅ **31 requirements fully implemented** - All critical features complete
-- ✅ **Production Ready** - Full CRUD, indexing, constraints, monitoring, scaling
-- ✅ **ISO GQL Compliant** - Core conformance achieved with extensions
-- 🎯 **Future Extensions** - GPU acceleration, ML integration, streaming (see [NEXT.md](docs/NEXT.md))
-
-**Key Links**:
-- **Requirements Ledger**: [docs/GAP_ANALYSIS.md#requirements-ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Authoritative status with evidence
-- **GQL Conformance Profile**: [docs/GAP_ANALYSIS.md#gql-conformance-profile](docs/GAP_ANALYSIS.md#gql-conformance-profile) — Feature support matrix
-- **API Documentation**: [docs/API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md) — Complete API documentation
-- **Graph Execution API**: [docs/GRAPH_EXECUTION_API.md](docs/GRAPH_EXECUTION_API.md) — Graph-specific APIs
-- **Execution Backlog**: [docs/NEXT.md](docs/NEXT.md) — Prioritized roadmap
-
-**What Works Today**:
-- ✅ **Graph Mutations**: CREATE, DELETE, MERGE with transaction support
-- ✅ **Graph Pattern Matching**: MATCH with node/edge traversal, label filtering
-- ✅ **OPTIONAL MATCH**: Left-outer join semantics with NULL preservation
-- ✅ **Variable-Length Paths**: Bounded traversal with `[*1..3]` syntax, deterministic shortest path
-- ✅ **WITH Clause**: Query composition, intermediate projections, aggregation support
-- ✅ **Property Access**: Node and edge property access with `n.name` syntax
-- ✅ **SQL-like Queries**: RETURN, WHERE, ORDER BY, LIMIT/OFFSET, GROUP BY, DISTINCT
-- ✅ **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics
-- ✅ **Expression Engine**: CASE expressions, string predicates, temporal literals
-- ✅ **Binary Protocol**: HELLO/RUN_GQL/PULL frames with ISO diagnostics
-- ✅ **Transactions**: BEGIN/COMMIT/ROLLBACK with enhanced MVCC
-- ✅ **Conflict Detection**: Write-write, read-write, phantom read detection
-- ✅ **Storage**: Persistent graph storage with --data_dir, WAL recovery
-- ✅ **QUIC/TLS 1.3**: Secure high-performance transport
-- ✅ **Profiling**: EXPLAIN/PROFILE with memory and timing metrics
-- ✅ **Path Algorithms**: Dijkstra, PageRank, betweenness centrality
-- ✅ **Full-Text Search**: BM25 relevance scoring, phrase search, fuzzy matching
-- ✅ **Schema Constraints**: Type validation, cardinality limits, patterns
-- ✅ **Two-Phase Commit**: Distributed transactions with savepoints
-- ✅ **Production Monitoring**: Prometheus metrics, OpenTelemetry tracing
-- ✅ **Query Optimization**: Cost-based optimizer with statistics
+### Production Features
+- ✅ **ACID Transactions**: Enhanced MVCC with comprehensive conflict detection
+- ✅ **Monitoring**: Prometheus metrics and OpenTelemetry distributed tracing
 - ✅ **Horizontal Scaling**: Sharding with automatic rebalancing
+- ✅ **Schema Constraints**: Property validation, cardinality limits, unique indexes
+- ✅ **Graph Persistence**: Full catalog integration with metadata storage
+- ✅ **Two-Phase Commit**: Distributed transactions with savepoints and lock management
 
-**Production Ready Features**:
-- ✅ Complete CRUD operations for graph data
-- ✅ Observability with metrics and distributed tracing
-- ✅ Performance optimization with cost-based planning
-- ✅ Scale-out capability with intelligent sharding
+## Implementation Status
 
-**Recent Achievements**:
-1. **Complete Graph DML**: Full CREATE/DELETE/MERGE implementation
-2. **Production Observability**: Prometheus and OpenTelemetry integration
-3. **Advanced Query Optimization**: Cost-based optimizer with statistics
-4. **Horizontal Scale-Out**: Complete sharding with rebalancing
-3. **WITH Clause**: Query composition and aggregation support
-4. **ACID Compliance**: Comprehensive MVCC with ISO 40001 error mapping
-5. **Production Storage**: Persistent catalog with graph metadata
+### Conformance Level
+- **ISO/IEC 39075:2024 (GQL)**: Core conformance with extensions
+- **31+ Requirements Implemented**: Full feature set for production use
+- **Production Ready**: Complete CRUD, indexing, monitoring, and scaling
 
-**Conformance Notes**:
-- Working toward ISO/IEC 39075:2024 compliance
-- Currently implements query basics without graph features
-- Implementation-defined: US001 (pagination requires ORDER), binary collation, NULLS FIRST default
-- Diagnostics follow ISO 23.2 with proper status codes and precedence
+### Documentation
+- [Requirements Ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Implementation status with evidence
+- [GQL Conformance Profile](docs/GAP_ANALYSIS.md#gql-conformance-profile) — Feature support matrix
+- [API Documentation](docs/API_DOCUMENTATION.md) — Complete API reference
+- [Graph Execution API](docs/GRAPH_EXECUTION_API.md) — Graph-specific operations
+- [Roadmap](docs/NEXT.md) — Future features and priorities
 
 ## Core Features (Currently Implemented)
 
-- **Query Engine**: RETURN with expressions, WHERE filtering, ORDER BY with sort specs, LIMIT/OFFSET with US001 policy,
-  GROUP BY with aggregations, UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics, DISTINCT deduplication.
-- **Expression Evaluation**: CASE expressions (searched), string predicates (STARTS WITH, ENDS WITH, CONTAINS),
-  temporal literals (DATE/TIME/DATETIME), arithmetic with type coercion, 3-valued logic.
-- **Transaction Support**: BEGIN/COMMIT/ROLLBACK, MVCC with timestamps (partial conflict detection), 
-  proper ISO status codes (00000 success, 25000 txn state, 40001 serialization).
-- **Storage Layer**: WAL with STEAL/NO-FORCE, page management with checksums, recovery from WAL,
-  compaction support, in-memory and disk modes (partial persistence).
-- **Protocol & Transport**: Binary frames (HELLO, RUN_GQL, PULL), QUIC with TLS 1.3 (default),
-  TCP and stdio fallback, JSON and text output formats.
-- **Profiling**: EXPLAIN plans, PROFILE with timing/memory/spill metrics, memory curves,
-  CPU time tracking, adaptive estimates.
+### Query Engine
+- **Graph Operations**: MATCH/OPTIONAL MATCH with pattern matching, CREATE/DELETE/MERGE mutations
+- **Query Features**: RETURN with expressions, WHERE filtering, ORDER BY with sort specs, LIMIT/OFFSET with US001 policy
+- **Aggregations**: GROUP BY with COUNT, SUM, AVG, MIN, MAX, STDEV, VARIANCE
+- **Set Operations**: UNION/INTERSECT/EXCEPT with DISTINCT/ALL semantics
+- **Path Operations**: Variable-length paths `[*1..5]`, shortest path algorithms
 
-See USAGE.md for commands and flags.
+### Expression Evaluation
+- **CASE Expressions**: Searched CASE with 3-valued logic
+- **String Operations**: STARTS WITH, ENDS WITH, CONTAINS predicates
+- **Temporal Support**: DATE/TIME/DATETIME literals per ISO 8601
+- **Type System**: Automatic numeric promotion with Int→Decimal→Float hierarchy
+
+### Transaction Support
+- **ACID Compliance**: BEGIN/COMMIT/ROLLBACK with full isolation
+- **MVCC**: Multi-version concurrency control with conflict detection
+- **Conflict Types**: Write-write, read-write, write-read, phantom read detection
+- **ISO Status Codes**: 00000 (success), 25000 (txn state), 40001 (serialization failure)
+
+### Storage Layer
+- **WAL**: Write-ahead logging with STEAL/NO-FORCE policy
+- **Page Management**: Checksummed pages with automatic recovery
+- **Graph Persistence**: Catalog integration with metadata storage
+- **Compaction**: Automatic WAL compaction with configurable intervals
+
+### Protocol & Transport  
+- **QUIC/TLS 1.3**: Default secure high-performance transport
+- **Binary Protocol**: HELLO, RUN_GQL, PULL frames with ISO diagnostics
+- **Fallback Modes**: TCP and stdio for compatibility
+- **Output Formats**: JSON (default) and text/plain
+
+### Client Libraries
+- **Zig Client**: Native client with full protocol support
+- **Go Client**: Complete driver with connection pooling and query builder
+- **Cross-Platform**: Pre-built binaries for Windows, Linux (x86_64/ARM64), macOS (x86_64/ARM64)
+- **Cross-Compilation**: Full support for all major platforms (see [docs/CROSS_COMPILATION.md](docs/CROSS_COMPILATION.md))
+
+### Production Features
+- **Monitoring**: Prometheus metrics, OpenTelemetry tracing
+- **Query Optimization**: Cost-based optimizer with statistics
+- **Horizontal Scaling**: Sharding with automatic rebalancing
+- **Security**: Row-level security (RLS), user authentication, TLS encryption
+- **Profiling**: EXPLAIN/PROFILE with timing, memory, and spill metrics
+
+See [USAGE.md](USAGE.md) for commands and flags.
 
 ## Building from Source
 
@@ -112,6 +94,8 @@ See USAGE.md for commands and flags.
 - Zig 0.15.1 or later
 - Git (for submodules)
 - Optional: Go 1.19+ (for Go client)
+- Optional: QEMU (for testing cross-compiled binaries)
+- Optional: Wine (for testing Windows binaries on Linux)
 
 ### Quick Start
 ```bash
@@ -122,26 +106,90 @@ cd geode
 # Or if already cloned, initialize submodules
 git submodule update --init --recursive
 
-# Build
+# Build all components (server, clients, tools)
 make build
 
 # Run tests
 make test
+
+# Build client libraries for all platforms
+make cross-clients
+
+# Test cross-compiled clients with QEMU/Wine
+make qemu-test-clients
+```
+
+### Available Make Targets
+```bash
+make help              # Show all available targets
+make release           # Build optimized release version
+make cross-compile     # Cross-compile for all platforms
+make docker-build      # Build Docker images
+make go-example        # Run Go client example
+make tools             # Build auxiliary tools (cert_gen, wal_compact, etc.)
 ```
 
 ### QUIC Library
 The QUIC transport layer is included as a git submodule at `vendor/quic/`. For more details, see [docs/QUIC_SUBMODULE_SETUP.md](docs/QUIC_SUBMODULE_SETUP.md).
 
-## Roadmap to Graph Database
+## Quick Start Guide
 
-The following features are required for true GQL graph database functionality:
+### Starting the Server
+```bash
+# QUIC mode (default, recommended)
+./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
 
-1. **Graph Pattern Matching** (P0): Implement MATCH clause execution with node and edge traversal
-2. **Property Graph Model** (P0): Add property storage and access (n.name syntax), label filtering
-3. **Graph Traversal** (P0): Variable-length paths, OPTIONAL MATCH with outer semantics
-4. **Graph Mutations** (P1): CREATE, DELETE, MERGE operations for nodes and relationships
-5. **Query Composition** (P1): WITH clause for multi-stage queries
-6. **Advanced Features** (P2): Shortest path algorithms, graph indexes, schema constraints
+# TCP mode (legacy)
+./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567
+
+# With persistent storage
+./zig-out/bin/geoded --data_dir ./data --listen-quic 0.0.0.0:7567
+```
+
+### Using the CLI Client
+```bash
+# Simple query
+./zig-out/bin/geodec "RETURN 1 AS x ORDER BY x LIMIT 1"
+
+# With QUIC connection
+./zig-out/bin/geodec "MATCH (n:Person) RETURN n.name" --server 127.0.0.1:7567
+
+# Profile a query
+./zig-out/bin/geodec "PROFILE MATCH (n) RETURN COUNT(n)" --format json
+```
+
+### Docker Deployment
+```bash
+# Single node
+make docker-up-singleton
+
+# Distributed cluster
+make docker-up-distributed
+
+# View logs
+make docker-logs-singleton
+```
+
+## Documentation
+
+### Core Documentation
+- **[API Documentation](docs/API_DOCUMENTATION.md)**: Complete API reference
+- **[Graph Execution API](docs/GRAPH_EXECUTION_API.md)**: Graph-specific operations
+- **[Binary Protocol](docs/BINARY_PROTOCOL.md)**: Wire protocol specification
+- **[Cross-Compilation Guide](docs/CROSS_COMPILATION.md)**: Building for multiple platforms
+- **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)**: Container deployment guide
+
+### Implementation Status
+- **[Gap Analysis](docs/GAP_ANALYSIS.md)**: Requirements ledger and conformance profile
+- **[Current State](docs/CURRENT_STATE.md)**: Detailed implementation status
+- **[Next Steps](docs/NEXT.md)**: Prioritized roadmap and future features
+- **[Conformance Matrix](docs/CONFORMANCE_MATRIX.md)**: ISO GQL compliance tracking
+
+### Advanced Topics
+- **[Numeric Promotion](docs/NUMERIC_PROMOTION.md)**: Type coercion rules
+- **[Query Engine](docs/query_engine.md)**: Internal query execution details
+- **[Profiling Guide](docs/PROFILING.md)**: Performance analysis and optimization
+- **[Research Papers](docs/research.md)**: Academic foundation and algorithms
 
 ## Profiling & Metrics
 
@@ -320,3 +368,21 @@ zig run src/tools/doc_sync.zig
 ```
 
 The script prints any MISSING (referenced in code but absent from GAP_ANALYSIS) or EXTRA (present in GAP_ANALYSIS but not found in source) requirement IDs. Resolve discrepancies by editing `docs/GAP_ANALYSIS.md` until the script outputs no differences. Integrate this check in CI to prevent drift.
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+- All tests pass (`make test`)
+- Code is formatted (`make fmt`)
+- Cross-compilation works (`make cross-compile`)
+- Documentation is updated for new features
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Support
+
+- **Issues**: GitHub Issues for bug reports and feature requests
+- **Documentation**: See the [docs/](docs/) directory for detailed guides
+- **Examples**: Check [examples/](examples/) for query examples and use cases

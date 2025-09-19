@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -79,7 +80,13 @@ type dsnConfig struct {
 }
 
 func parseDSN(dsn string) dsnConfig {
-	cfg := dsnConfig{Mode: "process", Path: "./zig-out/bin/geoded", PageSize: 1000, HelloName: "gql-go", HelloVer: "0.1", Conformance: "min", UseQUIC: false}
+	// Default path depends on OS
+	defaultPath := "./zig-out/bin/geoded"
+	if runtime.GOOS == "windows" {
+		defaultPath = "./zig-out/bin/geoded.exe"
+	}
+	
+	cfg := dsnConfig{Mode: "process", Path: defaultPath, PageSize: 1000, HelloName: "gql-go", HelloVer: "0.1", Conformance: "min", UseQUIC: false}
 	if dsn == "" {
 		if p := os.Getenv("GEODE_SERVER_PATH"); p != "" { cfg.Path = p }
 		return cfg
@@ -192,6 +199,24 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 	// process mode
 	path := db.path
 	if !filepath.IsAbs(path) { if wd, _ := os.Getwd(); wd != "" { path = filepath.Join(wd, path) } }
+	
+	// Check if the executable exists, and if not, try to build it
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Try to build the server if it doesn't exist
+		buildCmd := exec.Command("zig", "build")
+		buildCmd.Dir = filepath.Dir(filepath.Dir(filepath.Dir(path))) // Go up to project root
+		buildCmd.Stdout = os.Stderr
+		buildCmd.Stderr = os.Stderr
+		if buildErr := buildCmd.Run(); buildErr == nil {
+			// Check again after build
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				return nil, fmt.Errorf("geoded not found after build: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("geoded not found and build failed: %w", err)
+		}
+	}
+	
 	cmd := exec.Command(path)
 	stdin, err := cmd.StdinPipe(); if err != nil { return nil, err }
 	stdout, err := cmd.StdoutPipe(); if err != nil { return nil, err }

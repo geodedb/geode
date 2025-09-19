@@ -37,7 +37,7 @@ jobs:
           key: ${{ runner.os }}-zig-${{ hashFiles('build.zig','src/**/*.zig') }}
           restore-keys: ${{ runner.os }}-zig-
       - name: Build
-        run: zig build -Drelease-safe
+        run: zig build -Doptimize=ReleaseSafe
       - name: Schema validate PROFILE output
         run: |
           pip3 install --no-cache-dir jsonschema

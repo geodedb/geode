@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,14 @@ func ensureServer(t *testing.T) string {
 	t.Helper()
 	wd, _ := os.Getwd()
 	root := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
-	path := filepath.Join(root, "zig-out", "bin", "geoded")
+	
+	// Add .exe extension on Windows
+	serverName := "geoded"
+	if runtime.GOOS == "windows" {
+		serverName = "geoded.exe"
+	}
+	
+	path := filepath.Join(root, "zig-out", "bin", serverName)
 	if _, err := os.Stat(path); err == nil {
 		return path
 	}
@@ -34,12 +42,17 @@ func ensureServer(t *testing.T) string {
 // It waits until the port is accepting connections or fails the test after timeout.
 func startTCP(t *testing.T) string {
 	t.Helper()
-	ensureServer(t)
+	serverPath := ensureServer(t)
 	// Kill any existing server on the port (could be QUIC or TCP from previous test)
-	exec.Command("pkill", "-f", "geoded.*7567").Run()
+	// On Windows, use taskkill instead of pkill
+	if runtime.GOOS == "windows" {
+		exec.Command("taskkill", "/F", "/IM", "geoded.exe").Run()
+	} else {
+		exec.Command("pkill", "-f", "geoded.*7567").Run()
+	}
 	time.Sleep(100 * time.Millisecond)
 	
-	cmd := exec.Command("../../../zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7567")
+	cmd := exec.Command(serverPath, "--listen-tcp", "127.0.0.1:7567")
 	if err := cmd.Start(); err != nil { t.Fatalf("start tcp server: %v", err) }
 	// Wait readiness
 	deadline := time.Now().Add(3 * time.Second)
@@ -53,8 +66,8 @@ func startTCP(t *testing.T) string {
 
 func withConn(t *testing.T) *Conn {
 	t.Helper()
-	_ = ensureServer(t)
-	db, err := Open("process:"+filepath.Join("..","..","..","zig-out","bin","geoded")+"?page_size=3")
+	serverPath := ensureServer(t)
+	db, err := Open("process:"+serverPath+"?page_size=3")
 	if err != nil { t.Fatalf("Open err: %v", err) }
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
@@ -117,9 +130,9 @@ func contains(s, sub string) bool { return len(sub) == 0 || (len(s) >= len(sub) 
 // startQUIC launches a geoded in QUIC mode on the default port (127.0.0.1:7567) for the duration of the test.
 func startQUIC(t *testing.T) string {
 	t.Helper()
-	ensureServer(t)
+	serverPath := ensureServer(t)
 	// Check if already listening on QUIC
-	cmd := exec.Command("../../../zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567")
+	cmd := exec.Command(serverPath, "--listen-quic", "127.0.0.1:7567")
 	if err := cmd.Start(); err != nil { t.Fatalf("start quic server: %v", err) }
 	// Wait for server to be ready
 	time.Sleep(500 * time.Millisecond)

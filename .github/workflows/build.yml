@@ -198,7 +198,7 @@ jobs:
         with:
           version: ${{ matrix.zig }}
       - name: Build
-        run: make build ZIG_FLAGS='-Drelease-safe=false'
+        run: make build
       - name: Run tests
         run: zig build test
       - name: Build fuzzers
@@ -263,7 +263,7 @@ jobs:
         with:
           version: 0.15.1
       - name: Build server
-        run: zig build -Drelease-safe=false
+        run: zig build
       - name: Start geoded (tcp)
         run: |
           ./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567 > server.out 2> server.err &
