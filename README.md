@@ -159,16 +159,28 @@ The QUIC transport layer is included as a git submodule at `vendor/quic/`. For m
 ```
 
 ### Docker Deployment
+
+Pre-built multi-platform Docker images are available from GitHub Container Registry:
+
 ```bash
-# Single node
+# Pull the latest image (supports linux/amd64 and linux/arm64)
+docker pull ghcr.io/[owner]/geode:latest
+
+# Run the server with QUIC
+docker run -d -p 7567:7567/udp ghcr.io/[owner]/geode:latest
+
+# Run a query
+docker run --rm ghcr.io/[owner]/geode:latest geodec "RETURN 1 AS x ORDER BY x LIMIT 1" --no-quic
+
+# Using Docker Compose
+docker compose up -d
+
+# Build and run locally
+make docker-build
 make docker-up-singleton
-
-# Distributed cluster
-make docker-up-distributed
-
-# View logs
-make docker-logs-singleton
 ```
+
+See [Docker Usage Guide](docs/DOCKER_USAGE.md) for detailed deployment instructions.
 
 ## Documentation
 
@@ -177,7 +189,8 @@ make docker-logs-singleton
 - **[Graph Execution API](docs/GRAPH_EXECUTION_API.md)**: Graph-specific operations
 - **[Binary Protocol](docs/BINARY_PROTOCOL.md)**: Wire protocol specification
 - **[Cross-Compilation Guide](docs/CROSS_COMPILATION.md)**: Building for multiple platforms
-- **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)**: Container deployment guide
+- **[Docker Usage Guide](docs/DOCKER_USAGE.md)**: Complete Docker deployment guide
+- **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)**: Docker Compose examples
 
 ### Implementation Status
 - **[Gap Analysis](docs/GAP_ANALYSIS.md)**: Requirements ledger and conformance profile

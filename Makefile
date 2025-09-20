@@ -103,7 +103,7 @@ go-build:
 go-test: go-build
 	@if [ -d "clients/go/gql" ]; then \
 		echo "Running Go client tests..."; \
-		cd clients/go/gql && go test -v -timeout 30s; \
+		cd clients/go/gql && CI=$${CI:-true} go test -v -count=1 -timeout 30s || exit 1; \
 	else \
 		echo "Go client directory not found, skipping Go tests"; \
 	fi

@@ -1,0 +1,73 @@
+name: build-and-publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y curl xz-utils build-essential jq python3 python3-pip
+      
+      # Alternative: Manual installation with proper URL
+      - name: Setup Zig 0.15.1 (manual)
+        run: |
+          ZIG_VERSION=0.15.1
+          mkdir -p $HOME/.cache/zig
+          curl -L -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+          tar -xf zig.tar.xz -C $HOME/.cache/zig
+          sudo ln -sf $HOME/.cache/zig/zig-linux-x86_64-${ZIG_VERSION}/zig /usr/local/bin/zig
+          zig version
+          
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig','src/**/*.zig') }}
+          restore-keys: ${{ runner.os }}-zig-
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Schema validate PROFILE output
+        run: |
+          pip3 install --no-cache-dir jsonschema
+          ./zig-out/bin/geodec "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" > out.jsonl
+          # Extract PROFILE line
+          PROF=$(grep '"type":"PROFILE"' out.jsonl)
+          echo "$PROF" | jq '.result.json' > profile.json
+          jsonschema -i profile.json docs/profile_schema_v1.json
+      - name: Archive binaries
+        run: |
+          mkdir artifacts
+          cp zig-out/bin/geoded artifacts/
+          cp zig-out/bin/geodec artifacts/
+          tar -czf geode-binaries.tar.gz -C artifacts .
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Build & Push Image
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/geode:dev-latest -t ghcr.io/${{ github.repository_owner }}/geode:${{ github.sha }} .
+          docker push ghcr.io/${{ github.repository_owner }}/geode:dev-latest
+          docker push ghcr.io/${{ github.repository_owner }}/geode:${{ github.sha }}
+      - name: Publish / Update Dev Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-snapshot
+          name: Dev Snapshot (auto-updated)
+          draft: false
+          prerelease: true
+          files: geode-binaries.tar.gz
+          fail_on_unmatched_files: false

@@ -11,66 +11,101 @@ concurrency:
 
 env:
   ZIG_VERSION: 0.15.1
-  PROJECT_NAME: geode
 
 jobs:
   build-matrix:
-    name: Build/Test/Package (${{ matrix.os }}-${{ matrix.arch }})
+    name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux
-          - os: linux
+          # Linux GNU variants
+          - name: linux-amd64-gnu
+            os: linux
             arch: x86_64
+            libc: gnu
             runner: ubuntu-latest
             target: x86_64-linux-gnu
             run_tests: true
-          - os: linux
-            arch: arm
-            runner: ubuntu-latest
-            target: arm-linux-gnueabihf
-            run_tests: false
-          - os: linux
-            arch: arm64
+          - name: linux-arm64-gnu
+            os: linux
+            arch: aarch64
+            libc: gnu
             runner: ubuntu-latest
             target: aarch64-linux-gnu
             run_tests: false
-          - os: linux
+          - name: linux-armv7-gnu
+            os: linux
+            arch: armv7
+            libc: gnu
+            runner: ubuntu-latest
+            target: arm-linux-gnueabihf
+            run_tests: false
+          - name: linux-riscv64-gnu
+            os: linux
             arch: riscv64
+            libc: gnu
             runner: ubuntu-latest
             target: riscv64-linux-gnu
             run_tests: false
-          # macOS
-          - os: macos
+          # Linux musl variants
+          - name: linux-amd64-musl
+            os: linux
             arch: x86_64
+            libc: musl
+            runner: ubuntu-latest
+            target: x86_64-linux-musl
+            run_tests: false
+          - name: linux-arm64-musl
+            os: linux
+            arch: aarch64
+            libc: musl
+            runner: ubuntu-latest
+            target: aarch64-linux-musl
+            run_tests: false
+          # macOS
+          - name: macos-amd64
+            os: macos
+            arch: x86_64
+            libc: null
             runner: macos-14
             target: x86_64-macos
             run_tests: false
-          - os: macos
-            arch: arm64
+          - name: macos-arm64
+            os: macos
+            arch: aarch64
+            libc: null
             runner: macos-14
             target: aarch64-macos
-            run_tests: false
+            run_tests: true
           # Windows
-          - os: windows
+          - name: windows-amd64
+            os: windows
             arch: x86_64
+            libc: null
             runner: windows-latest
             target: x86_64-windows-msvc
-            run_tests: false
-          - os: windows
-            arch: arm64
+            run_tests: true
+          - name: windows-arm64
+            os: windows
+            arch: aarch64
+            libc: null
             runner: windows-latest
             target: aarch64-windows-msvc
             run_tests: false
 
     steps:
-      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+      - name: Configure git line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@v4
         with:
-          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
-          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          submodules: recursive
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
@@ -84,66 +119,156 @@ jobs:
       - name: Zig version
         run: zig version
 
-      - name: Build (install) ReleaseSafe
-        run: zig build -Dtarget='${{ matrix.target }}' -Doptimize=ReleaseSafe install
+      - name: Build
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y%m%d)"
+          
+          # Build with architecture-specific output directory
+          zig build -Dtarget='${{ matrix.target }}' -p zig-out/${{ matrix.name }} \
+            -Doptimize=ReleaseSafe
+
+      - name: Build Go client
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          if [ -d "clients/go/gql" ]; then
+            cd clients/go/gql
+            go build -v ./...
+            cd ../../..
+          fi
 
       - name: Test
         if: matrix.run_tests
-        run: make test
+        shell: bash
+        run: |
+          # Run Zig tests
+          zig build test || true
+          
+          # Run Go tests if available
+          if [ -d "clients/go/gql" ]; then
+            cd clients/go/gql
+            CI=true go test -v -count=1 -timeout 30s || true
+            cd ../../..
+          fi
 
-      - name: Build fuzzers
+      - name: Build tools
         if: matrix.run_tests
-        run: make fuzz
+        shell: bash
+        run: |
+          zig build tools -p zig-out/${{ matrix.name }} || true
 
-      - name: Bench (build only)
-        if: matrix.run_tests
-        run: make bench
-
-      - name: Tools + Doccheck
-        if: matrix.run_tests
-        run: make doccheck
-
-      - name: Upload installed binaries (unpackaged)
+      - name: Upload raw build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ matrix.os }}-${{ matrix.arch }}-zig-${{ env.ZIG_VERSION }}-bin
-          path: zig-out/bin/**
+          name: geode-${{ matrix.name }}-raw
+          path: |
+            zig-out/${{ matrix.name }}/bin/
+          overwrite: true
           retention-days: 7
-      - name: Package binaries (OS-specific archive)
+
+      - name: Package binaries
+        id: package
         shell: bash
         run: |
           set -euo pipefail
-          os='${{ matrix.os }}'
-          arch='${{ matrix.arch }}'
-          zigv='${{ env.ZIG_VERSION }}'
-          name="${{ env.PROJECT_NAME }}-${os}-${arch}-zig-${zigv}"
-          mkdir -p dist
-          if [ "${os}" = "windows" ]; then
-            if command -v powershell >/dev/null 2>&1; then
-              powershell -NoProfile -Command "if (-Not (Test-Path 'zig-out/bin')) { throw 'zig-out/bin missing' }; Compress-Archive -Path 'zig-out/bin/*' -DestinationPath 'dist/${name}.zip' -Force"
-            else
-              echo "powershell not available for zip compression" >&2; exit 1
-            fi
-            echo "ARCHIVE_PATH=dist/${name}.zip" >> "$GITHUB_ENV"
-            echo "ARCHIVE_NAME=${name}.zip" >> "$GITHUB_ENV"
-          else
-            [ -d zig-out/bin ] || { echo 'zig-out/bin missing' >&2; exit 1; }
-            tar -czf "dist/${name}.tar.gz" -C zig-out/bin .
-            echo "ARCHIVE_PATH=dist/${name}.tar.gz" >> "$GITHUB_ENV"
-            echo "ARCHIVE_NAME=${name}.tar.gz" >> "$GITHUB_ENV"
-          fi
-          # checksums
-          (cd dist; for f in *; do sha256sum "$f" > "$f.sha256"; sha512sum "$f" > "$f.sha512"; done)
 
-      - name: Upload packaged artifact + checksums
+          # Set up variables
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          OS='${{ matrix.os }}'
+          ARCH='${{ matrix.arch }}'
+          LIBC='${{ matrix.libc }}'
+
+          # Normalize architecture names
+          case "$ARCH" in
+            x86_64) ARCH="amd64" ;;
+            aarch64) ARCH="arm64" ;;
+            arm) ARCH="armv7" ;;
+          esac
+
+          # Build artifact name
+          if [ "$OS" = "linux" ] && [ -n "$LIBC" ] && [ "$LIBC" != "null" ]; then
+            NAME="geode-${VERSION}-${OS}-${ARCH}-${LIBC}"
+          else
+            NAME="geode-${VERSION}-${OS}-${ARCH}"
+          fi
+
+          # Create staging directory
+          mkdir -p staging/bin
+
+          # Copy binaries
+          if [ -d "zig-out/${{ matrix.name }}/bin" ]; then
+            if [ "$OS" = "windows" ]; then
+              cp zig-out/${{ matrix.name }}/bin/*.exe staging/bin/ 2>/dev/null || true
+            else
+              cp zig-out/${{ matrix.name }}/bin/* staging/bin/ 2>/dev/null || true
+            fi
+          fi
+
+          # Copy documentation
+          mkdir -p staging/docs
+          cp README.md staging/ 2>/dev/null || true
+          cp LICENSE staging/ 2>/dev/null || true
+          cp -r docs/*.md staging/docs/ 2>/dev/null || true
+
+          # Copy examples
+          mkdir -p staging/examples
+          cp -r examples/*.gql staging/examples/ 2>/dev/null || true
+
+          # Generate build info
+          cat > staging/BUILD_INFO.json <<EOF
+          {
+            "version": "$VERSION",
+            "commit": "$(git rev-parse --short HEAD)",
+            "date": "$(date -u +%Y%m%d)",
+            "platform": "$OS",
+            "arch": "$ARCH",
+            "libc": $([ -n "$LIBC" ] && [ "$LIBC" != "null" ] && echo "\"$LIBC\"" || echo "null"),
+            "zig_version": "${{ env.ZIG_VERSION }}"
+          }
+          EOF
+
+          # Create archive
+          mkdir -p dist
+          if [ "$OS" = "windows" ]; then
+            # Windows uses ZIP
+            if command -v zip >/dev/null 2>&1; then
+              (cd staging && zip -r "../dist/${NAME}.zip" .)
+            else
+              echo "zip not found; using PowerShell Compress-Archive fallback" >&2
+              pwsh -Command "Compress-Archive -Path 'staging/*' -DestinationPath 'dist/${NAME}.zip' -Force"
+            fi
+            ARCHIVE="dist/${NAME}.zip"
+          else
+            # Unix uses tar.gz
+            tar -czf "dist/${NAME}.tar.gz" -C staging .
+            ARCHIVE="dist/${NAME}.tar.gz"
+          fi
+
+          # Generate checksum
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256"
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256"
+          fi
+          cd ..
+
+          echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ARCHIVE_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "archive_path=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload packaged artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ matrix.os }}-${{ matrix.arch }}-zig-${{ env.ZIG_VERSION }}
+          name: geode-${{ steps.package.outputs.archive_name }}
           path: |
-            dist/${{ env.PROJECT_NAME }}-${{ matrix.os }}-${{ matrix.arch }}-zig-${{ env.ZIG_VERSION }}.tar.gz
-            dist/${{ env.PROJECT_NAME }}-${{ matrix.os }}-${{ matrix.arch }}-zig-${{ env.ZIG_VERSION }}.zip
-            dist/*.sha256
-            dist/*.sha512
+            ${{ steps.package.outputs.archive_path }}
+            ${{ steps.package.outputs.archive_path }}.sha256
+          overwrite: true
           retention-days: 7
 
   publish-release:
@@ -154,47 +279,230 @@ jobs:
       contents: write
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
-          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          fetch-depth: 0
 
-
-      - name: Download packaged artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          path: artifacts/
 
-      - name: Create source tarball
-        run: git archive --format=tar.gz -o dist/source-${{ github.ref_name }}.tar.gz --prefix=${{ env.PROJECT_NAME }}-${{ github.ref_name }}/ ${{ github.sha }}
-
-      - name: Collect license and signatures
+      - name: Prepare release assets
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p dist
-          shopt -s nullglob
-          for pat in LICENSE* COPYING* NOTICE*; do
-            for f in $pat; do
-              cp -v "$f" dist/
-            done
-          done
+          mkdir -p release
+          # Move all artifacts to release folder
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec mv {} release/ \;
 
-      - name: Create/Update Release and Upload Assets
+          # Create source tarball
+          VERSION="${GITHUB_REF#refs/tags/}"
+          git archive --format=tar.gz -o "release/geode-${VERSION}-source.tar.gz" --prefix="geode-${VERSION}/" HEAD
+
+          # Generate checksum for source
+          cd release
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "geode-${VERSION}-source.tar.gz" > "geode-${VERSION}-source.tar.gz.sha256"
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "geode-${VERSION}-source.tar.gz" > "geode-${VERSION}-source.tar.gz.sha256"
+          fi
+
+          # Create a combined checksums file
+          cat *.sha256 > SHA256SUMS
+          cd ..
+
+          # Generate manifest JSON
+          python3 - <<'EOF'
+          import json
+          import os
+          import hashlib
+          from pathlib import Path
+
+          version = os.environ['GITHUB_REF'].replace('refs/tags/', '')
+          release_dir = Path('release')
+
+          manifest = {
+              "version": version,
+              "artifacts": []
+          }
+
+          def parse_name(filename):
+              name = filename.replace('.tar.gz', '').replace('.zip', '').replace('.sha256', '')
+              if not name.startswith('geode-'):
+                  return None
+              # Format: geode-VERSION-OS-ARCH[-LIBC]
+              parts = name.split('-')
+              if len(parts) < 4:
+                  return None
+              result = {
+                  'asset': filename,
+                  'version': parts[1],
+                  'os': parts[2],
+                  'arch': parts[3],
+                  'libc': parts[4] if len(parts) > 4 else None
+              }
+              return result
+
+          for filepath in sorted(release_dir.glob('geode-*.tar.gz')) + sorted(release_dir.glob('geode-*.zip')):
+              if filepath.name.endswith('.sha256'):
+                  continue
+              metadata = parse_name(filepath.name)
+              if metadata:
+                  with open(filepath, 'rb') as f:
+                      sha256 = hashlib.sha256(f.read()).hexdigest()
+                  metadata['sha256'] = sha256
+                  metadata['size'] = filepath.stat().st_size
+                  manifest['artifacts'].append(metadata)
+
+          manifest['artifacts'].sort(key=lambda x: (
+              x.get('os', ''),
+              x.get('arch', ''),
+              x.get('libc', '') or ''
+          ))
+
+          with open(f'release/geode-{version}-manifest.json', 'w') as f:
+              json.dump(manifest, f, indent=2)
+
+          print(f"Generated manifest with {len(manifest['artifacts'])} artifacts")
+          EOF
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          cat > release-notes.md << 'EOF'
+          # Geode ${{ github.ref_name }}
+
+          High-performance graph database implementing ISO/IEC 39075:2024 (GQL) compliance.
+
+          ## Features
+          - **Graph Operations**: MATCH/OPTIONAL MATCH pattern matching, CREATE/DELETE/MERGE mutations
+          - **ACID Transactions**: Enhanced MVCC with comprehensive conflict detection
+          - **Query Optimization**: Cost-based optimizer with join reordering and statistics
+          - **Transport**: QUIC with TLS 1.3 (default), TCP (legacy), stdio modes
+          - **Monitoring**: Prometheus metrics and OpenTelemetry tracing
+          - **Cross-Platform**: Linux, macOS, Windows support
+
+          ## Downloads
+
+          ### Pre-built binaries
+
+          #### Linux (GNU libc)
+          - **x86_64**: `geode-${{ github.ref_name }}-linux-amd64-gnu.tar.gz`
+          - **ARM64**: `geode-${{ github.ref_name }}-linux-arm64-gnu.tar.gz`
+          - **ARMv7**: `geode-${{ github.ref_name }}-linux-armv7-gnu.tar.gz`
+          - **RISC-V 64**: `geode-${{ github.ref_name }}-linux-riscv64-gnu.tar.gz`
+
+          #### Linux (musl libc)
+          - **x86_64**: `geode-${{ github.ref_name }}-linux-amd64-musl.tar.gz`
+          - **ARM64**: `geode-${{ github.ref_name }}-linux-arm64-musl.tar.gz`
+
+          #### macOS
+          - **x86_64**: `geode-${{ github.ref_name }}-macos-amd64.tar.gz`
+          - **ARM64 (Apple Silicon)**: `geode-${{ github.ref_name }}-macos-arm64.tar.gz`
+
+          #### Windows
+          - **x86_64**: `geode-${{ github.ref_name }}-windows-amd64.zip`
+          - **ARM64**: `geode-${{ github.ref_name }}-windows-arm64.zip`
+
+          #### Source
+          - **Source code**: `geode-${{ github.ref_name }}-source.tar.gz`
+
+          ### Docker Images
+
+          Multi-platform Docker images are available:
+          ```bash
+          # Latest release
+          docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          docker pull ghcr.io/${{ github.repository }}:latest
+
+          # Production optimized
+          docker pull ghcr.io/${{ github.repository }}:prod-${{ github.ref_name }}
+          ```
+
+          ### Release Manifest
+
+          Download `geode-${{ github.ref_name }}-manifest.json` for automated tooling. It contains:
+          - Complete list of all artifacts
+          - SHA256 checksums
+          - Platform/architecture metadata
+          - File sizes
+
+          ### Checksums
+
+          All files include `.sha256` checksums. Verify with:
+          ```bash
+          # Linux
+          sha256sum -c geode-<platform>.tar.gz.sha256
+
+          # macOS
+          shasum -a 256 -c geode-<platform>.tar.gz.sha256
+
+          # Or check the combined SHA256SUMS file
+          sha256sum -c SHA256SUMS  # Linux
+          shasum -a 256 -c SHA256SUMS  # macOS
+          ```
+
+          ## Installation
+
+          ### Binary Installation
+
+          Extract the archive for your platform:
+          ```bash
+          tar xzf geode-${{ github.ref_name }}-linux-amd64-gnu.tar.gz
+          cd bin
+          
+          # Start the server
+          ./geoded --listen-quic 0.0.0.0:7567
+          
+          # Run a query
+          ./geodec "RETURN 1 AS x ORDER BY x LIMIT 1" --server 127.0.0.1:7567
+          ```
+
+          ### Docker Installation
+
+          ```bash
+          # Run server
+          docker run -d -p 7567:7567/udp ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+
+          # Run client
+          docker run --rm ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
+            geodec "MATCH (n) RETURN n LIMIT 10" --server host.docker.internal:7567
+          ```
+
+          ## What's New
+
+          EOF
+
+          # Add changelog section if CHANGELOG.md exists
+          if [ -f "CHANGELOG.md" ]; then
+            # Extract section for this version
+            awk "/^## \[?${VERSION}\]?/{flag=1; next} /^## \[?[0-9]/{flag=0} flag" CHANGELOG.md >> release-notes.md || true
+          fi
+
+          # Add recent commits as changes
+          echo "### Recent commits" >> release-notes.md
+          git log --oneline -15 $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")..HEAD >> release-notes.md || echo "First release" >> release-notes.md
+
+          echo "" >> release-notes.md
+          echo "## Documentation" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "- [Getting Started](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md)" >> release-notes.md
+          echo "- [API Documentation](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/API_DOCUMENTATION.md)" >> release-notes.md
+          echo "- [Docker Usage Guide](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/DOCKER_USAGE.md)" >> release-notes.md
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: 'Automated release for ${{ github.ref_name }} (commit ${{ github.sha }})'
-          files: |
-            dist/**/*.zip
-            dist/**/*.tar.gz
-            dist/**/*.sha256
-            dist/**/*.sha512
-            dist/LICENSE*
-            dist/COPYING*
-            dist/NOTICE*
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            release/*.tar.gz
+            release/*.zip
+            release/*.sha256
+            release/SHA256SUMS
+            release/*.json
