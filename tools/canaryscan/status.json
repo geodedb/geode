@@ -1,0 +1,53 @@
+{
+  "generated_at": "2025-09-20T20:33:48.470188628Z",
+  "requirements": [
+    {
+      "id": "REQ-GQL-042",
+      "features": [
+        {
+          "feature": "CDC/Streaming",
+          "aspect": "API",
+          "status": "STUB",
+          "files": [
+            "internal/fixtures/file1.zig"
+          ],
+          "tests": [
+            "tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-046",
+      "features": [
+        {
+          "feature": "TDE",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "internal/fixtures/file2.go"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_046_KeyRotate"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-20"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "by_status": {
+      "STUB": 1,
+      "TESTED": 1
+    },
+    "by_aspect": {
+      "API": 1,
+      "Storage": 1
+    }
+  }
+}

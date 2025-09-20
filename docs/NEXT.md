@@ -34,10 +34,19 @@ Principle: Every slice moves a requirement one evidence grade forward (STUB→IM
    - ISO: §8 Durability (implementation-defined method).
 
 5. REQ-GQL-042 Minimal CDC Tail
+
    - Why: Streaming STUB; need first event pipeline.
    - What: Implement tailer reading appended WAL records and pushing JSON change events (node create) to channel; test `TestCANARY_REQ_GQL_042_CDC_StartStop`.
    - Acceptance: STUB→TESTED with start/stop lifecycle.
    - ISO: Extension (impl-defined streaming) + Diagnostics §23 for errors.
+
+6. REQ-GQL-042 CDC_CONTROL Refactor Test Naming
+
+   - Why: Current CANARY test reference uses a file path instead of canonical `TestCANARY_` name; ensure promotion semantics remain stable and human-readable.
+   - What: Add/rename test to `TestCANARY_REQ_GQL_042_CDC_ControlReset` validating RESET_GUARDRAILS action returns OK status line; update CANARY line in `src/server/main.zig` to reference the new test name.
+   - Acceptance: Scanner lists REQ-GQL-042 CDC_CONTROL (Refactor) aspect with status TESTED and test array containing `TestCANARY_REQ_GQL_042_CDC_ControlReset`.
+   - ISO: §8 Transactions (guardrail interacts with state), Diagnostics §23.
+   - CANARY: Update existing line status date.
 
 ## NEXT (After NOW)
 

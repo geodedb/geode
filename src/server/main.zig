@@ -1147,7 +1147,7 @@ const graph_exec = @import("graph/exec.zig");
 
 // Centralized CDC_CONTROL handler to eliminate duplicated logic between processMessage
 // (network path) and stdio loop. Returns a newly allocated response line or null slice on OOM.
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=IMPLEMENTED; TEST=tests/e2e_protocol_cdc_control.zig; OWNER=server; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=server; UPDATED=2025-09-20
 fn handleCdcControl(gpa: std.mem.Allocator, state: *ServerState, action: []const u8) ?[]u8 {
     if (state.cdc_engine) |eng| {
         if (std.ascii.eqlIgnoreCase(action, "RESET_GUARDRAILS")) {

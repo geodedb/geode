@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-20T19:02:12.161833028Z",
+  "generated_at": "2025-09-20T20:50:23.015547922Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -12,6 +12,7 @@
             "src/canary.zig"
           ],
           "tests": [
+            "TestCANARY_REQ_GQL_001_WireMalformedFrame",
             "TestCANARY_REQ_GQL_005_HelloRoundTrip"
           ],
           "benches": [],
@@ -31,6 +32,7 @@
             "src/canary.zig"
           ],
           "tests": [
+            "TestCANARY_REQ_GQL_002_WireUnsupportedCapability",
             "TestCANARY_REQ_GQL_005_HelloRoundTrip"
           ],
           "benches": [],
@@ -106,7 +108,8 @@
             "TestCANARY_REQ_GQL_010_DiagnosticsFold"
           ],
           "benches": [
-            "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFold"
+            "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFold",
+            "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge"
           ],
           "owner": "engine",
           "updated": "2025-09-20"
@@ -249,7 +252,10 @@
             "src/server/graph/exec.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_017_PropertyAccess"
+            "TestCANARY_REQ_GQL_017_PropertyAccess",
+            "TestCANARY_REQ_GQL_017_PropertyAccessDecimalFormat",
+            "TestCANARY_REQ_GQL_017_PropertyAccessMissing",
+            "TestCANARY_REQ_GQL_017_PropertyAccessNull"
           ],
           "benches": [],
           "owner": "engine",
@@ -334,7 +340,9 @@
             "src/canary.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_032_ConstraintEnforce"
+            "TestCANARY_REQ_GQL_032_ConstraintEnforce",
+            "TestCANARY_REQ_GQL_032_ConstraintRange",
+            "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation"
           ],
           "benches": [],
           "owner": "schema",
@@ -599,6 +607,62 @@
         },
         {
           "feature": "CDC Engine",
+          "aspect": "Backpressure",
+          "status": "TESTED",
+          "files": [
+            "tests/unit_cdc_backpressure.zig"
+          ],
+          "tests": [
+            "unit_CDC_backpressure_flag"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "BackpressureToggle",
+          "status": "TESTED",
+          "files": [
+            "tests/unit_cdc_backpressure_toggle.zig"
+          ],
+          "tests": [
+            "unit_CDC_backpressure_toggle"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "CDCControlProtocol",
+          "status": "TESTED",
+          "files": [
+            "src/protocol.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_ControlReset"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "CDCControlProtocolMalformed",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_protocol_cdc_control_malformed.zig"
+          ],
+          "tests": [
+            "protocol_CDC_CONTROL_malformed_missing_action"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
           "aspect": "CDCDiagnosticsProtocol",
           "status": "TESTED",
           "files": [
@@ -648,6 +712,34 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_042_CDC_EventCapture"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "GuardrailReset",
+          "status": "TESTED",
+          "files": [
+            "tests/cdc_guardrail_reset.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_GuardrailReset"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "GuardrailTimestampsMonotonic",
+          "status": "TESTED",
+          "files": [
+            "tests/cdc_guardrail_timestamps_monotonic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_GuardrailTimestampsMonotonic"
           ],
           "benches": [],
           "owner": "streaming",
@@ -976,6 +1068,62 @@
           "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDCControlProtocol",
+          "aspect": "E2E",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_protocol_cdc_control.zig"
+          ],
+          "tests": [
+            "protocol_CDC_CONTROL_reset"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDCControlProtocol",
+          "aspect": "E2ENoEngine",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_protocol_cdc_control_no_engine.zig"
+          ],
+          "tests": [
+            "protocol_CDC_CONTROL_no_engine"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDCControlProtocol",
+          "aspect": "E2EUnsupported",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_protocol_cdc_control_unsupported.zig"
+          ],
+          "tests": [
+            "protocol_CDC_CONTROL_unsupported"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC_CONTROL",
+          "aspect": "Refactor",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_ControlReset"
+          ],
+          "benches": [],
+          "owner": "server",
+          "updated": "2025-09-20"
         }
       ]
     },
@@ -1004,7 +1152,7 @@
     "by_status": {
       "BENCHED": 20,
       "STUB": 2,
-      "TESTED": 44
+      "TESTED": 54
     },
     "by_aspect": {
       "API": 3,
@@ -1014,11 +1162,20 @@
       "AdaptiveDiffPerfThresholdEnv": 2,
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
       "AdaptiveFlush": 1,
+      "Backpressure": 1,
+      "BackpressureToggle": 1,
+      "CDCControlProtocol": 1,
+      "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
       "ConstraintPerf": 1,
       "DiagnosticsExport": 2,
+      "E2E": 1,
+      "E2ENoEngine": 1,
+      "E2EUnsupported": 1,
       "Engine": 13,
       "EventCapture": 1,
+      "GuardrailReset": 1,
+      "GuardrailTimestampsMonotonic": 1,
       "Ingest": 1,
       "MixedWorkload": 1,
       "Ordering": 1,
@@ -1031,6 +1188,7 @@
       "PatternStateDedupMem": 1,
       "PatternStateDedupPerf": 1,
       "Planner": 4,
+      "Refactor": 1,
       "Retention": 1,
       "Storage": 2,
       "Telemetry": 1,

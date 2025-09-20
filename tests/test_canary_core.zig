@@ -40,10 +40,10 @@ test "TestCANARY_REQ_GQL_028_WalCompact" {
     _ = try comp.shouldCompact();
 }
 
-// TestCANARY_REQ_GQL_017_PathExpandBfs (stub) - ensures PathExpand structure compiles and basic BFS ordering logic placeholder.
+// TestCANARY_REQ_GQL_016_PathExpandBfs (stub) - ensures PathExpand structure compiles and basic BFS ordering logic placeholder.
 const planner = @import("../src/planner.zig");
 
-test "TestCANARY_REQ_GQL_017_PathExpandBfs" {
+test "TestCANARY_REQ_GQL_016_PathExpandBfs" {
     // For now we just instantiate the struct; full adjacency integration pending.
     const pe = planner.PathExpand{ .min_hops = 1, .max_hops = 2 };
     _ = pe; // silence unused
