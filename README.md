@@ -357,6 +357,89 @@ Yields PROFILE JSON (abridged):
 
 Metrics are stable for automation; additions bump `profile_version`.
 
+## Performance Baselines (Initial 2025-09-20)
+
+These are informational baseline outputs from new CANARY benchmarks (nanoseconds unless noted). Future regressions >+15% should trigger investigation; planner/path breadth allowed ±5% variance per NEXT backlog.
+
+| Benchmark                                           | Purpose                                                                   | Baseline Output (example run)                           |
+| --------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix`     | Commit latency under write/write contention (atomic increment simulation) | `TxnConflictMatrix ns=~45_000_000`                      |
+| `BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPath` | Property hash lookup micro-cost (1M lookups)                              | `PropertyAccessHotPath ns=~70_000_000`                  |
+| `BenchmarkCANARY_REQ_GQL_005_FrameDecode`           | Binary frame decode throughput (synthetic)                                | `FrameDecode bytes_per_sec=~120_000_000 elapsed_ns=...` |
+| `BenchmarkCANARY_REQ_GQL_016_PathExpandBreadth`     | Breadth expansion cost growth (simulated branching)                       | `PathExpandBreadth visits=~37449 elapsed_ns=...`        |
+
+Notes:
+
+1. Values are illustrative from a single developer machine; CI should record raw lines and compare relative deltas.
+2. Throughput benchmark reports computed bytes/sec; maintain monotonic improvements where possible.
+3. Txn/Property benchmarks should remain within memory budget (no allocations in hot loop except initial setup).
+4. All benchmarks are simple `test` blocks; migrating to `std.benchmark` harness is a future enhancement.
+
+### Benchmark Extraction (JSON Lines)
+
+Convert raw benchmark output to JSON Lines for CI dashboards:
+
+```bash
+zig build test 2>&1 | ./zig-out/bin/bench_extract > bench_results.jsonl
+```
+
+Sample line:
+
+```text
+DiagnosticsFoldLarge total_bytes=1234567 allocs=50000 elapsed_ns=987654321
+```
+
+Parsed JSON:
+
+```json
+{
+  "kind": "DiagnosticsFoldLarge",
+  "total_bytes": 1234567,
+  "allocs": 50000,
+  "elapsed_ns": 987654321
+}
+```
+
+Extend parsing by adding a prefix clause in `src/tools/bench_extract.zig`.
+
+### Benchmark Regression Check
+
+Compare current benchmark run against a stored baseline with tolerance (default 15% increase allowed):
+
+````bash
+zig build tools
+zig build test 2>&1 | ./zig-out/bin/bench_extract > bench_current.jsonl
+./zig-out/bin/bench_regress benchmarks/baseline.jsonl bench_current.jsonl 15
+
+Outputs a single JSON summary line to stdout:
+
+```json
+{"type":"bench_regress_summary","baseline":"benchmarks/baseline.jsonl","current":"bench_current.jsonl","tolerance_pct":15,"compared":6,"regressions":0,"regression_keys":[],"ts_ms":1730000000000}
+````
+
+Fields:
+
+- `compared`: total metric comparisons (kind \* metric_name) excluding timestamps.
+- `regressions`: count of failing comparisons.
+- `regression_keys`: array of `kind:metric` identifiers that failed.
+- `tolerance_pct`: applied tolerance for increases (only increases currently considered). Value is the nearest integer rounding of the user-supplied (or default) tolerance argument.
+
+Multi-metric: any numeric field parsed (e.g. `elapsed_ns`, `total_bytes`, `allocs`). Timestamp fields like `ts_ms` are ignored.
+
+Baseline refresh (write current metrics as new baseline):
+
+```bash
+./zig-out/bin/bench_regress benchmarks/baseline.jsonl bench_current.jsonl 15 --write-baseline benchmarks/baseline_new.jsonl
+# Refuses if regressions detected; override with --force
+./zig-out/bin/bench_regress benchmarks/baseline.jsonl bench_current.jsonl 15 --write-baseline benchmarks/baseline.jsonl --force
+```
+
+CI Suggestion: capture summary line and parse `regressions` > 0 for failure gating or attach as artifact.
+
+```text
+Return code non-zero (RegressionDetected) signals a regression beyond tolerance for at least one metric's `elapsed_ns`.
+```
+
 ## Stability & Fuzz Coverage
 
 - PROFILE / EXPLAIN schema frozen at `profile_version=2`. Any structural key additions or removals REQUIRE incrementing this version and updating snapshot signatures.

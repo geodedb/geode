@@ -242,6 +242,22 @@ pub fn build(b: *std.Build) void {
     const tools_step = b.step("tools", "Build all auxiliary tools");
     tools_step.dependOn(&doccheck_exe.step);
 
+    // Benchmark extraction tool
+    const bench_extract_exe = b.addExecutable(.{
+        .name = "bench_extract",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_extract.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(bench_extract_exe);
+    tools_step.dependOn(&bench_extract_exe.step);
+
+    // Benchmark regression tool
+    const bench_regress_exe = b.addExecutable(.{
+        .name = "bench_regress",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_regress.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(bench_regress_exe);
+    tools_step.dependOn(&bench_regress_exe.step);
+
     const wal_compact_exe = b.addExecutable(.{
         .name = "wal_compact",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/wal_compact.zig"), .target = target, .optimize = optimize }),

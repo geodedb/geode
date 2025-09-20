@@ -1,5 +1,6 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Lifecycle"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ingest; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Ingest; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTail; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailPromote; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_WalTailPerf; OWNER=streaming; UPDATED=2025-09-20
@@ -15,9 +16,10 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=EventCapture; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_EventCapture; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedDiagnostics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformed; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLog; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformed; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLogBuffer; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBuffer; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=DiagnosticsExport; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLog; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformed; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLogBuffer; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBuffer; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=DiagnosticsExport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ResumeTokenRestart; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedSnapshotInterval; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedPayloadHash; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailWarn; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
@@ -198,6 +200,7 @@ pub const CDCEngine = struct {
     is_running: bool,
     thread: ?std.Thread,
     mutex: std.Thread.Mutex,
+    diag_events: std.ArrayList(DiagEvent), // lifecycle diagnostics (START/STOP)
     current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
     next_sequence: u64 = 1,
     adapt_events_accum: u32 = 0,
@@ -216,6 +219,8 @@ pub const CDCEngine = struct {
     start_time_ms: i64 = 0, // engine start timestamp for uptime computations
 
     const Self = @This();
+
+    pub const DiagEvent = enum { start, stop };
 
     pub const MalformedRing = struct {
         const CAP = 32;
@@ -317,6 +322,7 @@ pub const CDCEngine = struct {
             .is_running = false,
             .thread = null,
             .mutex = .{},
+            .diag_events = std.ArrayList(DiagEvent).initCapacity(allocator, 0) catch @panic("OOM"),
             .adapt_events_accum = 0,
             .dynamic_batch_size = if (config.adaptive_flush) config.batch_size else 0,
             .peak_buffer = 0,
@@ -360,6 +366,9 @@ pub const CDCEngine = struct {
     pub fn deinit(self: *Self) void {
         self.stop();
 
+        // free diagnostics list
+        self.diag_events.deinit(self.allocator);
+
         // Free any remaining events (in case not flushed)
         for (self.event_buffer.items) |*event| {
             freeEventInternal(self, event);
@@ -387,17 +396,26 @@ pub const CDCEngine = struct {
 
         self.is_running = true;
         self.start_time_ms = std.time.milliTimestamp();
+        // record lifecycle diagnostic
+        self.diag_events.append(self.allocator, .start) catch @panic("OOM");
         self.thread = try std.Thread.spawn(.{}, processingLoop, .{self});
     }
 
     pub fn stop(self: *Self) void {
         self.mutex.lock();
+        const was_running = self.is_running;
         self.is_running = false;
         self.mutex.unlock();
 
         if (self.thread) |thread| {
             thread.join();
             self.thread = null;
+        }
+
+        if (was_running) { // only record a stop once per active run
+            self.mutex.lock();
+            self.diag_events.append(self.allocator, .stop) catch @panic("OOM");
+            self.mutex.unlock();
         }
     }
 
@@ -538,6 +556,15 @@ pub const CDCEngine = struct {
         };
     }
 
+    /// Snapshot lifecycle diagnostic events (ordered) for tests.
+    pub fn diagnosticsLifecycle(self: *Self, allocator: Allocator) ![]DiagEvent {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const out = try allocator.alloc(DiagEvent, self.diag_events.items.len);
+        std.mem.copy(DiagEvent, out, self.diag_events.items);
+        return out;
+    }
+
     /// Returns whether the CDC engine background processing loop is active.
     pub fn isRunning(self: *Self) bool {
         self.mutex.lock();
@@ -556,6 +583,34 @@ pub const CDCEngine = struct {
         after: ?[]const u8,
     ) !void {
         try self.captureChange(change_type, entity_type, entity_id, before, after);
+    }
+
+    /// Generate a resume token (opaque u64 sequence) representing next unread sequence after current highest.
+    pub fn currentResumeToken(self: *Self) u64 {
+        self.mutex.lock();
+        const token = self.next_sequence; // next to be assigned => resume from this
+        self.mutex.unlock();
+        return token;
+    }
+
+    /// Replay events with sequence >= token into provided slice (allocator-owned). Primarily for tests now.
+    pub fn replayFrom(self: *Self, allocator: Allocator, token: u64) ![]ChangeEvent {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        // Count how many qualify
+        var count: usize = 0;
+        for (self.event_buffer.items) |ev| {
+            if (ev.sequence >= token) count += 1;
+        }
+        var out = try allocator.alloc(ChangeEvent, count);
+        var idx: usize = 0;
+        for (self.event_buffer.items) |ev| {
+            if (ev.sequence >= token) {
+                out[idx] = ev; // shallow copy (tests only; caller must not free internals)
+                idx += 1;
+            }
+        }
+        return out;
     }
 
     /// Force an immediate flush of currently buffered events to all sinks (primarily memory sink for tests).

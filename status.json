@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-20T20:56:58.130902024Z",
+  "generated_at": "2025-09-20T21:12:19.884292501Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -57,6 +57,21 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Pagination Policy Override",
+          "aspect": "Planner",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig",
+            "tests/canary_pagination_policy_toggle.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-20"
         }
       ]
     },
@@ -79,6 +94,20 @@
           "updated": "2025-09-20"
         },
         {
+          "feature": "Frame Decode",
+          "aspect": "Wire",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_frame_decode.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_005_FrameDecode"
+          ],
+          "owner": "wire",
+          "updated": "2025-09-20"
+        },
+        {
           "feature": "Set Operations",
           "aspect": "Engine",
           "status": "TESTED",
@@ -97,6 +126,21 @@
     {
       "id": "REQ-GQL-010",
       "features": [
+        {
+          "feature": "Diagnostics Large Fold",
+          "aspect": "Engine",
+          "status": "BENCHED",
+          "files": [
+            "src/canary.zig",
+            "tests/benchmark_diagnostics_fold_large.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        },
         {
           "feature": "Diagnostics Precedence",
           "aspect": "Engine",
@@ -162,6 +206,20 @@
           ],
           "owner": "engine",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Txn Conflict Matrix",
+          "aspect": "Engine",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_txn_conflict_matrix.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-20"
         }
       ]
     },
@@ -179,6 +237,20 @@
             "TestCANARY_REQ_GQL_016_PathCycleDeterminism"
           ],
           "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Path Expand Breadth",
+          "aspect": "Planner",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_expand_breadth.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_016_PathExpandBreadth"
+          ],
           "owner": "planner",
           "updated": "2025-09-20"
         },
@@ -253,6 +325,21 @@
           ],
           "owner": "planner",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Weighted Path Cost",
+          "aspect": "Planner",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig",
+            "tests/canary_path_weighted_cost.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathWeightedCost"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-20"
         }
       ]
     },
@@ -276,12 +363,56 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Property Access Hot Path",
+          "aspect": "Engine",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_property_access_hotpath.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPath"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-20"
         }
       ]
     },
     {
       "id": "REQ-GQL-028",
       "features": [
+        {
+          "feature": "Recovery After Compaction",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig",
+            "tests/canary_wal_recovery_after_compaction.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_RecoveryAfterCompaction"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "WAL Adaptive Policy",
+          "aspect": "Storage",
+          "status": "BENCHED",
+          "files": [
+            "src/canary.zig",
+            "tests/benchmark_wal_adaptive_policy.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicy"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-20"
+        },
         {
           "feature": "WAL Compaction",
           "aspect": "Storage",
@@ -358,6 +489,22 @@
           "tests": [
             "TestCANARY_REQ_GQL_032_ConstraintEnforce",
             "TestCANARY_REQ_GQL_032_ConstraintRange",
+            "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation"
+          ],
+          "benches": [],
+          "owner": "schema",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Schema Constraints Negative",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig",
+            "tests/canary_constraints_negative.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_032_ConstraintTypeMismatch",
             "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation"
           ],
           "benches": [],
@@ -506,6 +653,21 @@
             "tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Backfill Latency",
+          "aspect": "API",
+          "status": "BENCHED",
+          "files": [
+            "src/canary.zig",
+            "tests/benchmark_cdc_backfill_latency.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -1072,6 +1234,36 @@
           "updated": "2025-09-20"
         },
         {
+          "feature": "CDC Lifecycle",
+          "aspect": "API",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig",
+            "tests/canary_cdc_lifecycle.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Resume Token",
+          "aspect": "API",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig",
+            "tests/canary_cdc_resume_token.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_ResumeToken"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
           "feature": "CDC/Streaming",
           "aspect": "API",
           "status": "STUB",
@@ -1160,18 +1352,33 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "TDE Key Rotation Throughput",
+          "aspect": "Storage",
+          "status": "BENCHED",
+          "files": [
+            "src/canary.zig",
+            "tests/benchmark_tde_key_rotate.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput"
+          ],
+          "owner": "security",
+          "updated": "2025-09-20"
         }
       ]
     }
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 21,
+      "BENCHED": 29,
       "STUB": 2,
-      "TESTED": 54
+      "TESTED": 60
     },
     "by_aspect": {
-      "API": 3,
+      "API": 6,
       "AdaptiveBaselinePerf": 1,
       "AdaptiveDiffPerf": 1,
       "AdaptiveDiffPerfThreshold": 1,
@@ -1188,7 +1395,7 @@
       "E2E": 1,
       "E2ENoEngine": 1,
       "E2EUnsupported": 1,
-      "Engine": 14,
+      "Engine": 18,
       "EventCapture": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
@@ -1203,10 +1410,10 @@
       "PatternPerf": 1,
       "PatternStateDedupMem": 1,
       "PatternStateDedupPerf": 1,
-      "Planner": 4,
+      "Planner": 7,
       "Refactor": 1,
       "Retention": 1,
-      "Storage": 2,
+      "Storage": 5,
       "Telemetry": 1,
       "UniquePerf": 1,
       "WALTail": 1,
@@ -1223,7 +1430,7 @@
       "WALTailMalformedPayloadHash": 1,
       "WALTailMalformedSnapshotInterval": 1,
       "WALTailMalformedSnapshotIntervalEnv": 1,
-      "Wire": 3
+      "Wire": 4
     }
   }
 }

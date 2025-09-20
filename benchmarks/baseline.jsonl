@@ -1,0 +1,6 @@
+{"kind":"DiagnosticsFoldLarge","elapsed_ns":100000000}
+{"kind":"CDC_BackfillLatency","elapsed_ns":50000000}
+{"kind":"TxnConflictMatrix","elapsed_ns":45000000}
+{"kind":"PropertyAccessHotPath","elapsed_ns":70000000}
+{"kind":"FrameDecode","elapsed_ns":15000000}
+{"kind":"PathExpandBreadth","elapsed_ns":60000000}
