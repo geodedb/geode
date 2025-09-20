@@ -109,8 +109,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wine wine64
           
-          # Cross-compile the test for Windows
-          zig test tests/test_cross_platform_stdio.zig -target x86_64-windows -femit-bin=test_stdio_windows.exe
+          # Cross-compile the test for Windows using --test-no-exec to prevent execution
+          zig test tests/test_cross_platform_stdio.zig -target x86_64-windows --test-no-exec -femit-bin=test_stdio_windows.exe
           
           # Run with Wine (captures both stdout and stderr)
           wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stdout" || exit 1
@@ -119,12 +119,12 @@ jobs:
       - name: Cross-compile binaries for Windows 
         run: |
           # Cross-compile the main binaries for Windows to verify they compile
-          zig build -Dtarget=x86_64-windows
+          zig build -Dtarget=x86_64-windows -p zig-out/windows-x86_64
           
           # Verify the binaries were created
-          test -f zig-out/bin/geoded.exe || exit 1
-          test -f zig-out/bin/geodec.exe || exit 1
-          test -f zig-out/bin/gql.exe || exit 1
+          test -f zig-out/windows-x86_64/bin/geoded.exe || exit 1
+          test -f zig-out/windows-x86_64/bin/geodec.exe || exit 1
+          test -f zig-out/windows-x86_64/bin/gql.exe || exit 1
 
   cross-builds:
     name: Cross builds (${{ matrix.archive_os }}-${{ matrix.archive_arch }})
