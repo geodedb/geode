@@ -1,6 +1,63 @@
 {
-  "generated_at": "2025-09-20T16:51:07.402897445Z",
+  "generated_at": "2025-09-20T17:09:02.21063117Z",
   "requirements": [
+    {
+      "id": "REQ-GQL-001",
+      "features": [
+        {
+          "feature": "Binary Protocol Frames",
+          "aspect": "Wire",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_005_HelloRoundTrip"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-002",
+      "features": [
+        {
+          "feature": "HELLO Capabilities",
+          "aspect": "Wire",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_005_HelloRoundTrip"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-004",
+      "features": [
+        {
+          "feature": "Pagination Legality (US001)",
+          "aspect": "Planner",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_004_UnorderedLimitReject"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
     {
       "id": "REQ-GQL-005",
       "features": [
@@ -18,12 +75,40 @@
           "benches": [],
           "owner": "wire",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Set Operations",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_005_SetOpsDistinct"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
         }
       ]
     },
     {
       "id": "REQ-GQL-010",
       "features": [
+        {
+          "feature": "Diagnostics Precedence",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_010_DiagnosticsFold"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        },
         {
           "feature": "Diagnostics Precedence & Folding",
           "aspect": "Engine",
@@ -41,7 +126,26 @@
       ]
     },
     {
-      "id": "REQ-GQL-017",
+      "id": "REQ-GQL-013",
+      "features": [
+        {
+          "feature": "Transactions/MVCC",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_030_TxnCommit"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-016",
       "features": [
         {
           "feature": "Path Expansion Operator",
@@ -51,10 +155,44 @@
             "src/planner.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_017_PathExpandBfs"
+            "TestCANARY_REQ_GQL_016_PathExpandBfs"
           ],
           "benches": [],
           "owner": "planner",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "Planner",
+          "status": "STUB",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathExpandBfs"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-017",
+      "features": [
+        {
+          "feature": "Property Access",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig",
+            "src/server/graph/exec.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_017_PropertyAccess"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2025-09-20"
         }
       ]
@@ -68,6 +206,7 @@
           "status": "STUB",
           "files": [
             "docs/PROMPTS.md",
+            "src/canary.zig",
             "src/storage/wal_compactor.zig"
           ],
           "tests": [
@@ -83,18 +222,50 @@
       "id": "REQ-GQL-030",
       "features": [
         {
+          "feature": "Advanced Path Algorithms",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_030_PathAlgoPageRank"
+          ],
+          "benches": [],
+          "owner": "analytics",
+          "updated": "2025-09-20"
+        },
+        {
           "feature": "Transactions/MVCC",
           "aspect": "Engine",
           "status": "TESTED",
           "files": [
-            "docs/PROMPTS.md",
-            "src/txn/manager.zig"
+            "docs/PROMPTS.md"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_030_TxnCommit"
           ],
           "benches": [],
           "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-032",
+      "features": [
+        {
+          "feature": "Schema Constraints",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/canary.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_032_ConstraintEnforce"
+          ],
+          "benches": [],
+          "owner": "schema",
           "updated": "2025-09-20"
         }
       ]
@@ -155,15 +326,15 @@
   ],
   "summary": {
     "by_status": {
-      "STUB": 4,
-      "TESTED": 4
+      "STUB": 5,
+      "TESTED": 13
     },
     "by_aspect": {
       "API": 2,
-      "Engine": 2,
-      "Planner": 1,
+      "Engine": 8,
+      "Planner": 3,
       "Storage": 2,
-      "Wire": 1
+      "Wire": 3
     }
   }
 }

@@ -1,12 +1,23 @@
 req,feature,aspect,status,file,test,bench,owner,updated
+REQ-GQL-001,Binary Protocol Frames,Wire,TESTED,src/canary.zig,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20
+REQ-GQL-002,HELLO Capabilities,Wire,TESTED,src/canary.zig,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20
+REQ-GQL-004,Pagination Legality (US001),Planner,TESTED,src/canary.zig,TestCANARY_REQ_GQL_004_UnorderedLimitReject,,planner,2025-09-20
 REQ-GQL-005,Binary Protocol Core,Wire,TESTED,docs/PROMPTS.md,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20
 REQ-GQL-005,Binary Protocol Core,Wire,TESTED,src/protocol.zig,,,wire,2025-09-20
+REQ-GQL-005,Set Operations,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_005_SetOpsDistinct,,engine,2025-09-20
+REQ-GQL-010,Diagnostics Precedence,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_010_DiagnosticsFold,,engine,2025-09-20
 REQ-GQL-010,Diagnostics Precedence & Folding,Engine,TESTED,src/diagnostics.zig,TestCANARY_REQ_GQL_010_DiagnosticsFold,,engine,2025-09-20
-REQ-GQL-017,Path Expansion Operator,Planner,STUB,src/planner.zig,TestCANARY_REQ_GQL_017_PathExpandBfs,,planner,2025-09-20
+REQ-GQL-013,Transactions/MVCC,Engine,TESTED,src/txn/manager.zig,TestCANARY_REQ_GQL_030_TxnCommit,,engine,2025-09-20
+REQ-GQL-016,Path Expansion Operator,Planner,STUB,src/planner.zig,TestCANARY_REQ_GQL_016_PathExpandBfs,,planner,2025-09-20
+REQ-GQL-016,Variable Length Path Expand,Planner,STUB,src/canary.zig,TestCANARY_REQ_GQL_016_PathExpandBfs,,planner,2025-09-20
+REQ-GQL-017,Property Access,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_017_PropertyAccess,,engine,2025-09-20
+REQ-GQL-017,Property Access,Engine,TESTED,src/server/graph/exec.zig,,,engine,2025-09-20
 REQ-GQL-028,WAL Compaction,Storage,STUB,docs/PROMPTS.md,TestCANARY_REQ_GQL_028_WalCompact,,storage,2025-09-20
+REQ-GQL-028,WAL Compaction,Storage,STUB,src/canary.zig,,,storage,2025-09-20
 REQ-GQL-028,WAL Compaction,Storage,STUB,src/storage/wal_compactor.zig,,,storage,2025-09-20
+REQ-GQL-030,Advanced Path Algorithms,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_030_PathAlgoPageRank,,analytics,2025-09-20
 REQ-GQL-030,Transactions/MVCC,Engine,TESTED,docs/PROMPTS.md,TestCANARY_REQ_GQL_030_TxnCommit,,engine,2025-09-20
-REQ-GQL-030,Transactions/MVCC,Engine,TESTED,src/txn/manager.zig,,,engine,2025-09-20
+REQ-GQL-032,Schema Constraints,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_032_ConstraintEnforce,,schema,2025-09-20
 REQ-GQL-042,CDC,API,STUB,docs/PROMPTS.md,tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-20
 REQ-GQL-042,CDC/Streaming,API,STUB,tools/canaryscan/internal/fixtures/file1.zig,tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-20
 REQ-GQL-046,TDE,Storage,TESTED,docs/PROMPTS.md,TestCANARY_REQ_GQL_046_KeyRotate,,security,2025-09-20

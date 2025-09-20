@@ -1,306 +1,89 @@
-# NEXT — Execution‑Ready Backlog
+# NEXT — Verifiable Backlog (CANARY Oriented)
 
-Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope (S/M/L) • DRI. Swimlanes: Now / Next / Later. All acceptance include concrete GQL plus expected result shape or diagnostic.
+Principle: Every slice moves a requirement one evidence grade forward (STUB→IMPL or IMPL→TESTED). No large multi-week epics; each acceptance must cite at least one new CANARY test name before merge.
 
-## Now (P0) — Parser Integration & Client Updates
+## NOW (High Priority)
 
-1. **Time-Series Parser Integration**
-   - Why: Complete TS feature integration into GQL
-   - What: Wire TS functions into parser/eval, add protocol support
-   - Acceptance: `RETURN last_value('device:1:temp')` executes correctly
-   - ISO: impl-defined extensions; diagnostics §23
-   - Deps: src/parser.zig, src/eval.zig, src/protocol.zig
-   - Scope: M
-   - DRI: parser
+1. REQ-GQL-013 Txn MVCC Test Alignment
 
-2. **Client Library Updates**
-   - Why: Enable time-series queries from Go/Zig clients
-   - What: Add TS result types, helper functions, examples
-   - Acceptance: Clients can query and process TS data
-   - ISO: Client bindings
-   - Deps: clients/go/gql/, clients/zig/
-   - Scope: M
-   - DRI: clients
+   - Why: Current test tagged under legacy ID 030; need canonical 013 evidence.
+   - What: Add or rename test `TestCANARY_REQ_GQL_013_TxnCommit` validating begin/commit conflict detection.
+   - Acceptance: Scanner shows REQ-GQL-013 status TESTED; REQ-GQL-030 disappears (removed or comment updated).
+   - ISO: §8 Transactions.
+   - CANARY: Add line in `src/txn/manager.zig` or dedicated test file.
 
-3. **Performance Optimization**
-   - Why: Meet 1M points/sec target
-   - What: Optimize serialization, reduce lock contention
-   - Acceptance: Benchmark shows >1M points/sec write throughput
-   - ISO: Performance targets
-   - Deps: src/timeseries/, profiling tools
-   - Scope: M
-   - DRI: performance
+2. REQ-GQL-017 Property Access Execution Test
 
-## Completed (December 2024 - Latest)
+   - Why: Implementation tagged IMPL but no test evidence.
+   - What: Create test `TestCANARY_REQ_GQL_017_PropertyAccess` returning a node property; confirm JSON output.
+   - Acceptance: Scan promotes to TESTED.
+   - ISO: §4.3 Property Graph Model.
 
-### ✅ Time-Series Core Implementation
-- **Implemented**: In-memory store, GQL UDFs (last_value, value_at, sample_by, interpolate, moving_avg, rate, derivative)
-- **Files**: `src/timeseries/timeseries.zig`, `src/timeseries/gql_functions.zig`
-- **Performance**: 750K points/sec write, <100ms query latency
-- **Status**: Ready for parser integration
+3. REQ-GQL-016 Path Expansion Implementation
 
-### ✅ Chunked Storage with Gorilla Compression
-- **Implemented**: Delta-of-delta + XOR compression, chunk management, retention
-- **Files**: `src/timeseries/chunk_storage.zig`
-- **Compression**: ~10 bytes/value (from 16 bytes uncompressed)
-- **Status**: Production-ready with automatic retention
+   - Why: STUB prevents traversal queries.
+   - What: Implement minimal BFS variable-length expand (min..max hops) with deterministic tie-break; test `TestCANARY_REQ_GQL_016_PathExpandBfs`.
+   - Acceptance: Status moves STUB→TESTED (auto-promotion after test).
+   - ISO: §22 Path Patterns.
 
-### ✅ Backup and Restore System
-- **Implemented**: Full/incremental backups, point-in-time recovery, retention policies
-- **Files**: `src/storage/backup.zig`
-- **Features**: Compression support, backup chains, metadata tracking
-- **Status**: Core functionality complete, needs WAL integration
+4. REQ-GQL-028 WAL Compaction Prototype
 
-### ✅ Federated Query Framework
-- **Implemented**: Federation manager, connection pooling, health monitoring, cost-based planner
-- **Files**: `src/distributed/federation.zig`
-- **Features**: Query caching, multiple merge strategies, remote node management
-- **Status**: Framework ready, needs network protocol
+   - Why: Log growth unmanaged; currently STUB.
+   - What: Implement segment scan + copy-live-records to new file; test `TestCANARY_REQ_GQL_028_WalCompact` verifying size reduction & LSN continuity.
+   - Acceptance: STUB→TESTED.
+   - ISO: §8 Durability (implementation-defined method).
 
-### ✅ Grey Cardinal Documentation
-- **Implemented**: P0 tracking, risk logs, decision logs, metrics
-- **Files**: `docs/grey-cardinal/index.md`
-- **Status**: Complete and actively maintained
+5. REQ-GQL-042 Minimal CDC Tail
+   - Why: Streaming STUB; need first event pipeline.
+   - What: Implement tailer reading appended WAL records and pushing JSON change events (node create) to channel; test `TestCANARY_REQ_GQL_042_CDC_StartStop`.
+   - Acceptance: STUB→TESTED with start/stop lifecycle.
+   - ISO: Extension (impl-defined streaming) + Diagnostics §23 for errors.
 
-## Not Actually Completed (Reality Check)
+## NEXT (After NOW)
 
-The following features are documented as complete but are actually stubs or not implemented:
+1. REQ-GQL-032 Schema Constraints Test Matrix
 
-### ❌ Distributed Activation (REQ-GQL-048)
-- **Reality**: Only type definitions exist, no Raft protocol implementation
-- **Files**: `src/distributed/raft_consensus.zig` contains structs only
-- **Status**: No actual distributed functionality
+   - Add tests for unique violation, type mismatch, cardinality; ensure diagnostics precedence consistent (US001 unaffected).
 
-### ❌ Advanced Query Optimization (REQ-GQL-049)  
-- **Reality**: Empty stub functions, no optimization logic
-- **Files**: `src/planner/adaptive.zig` has types but no implementation
-- **Status**: Basic query execution only
+2. REQ-GQL-001/002 Wire Negative Cases
 
-### ❌ Recursive Queries (REQ-GQL-050)
-- **Reality**: Not implemented
-- **Files**: `src/planner/recursive.zig` doesn't exist or is stub
-- **Status**: No WITH RECURSIVE support
+   - Add malformed frame + unsupported capability tests; ensure diagnostics folding.
 
-### ❌ Materialized Views (REQ-GQL-051)
-- **Reality**: Type definitions with TODO comments throughout
-- **Files**: `src/storage/materialized_views.zig` has no functionality
-- **Status**: Cannot create or refresh views
+3. REQ-GQL-010 Multi-Diagnostic Ordering Bench
 
-### ❌ Row-Level Security Enhancement (REQ-GQL-052)
-- **Reality**: Basic structures only
-- **Files**: `src/security/rls.zig` minimal implementation
-- **Status**: No real security features
+   - Add benchmark `BenchmarkCANARY_REQ_GQL_010_DiagnosticsFold` to promote Engine aspect to BENCHED.
 
-## Also Not Implemented (Despite Claims)
+4. REQ-GQL-017 Property Access Edge Cases
 
-### ❌ TDE Hardening (REQ-GQL-046)
-- **Reality**: Basic encryption only, no KMS integration
-- **Files**: `src/storage/crypto_enhanced.zig` returns NotImplemented
-- **Status**: Minimal encryption support
+   - Null, missing property, decimal formatting tests.
 
-### ❌ Multi-Graph Support (REQ-GQL-047)
-- **Reality**: Basic structures, no actual isolation
-- **Files**: `src/storage/multi_graph.zig` has TODOs for persistence
-- **Status**: Cannot create/use multiple graphs
+5. REQ-GQL-016 Path Expansion Performance
+   - Add benchmark for breadth growth scenarios.
 
-### ❌ Machine Learning Integration (REQ-GQL-041)
-- **Reality**: Only basic PageRank implemented
-- **Files**: `src/ml/integration_enhanced.zig` mostly stubs
-- **Status**: No real ML algorithms
+## LATER (Strategic)
 
-### ❌ Streaming and CDC (REQ-GQL-042)
-- **Reality**: Complete stub, no CDC capture
-- **Files**: `src/streaming/cdc_enhanced.zig` empty implementation
-- **Status**: No streaming functionality
+1. REQ-GQL-042 CDC Backfill & Resume Tokens
+2. REQ-GQL-028 Adaptive Compaction Heuristics
+3. REQ-GQL-013 Serializable Isolation Upgrade Path
+4. REQ-GQL-016 Weighted Path Cost (Dijkstra) Integration
 
-### ❌ Time-Travel Queries (REQ-GQL-045)
-- **Reality**: Not implemented
-- **Files**: `src/temporal/time_travel.zig` minimal or stub
-- **Status**: No temporal query support
+## Acceptance Template (Per Slice)
 
-### ❌ GPU Acceleration (REQ-GQL-040)
-- **Reality**: Complete fake, mock device detection
-- **Files**: `src/gpu/acceleration.zig` empty kernel implementations
-- **Status**: No GPU support whatsoever
+Each PR MUST include:
 
-## Now (P0) - Actually Needed Implementation
+```text
+// CANARY_SAMPLE: REQ=REQ-GQL-XXX; FEATURE="<feature name>"; ASPECT=<Aspect>; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_XXX_<Short>; OWNER=<team>; UPDATED=YYYY-MM-DD
+```
 
-- Status: **Most features are NOT implemented**. Database needs:
-  - Actual graph traversal execution
-  - Real distributed consensus (Raft is stub)
-  - Any query optimization (currently none)
-  - Real security features (mostly stubs)
-  - Actual monitoring (Prometheus stub)
-  - Fix 171+ NotImplemented errors
-  - Implement features claimed in documentation
+Plus at least one test file referencing that test name.
 
-*Focus should be on implementing basic functionality before claiming advanced features*
+## Progress Metrics
 
-## Next (P1) - Operational Excellence
+- Goal: Reduce STUB count to 0 in NOW set.
+- Goal: Achieve >=70% of listed requirements in TESTED within two iterations.
 
-1. **Production Monitoring Dashboard** (REQ-GQL-056)
-   - Why: Real-time visibility into cluster health
-   - What: Grafana dashboards, Prometheus metrics, alerting
-   - Acceptance: Complete observability stack deployed
-   - ISO: impl-defined monitoring
-   - Deps: Metrics already implemented
-   - Scope: M
-   - DRI: operations
+## Verification Command
 
-2. **Backup and Restore** (REQ-GQL-057)
-   - Why: Disaster recovery and data protection
-   - What: Point-in-time recovery, incremental backups
-   - Acceptance: Restore to any point within retention window
-   - ISO: impl-defined backup
-   - Deps: WAL, snapshot mechanism
-   - Scope: L
-   - DRI: storage
+`./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`
 
-3. **Performance Benchmarking Suite** (REQ-GQL-058)
-   - Why: Track performance regression and optimization impact
-   - What: TPC-H style benchmarks for graph workloads
-   - Acceptance: Automated performance regression detection
-   - ISO: impl-defined benchmarking
-   - Deps: Query executor, test framework
-   - Scope: M
-   - DRI: performance
-
-4. **Deployment Automation** (REQ-GQL-059)
-   - Why: Simplify production deployment
-   - What: Kubernetes operators, Helm charts, Terraform modules
-   - Acceptance: One-click deployment to major clouds
-   - ISO: impl-defined deployment
-   - Deps: Container images, orchestration
-   - Scope: M
-   - DRI: devops
-
-5. **Security Audit and Compliance** (REQ-GQL-060)
-   - Why: Meet enterprise security requirements
-   - What: SOC2, GDPR compliance, security scanning
-   - Acceptance: Pass security audit
-   - ISO: Security standards
-   - Deps: RLS, TDE, audit logging
-   - Scope: L
-   - DRI: security
-
-## Later (P2+) - Future Extensions
-
-1. **Graph Visualization** (REQ-GQL-043)
-   - Why: Interactive exploration of graph data
-   - What: Built-in visualization server with WebGL rendering
-   - Acceptance: Web UI shows interactive graph visualization
-   - ISO: impl-defined tooling
-   - Deps: Web framework, rendering engine
-   - Scope: L
-   - DRI: viz
-
-2. **Multi-Model Support** (REQ-GQL-044)
-   - Why: Support document and key-value workloads
-   - What: JSON document storage, key-value API
-   - Acceptance: Store and query JSON documents alongside graph
-   - ISO: Extensions
-   - Deps: Storage layer extensions
-   - Scope: XL
-   - DRI: multimodel
-
-3. **Federated Queries** (REQ-GQL-053)
-   - Why: Query across multiple Geode instances
-   - What: Distributed query planning and execution
-   - Acceptance: JOIN across remote graphs
-   - ISO: Extensions
-   - Deps: Network protocol, distributed planner
-   - Scope: XL
-   - DRI: federation
-
-4. **AutoML Integration** (REQ-GQL-054)
-   - Why: Automatic model selection and tuning
-   - What: AutoML for graph algorithms
-   - Acceptance: System auto-selects best ML algorithm
-   - ISO: Extensions
-   - Deps: ML framework, model registry
-   - Scope: XL
-   - DRI: automl
-
-5. **Quantum-Resistant Crypto** (REQ-GQL-055)
-   - Why: Future-proof against quantum attacks
-   - What: Post-quantum cryptography algorithms
-   - Acceptance: NIST-approved PQC algorithms
-   - ISO: Security extensions
-   - Deps: Crypto libraries
-   - Scope: M
-   - DRI: crypto
-
-## Performance Targets (Q1 2025)
-
-| Metric | Current | Target | Method |
-|--------|---------|--------|--------|
-| QPS (single node) | 70k | 100k | Query optimization |
-| P99 Latency | 2ms | <1ms | Index improvements |
-| Node capacity | 10M | 100M | Storage optimization |
-| Concurrent connections | 1k | 10k | Connection pooling |
-| Recovery time | 30s | <10s | Parallel recovery |
-
-## Testing Requirements
-
-For new features to be considered complete:
-1. Unit tests with >90% coverage
-2. Integration tests with real scenarios
-3. Performance benchmarks
-4. Fuzz testing where applicable
-5. Documentation with examples
-
-## Documentation Sync Policy
-
-- Completed items should be moved to docs/IMPLEMENTED.md with full details
-- GAP_ANALYSIS.md tracks requirement status with evidence
-- This file (NEXT.md) only contains pending work
-- README.md provides high-level status summary
-
-## Completion Criteria
-
-For an item to be considered complete and moved to IMPLEMENTED.md:
-1. Code implementation in appropriate src/ files
-2. Test coverage in tests/ directory
-3. Documentation updates
-4. Performance validation where applicable
-5. Security review for sensitive features
-
-## Risk Mitigation
-
-### Technical Risks
-- **Distributed complexity**: Phased rollout, extensive testing
-- **Performance regression**: Continuous benchmarking
-- **Security vulnerabilities**: Regular audits, quick patches
-
-### Resource Risks
-- **Developer bandwidth**: Prioritize P1 items
-- **Testing infrastructure**: Invest in CI/CD
-- **Documentation debt**: Maintain as we go
-
-## Success Metrics
-
-### Q1 2025 Goals
-- 100% P1 feature completion
-- 99.99% availability in production
-- <24hr security patch turnaround
-- 1000+ GitHub stars
-- 10+ production deployments
-
-### Q2 2025 Goals
-- Multi-region deployment capability
-- Enterprise support offering
-- Cloud marketplace listings
-- Certification (SOC2, ISO 27001)
-- 50+ production deployments
-
-## Conclusion
-
-With the completion of all P1 advanced features in December 2024, Geode has achieved production readiness with enterprise-grade capabilities. The focus now shifts to:
-
-1. **Activation**: Enable distributed features
-2. **Optimization**: Achieve performance targets
-3. **Hardening**: Enterprise security and compliance
-4. **Ecosystem**: Client libraries and tools
-5. **Adoption**: Production deployments
-
-The roadmap prioritizes stability and performance over new features, ensuring Geode becomes the trusted choice for production graph workloads.
+End of backlog.
