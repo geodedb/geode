@@ -1,5 +1,6 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Operator"; ASPECT=Planner; STATUS=STUB; TEST=TestCANARY_REQ_GQL_016_PathExpandBfs; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Operator"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathExpandBfs; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Cycle Determinism"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathCycleDeterminism; OWNER=planner; UPDATED=2025-09-20
 const ast = @import("gql/ast.zig");
 const mem = std.mem;
 const temporal = @import("temporal.zig");

@@ -1,4 +1,14 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ingest; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Ingest; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTail; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_WalIngest; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ordering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Ordering; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingConcurrency; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=MixedWorkload; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveFlush; STATUS=IMPL; TEST=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=EventCapture; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_EventCapture; OWNER=streaming; UPDATED=2025-09-20
 const Allocator = std.mem.Allocator;
 
 pub const ChangeType = enum {
@@ -9,7 +19,8 @@ pub const ChangeType = enum {
 
 pub const ChangeEvent = struct {
     timestamp: i64,
-    transaction_id: u64,
+    transaction_id: u64, // 0 when not attributed to a transaction
+    sequence: u64, // global monotonic sequence
     change_type: ChangeType,
     entity_type: EntityType,
     entity_id: u64,
@@ -40,6 +51,10 @@ pub const CDCConfig = struct {
     retention_period_ms: i64 = 7 * 24 * 60 * 60 * 1000, // 7 days
     batch_size: u32 = 1000,
     flush_interval_ms: u32 = 1000,
+    adaptive_flush: bool = false,
+    min_batch_size: u32 = 256,
+    max_batch_size: u32 = 32_000,
+    adapt_window_events: u32 = 4_000, // after this many events re-evaluate rate
     filter_patterns: ?[]const u8 = null,
     include_before_image: bool = true,
     include_metadata: bool = true,
@@ -136,6 +151,10 @@ pub const CDCEngine = struct {
     is_running: bool,
     thread: ?std.Thread,
     mutex: std.Thread.Mutex,
+    current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+    next_sequence: u64 = 1,
+    adapt_events_accum: u32 = 0,
+    dynamic_batch_size: u32 = 0,
 
     const Self = @This();
 
@@ -150,6 +169,8 @@ pub const CDCEngine = struct {
             .is_running = false,
             .thread = null,
             .mutex = .{},
+            .adapt_events_accum = 0,
+            .dynamic_batch_size = if (config.adaptive_flush) config.batch_size else 0,
         };
 
         // Initialize sinks
@@ -183,6 +204,11 @@ pub const CDCEngine = struct {
 
         if (self.is_running) {
             return error.AlreadyRunning;
+        }
+
+        // If CDC globally disabled we treat start as a no-op so that tests can assert not running
+        if (!self.config.enabled) {
+            return; // remain not running
         }
 
         self.is_running = true;
@@ -220,7 +246,8 @@ pub const CDCEngine = struct {
 
         const event = ChangeEvent{
             .timestamp = std.time.milliTimestamp(),
-            .transaction_id = 0, // TODO: Get from transaction manager
+            .transaction_id = self.current_txn_id,
+            .sequence = self.next_sequence,
             .change_type = change_type,
             .entity_type = entity_type,
             .entity_id = entity_id,
@@ -228,12 +255,29 @@ pub const CDCEngine = struct {
             .after = if (after) |a| try self.allocator.dupe(u8, a) else null,
             .metadata = metadata,
         };
+        self.next_sequence += 1;
 
         try self.event_buffer.append(event);
         self.total_events += 1;
+        if (self.config.adaptive_flush) {
+            self.adapt_events_accum += 1;
+            if (self.adapt_events_accum >= self.config.adapt_window_events) {
+                // Simple heuristic: events per interval vs desired; adjust up/down by 2x within bounds.
+                const now = std.time.milliTimestamp();
+                const elapsed_ms = @max(now - self.last_flush, 1);
+                const eps = (@as(f64, @floatFromInt(self.adapt_events_accum)) * 1000.0) / @as(f64, @floatFromInt(elapsed_ms));
+                if (eps > 50_000 and self.dynamic_batch_size < self.config.max_batch_size) {
+                    self.dynamic_batch_size = @min(self.dynamic_batch_size * 2, self.config.max_batch_size);
+                } else if (eps < 5_000 and self.dynamic_batch_size > self.config.min_batch_size) {
+                    self.dynamic_batch_size = @max(self.dynamic_batch_size / 2, self.config.min_batch_size);
+                }
+                self.adapt_events_accum = 0;
+            }
+        }
 
         // Check if we should flush
-        if (self.event_buffer.items.len >= self.config.batch_size) {
+        const target_batch = if (self.config.adaptive_flush) self.dynamic_batch_size else self.config.batch_size;
+        if (self.event_buffer.items.len >= target_batch) {
             try self.flush();
         }
     }
@@ -307,6 +351,83 @@ pub const CDCEngine = struct {
             .last_flush = self.last_flush,
             .sinks_count = self.sinks.items.len,
         };
+    }
+
+    /// Returns whether the CDC engine background processing loop is active.
+    pub fn isRunning(self: *Self) bool {
+        self.mutex.lock();
+        const running = self.is_running;
+        self.mutex.unlock();
+        return running;
+    }
+
+    /// Public wrapper for change capture; alias to captureChange for semantic clarity in tests / future WAL tail integration.
+    pub fn emitChange(
+        self: *Self,
+        change_type: ChangeType,
+        entity_type: EntityType,
+        entity_id: u64,
+        before: ?[]const u8,
+        after: ?[]const u8,
+    ) !void {
+        try self.captureChange(change_type, entity_type, entity_id, before, after);
+    }
+
+    /// Force an immediate flush of currently buffered events to all sinks (primarily memory sink for tests).
+    pub fn flushNow(self: *Self) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.flush();
+    }
+
+    pub fn beginTxn(self: *Self, id: u64) void {
+        self.mutex.lock();
+        self.current_txn_id = id;
+        self.mutex.unlock();
+    }
+
+    pub fn endTxn(self: *Self) void {
+        self.mutex.lock();
+        self.current_txn_id = 0;
+        self.mutex.unlock();
+    }
+
+    /// Return the number of events stored in the in-process memory sink (0 if not configured).
+    pub fn memorySinkEventCount(self: *Self) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.sinks.items) |*sink| {
+            switch (sink.impl) {
+                .memory => |ms| return ms.events.items.len,
+                else => {},
+            }
+        }
+        return 0;
+    }
+
+    /// Simulated WAL record ingestion; maps record metadata to a change event.
+    pub fn ingestFromWalRecord(self: *Self, txn_id: u64, entity_type: EntityType, entity_id: u64, after_json: []const u8) !void {
+        self.beginTxn(txn_id);
+        try self.emitChange(.update, entity_type, entity_id, null, after_json);
+        self.endTxn();
+    }
+
+    /// For tests: capture a snapshot of memory sink sequences (requires memory sink configured).
+    pub fn memorySinkSequences(self: *Self, allocator: Allocator) ![]u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.sinks.items) |*sink| {
+            switch (sink.impl) {
+                .memory => |ms| {
+                    var arr = try allocator.alloc(u64, ms.events.items.len);
+                    var i: usize = 0;
+                    while (i < ms.events.items.len) : (i += 1) arr[i] = ms.events.items[i].sequence;
+                    return arr;
+                },
+                else => {},
+            }
+        }
+        return allocator.alloc(u64, 0);
     }
 };
 
