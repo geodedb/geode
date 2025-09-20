@@ -62,79 +62,79 @@ Each task lists: Why • What • Acceptance • ISO Anchors • Deps • Scope 
 - **Files**: `docs/grey-cardinal/index.md`
 - **Status**: Complete and actively maintained
 
-## Completed (January 2025)
+## Not Actually Completed (Reality Check)
 
-The following P1 production hardening features have been completed:
+The following features are documented as complete but are actually stubs or not implemented:
 
-### ✅ Distributed Activation (REQ-GQL-048)
-- **Implemented**: Full Raft consensus, 3-node clusters, automatic failover, health monitoring
-- **Files**: `src/distributed/raft_consensus.zig`, `src/distributed/cluster.zig`, `tests/e2e_distributed_cluster.zig`
-- **Status**: Production-ready with leader election and shard rebalancing
+### ❌ Distributed Activation (REQ-GQL-048)
+- **Reality**: Only type definitions exist, no Raft protocol implementation
+- **Files**: `src/distributed/raft_consensus.zig` contains structs only
+- **Status**: No actual distributed functionality
 
-### ✅ Advanced Query Optimization (REQ-GQL-049)
-- **Implemented**: Adaptive query execution, runtime statistics, plan caching, workload analysis
-- **Files**: `src/planner/adaptive.zig`, enhanced `src/planner/optimizer.zig`
-- **Status**: 2-10x performance improvement achieved on complex queries
+### ❌ Advanced Query Optimization (REQ-GQL-049)  
+- **Reality**: Empty stub functions, no optimization logic
+- **Files**: `src/planner/adaptive.zig` has types but no implementation
+- **Status**: Basic query execution only
 
-### ✅ Recursive Queries (REQ-GQL-050)
-- **Implemented**: WITH RECURSIVE clause, cycle detection, path enumeration, memory spill
-- **Files**: `src/planner/recursive.zig`, `tests/e2e_recursive_queries.zig`
-- **Status**: Complete with multiple cycle detection strategies
+### ❌ Recursive Queries (REQ-GQL-050)
+- **Reality**: Not implemented
+- **Files**: `src/planner/recursive.zig` doesn't exist or is stub
+- **Status**: No WITH RECURSIVE support
 
-### ✅ Materialized Views (REQ-GQL-051)
-- **Implemented**: CREATE MATERIALIZED VIEW, incremental/differential refresh, dependency tracking
-- **Files**: `src/storage/materialized_views.zig`, `tests/e2e_materialized_views.zig`
-- **Status**: Auto-refresh with query rewriting optimization
+### ❌ Materialized Views (REQ-GQL-051)
+- **Reality**: Type definitions with TODO comments throughout
+- **Files**: `src/storage/materialized_views.zig` has no functionality
+- **Status**: Cannot create or refresh views
 
-### ✅ Row-Level Security Enhancement (REQ-GQL-052)
-- **Implemented**: Hierarchical multi-tenant, ABAC, temporal constraints, audit logging
-- **Files**: Enhanced `src/security/rls.zig`, `tests/e2e_rls_enhanced.zig`
-- **Status**: Enterprise-grade security with fine-grained access control
+### ❌ Row-Level Security Enhancement (REQ-GQL-052)
+- **Reality**: Basic structures only
+- **Files**: `src/security/rls.zig` minimal implementation
+- **Status**: No real security features
 
-## Completed (December 2024)
+## Also Not Implemented (Despite Claims)
 
-The following P1 features have been completed and moved to production:
+### ❌ TDE Hardening (REQ-GQL-046)
+- **Reality**: Basic encryption only, no KMS integration
+- **Files**: `src/storage/crypto_enhanced.zig` returns NotImplemented
+- **Status**: Minimal encryption support
 
-### ✅ TDE Hardening (REQ-GQL-046)
-- **Implemented**: AES-256-GCM, KMS integration (AWS/Azure/HashiCorp/Google), online key rotation
-- **Files**: `src/storage/crypto_enhanced.zig`, `tests/e2e_tde_encryption.zig`
-- **Status**: Production-ready with audit logging
+### ❌ Multi-Graph Support (REQ-GQL-047)
+- **Reality**: Basic structures, no actual isolation
+- **Files**: `src/storage/multi_graph.zig` has TODOs for persistence
+- **Status**: Cannot create/use multiple graphs
 
-### ✅ Multi-Graph Support (REQ-GQL-047)
-- **Implemented**: CREATE/DROP/USE GRAPH, namespace isolation, DSN-based selection
-- **Files**: `src/storage/multi_graph.zig`, `tests/e2e_multi_graph.zig`
-- **Status**: Complete with cross-graph access control
+### ❌ Machine Learning Integration (REQ-GQL-041)
+- **Reality**: Only basic PageRank implemented
+- **Files**: `src/ml/integration_enhanced.zig` mostly stubs
+- **Status**: No real ML algorithms
 
-### ✅ Machine Learning Integration (REQ-GQL-041)
-- **Implemented**: Node2Vec, PageRank, Louvain, link prediction, GDS procedures
-- **Files**: `src/ml/integration_enhanced.zig`, `tests/e2e_ml_integration.zig`
-- **Status**: Full GDS-compatible interface
+### ❌ Streaming and CDC (REQ-GQL-042)
+- **Reality**: Complete stub, no CDC capture
+- **Files**: `src/streaming/cdc_enhanced.zig` empty implementation
+- **Status**: No streaming functionality
 
-### ✅ Streaming and CDC (REQ-GQL-042)
-- **Implemented**: Real-time CDC, multiple sinks, windowed queries
-- **Files**: `src/streaming/cdc_enhanced.zig`, `tests/e2e_cdc_streaming.zig`
-- **Status**: Production-ready with Kafka/Kinesis support
+### ❌ Time-Travel Queries (REQ-GQL-045)
+- **Reality**: Not implemented
+- **Files**: `src/temporal/time_travel.zig` minimal or stub
+- **Status**: No temporal query support
 
-### ✅ Time-Travel Queries (REQ-GQL-045)
-- **Implemented**: AS OF/BETWEEN queries, bi-temporal support, versioning
-- **Files**: `src/temporal/time_travel.zig` (enhanced)
-- **Status**: Complete with retention policies
+### ❌ GPU Acceleration (REQ-GQL-040)
+- **Reality**: Complete fake, mock device detection
+- **Files**: `src/gpu/acceleration.zig` empty kernel implementations
+- **Status**: No GPU support whatsoever
 
-### ✅ GPU Acceleration (REQ-GQL-040)
-- **Implemented**: CUDA/OpenCL backends, parallel algorithms, 10-100x speedup
-- **Files**: `src/gpu/acceleration.zig` (enhanced)
-- **Status**: Feature-flagged, production-ready
+## Now (P0) - Actually Needed Implementation
 
-## Now (P0) - Production Deployment
+- Status: **Most features are NOT implemented**. Database needs:
+  - Actual graph traversal execution
+  - Real distributed consensus (Raft is stub)
+  - Any query optimization (currently none)
+  - Real security features (mostly stubs)
+  - Actual monitoring (Prometheus stub)
+  - Fix 171+ NotImplemented errors
+  - Implement features claimed in documentation
 
-- Status: **All critical features implemented**. Database is production-ready with:
-  - Complete ISO GQL conformance
-  - High availability with distributed consensus
-  - Advanced query optimization
-  - Enterprise security features
-  - Full monitoring and observability
-
-*Focus now shifts to production deployment and operational excellence*
+*Focus should be on implementing basic functionality before claiming advanced features*
 
 ## Next (P1) - Operational Excellence
 

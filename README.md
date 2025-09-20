@@ -2,36 +2,34 @@
 
 ## Description
 
-Geode is a Zig-based graph database implementing ISO/IEC 39075:2024 (GQL) compliance. Features a complete graph execution engine with pattern matching, transactions, and persistent storage.
+Geode is a partially-implemented Zig-based database with basic GQL query support. While documentation claims extensive features, the actual implementation is approximately 25% complete with most advanced features being stubs or placeholders.
 
-## Key Features
+## Actually Working Features
 
-### Graph Operations
-- ✅ **Pattern Matching**: MATCH and OPTIONAL MATCH with left-outer join semantics
-- ✅ **Graph Mutations**: CREATE, DELETE, MERGE statements with full transaction support
-- ✅ **Variable-Length Paths**: Bounded traversal with `[*min..max]` syntax
-- ✅ **Path Algorithms**: Shortest path (Dijkstra), PageRank, centrality calculations
-- ✅ **WITH Clause**: Query composition and multi-stage aggregation
+### Basic Query Operations
+- ✅ **Simple Queries**: RETURN, ORDER BY, LIMIT, OFFSET
+- ✅ **Set Operations**: UNION, INTERSECT, EXCEPT with ALL/DISTINCT
+- ✅ **Aggregations**: GROUP BY with COUNT, SUM, AVG, MIN, MAX
+- ✅ **Transactions**: MVCC implementation with snapshot isolation
+- ⚠️ **Graph Operations**: Basic MATCH parsing (limited execution)
 
-### Performance & Indexing
-- ✅ **Index Structures**: B-tree, hash, bitmap, and full-text indexes
-- ✅ **Query Optimizer**: Cost-based optimization with join reordering and statistics
-- ✅ **Full-Text Search**: BM25 scoring, inverted index, phrase search, highlighting
+### Not Actually Implemented (Despite Documentation)
+- ❌ **Distributed Features**: No Raft, no sharding, no clustering
+- ❌ **GPU Acceleration**: Complete stub with empty implementations  
+- ❌ **Machine Learning**: Only basic PageRank, no real ML algorithms
+- ❌ **CDC/Streaming**: No change capture or sink integration
+- ❌ **Materialized Views**: Just type definitions with TODOs
+- ❌ **Query Optimization**: No adaptive or cost-based optimization
+- ❌ **Full-Text Search**: Not implemented
+- ❌ **QUIC Transport**: Returns NotImplemented, falls back to TCP
 
-### Production Features
-- ✅ **ACID Transactions**: Enhanced MVCC with comprehensive conflict detection
-- ✅ **Monitoring**: Prometheus metrics and OpenTelemetry distributed tracing
-- ✅ **Horizontal Scaling**: Sharding with automatic rebalancing
-- ✅ **Schema Constraints**: Property validation, cardinality limits, unique indexes
-- ✅ **Graph Persistence**: Full catalog integration with metadata storage
-- ✅ **Two-Phase Commit**: Distributed transactions with savepoints and lock management
+## Real Implementation Status
 
-## Implementation Status
-
-### Conformance Level
-- **ISO/IEC 39075:2024 (GQL)**: Core conformance with extensions
-- **31+ Requirements Implemented**: Full feature set for production use
-- **Production Ready**: Complete CRUD, indexing, monitoring, and scaling
+### Actual State
+- **~25% Implemented**: Basic queries and transactions work
+- **171+ NotImplemented errors**: Throughout the codebase
+- **Extensive TODOs**: Most advanced features are stubs
+- **Not Production Ready**: Missing critical features
 
 ### Documentation
 - [Requirements Ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Implementation status with evidence

@@ -4,7 +4,7 @@
 
 This system is working toward a distributed, ACID property-graph DB that will **speak GQL** per ISO/IEC 39075:2024. Currently implements a SQL-like query engine with GQL syntax parsing. The GQL layer is normative for language and semantics; the engine will follow the **GQL execution model over binding tables** and the **linear composition** of statements. Binding tables carry **ordered vs unordered** descriptors that directly affect `ORDER BY`, `LIMIT`, and `OFFSET`.
 
-**Current Status**: Core query operations working (RETURN, ORDER BY, set operations). Graph features (MATCH patterns, property access, traversal) not yet implemented.
+**Current Status**: Basic query operations working (RETURN, ORDER BY, set operations). Graph features have minimal implementation (~10% complete). Most advanced features are stubs or type definitions only.
 
 ## 1. Conformance & Options (ship-blocking)
 
@@ -17,11 +17,11 @@ This system is working toward a distributed, ACID property-graph DB that will **
 ## 2. Language Surface (Phase 0 baseline)
 
 - **Queries** (partially implemented)
-  - `<linear query statement>` composition and hand-off of **working record/table types**; `<primitive result>`; `<select>` desugaring. ✅
-  - `MATCH`/`OPTIONAL MATCH` with **graph patterns**, **variable-length quantifiers**, **parenthesized path pattern** options. ❌ *Parser recognizes, execution not implemented*
-  - `WHERE` filtering ✅; `YIELD` rename rules and column typing. ⚠️
-  - `ORDER BY`, `LIMIT`, `OFFSET` with correctness w.r.t. **ordered vs unordered** inputs; no unsafe pushdown of OFFSET without stable order. (US001 documented.) ✅
-  - Set operations: `UNION [ALL|DISTINCT]`, `EXCEPT [ALL|DISTINCT]`, `INTERSECT [ALL|DISTINCT]`. ✅
+  - `<linear query statement>` composition - basic only ✅
+  - `MATCH`/`OPTIONAL MATCH` - Parser recognizes, execution minimal ❌
+  - `WHERE` filtering - basic expressions only ⚠️
+  - `ORDER BY`, `LIMIT`, `OFFSET` - working for simple queries ✅
+  - Set operations - functional ✅
 - **DML & Procedures** ❌ (not implemented)
   - `<insert statement>` and `<linear data-modifying statement>` surfaces; read-only access mode guard.
   - `<procedure body>` flow with `NEXT` and binding contexts (baseline for future procedure support).
@@ -31,7 +31,7 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 ## 3. Planner/Executor Contracts (must-haves)
 
-- The planner/executor shall implement the **GQL→Engine crosswalk** (NodeScan, Expand, OPTIONAL as LOJ, Project/Group, Order, Top-k, SetOps) as documented in `query_engine.md`. ⚠️ *Currently missing graph operators*
+- The planner/executor implements basic operations only. Graph operators (NodeScan, Expand) have minimal implementation. No query optimization. ❌
 - **Offset pushdown requires explicit order** (testable rule). ✅
 - Path planning honors **UA005/UA006** (deterministic tie-break documented). ❌ *No path execution*
 
@@ -41,7 +41,7 @@ This system is working toward a distributed, ACID property-graph DB that will **
 - The preferred/default storage mode is disk-backed; both modes SHALL share invariants (page headers, slotted layout contracts, id alloc semantics). ⚠️
 - Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, while performance and durability tests MUST use disk.
 
-## 4. Distributed System Requirements ❌ (not implemented)
+## 4. Distributed System Requirements ❌ (COMPLETELY UNIMPLEMENTED - STUBS ONLY)
 
 - **Replication & Meta:** Raft-backed partitions; meta service maps partition→replicas/leaders and routes queries.
 - **Distributed Txn:** 2PC over replicated logs; participants log prepare; recovery consults coordinator/meta to finish in-doubt txns.
@@ -50,11 +50,11 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 ## 5. Security Requirements
 
-- **TDE** for pages + WAL (configurable). ✅
+- **TDE** for pages + WAL - basic encryption only, no KMS ⚠️
   - Enable via env: `GEODE_DISK_ENCRYPTION=on`, `GEODE_DISK_KEY_HEX=<64 hex>`, optional `GEODE_WAL_ENCRYPTION=on`
   - PageManager encrypts/decrypts pages; WAL payloads encrypted per-record; files created 0600
   - Key rotation helper: `key_rotate` prints export for env update
-- **TLS 1.3** for transport security. ✅ *QUIC with TLS implemented*
+- **TLS 1.3** for transport - QUIC returns NotImplemented ❌
 
 ## 6. Diagnostics & Protocol Requirements
 
@@ -67,6 +67,12 @@ This system is working toward a distributed, ACID property-graph DB that will **
 - Graph feature tests pending implementation of core functionality.
 
 ## Implementation Status Legend
-- ✅ Implemented and tested
-- ⚠️ Partially implemented
-- ❌ Not implemented
+- ✅ Actually working (tested and functional)
+- ⚠️ Partially implemented (incomplete or limited)
+- ❌ Not implemented (stub, fake, or missing)
+
+## Reality Check
+- ~25% of documented features actually work
+- 171+ NotImplemented errors in codebase
+- Most "advanced" features are elaborate type definitions
+- Documentation significantly overstates capabilities

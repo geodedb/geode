@@ -34,7 +34,7 @@ As of December 2024, Geode has achieved **95% feature completeness** for product
 | REQ‑GQL‑020 | WITH clause: query chaining | ISO 14.5 | Implemented | src/server/graph/exec.zig:executeWith; tests/e2e_with_clause.zig | — | 2024‑12‑17 | planner | Projection and aggregation |
 | REQ‑GQL‑025 | Storage catalog persistence (catalog, adjacency) | impl‑defined storage mgmt | Implemented | src/storage/catalog.zig:GraphMetadata; server --data_dir | — | 2024‑12‑17 | storage | Graph persistence |
 | REQ‑GQL‑027 | MVCC conflict detection completion | ISO 8 | Implemented | src/server/txn/mvcc.zig:detectConflict, conflictToError | — | 2024‑12‑17 | txn | 40001 mapping |
-| REQ‑GQL‑028 | Distributed scaffold: Raft (leader only) | impl‑defined distribution | Implemented | src/distributed/raft_consensus.zig; enhanced with proper state management | — | 2024‑12‑31 | dist | Feature‑flagged |
+| REQ‑GQL‑028 | Distributed scaffold: Raft (leader only) | impl‑defined distribution | **STUB ONLY** | src/distributed/raft_consensus.zig has types only, no implementation | Critical gap | 2025‑Q2 | dist | No actual Raft protocol |
 | REQ‑GQL‑030 | Advanced path algorithms: Dijkstra, PageRank, centrality | impl‑defined analytics | Implemented | src/graph/path_algorithms.zig; tests/e2e_advanced_features.zig | — | 2025‑01‑17 | analytics | Graph analytics ready |
 | REQ‑GQL‑031 | Full-text search with BM25 scoring | impl‑defined search | Implemented | src/index/fulltext.zig; tests/e2e_advanced_features.zig | — | 2025‑01‑17 | search | Inverted index, highlighting |
 | REQ‑GQL‑032 | Schema constraints: validation, cardinality, unique | ISO 23 (diagnostics) | Implemented | src/storage/constraints.zig; tests/e2e_advanced_features.zig | — | 2025‑01‑17 | schema | Type and range validation |
@@ -42,16 +42,16 @@ As of December 2024, Geode has achieved **95% feature completeness** for product
 | REQ‑GQL‑034 | Production monitoring: Prometheus metrics, tracing | impl‑defined monitoring | Implemented | src/monitoring/prometheus.zig, src/monitoring/tracing.zig | — | 2025‑01‑17 | ops | Observability ready |
 | REQ‑GQL‑035 | Query optimizer: cost-based, join reordering | ISO Annex (optimization) | Implemented | src/planner/query_optimizer.zig | — | 2025‑01‑17 | optimizer | Statistics-based |
 | REQ‑GQL‑036 | Horizontal scaling: sharding, rebalancing | impl‑defined scaling | Implemented | src/distributed/sharding.zig (enhanced) | — | 2025‑01‑17 | dist | Auto-rebalancing |
-| REQ‑GQL‑040 | GPU Acceleration | impl‑defined performance | Implemented | src/gpu/acceleration.zig (enhanced) | — | 2024‑12‑15 | perf | 10-100x speedup |
-| REQ‑GQL‑041 | Machine Learning Integration | impl‑defined ML | Implemented | src/ml/integration_enhanced.zig | — | 2024‑12‑15 | ml | GDS-compatible |
-| REQ‑GQL‑042 | Streaming and CDC | impl‑defined streaming | Implemented | src/streaming/cdc_enhanced.zig | — | 2024‑12‑15 | streaming | Kafka/Kinesis support |
+| REQ‑GQL‑040 | GPU Acceleration | impl‑defined performance | **FAKE** | src/gpu/acceleration.zig is complete stub, no GPU code | Major gap | Unknown | perf | Empty implementations |
+| REQ‑GQL‑041 | Machine Learning Integration | impl‑defined ML | **STUB** | src/ml/integration_enhanced.zig has basic PageRank only | Major gap | Unknown | ml | No real ML |
+| REQ‑GQL‑042 | Streaming and CDC | impl‑defined streaming | **NOT IMPLEMENTED** | src/streaming/cdc_enhanced.zig is stub only | Critical gap | Unknown | streaming | No CDC capture |
 | REQ‑GQL‑045 | Time-Travel Queries | impl‑defined temporal | Implemented | src/temporal/time_travel.zig | — | 2024‑12‑15 | temporal | AS OF/BETWEEN |
 | REQ‑GQL‑046 | TDE Hardening | Security | Implemented | src/storage/crypto_enhanced.zig | — | 2024‑12‑15 | security | AES-256-GCM, KMS |
 | REQ‑GQL‑047 | Multi-Graph Support | ISO 4.3, 14 | Implemented | src/storage/multi_graph.zig | — | 2024‑12‑15 | catalog | CREATE/DROP/USE GRAPH |
-| REQ‑GQL‑048 | Distributed Activation | impl‑defined HA | Implemented | src/distributed/raft_consensus.zig | — | 2025‑01‑15 | dist | 3-node clusters |
-| REQ‑GQL‑049 | Advanced Query Optimization | ISO Annex | Implemented | src/planner/adaptive.zig | — | 2025‑01‑15 | optimizer | Adaptive execution |
+| REQ‑GQL‑048 | Distributed Activation | impl‑defined HA | **NOT IMPLEMENTED** | src/distributed/raft_consensus.zig is stub | Critical gap | Unknown | dist | No clustering |
+| REQ‑GQL‑049 | Advanced Query Optimization | ISO Annex | **STUB** | src/planner/adaptive.zig has no logic | Major gap | Unknown | optimizer | No optimization |
 | REQ‑GQL‑050 | Recursive Queries | ISO 14 | Implemented | src/planner/recursive.zig | — | 2025‑01‑15 | planner | WITH RECURSIVE |
-| REQ‑GQL‑051 | Materialized Views | impl‑defined views | Implemented | src/storage/materialized_views.zig | — | 2025‑01‑15 | storage | Auto-refresh |
+| REQ‑GQL‑051 | Materialized Views | impl‑defined views | **STUB** | src/storage/materialized_views.zig has TODOs throughout | Major gap | Unknown | storage | No functionality |
 | REQ‑GQL‑052 | RLS Enhancement | Security | Implemented | src/security/rls.zig (enhanced) | — | 2025‑01‑15 | security | ABAC, temporal |
 | REQ‑GQL‑TS‑001 | Time-Series in-memory API | impl‑defined TS | **Implemented** | src/timeseries/timeseries.zig; tests pass | Parser integration pending | 2024‑12‑19 | engine | Full API complete |
 | REQ‑GQL‑TS‑002 | Chunked TS storage + compression | impl‑defined storage | **Implemented** | src/timeseries/chunk_storage.zig | ~10 bytes/value achieved | 2024‑12‑19 | storage | Gorilla compression |
