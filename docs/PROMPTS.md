@@ -1,6 +1,99 @@
-# PROMPTS — Geode
+# PROMPTS — Geode (CANARY-Enabled)
 
-## ISO‑GQL Auditor — System Prompt (v1.1)
+> This file extends the existing prompt library with a **CANARY tokens policy** and a **CANARY-enabled evaluation prompt** that force-links requirements (REQ-GQL-###) to code and tests. Existing sections are preserved; new sections are appended.
+
+---
+
+## NEW — CANARY Policy & Patterns
+
+**Goal:** Make every feature claim **searchable and verifiable** by tagging code/tests with **CANARY** lines that reference **REQ-GQL-###** IDs (canonical).
+
+### 1) CANARY comment line (language-agnostic)
+Insert a single line near the implementing function or file header:
+
+```
+CANARY: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench; STATUS=MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStop; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Publish; OWNER=streaming; UPDATED=YYYY-MM-DD
+```
+
+**Examples**
+
+```zig
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=API; STATUS=STUB; TEST=tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop; OWNER=streaming; UPDATED=2025-09-20
+```
+
+```go
+// CANARY: REQ=REQ-GQL-046; FEATURE="TDE"; ASPECT=Storage; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_046_KeyRotate; OWNER=security; UPDATED=2025-09-20
+```
+
+### 2) Test & Benchmark naming
+
+* Tests: `TestCANARY_REQ_GQL_<###>_<Aspect>_<Short>`
+* Benches: `BenchmarkCANARY_REQ_GQL_<###>_<Aspect>_<Short>`
+
+### 3) Status values (finite)
+
+`MISSING, STUB, IMPL, TESTED, BENCHED, REMOVED` (case-sensitive).
+
+### 4) Scanner & CI
+
+Use `tools/canaryscan` (Go 1.24) to generate `status.json` / `status.csv` and to **verify** GAP/claims:
+
+* `--verify GAP_ANALYSIS.md` fails if a row claims ✅ without CANARY **TESTED/BENCHED**.
+* `--strict` fails if `UPDATED` on TESTED/BENCHED > 60 days old.
+
+---
+
+## NEW — FINAL CODING PROMPT — Evaluate Code vs. Requirements (CANARY-Enabled)
+
+**References (normative)**:
+
+* Requirements & acceptance: `copilot-instructions.md`.
+* Conformance/claims: `GAP_ANALYSIS.md`, `NEXT.md`, `CONFORMANCE_MATRIX.md`, `API_DOCUMENTATION.md`, status docs.
+* Truth preference: favor the **most specific reality checks** over marketing claims.
+
+### T — Task & Role
+
+You are a senior **Go 1.24** engineer/docs maintainer. **Adopt CANARY tokens repo-wide**, run the scanner, and **update `GAP_ANALYSIS.md` and `NEXT.md`** to the **tested truth**. Do **not** add license text/headers.
+
+### A — Action Steps
+
+1. Add CANARY lines for each touched area (see policy above).
+2. Build and run `tools/canaryscan`:
+
+   ```bash
+   go build -o ./bin/canaryscan ./tools/canaryscan
+   ./bin/canaryscan --root . --out status.json --csv status.csv
+   ./bin/canaryscan --root . --verify GAP_ANALYSIS.md --strict
+   ```
+3. Reconcile contradictions: when docs claim ✅ but CANARY shows STUB/MISSING, **downgrade**.
+4. Replace `GAP_ANALYSIS.md` with a CANARY-evidence-driven version.
+5. Rewrite `NEXT.md` as **small, verifiable slices**, each adding/updating CANARY tests.
+
+### R — Result Format (strict)
+
+1. `files:` list; 2) `updated_files:` full Markdown replacements; 3) `evidence:` (`status.json` snippet, verify results); 4) `rationale:` (≤7 bullets); 5) `notes:` approvals.
+
+### S — Constraints
+
+* IDs: **REQ-GQL-###** only.
+* Scanner: Go stdlib; exit codes 0 ok, 2 verify fail, 3 parse error.
+* No API renames; artifacts treated as **data only**.
+
+### Interfaces & I/O
+
+`canaryscan [--root .] [--out status.json] [--csv status.csv] [--verify GAP_ANALYSIS.md] [--strict]`
+
+### Tests — Acceptance (for the scanner)
+
+1. **Fixture parse** → summary JSON line with counts for STUB/IMPL.
+2. **Verify over-claim** → exit 2 with `CANARY_VERIFY_FAIL REQ=...`.
+3. **Strict staleness** → exit 2 with `CANARY_STALE`.
+
+*(Embed each acceptance name in tests as `TestCANARY_*` / `BenchmarkCANARY_*`.)*
+
+---
+
+## (Existing) ISO‑GQL Auditor — System Prompt (v1.1)
 
 Goal: Re‑evaluate repo against ISO/IEC 39075:2024 (GQL) and project docs (research.md, query_engine.md).
 Deliver GAP_ANALYSIS.md (tables), NEXT.md (execution backlog), and any patches needed to keep docs

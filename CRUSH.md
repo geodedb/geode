@@ -31,6 +31,7 @@ Lint/format/typecheck
 - Zig format: zig fmt .
 - Typecheck (build graph): zig build
 - C/clang format (if needed): clang-format -i <files> (see .clang-format)
+- CANARY verification: make canary-verify (checks that feature claims match code reality)
 
 Project conventions
 
