@@ -1,6 +1,9 @@
 # Multi-stage build for geode database
 FROM debian:bookworm-slim AS builder
 
+# ARG needs to be declared at the beginning of the stage
+ARG TARGETARCH
+
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     curl \
@@ -15,7 +18,12 @@ RUN apt-get update && apt-get install -y \
 COPY scripts/docker/install-zig.sh /tmp/install-zig.sh
 ARG ZIG_VERSION=0.15.1
 RUN chmod +x /tmp/install-zig.sh && \
-    /tmp/install-zig.sh ${ZIG_VERSION} x86_64 linux /opt && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    /tmp/install-zig.sh ${ZIG_VERSION} $ARCH linux /opt && \
     rm /tmp/install-zig.sh
 
 # Set working directory
@@ -25,8 +33,13 @@ WORKDIR /build
 COPY . .
 
 # Build geode binaries and tools
-RUN zig build -Doptimize=ReleaseSafe && \
-    (zig build tools -Doptimize=ReleaseSafe || echo "Warning: Some tools may not have built")
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        export ZIG_TARGET="aarch64-linux-gnu"; \
+    else \
+        export ZIG_TARGET="x86_64-linux-gnu"; \
+    fi && \
+    zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET && \
+    (zig build tools -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET || echo "Warning: Some tools may not have built")
 
 # Runtime stage
 FROM debian:bookworm-slim AS runtime

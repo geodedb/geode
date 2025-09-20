@@ -1,6 +1,9 @@
 # Reliable Dockerfile using community mirrors properly
 FROM debian:bookworm-slim AS builder
 
+# ARG needs to be declared at the beginning of the stage
+ARG TARGETARCH
+
 # Install dependencies
 RUN apt-get update && apt-get install -y \
     curl \
@@ -15,15 +18,20 @@ RUN apt-get update && apt-get install -y \
 # Install Zig 0.15.1 directly with correct filename format
 ARG ZIG_VERSION=0.15.1
 RUN set -ex && \
-    TARBALL="zig-x86_64-linux-${ZIG_VERSION}.tar.xz" && \
-    echo "Downloading Zig ${ZIG_VERSION}..." && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    TARBALL="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
+    echo "Downloading Zig ${ZIG_VERSION} for ${ARCH}..." && \
     curl -fsSL --connect-timeout 30 --max-time 300 \
          -o "/tmp/${TARBALL}" \
          "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" && \
     echo "Extracting Zig..." && \
     tar -xJf "/tmp/${TARBALL}" -C /opt && \
     rm "/tmp/${TARBALL}" && \
-    ln -s "/opt/zig-x86_64-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig && \
+    ln -s "/opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig && \
     zig version
 
 # Set working directory
@@ -34,13 +42,18 @@ COPY . .
 
 # Build geode with multiple fallback options
 RUN echo "Building with Zig $(zig version)..." && \
-    (zig build -Doptimize=ReleaseSafe 2>/dev/null || \
-     zig build 2>/dev/null || \
-     (echo "Build failed, trying without optimization..." && zig build)) && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        export ZIG_TARGET="aarch64-linux-gnu"; \
+    else \
+        export ZIG_TARGET="x86_64-linux-gnu"; \
+    fi && \
+    (zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET 2>/dev/null || \
+     zig build -Dtarget=$ZIG_TARGET 2>/dev/null || \
+     (echo "Build failed, trying without target..." && zig build)) && \
     echo "Main build complete" && \
     # Try to build tools (optional)
-    (zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
-     zig build tools 2>/dev/null || \
+    (zig build tools -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET 2>/dev/null || \
+     zig build tools -Dtarget=$ZIG_TARGET 2>/dev/null || \
      echo "Note: Some tools may not have built")
 
 # Runtime stage

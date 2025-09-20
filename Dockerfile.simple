@@ -1,6 +1,9 @@
 # Simplified Dockerfile with inline Zig installation
 FROM debian:bookworm-slim AS builder
 
+# ARG needs to be declared at the beginning of the stage
+ARG TARGETARCH
+
 # Install dependencies including minisign for signature verification
 RUN apt-get update && apt-get install -y \
     curl \
@@ -17,7 +20,12 @@ ARG ZIG_VERSION=0.15.1
 ENV ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
 RUN set -ex && \
-    TARBALL="zig-x86_64-linux-${ZIG_VERSION}.tar.xz" && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    TARBALL="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
     INSTALLED=false && \
     # Try multiple mirrors \
     for MIRROR in \
@@ -40,7 +48,7 @@ RUN set -ex && \
             if file "/tmp/${TARBALL}" | grep -q "XZ compressed data"; then \
                 tar -xJf "/tmp/${TARBALL}" -C /opt && \
                 rm "/tmp/${TARBALL}" && \
-                ln -s /opt/zig-x86_64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+                ln -s /opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
                 zig version && \
                 INSTALLED=true && \
                 break; \
@@ -63,12 +71,22 @@ WORKDIR /build
 COPY . .
 
 # Build geode
-RUN zig build -Doptimize=ReleaseSafe || zig build
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        export ZIG_TARGET="aarch64-linux-gnu"; \
+    else \
+        export ZIG_TARGET="x86_64-linux-gnu"; \
+    fi && \
+    (zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET || zig build -Dtarget=$ZIG_TARGET)
 
 # Try to build tools (may fail, that's ok)
-RUN zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
-    zig build tools 2>/dev/null || \
-    echo "Warning: Some tools may not have built"
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        export ZIG_TARGET="aarch64-linux-gnu"; \
+    else \
+        export ZIG_TARGET="x86_64-linux-gnu"; \
+    fi && \
+    (zig build tools -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET 2>/dev/null || \
+     zig build tools -Dtarget=$ZIG_TARGET 2>/dev/null || \
+     echo "Warning: Some tools may not have built")
 
 # Runtime stage
 FROM debian:bookworm-slim AS runtime

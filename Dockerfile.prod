@@ -1,6 +1,9 @@
 # Production Dockerfile with optimizations and security hardening
 FROM debian:bookworm-slim AS builder
 
+# ARG needs to be declared at the beginning of the stage
+ARG TARGETARCH
+
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     curl \
@@ -12,18 +15,32 @@ RUN apt-get update && apt-get install -y \
 
 # Install Zig 0.15.1
 ARG ZIG_VERSION=0.15.1
-RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz | tar -xJ -C /opt && \
-    ln -s /opt/zig-x86_64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz | tar -xJ -C /opt && \
+    ln -s /opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
     zig version
 
 WORKDIR /build
 COPY . .
 
 # Build with maximum optimizations
-RUN zig build -Doptimize=ReleaseFast && \
-    zig build tools -Doptimize=ReleaseFast && \
-    strip /build/zig-out/bin/geoded && \
-    strip /build/zig-out/bin/geodec
+# Use TARGETARCH to build for the correct architecture
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        export ZIG_TARGET="aarch64-linux-gnu"; \
+    else \
+        export ZIG_TARGET="x86_64-linux-gnu"; \
+    fi && \
+    zig build -Doptimize=ReleaseFast -Dtarget=$ZIG_TARGET && \
+    zig build tools -Doptimize=ReleaseFast -Dtarget=$ZIG_TARGET && \
+    # Only strip if we're building for the native architecture
+    if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "" ]; then \
+        strip /build/zig-out/bin/geoded || true; \
+        strip /build/zig-out/bin/geodec || true; \
+    fi
 
 # Distroless runtime for minimal attack surface
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
