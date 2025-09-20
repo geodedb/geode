@@ -68,3 +68,33 @@ The build system is now fully functional with the graph execution and MVCC modul
 - Replaced hard-coded `wine64` invocations with auto-detected `WINE_CMD` (prefers `wine64`, falls back to `wine`).
 - Added `wine-info` target for quick local diagnostics.
 - Ensures `make cross-test` and client test targets skip gracefully when Wine absent, improving portability on minimal builders.
+
+### 10. Docker CI Target Hardening
+
+- Added Docker availability check before proceeding.
+- Added dynamic Dockerfile selection with priority: `Dockerfile.reliable`, `Dockerfile.simple`, fallback `Dockerfile`.
+- Captures full build log to a temp file; on failure prints last 40 lines for quick triage.
+- Verifies image presence explicitly after build.
+- Adds container health check: ensures it remains running after startup; prints logs if it exits early.
+- Improves step-by-step progress messages and structured numbering.
+
+### 11. Dockerfile.reliable & Build Fallback Fix
+
+- Fixed CI failure: apt packages (curl, git, etc.) reported missing due to transient mirror/update issues.
+- Added `DEBIAN_FRONTEND=noninteractive` and retry loop for `apt-get update` in both build and runtime stages.
+- Switched installs to `--no-install-recommends` and cleaned apt lists for smaller layers.
+- Added multi-attempt fallback in `docker-ci`: if primary Dockerfile build fails, automatically retries with `Dockerfile.simple` (if present) and surfaces logs.
+- Provides clearer diagnostics (primary & fallback last 40 lines + temp log paths) for rapid triage.
+
+### 12. Windows Stdio Wine Test Stabilization
+
+- Modified `cross-test` target to use `--test-no-exec` when cross-compiling Windows test to avoid Zig attempting native execution of PE binary.
+- Consolidated to a single Wine invocation capturing combined stdout/stderr for validation.
+- Added explicit artifact existence check prior to execution and clearer failure messages (stdout vs stderr markers missing).
+- Prints full (prefixed) Wine output to aid debugging without rerunning.
+
+### 13. Dedicated Windows Stdio Smoke Executable
+
+- Replaced prior use of `zig test` for Windows stdio validation (which produced a harness binary Wine rejected with "Bad EXE format" in some environments).
+- Added `tests/windows_stdio_smoke.zig` built via `zig build-exe` to emit only the required markers.
+- Simplifies validation path (single run, minimal binary) and removes reliance on test harness metadata sections.
