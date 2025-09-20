@@ -1,11 +1,12 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCDiagnosticsProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol; OWNER=wire; UPDATED=2025-09-20
 
 // Debug instrumentation toggle for protocol frame builders.
 // Set true locally when investigating length arithmetic or corruption.
 const PROTOCOL_DEBUG = false;
 
-pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING };
+pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING, CDC_DIAGNOSTICS };
 
 pub const Hello = struct {
     client_name: []const u8,
@@ -33,6 +34,7 @@ pub const ClientMessage = union(MessageType) {
     SAVEPOINT: struct { name: []const u8 },
     ROLLBACK_TO: struct { name: []const u8 },
     PING: void,
+    CDC_DIAGNOSTICS: void,
 };
 
 pub const ResultType = enum { SCHEMA, BINDINGS, ERROR, EXPLAIN, PROFILE };
@@ -225,6 +227,18 @@ pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags
     return out;
 }
 
+pub fn buildCdcDiagnosticsLine(ally: std.mem.Allocator, json_payload: []const u8) ![]u8 {
+    // Minimal frame: status_class 00000 and result type CDC_DIAGNOSTICS with nested json field
+    const prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"CDC_DIAGNOSTICS\",\"json\":";
+    const suffix = "}}\n";
+    const total = prefix.len + json_payload.len + suffix.len;
+    var out = try ally.alloc(u8, total);
+    @memcpy(out[0..prefix.len], prefix);
+    @memcpy(out[prefix.len .. prefix.len + json_payload.len], json_payload);
+    @memcpy(out[prefix.len + json_payload.len .. total], suffix);
+    return out;
+}
+
 pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
@@ -378,6 +392,8 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         return .{ .ROLLBACK_TO = .{ .name = name } };
     } else if (std.mem.eql(u8, typ, "PING")) {
         return .{ .PING = {} };
+    } else if (std.mem.eql(u8, typ, "CDC_DIAGNOSTICS")) {
+        return .{ .CDC_DIAGNOSTICS = {} };
     }
     return error.Invalid;
 }

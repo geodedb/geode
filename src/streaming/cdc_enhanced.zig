@@ -2,13 +2,29 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ingest; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Ingest; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTail; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_WalIngest; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTail; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailPromote; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_WalTailPerf; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailDisabled; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailDisabled; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformed; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ordering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Ordering; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingConcurrency; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingConcurrency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=MixedWorkload; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveFlush; STATUS=IMPL; TEST=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveFlush; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveBaselinePerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveBaselinePerf; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Telemetry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Telemetry; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=EventCapture; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_EventCapture; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedDiagnostics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformed; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLog; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformed; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLogBuffer; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBuffer; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=DiagnosticsExport; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedSnapshotInterval; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedPayloadHash; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailWarn; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailAbort; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailWarnEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailAbortEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedSnapshotIntervalEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
 const Allocator = std.mem.Allocator;
 
 pub const ChangeType = enum {
@@ -58,6 +74,11 @@ pub const CDCConfig = struct {
     filter_patterns: ?[]const u8 = null,
     include_before_image: bool = true,
     include_metadata: bool = true,
+    // Malformed WAL diagnostics tuning
+    malformed_snapshot_interval: u64 = 100, // capture snapshot every N malformed (plus first)
+    malformed_hash_retain: u32 = 8, // retain hashes/prefixes for first N malformed payloads
+    malformed_warn_pct: f64 = 0.05, // warn guardrail threshold (malformed/attempts)
+    malformed_abort_pct: f64 = 0.50, // abort guardrail threshold
 };
 
 pub const KafkaConfig = struct {
@@ -155,8 +176,95 @@ pub const CDCEngine = struct {
     next_sequence: u64 = 1,
     adapt_events_accum: u32 = 0,
     dynamic_batch_size: u32 = 0,
+    peak_buffer: usize = 0,
+    batch_adjustments: u32 = 0,
+    malformed_wal_records: u64 = 0,
+    malformed_ring: MalformedRing = .{},
+    total_wal_attempts: u64 = 0,
+    guardrail_warn_triggered: bool = false,
+    guardrail_abort_triggered: bool = false,
+    malformed_hashes: MalformedHashStore = .{},
 
     const Self = @This();
+
+    pub const MalformedRing = struct {
+        const CAP = 32;
+        counts: [CAP]u64 = [_]u64{0} ** CAP,
+        times: [CAP]i64 = [_]i64{0} ** CAP,
+        next: usize = 0,
+        filled: bool = false,
+
+        pub fn record(self: *MalformedRing, count: u64) void {
+            self.counts[self.next] = count;
+            self.times[self.next] = std.time.milliTimestamp();
+            self.next = (self.next + 1) % CAP;
+            if (self.next == 0) self.filled = true;
+        }
+
+        pub fn writeJson(self: *MalformedRing, w: anytype) !void {
+            try w.writeAll("[");
+            var first = true;
+            const total = if (self.filled) CAP else self.next;
+            var idx: usize = 0;
+            while (idx < total) : (idx += 1) {
+                const logical = if (self.filled) (self.next + idx) % CAP else idx;
+                if (!first) {
+                    try w.writeAll(",");
+                } else {
+                    first = false;
+                }
+                try std.fmt.format(w, "{\"count\":{d},\"ts_ms\":{d}}", .{ self.counts[logical], self.times[logical] });
+            }
+            try w.writeAll("]");
+        }
+    };
+
+    const MalformedHashEntry = struct {
+        count: u64,
+        hash: u64,
+        ts_ms: i64,
+        prefix_len: u8,
+        prefix: [16]u8,
+    };
+
+    pub const MalformedHashStore = struct {
+        const CAP = 64; // upper bound; actual retention limited by config.malformed_hash_retain
+        entries: [CAP]MalformedHashEntry = undefined,
+        used: u32 = 0,
+
+        fn record(self: *MalformedHashStore, cfg_limit: u32, count: u64, payload: []const u8) void {
+            if (self.used >= cfg_limit or cfg_limit == 0) return;
+            const idx = self.used;
+            const ts = std.time.milliTimestamp();
+            var prefix_buf: [16]u8 = .{0} ** 16;
+            const take = @min(payload.len, prefix_buf.len);
+            if (take > 0) std.mem.copy(u8, prefix_buf[0..take], payload[0..take]);
+            self.entries[idx] = .{ .count = count, .hash = fnv1a64(payload), .ts_ms = ts, .prefix_len = @intCast(take), .prefix = prefix_buf };
+            self.used += 1;
+        }
+
+        fn writeJson(self: *MalformedHashStore, w: anytype, cfg_limit: u32) !void {
+            try w.writeAll("[");
+            var i: u32 = 0;
+            while (i < self.used and i < cfg_limit) : (i += 1) {
+                if (i > 0) try w.writeAll(",");
+                const e = self.entries[i];
+                try std.fmt.format(w, "{\"count\":{d},\"hash\":{d},\"ts_ms\":{d},\"prefix\":\"", .{ e.count, e.hash, e.ts_ms });
+                const p = e.prefix[0..e.prefix_len];
+                // hex encode prefix bytes
+                var j: usize = 0;
+                while (j < p.len) : (j += 1) try std.fmt.format(w, "{x:0>2}", .{p[j]});
+                try w.writeAll("\"}");
+            }
+            try w.writeAll("]");
+        }
+    };
+
+    fn fnv1a64(data: []const u8) u64 {
+        var h: u64 = 0xcbf29ce484222325;
+        for (data) |b| h = (h ^ @as(u64, b)) * 0x100000001b3;
+        return h;
+    }
 
     pub fn init(allocator: Allocator, config: CDCConfig) !Self {
         var engine = Self{
@@ -171,7 +279,32 @@ pub const CDCEngine = struct {
             .mutex = .{},
             .adapt_events_accum = 0,
             .dynamic_batch_size = if (config.adaptive_flush) config.batch_size else 0,
+            .peak_buffer = 0,
+            .batch_adjustments = 0,
+            .total_wal_attempts = 0,
+            .guardrail_warn_triggered = false,
+            .guardrail_abort_triggered = false,
         };
+
+        // Environment variable overrides (ignore parse errors; bounds check defensively)
+        if (std.process.getEnvVarOwned(allocator, "GEODE_MALFORMED_WAL_WARN_PCT")) |val| {
+            defer allocator.free(val);
+            if (std.fmt.parseFloat(f64, val)) |p| {
+                if (p > 0.0 and p < 1.0) engine.config.malformed_warn_pct = p;
+            } else |_| {}
+        } else |_| {}
+        if (std.process.getEnvVarOwned(allocator, "GEODE_MALFORMED_WAL_ABORT_PCT")) |val| {
+            defer allocator.free(val);
+            if (std.fmt.parseFloat(f64, val)) |p| {
+                if (p > 0.0 and p < 1.0 and p > engine.config.malformed_warn_pct) engine.config.malformed_abort_pct = p;
+            } else |_| {}
+        } else |_| {}
+        if (std.process.getEnvVarOwned(allocator, "GEODE_MALFORMED_WAL_SNAPSHOT_INTERVAL")) |val| {
+            defer allocator.free(val);
+            if (std.fmt.parseInt(u64, val, 10)) |v| {
+                if (v > 0 and v <= 10_000) engine.config.malformed_snapshot_interval = v;
+            } else |_| {}
+        } else |_| {}
 
         // Initialize sinks
         for (config.sinks) |sink_type| {
@@ -259,6 +392,7 @@ pub const CDCEngine = struct {
 
         try self.event_buffer.append(event);
         self.total_events += 1;
+        if (self.event_buffer.items.len > self.peak_buffer) self.peak_buffer = self.event_buffer.items.len;
         if (self.config.adaptive_flush) {
             self.adapt_events_accum += 1;
             if (self.adapt_events_accum >= self.config.adapt_window_events) {
@@ -267,9 +401,13 @@ pub const CDCEngine = struct {
                 const elapsed_ms = @max(now - self.last_flush, 1);
                 const eps = (@as(f64, @floatFromInt(self.adapt_events_accum)) * 1000.0) / @as(f64, @floatFromInt(elapsed_ms));
                 if (eps > 50_000 and self.dynamic_batch_size < self.config.max_batch_size) {
-                    self.dynamic_batch_size = @min(self.dynamic_batch_size * 2, self.config.max_batch_size);
+                    const new_size = @min(self.dynamic_batch_size * 2, self.config.max_batch_size);
+                    if (new_size != self.dynamic_batch_size) self.batch_adjustments += 1;
+                    self.dynamic_batch_size = new_size;
                 } else if (eps < 5_000 and self.dynamic_batch_size > self.config.min_batch_size) {
-                    self.dynamic_batch_size = @max(self.dynamic_batch_size / 2, self.config.min_batch_size);
+                    const new_size = @max(self.dynamic_batch_size / 2, self.config.min_batch_size);
+                    if (new_size != self.dynamic_batch_size) self.batch_adjustments += 1;
+                    self.dynamic_batch_size = new_size;
                 }
                 self.adapt_events_accum = 0;
             }
@@ -350,6 +488,9 @@ pub const CDCEngine = struct {
             .buffer_size = self.event_buffer.items.len,
             .last_flush = self.last_flush,
             .sinks_count = self.sinks.items.len,
+            .peak_buffer = self.peak_buffer,
+            .batch_adjustments = self.batch_adjustments,
+            .malformed_wal_records = self.malformed_wal_records,
         };
     }
 
@@ -407,6 +548,39 @@ pub const CDCEngine = struct {
 
     /// Simulated WAL record ingestion; maps record metadata to a change event.
     pub fn ingestFromWalRecord(self: *Self, txn_id: u64, entity_type: EntityType, entity_id: u64, after_json: []const u8) !void {
+        // Count attempt (valid or malformed)
+        self.mutex.lock();
+        self.total_wal_attempts += 1;
+        const attempt = self.total_wal_attempts;
+        self.mutex.unlock();
+
+        const malformed = after_json.len == 0 or after_json[0] != '{' or after_json[after_json.len - 1] != '}';
+        if (malformed) {
+            self.mutex.lock();
+            self.malformed_wal_records += 1;
+            const count = self.malformed_wal_records;
+            // Snapshot interval logic (always first)
+            if (count == 1 or (count % self.config.malformed_snapshot_interval == 0)) {
+                self.malformed_ring.record(count);
+            }
+            // Hash retention for first N malformed
+            self.malformed_hashes.record(self.config.malformed_hash_retain, count, after_json);
+            // Guardrail evaluation
+            const ratio = @as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts));
+            if (!self.guardrail_warn_triggered and ratio >= self.config.malformed_warn_pct) {
+                self.guardrail_warn_triggered = true;
+                std.log.warn("CDC malformed WAL warn threshold triggered ratio={d:.3}", .{ratio});
+            }
+            if (!self.guardrail_abort_triggered and ratio >= self.config.malformed_abort_pct) {
+                self.guardrail_abort_triggered = true;
+                std.log.err("CDC malformed WAL abort threshold triggered ratio={d:.3}", .{ratio});
+            }
+            self.mutex.unlock();
+            if (count == 1 or (count % self.config.malformed_snapshot_interval == 0)) {
+                std.log.warn("CDC malformed WAL record count={} attempts={} ratio={d:.3}", .{ count, attempt, @as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts)) });
+            }
+            return; // counted & dropped
+        }
         self.beginTxn(txn_id);
         try self.emitChange(.update, entity_type, entity_id, null, after_json);
         self.endTxn();
@@ -429,6 +603,40 @@ pub const CDCEngine = struct {
         }
         return allocator.alloc(u64, 0);
     }
+
+    /// Serialize malformed ring buffer snapshots to JSON array string.
+    pub fn malformedLogSnapshots(self: *Self, allocator: Allocator) ![]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var buf = std.ArrayList(u8).init(allocator);
+        try self.malformed_ring.writeJson(buf.writer());
+        return buf.toOwnedSlice();
+    }
+
+    /// Export a consolidated diagnostics JSON object (string) containing counters and ring snapshots.
+    pub fn exportDiagnostics(self: *Self, allocator: Allocator) ![]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var buf = std.ArrayList(u8).init(allocator);
+        const w = buf.writer();
+        try w.writeAll("{\"malformed_wal_records\":");
+        try std.fmt.format(w, "{d}", .{self.malformed_wal_records});
+        try w.writeAll(",\"total_wal_attempts\":");
+        try std.fmt.format(w, "{d}", .{self.total_wal_attempts});
+        try w.writeAll(",\"malformed_ratio\":");
+        const ratio = if (self.total_wal_attempts == 0) 0.0 else (@as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts)));
+        try std.fmt.format(w, "{d:.6}", .{ratio});
+        try w.writeAll(",\"guardrail_warn_triggered\":");
+        try w.writeAll(if (self.guardrail_warn_triggered) "true" else "false");
+        try w.writeAll(",\"guardrail_abort_triggered\":");
+        try w.writeAll(if (self.guardrail_abort_triggered) "true" else "false");
+        try w.writeAll(",\"malformed_snapshots\":");
+        try self.malformed_ring.writeJson(w);
+        try w.writeAll(",\"malformed_hashes\":");
+        try self.malformed_hashes.writeJson(w, self.config.malformed_hash_retain);
+        try w.writeAll("}");
+        return buf.toOwnedSlice();
+    }
 };
 
 pub const CDCStatus = struct {
@@ -437,6 +645,9 @@ pub const CDCStatus = struct {
     buffer_size: usize,
     last_flush: i64,
     sinks_count: usize,
+    peak_buffer: usize,
+    batch_adjustments: u32,
+    malformed_wal_records: u64,
 };
 
 const Sink = struct {

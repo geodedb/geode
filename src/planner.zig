@@ -1,6 +1,9 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Operator"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathExpandBfs; OWNER=planner; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-016; FEATURE="Path Cycle Determinism"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathCycleDeterminism; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Cycle Pruning Perf"; ASPECT=PathCyclePruningPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathCyclePruningPerf; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Pruning Stats Perf"; ASPECT=PathPruningStatsPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathPruningStatsPerf; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Memory Perf"; ASPECT=PathExpandMemPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandMemPerf; OWNER=planner; UPDATED=2025-09-20
 const ast = @import("gql/ast.zig");
 const mem = std.mem;
 const temporal = @import("temporal.zig");

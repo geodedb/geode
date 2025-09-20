@@ -853,7 +853,7 @@ fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, lim
         first = false;
         w.writeAll("\"distinct\":true") catch {};
     }
-    w.writeAll("}}") catch {};  // Close properties object and outer JSON object
+    w.writeAll("}}") catch {}; // Close properties object and outer JSON object
     return buf.toOwnedSlice(ally) catch "{\"logical\":[]}";
 }
 
@@ -1931,6 +1931,11 @@ fn processMessage(
             const hello_response = "{\"status_class\":\"00000\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}\n";
             return try gpa.dupe(u8, hello_response);
         },
+        .CDC_DIAGNOSTICS => |_| {
+            // Placeholder: if CDC engine globally accessible later, fetch exportDiagnostics; for now emit minimal stub
+            const json = "{\"cdc\":{\"malformed_wal_records\":0}}";
+            return protocol.buildCdcDiagnosticsLine(gpa, json) catch try gpa.dupe(u8, "");
+        },
         .PING => |_| {
             const ok = "{\"ok\":true}";
             const flags = computeBaseFlags(false, false);
@@ -2049,7 +2054,7 @@ pub fn main() !void {
     var data_dir: ?[]const u8 = null;
     var test_exit_after_first: bool = false;
     var catalog_create_name: ?[]const u8 = null;
-    
+
     // Check for help flag
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -2072,7 +2077,7 @@ pub fn main() !void {
             return;
         }
     }
-    
+
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
             const f = args[ai + 1];
@@ -2119,18 +2124,18 @@ pub fn main() !void {
     if (listen_quic != null) {
         if (cert_path == null or key_path == null) {
             // Use default paths or fallback to /tmp
-            const default_cert = if (data_dir) |dir| 
+            const default_cert = if (data_dir) |dir|
                 try std.fmt.allocPrint(gpa, "{s}/server.crt", .{dir})
-            else 
+            else
                 "/tmp/geode-server.crt";
             const default_key = if (data_dir) |dir|
                 try std.fmt.allocPrint(gpa, "{s}/server.key", .{dir})
             else
                 "/tmp/geode-server.key";
-            
+
             cert_path = cert_path orelse default_cert;
             key_path = key_path orelse default_key;
-            
+
             // Try to generate certificates if they don't exist
             cert_gen.ensureCertificatesAtPath(gpa, cert_path.?, key_path.?) catch |err| {
                 std.debug.print("Warning: Could not generate certificates: {s}\n", .{@errorName(err)});
@@ -2392,6 +2397,14 @@ pub fn main() !void {
         switch (msg) {
             .HELLO => |_| {
                 // No-op HELLO on stdio
+                continue;
+            },
+            .CDC_DIAGNOSTICS => |_| {
+                const json = "{\"cdc\":{\"malformed_wal_records\":0}}"; // stub until CDC wired
+                if (protocol.buildCdcDiagnosticsLine(gpa, json)) |line| {
+                    defer gpa.free(line);
+                    _ = stdout_file.write(line) catch {};
+                } else |_| {}
                 continue;
             },
             .BEGIN => |_| {

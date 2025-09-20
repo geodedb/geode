@@ -11,7 +11,10 @@ const Value = @import("../protocol.zig").Value;
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Matching"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_PatternMatch; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Regex"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_PatternRegex; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Performance"; ASPECT=PatternPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_PatternPerf; OWNER=schema; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Regex NegClass"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_PatternRegexNegClass; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Regex NegClass"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_PatternRegexNegClass; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern State Dedup Perf"; ASPECT=PatternStateDedupPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern State Dedup Memory"; ASPECT=PatternStateDedupMem; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Escape Support"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_PatternRegexEscape; OWNER=schema; UPDATED=2025-09-20
 pub const SchemaConstraints = struct {
     node_constraints: std.StringHashMap(NodeConstraints),
     edge_constraints: std.StringHashMap(EdgeConstraints),
@@ -494,6 +497,14 @@ pub const SchemaConstraints = struct {
             }
 
             const pc = p[pi];
+            if (pc == '\\') { // escape next literal
+                if (pi + 1 >= p.len) continue;
+                const lit = p[pi + 1];
+                if (si < input.len and input[si] == lit) {
+                    stack.append(.{ .pi = pi + 2, .si = si + 1 }) catch return false;
+                }
+                continue;
+            }
             switch (pc) {
                 '*' => {
                     var k: isize = @intCast(input.len - si);

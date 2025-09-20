@@ -1,6 +1,7 @@
 # Geode Graph Database API Documentation
 
 ## Table of Contents
+
 1. [Overview](#overview)
 2. [Connection Management](#connection-management)
 3. [Query Language (GQL)](#query-language-gql)
@@ -22,6 +23,7 @@
 Geode is a high-performance, distributed graph database that implements the ISO/IEC 39075:2024 GQL standard. It provides ACID transactions, automatic sharding, and comprehensive monitoring capabilities.
 
 ### Key Features
+
 - **GQL Compliance**: Full support for ISO GQL standard
 - **ACID Transactions**: Multi-version concurrency control (MVCC)
 - **Distributed**: Raft consensus and 2PC for distributed transactions
@@ -36,6 +38,7 @@ Geode is a high-performance, distributed graph database that implements the ISO/
 ## Connection Management
 
 ### QUIC Connection (Recommended)
+
 ```go
 import "geode/clients/go/gql"
 
@@ -51,6 +54,7 @@ defer client.Close()
 ```
 
 ### TCP Connection (Legacy)
+
 ```go
 // Connect using TCP
 client, err := gql.Connect("tcp://localhost:7567", gql.Config{
@@ -59,6 +63,7 @@ client, err := gql.Connect("tcp://localhost:7567", gql.Config{
 ```
 
 ### Connection Pooling
+
 ```go
 pool, err := gql.NewPool("quic://localhost:7567", gql.PoolConfig{
     MaxSize:     100,
@@ -77,6 +82,7 @@ defer conn.Release()
 ### Basic Queries
 
 #### MATCH Pattern
+
 ```gql
 MATCH (n:Person {name: 'Alice'})-[:KNOWS]->(friend)
 RETURN friend.name, friend.age
@@ -85,6 +91,7 @@ LIMIT 10
 ```
 
 #### Path Patterns
+
 ```gql
 MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person)
 WHERE a.name = 'Alice' AND b.city = 'NYC'
@@ -92,6 +99,7 @@ RETURN path
 ```
 
 #### Optional Match
+
 ```gql
 MATCH (p:Person)
 OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company)
@@ -99,6 +107,7 @@ RETURN p.name, c.name
 ```
 
 #### WITH Clause for Query Composition
+
 ```gql
 MATCH (p:Person)-[:KNOWS]->(friend:Person)
 WITH p, COUNT(friend) AS friend_count
@@ -108,6 +117,7 @@ ORDER BY friend_count DESC
 ```
 
 #### WITH and Aggregation
+
 ```gql
 MATCH (p:Person)-[:PURCHASED]->(product:Product)
 WITH p, SUM(product.price) AS total_spent
@@ -119,6 +129,7 @@ RETURN p.name, total_spent, city.name
 ### Path Queries
 
 #### Variable-Length Paths
+
 ```gql
 MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person)
 WHERE a.name = 'Alice' AND b.city = 'NYC'
@@ -126,6 +137,7 @@ RETURN path
 ```
 
 #### Shortest Path (Deterministic)
+
 ```gql
 MATCH path = (a:Person {name: 'Alice'})-[:KNOWS*1..5]->(b:Person {name: 'Bob'})
 RETURN path
@@ -134,6 +146,7 @@ LIMIT 1
 ```
 
 Note: When multiple shortest paths exist, geode applies deterministic tie-breaking based on:
+
 1. Path length (shortest wins)
 2. Start node ID (lexicographically smallest)
 3. End node ID (lexicographically smallest)
@@ -142,9 +155,10 @@ Note: When multiple shortest paths exist, geode applies deterministic tie-breaki
 ### Aggregations
 
 #### GROUP BY with Aggregates
+
 ```gql
 MATCH (p:Person)-[:PURCHASED]->(product:Product)
-RETURN p.age_group, 
+RETURN p.age_group,
        COUNT(*) AS purchase_count,
        SUM(product.price) AS total_spent,
        AVG(product.price) AS avg_price
@@ -153,6 +167,7 @@ ORDER BY total_spent DESC
 ```
 
 #### COLLECT Aggregate
+
 ```gql
 MATCH (p:Person)-[:LIKES]->(movie:Movie)
 RETURN p.name, COLLECT(movie.title) AS liked_movies
@@ -161,6 +176,7 @@ RETURN p.name, COLLECT(movie.title) AS liked_movies
 ### Mutations
 
 #### CREATE Nodes and Edges
+
 ```gql
 CREATE (p:Person {name: 'Bob', age: 30})
 CREATE (c:Company {name: 'TechCorp'})
@@ -169,6 +185,7 @@ RETURN p, c
 ```
 
 #### UPDATE Properties
+
 ```gql
 MATCH (p:Person {name: 'Bob'})
 SET p.age = 31, p.city = 'San Francisco'
@@ -176,12 +193,14 @@ RETURN p
 ```
 
 #### DELETE Operations
+
 ```gql
 MATCH (p:Person {name: 'Bob'})-[r:WORKS_AT]->(c:Company)
 DELETE r
 ```
 
 #### MERGE (Upsert)
+
 ```gql
 MERGE (p:Person {email: 'alice@example.com'})
 ON CREATE SET p.created = timestamp()
@@ -192,6 +211,7 @@ RETURN p
 ### Set Operations
 
 #### UNION
+
 ```gql
 MATCH (p:Person)-[:LIVES_IN]->(city:City {name: 'NYC'})
 RETURN p.name AS name
@@ -201,6 +221,7 @@ RETURN c.name AS name
 ```
 
 #### INTERSECT
+
 ```gql
 MATCH (p:Person)-[:KNOWS]->(friend:Person)
 WHERE p.name = 'Alice'
@@ -214,6 +235,7 @@ RETURN friend.name
 ## Graph Operations
 
 ### Pattern Matching API
+
 ```go
 // Create pattern matcher
 matcher := geode.NewPatternMatcher(client)
@@ -228,13 +250,14 @@ pattern := matcher.Pattern().
 // Execute match
 results, err := pattern.Match()
 for _, result := range results {
-    fmt.Printf("Person: %s knows %s\n", 
+    fmt.Printf("Person: %s knows %s\n",
         result.Get("p").Property("name"),
         result.Get("f").Property("name"))
 }
 ```
 
 ### Graph Traversal
+
 ```go
 // Breadth-first traversal
 traversal := geode.NewTraversal(client).
@@ -249,6 +272,7 @@ nodes, err := traversal.Execute()
 ```
 
 ### Shortest Path
+
 ```go
 // Find shortest path between two nodes
 path, err := client.ShortestPath(
@@ -264,6 +288,7 @@ path, err := client.ShortestPath(
 ## Transactions
 
 ### Basic Transaction
+
 ```go
 // Start transaction
 tx, err := client.BeginTx(context.Background(), gql.TxOptions{
@@ -273,7 +298,7 @@ tx, err := client.BeginTx(context.Background(), gql.TxOptions{
 defer tx.Rollback()
 
 // Execute queries in transaction
-result1, err := tx.Query("CREATE (p:Person {name: $name})", 
+result1, err := tx.Query("CREATE (p:Person {name: $name})",
     gql.Params{"name": "Charlie"})
 
 result2, err := tx.Query("MATCH (p:Person) RETURN COUNT(p) AS count")
@@ -283,6 +308,7 @@ err = tx.Commit()
 ```
 
 ### Savepoints
+
 ```go
 tx, _ := client.BeginTx(ctx, gql.TxOptions{})
 
@@ -301,6 +327,7 @@ tx.Commit()
 ```
 
 ### Distributed Transactions
+
 ```go
 // Two-phase commit transaction
 dtx, err := client.BeginDistributedTx(ctx, gql.DTxOptions{
@@ -322,17 +349,20 @@ err = dtx.Commit()
 ## Indexing
 
 ### Create Index
+
 ```gql
 CREATE INDEX person_name_idx ON Person(name)
 CREATE INDEX person_age_city_idx ON Person(age, city)
 ```
 
 ### Drop Index
+
 ```gql
 DROP INDEX person_name_idx
 ```
 
 ### Index Statistics
+
 ```go
 stats, err := client.IndexStats("person_name_idx")
 fmt.Printf("Index: %s\n", stats.Name)
@@ -341,6 +371,7 @@ fmt.Printf("Selectivity: %.2f\n", stats.Selectivity)
 ```
 
 ### Full-Text Search Index
+
 ```go
 // Create full-text index
 err := client.CreateFullTextIndex("content_idx", gql.FullTextOptions{
@@ -364,7 +395,7 @@ for _, result := range results {
 }
 
 // Phrase search
-results, err := client.PhraseSearch("content_idx", "graph database technology", 
+results, err := client.PhraseSearch("content_idx", "graph database technology",
     gql.SearchOptions{MaxResults: 5})
 
 // Fuzzy search with edit distance
@@ -377,6 +408,7 @@ results, err := client.FuzzySearch("content_idx", "grph", gql.FuzzyOptions{
 ## Monitoring & Metrics
 
 ### Query Profiling
+
 ```go
 // Enable profiling for a query
 result, err := client.QueryWithProfile(
@@ -401,6 +433,7 @@ for _, op := range profile.Operators {
 ```
 
 ### Metrics Collection
+
 ```go
 // Get metrics snapshot
 metrics, err := client.Metrics()
@@ -417,6 +450,7 @@ fmt.Printf("Idle Connections: %d\n", poolMetrics.IdleConnections)
 ```
 
 ### Custom Metrics
+
 ```go
 // Register custom metric
 client.RegisterMetric("custom_counter", gql.Counter)
@@ -431,17 +465,19 @@ client.RecordHistogram("request_size", float64(len(data)))
 ## Distributed Operations
 
 ### Sharding
+
 ```go
 // Get shard for a key
 shard := client.GetShard("user:12345")
 fmt.Printf("Key maps to shard: %s\n", shard.ID)
 
 // Query specific shard
-result, err := client.QueryShard(shard.ID, 
+result, err := client.QueryShard(shard.ID,
     "MATCH (p:Person) RETURN p LIMIT 10")
 ```
 
 ### Replication
+
 ```go
 // Configure replication
 client.SetReplicationFactor(3)
@@ -457,6 +493,7 @@ result, err := client.QueryWithConsistency(
 ```
 
 ### Cluster Management
+
 ```go
 // Get cluster status
 status, err := client.ClusterStatus()
@@ -473,10 +510,11 @@ err = client.RemoveNode("node3")
 ## Advanced Path Algorithms
 
 ### Dijkstra's Shortest Path
+
 ```go
 // Find shortest weighted path
 path, err := client.DijkstraPath(
-    startNodeID, 
+    startNodeID,
     endNodeID,
     gql.PathOptions{
         EdgeWeights: map[string]float64{
@@ -494,6 +532,7 @@ for _, node := range path.Nodes {
 ```
 
 ### PageRank Calculation
+
 ```go
 // Calculate PageRank for all nodes
 rankings, err := client.PageRank(gql.PageRankOptions{
@@ -509,6 +548,7 @@ for i, result := range rankings[:10] {
 ```
 
 ### Betweenness Centrality
+
 ```go
 // Calculate betweenness centrality
 centrality, err := client.BetweennessCentrality(gql.CentralityOptions{
@@ -523,6 +563,7 @@ for _, result := range centrality[:5] {
 ```
 
 ### Community Detection
+
 ```go
 // Detect communities using Louvain algorithm
 communities, err := client.LouvainCommunities(gql.CommunityOptions{
@@ -530,7 +571,7 @@ communities, err := client.LouvainCommunities(gql.CommunityOptions{
 })
 
 for _, community := range communities {
-    fmt.Printf("Community %d: %d nodes, modularity %.3f\n", 
+    fmt.Printf("Community %d: %d nodes, modularity %.3f\n",
         community.ID, len(community.Nodes), community.Modularity)
 }
 ```
@@ -538,6 +579,7 @@ for _, community := range communities {
 ## Schema Constraints
 
 ### Define Node Constraints
+
 ```gql
 -- Create node constraint with required properties
 CREATE CONSTRAINT person_constraint ON Person
@@ -555,6 +597,7 @@ CHECK (email MATCHES '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 ```
 
 ### Define Edge Constraints
+
 ```gql
 -- Edge constraint with cardinality
 CREATE CONSTRAINT knows_constraint ON KNOWS
@@ -568,6 +611,7 @@ REQUIRE (start_date DATE NOT NULL, position STRING NOT NULL)
 ```
 
 ### Validate Schema
+
 ```go
 // Validate node against constraints
 err := client.ValidateNode(node)
@@ -588,6 +632,7 @@ for _, violation := range violations {
 ## Enhanced Distributed Transactions
 
 ### Two-Phase Commit with Savepoints
+
 ```go
 // Start distributed transaction with enhanced options
 dtx, err := client.BeginDistributedTx(ctx, gql.DTxOptions{
@@ -618,6 +663,7 @@ if dtx.Prepare() {
 ```
 
 ### Lock Management
+
 ```go
 // Acquire locks explicitly
 lock, err := client.AcquireLock(gql.LockRequest{
@@ -634,6 +680,7 @@ fmt.Printf("Waiters: %d\n", len(status.Waiters))
 ```
 
 ### Recovery and Fault Tolerance
+
 ```go
 // Enable automatic recovery
 client.EnableRecovery(gql.RecoveryOptions{
@@ -672,10 +719,11 @@ err = client.RebalanceShards()
 ## Error Handling
 
 ### Error Types
+
 ```go
 switch err := err.(type) {
 case *gql.SyntaxError:
-    fmt.Printf("Syntax error at position %d: %s\n", 
+    fmt.Printf("Syntax error at position %d: %s\n",
         err.Position, err.Message)
 case *gql.ConstraintViolation:
     fmt.Printf("Constraint violated: %s\n", err.Constraint)
@@ -689,6 +737,7 @@ case *gql.NetworkError:
 ```
 
 ### Retry Logic
+
 ```go
 // Automatic retry with exponential backoff
 result, err := gql.WithRetry(func() (any, error) {
@@ -714,6 +763,7 @@ result, err := gql.WithRetry(func() (any, error) {
 ## Examples
 
 ### Social Network Query
+
 ```gql
 -- Find mutual friends
 MATCH (user:Person {name: $userName})-[:KNOWS]->(friend)
@@ -724,6 +774,7 @@ LIMIT 10
 ```
 
 ### Recommendation Engine
+
 ```gql
 -- Product recommendations based on similar users
 MATCH (user:Person {id: $userId})-[:PURCHASED]->(product)
@@ -739,12 +790,13 @@ LIMIT 20
 ```
 
 ### Fraud Detection
+
 ```gql
 -- Detect suspicious transaction patterns
 MATCH path = (account:Account)-[:TRANSFER*3..5]->(destination:Account)
 WHERE account.id = $accountId
-  AND ALL(transfer IN relationships(path) WHERE 
-    transfer.amount > 10000 AND 
+  AND ALL(transfer IN relationships(path) WHERE
+    transfer.amount > 10000 AND
     transfer.timestamp > timestamp() - duration('PT1H'))
 RETURN path, destination
 ```
@@ -754,6 +806,7 @@ RETURN path, destination
 ### Multi-Graph Support
 
 #### Create and Manage Graphs
+
 ```gql
 -- Create a new graph
 CREATE GRAPH social_network;
@@ -772,6 +825,7 @@ DROP GRAPH temp_graph CASCADE;
 ```
 
 #### Connect to Specific Graph
+
 ```go
 // Connect to specific graph via DSN
 client, err := gql.Connect("quic://localhost:7567/social_network")
@@ -783,6 +837,7 @@ err = client.UseGraph("analytics")
 ### Machine Learning
 
 #### Node Embeddings with Node2Vec
+
 ```gql
 -- Generate node embeddings
 CALL gds.node2vec.stream({
@@ -797,6 +852,7 @@ LIMIT 10;
 ```
 
 #### Link Prediction
+
 ```gql
 -- Predict likelihood of connection
 CALL gds.linkPrediction.mutate(
@@ -808,6 +864,7 @@ RETURN score;
 ```
 
 #### Community Detection
+
 ```gql
 -- Detect communities using Louvain
 CALL gds.louvain.stream({
@@ -818,6 +875,7 @@ ORDER BY size(members) DESC;
 ```
 
 #### PageRank
+
 ```gql
 -- Calculate PageRank
 CALL gds.pagerank.stream({
@@ -832,6 +890,7 @@ LIMIT 10;
 ### Change Data Capture (CDC)
 
 #### Start CDC
+
 ```gql
 -- Enable change data capture
 CALL db.cdc.start();
@@ -844,10 +903,11 @@ CALL db.cdc.stop();
 ```
 
 #### Subscribe to Changes
+
 ```go
 // Subscribe to change events
 err := client.CDCSubscribe(func(event gql.ChangeEvent) error {
-    fmt.Printf("Change: %s on %s %d\n", 
+    fmt.Printf("Change: %s on %s %d\n",
         event.Type, event.ObjectType, event.ObjectID)
     return nil
 })
@@ -860,6 +920,7 @@ err = client.CDCSubscribeFiltered(
 ```
 
 #### Configure CDC Sinks
+
 ```gql
 -- Configure Kafka sink
 CALL db.cdc.configureSink({
@@ -877,9 +938,61 @@ CALL db.cdc.configureSink({
 });
 ```
 
+#### Malformed WAL Record Diagnostics
+
+The CDC engine tracks malformed WAL ingestion attempts via the counter `malformed_wal_records` in CDC status output. A record is considered malformed if it lacks a JSON object envelope (does not start with `{` and end with `}`).
+
+Logging (rate-limited):
+
+- First malformed (`count == 1`) emits a WARN.
+- Every 100th malformed (`count % 100 == 0`) emits a WARN.
+
+Operational Guidance:
+
+1. Investigate upstream WAL serialization layer for corruption/version mismatch.
+2. Capture representative malformed payloads outside the engine (they are dropped, not queued).
+3. Consider enabling stricter abort policies (future feature) if rate spikes.
+
+Ring Buffer Snapshots:
+
+The engine now retains a fixed-size ring (32 entries) of snapshot points for malformed counts (1 and every 100th). These snapshots contain the cumulative malformed count and a millisecond timestamp of when the snapshot was taken. Access via internal API `exportDiagnostics()` (returns JSON) or `malformedLogSnapshots()` for just the array.
+
+Environment Guard (Adaptive Diff Threshold):
+
+Benchmark and runtime adaptive diff performance checks honor the environment variable `GEODE_ADAPTIVE_DIFF_MIN_RATIO` (default `0.90`). Values must be `0.0 < r < 2.0`; invalid values are ignored (fallback to default). Benchmarks emit the effective `min_ratio` in JSON output.
+
+Example Status Snippet:
+
+```json
+{
+  "total_events": 120345,
+  "buffer_size": 0,
+  "peak_buffer": 2048,
+  "batch_adjustments": 12,
+  "malformed_wal_records": 101
+}
+```
+
+CANARY Evidence (selected):
+
+- WALTailMalformedDiagnostics (TESTED)
+- WALTailMalformedLog (TESTED)
+- WALTailMalformedLogBuffer (TESTED)
+- WALTailMalformedLogBufferWrap (TESTED)
+- DiagnosticsExport (TESTED)
+- AdaptiveDiffPerfThresholdEnv (BENCHED)
+- AdaptiveDiffPerfThresholdEnvInvalidParse (TESTED)
+
+Planned Enhancements:
+
+1. Optional hashed payload prefix retention for first N malformed entries.
+2. Configurable malformed ratio guardrail.
+3. Administrative protocol surface for diagnostics export (currently internal).
+
 ### Time-Travel Queries
 
 #### Query Historical Data
+
 ```gql
 -- Query as of specific timestamp
 MATCH (n:Person)
@@ -899,6 +1012,7 @@ RETURN count(n);
 ```
 
 #### Version History
+
 ```gql
 -- Get all versions of a node
 MATCH (n:Document {id: 100})
@@ -913,6 +1027,7 @@ RETURN n.validFrom, n.value, n.previousValue;
 ```
 
 #### Configure Retention
+
 ```gql
 -- Set retention policy
 ALTER DATABASE SET temporal.retention = '90 DAYS';
@@ -924,6 +1039,7 @@ CALL db.temporal.vacuum();
 ### GPU Acceleration
 
 #### Enable GPU
+
 ```gql
 -- Check GPU availability
 CALL db.gpu.status() YIELD backend, devices;
@@ -935,6 +1051,7 @@ SET gpu.device = 0;
 ```
 
 #### GPU-Accelerated Algorithms
+
 ```gql
 -- BFS with GPU
 CALL gds.bfs.gpu({
@@ -956,15 +1073,17 @@ CALL gds.shortestPath.gpu({
 ```
 
 #### Benchmark GPU Performance
+
 ```gql
 -- Compare CPU vs GPU performance
-CALL db.gpu.benchmark('pagerank') 
+CALL db.gpu.benchmark('pagerank')
 YIELD algorithm, cpuTimeMs, gpuTimeMs, speedup;
 ```
 
 ### Encryption
 
 #### Configure Encryption
+
 ```bash
 # Generate new encryption key
 ./key_rotate generate --output master.key
@@ -976,6 +1095,7 @@ export GEODE_ENCRYPTION_KEY_FILE=/path/to/master.key
 ```
 
 #### Key Rotation
+
 ```bash
 # Rotate encryption keys online
 ./key_rotate rotate \
@@ -989,6 +1109,7 @@ export GEODE_ENCRYPTION_KEY_FILE=/path/to/master.key
 ```
 
 #### KMS Integration
+
 ```gql
 -- Configure AWS KMS
 ALTER DATABASE SET encryption.kms = 'aws';
@@ -1002,10 +1123,11 @@ CALL db.encryption.rotateKeys();
 ### Streaming Queries
 
 #### Window Functions
+
 ```gql
 -- Tumbling window aggregation
 CREATE STREAM node_activity AS
-SELECT 
+SELECT
   window_start,
   window_end,
   count(*) as events,
@@ -1016,22 +1138,23 @@ GROUP BY window_start, window_end;
 
 -- Sliding window
 CREATE STREAM moving_average AS
-SELECT 
+SELECT
   timestamp,
   avg(value) OVER (
-    ORDER BY timestamp 
+    ORDER BY timestamp
     RANGE BETWEEN INTERVAL '1 HOUR' PRECEDING AND CURRENT ROW
   ) as hourly_avg
 FROM metrics;
 ```
 
 #### Real-time Alerts
+
 ```gql
 -- Create alert on pattern
 CREATE ALERT high_activity
 WHEN (
-  SELECT count(*) 
-  FROM changes 
+  SELECT count(*)
+  FROM changes
   WINDOW TUMBLING (SIZE '1 MINUTE')
 ) > 1000
 CALL webhook.notify('https://alerts.example.com/high-activity');
@@ -1040,23 +1163,27 @@ CALL webhook.notify('https://alerts.example.com/high-activity');
 ## Performance Considerations
 
 ### GPU Acceleration Guidelines
+
 - Use GPU for graphs with >1M edges
 - Batch operations for better GPU utilization
 - CSR format automatically used for GPU algorithms
 - Memory limit: 8GB per GPU device by default
 
 ### Encryption Overhead
+
 - ~5-10% performance impact with AES-256-GCM
 - Key rotation can be performed online
 - Use KMS for production key management
 
 ### Multi-Graph Best Practices
+
 - Limit to 100 graphs per instance
 - Use connection pooling per graph
 - Consider sharding large graphs
 - Monitor per-graph resource usage
 
 ### CDC Performance
+
 - Event queue limited to 1M events by default
 - Retention period affects memory usage
 - Use filtering to reduce event volume
