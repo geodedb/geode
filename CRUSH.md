@@ -3,7 +3,7 @@ CRUSH.md — geode repo quick facts for agents
 Build & run
 
 - Build all: make build (builds both Zig and Go components)
-- Build (release-safe): zig build -Drelease-safe
+- Build (release-safe): zig build -Doptimize=ReleaseSafe
 - Debug build: zig build
 - Run server (QUIC): ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
 - Run server (TCP): ./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567

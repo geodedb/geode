@@ -1,5 +1,4 @@
 # Minimal Docker Compose for testing
-version: '3.8'
 
 services:
   geode:

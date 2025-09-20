@@ -5,8 +5,11 @@ const builtin = @import("builtin");
 // In production, use proper CA-signed certificates
 
 pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8, cert_path: []const u8, key_path: []const u8) !void {
-    // Create certs directory if it doesn't exist
-    std.fs.cwd().makeDir("certs") catch |err| switch (err) {
+    // Extract directory from cert_path
+    const cert_dir = std.fs.path.dirname(cert_path) orelse ".";
+    
+    // Create certificate directory if it doesn't exist
+    std.fs.cwd().makePath(cert_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -32,9 +35,17 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
 }
 
 pub fn ensureCertificates(allocator: std.mem.Allocator) !void {
-    const cert_path = "certs/server.crt";
-    const key_path = "certs/server.key";
+    ensureCertificatesAtPath(allocator, "certs/server.crt", "certs/server.key") catch |err| {
+        // If certs directory fails, try /tmp as fallback
+        if (err == error.AccessDenied or err == error.FileNotFound) {
+            try ensureCertificatesAtPath(allocator, "/tmp/geode-server.crt", "/tmp/geode-server.key");
+        } else {
+            return err;
+        }
+    };
+}
 
+pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8) !void {
     // Check if certificates already exist
     std.fs.cwd().access(cert_path, .{}) catch {
         // Generate new certificates

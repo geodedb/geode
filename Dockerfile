@@ -25,8 +25,8 @@ WORKDIR /build
 COPY . .
 
 # Build geode binaries and tools
-RUN zig build -Drelease-safe && \
-    (zig build tools -Drelease-safe || echo "Warning: Some tools may not have built")
+RUN zig build -Doptimize=ReleaseSafe && \
+    (zig build tools -Doptimize=ReleaseSafe || echo "Warning: Some tools may not have built")
 
 # Runtime stage
 FROM debian:bookworm-slim AS runtime

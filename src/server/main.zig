@@ -2043,12 +2043,36 @@ pub fn main() !void {
     var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
     var listen_quic: ?[]const u8 = null;
     var listen_tcp: ?[]const u8 = null;
-    var cert_path: []const u8 = "certs/server.crt";
-    var key_path: []const u8 = "certs/server.key";
+    var cert_path: ?[]const u8 = null;
+    var key_path: ?[]const u8 = null;
     var order_keys_mode_expr = false;
     var data_dir: ?[]const u8 = null;
     var test_exit_after_first: bool = false;
     var catalog_create_name: ?[]const u8 = null;
+    
+    // Check for help flag
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print("Geode Server v0.16.0\n\n", .{});
+            std.debug.print("Usage: geoded [OPTIONS]\n\n", .{});
+            std.debug.print("Options:\n", .{});
+            std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:7567)\n", .{});
+            std.debug.print("  --listen-tcp <addr:port>     Listen on TCP (e.g., 127.0.0.1:7568)\n", .{});
+            std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
+            std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
+            std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
+            std.debug.print("  --result-format <txt|json>   Result format (default: json)\n", .{});
+            std.debug.print("  --no-estimates               Disable query estimation\n", .{});
+            std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
+            std.debug.print("  --profile-memcurve           Enable memory curve profiling\n", .{});
+            std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
+            std.debug.print("  --help                       Show this help message\n", .{});
+            std.debug.print("\nIf no listen option is specified, defaults to stdio mode.\n", .{});
+            std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
+            return;
+        }
+    }
+    
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
             const f = args[ai + 1];
@@ -2091,8 +2115,36 @@ pub fn main() !void {
         }
     }
 
-    // Ensure TLS certificates exist
-    try cert_gen.ensureCertificates(gpa);
+    // Ensure TLS certificates exist (only if using QUIC and no custom certs specified)
+    if (listen_quic != null) {
+        if (cert_path == null or key_path == null) {
+            // Use default paths or fallback to /tmp
+            const default_cert = if (data_dir) |dir| 
+                try std.fmt.allocPrint(gpa, "{s}/server.crt", .{dir})
+            else 
+                "/tmp/geode-server.crt";
+            const default_key = if (data_dir) |dir|
+                try std.fmt.allocPrint(gpa, "{s}/server.key", .{dir})
+            else
+                "/tmp/geode-server.key";
+            
+            cert_path = cert_path orelse default_cert;
+            key_path = key_path orelse default_key;
+            
+            // Try to generate certificates if they don't exist
+            cert_gen.ensureCertificatesAtPath(gpa, cert_path.?, key_path.?) catch |err| {
+                std.debug.print("Warning: Could not generate certificates: {s}\n", .{@errorName(err)});
+                std.debug.print("Using fallback paths in /tmp\n", .{});
+                cert_path = "/tmp/geode-server.crt";
+                key_path = "/tmp/geode-server.key";
+                try cert_gen.ensureCertificatesAtPath(gpa, cert_path.?, key_path.?);
+            };
+        }
+    } else {
+        // For non-QUIC, use dummy paths if not specified
+        cert_path = cert_path orelse "certs/server.crt";
+        key_path = key_path orelse "certs/server.key";
+    }
     // Initialize WAL (test / prototype). For now use a temp path under /tmp; future: data_dir option.
     var wal = wal_mod.Wal.init(gpa);
     defer wal.deinit();
@@ -2204,8 +2256,8 @@ pub fn main() !void {
         var transport = try quic_transport.QuicTransport.init(gpa, .{
             .address = address_str,
             .port = port,
-            .cert_path = cert_path,
-            .key_path = key_path,
+            .cert_path = cert_path.?,
+            .key_path = key_path.?,
         });
         defer transport.deinit();
 

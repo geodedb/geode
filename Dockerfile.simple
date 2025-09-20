@@ -63,11 +63,10 @@ WORKDIR /build
 COPY . .
 
 # Build geode
-RUN zig build -Drelease-safe || zig build -Doptimize=ReleaseSafe || zig build
+RUN zig build -Doptimize=ReleaseSafe || zig build
 
 # Try to build tools (may fail, that's ok)
-RUN zig build tools -Drelease-safe 2>/dev/null || \
-    zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
+RUN zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
     zig build tools 2>/dev/null || \
     echo "Warning: Some tools may not have built"
 

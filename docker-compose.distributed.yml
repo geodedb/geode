@@ -1,5 +1,4 @@
 # Docker Compose for Geode - Distributed Deployment with Raft Consensus
-version: '3.8'
 
 services:
   # Geode Leader Node

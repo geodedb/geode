@@ -20,8 +20,8 @@ WORKDIR /build
 COPY . .
 
 # Build with maximum optimizations
-RUN zig build -Drelease-fast && \
-    zig build tools -Drelease-fast && \
+RUN zig build -Doptimize=ReleaseFast && \
+    zig build tools -Doptimize=ReleaseFast && \
     strip /build/zig-out/bin/geoded && \
     strip /build/zig-out/bin/geodec
 

@@ -5,13 +5,16 @@ ZIG_FLAGS ?=
 ZIG_RELEASE_FLAGS ?= -Doptimize=ReleaseSafe
 
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
-.PHONY: cross-compile cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64 cross-test
+.PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 
 # Default target - build everything including cross-compilation checks (non-blocking)
-all: build go-build test
+all: sub build go-build test
 	@echo "Running cross-compilation checks..."
 	@$(MAKE) cross-compile || echo "Warning: Some cross-compilation targets failed (see above for details)"
 	@$(MAKE) docker-ci || echo "Warning: Docker CI failed"
+
+sub:
+	git submodule update --init --recursive
 
 # Help target
 help:
@@ -195,7 +198,7 @@ ci: clean build test fuzz bench cross-compile-strict test-cross-clients
 	@echo "CI pipeline completed successfully"
 
 # Strict cross-compilation for CI (fails on any error)
-cross-compile-strict: cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64
+cross-compile-strict: cross-linux-x86_64 cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64
 	@echo "All cross-compilation targets built successfully"
 
 # Quick rebuild (no clean)
@@ -206,7 +209,7 @@ cross-compile: cross-compile-required cross-compile-optional cross-clients
 	@echo "Cross-compilation checks complete (including client libraries)"
 
 # Required 64-bit cross-compilation targets (must all pass)
-cross-compile-required: cross-windows cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-windows-arm64
+cross-compile-required: cross-linux-x86_64 cross-windows cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64
 	@echo "✓ All required cross-compilation targets built successfully"
 
 # Optional 32-bit cross-compilation targets (failures are non-fatal)
@@ -214,33 +217,40 @@ cross-compile-optional:
 	@echo "Checking optional 32-bit cross-compilation targets..."
 	@$(MAKE) cross-linux-arm || echo "⚠ Linux ARM (32-bit) cross-compilation failed (this is expected and non-fatal)"
 
+# Cross-compile for Linux x86_64
+cross-linux-x86_64:
+	@echo "Cross-compiling for Linux x86_64..."
+	$(ZIG) build -Dtarget=x86_64-linux -p zig-out/linux-x86_64 $(ZIG_FLAGS)
+	@echo "✓ Linux x86_64 build successful"
+	@$(MAKE) cross-go-linux-x86_64
+
 # Cross-compile for Windows x86_64
 cross-windows:
 	@echo "Cross-compiling for Windows x86_64..."
-	$(ZIG) build -Dtarget=x86_64-windows $(ZIG_FLAGS)
-	@test -f zig-out/bin/geoded.exe || (echo "Failed to build geoded.exe" && exit 1)
-	@test -f zig-out/bin/geodec.exe || (echo "Failed to build geodec.exe" && exit 1)
-	@test -f zig-out/bin/gql.exe || (echo "Failed to build gql.exe" && exit 1)
+	$(ZIG) build -Dtarget=x86_64-windows -p zig-out/windows-x86_64 $(ZIG_FLAGS)
+	@test -f zig-out/windows-x86_64/bin/geoded.exe || (echo "Failed to build geoded.exe" && exit 1)
+	@test -f zig-out/windows-x86_64/bin/geodec.exe || (echo "Failed to build geodec.exe" && exit 1)
+	@test -f zig-out/windows-x86_64/bin/gql.exe || (echo "Failed to build gql.exe" && exit 1)
 	@echo "✓ Windows x86_64 build successful"
 	@$(MAKE) cross-go-windows-x86_64
 
 # Cross-compile for Linux ARM (32-bit)
 cross-linux-arm:
 	@echo "Cross-compiling for Linux ARM..."
-	$(ZIG) build -Dtarget=arm-linux-gnueabihf $(ZIG_FLAGS)
+	$(ZIG) build -Dtarget=arm-linux-gnueabihf -p zig-out/linux-arm $(ZIG_FLAGS)
 	@echo "✓ Linux ARM build successful"
 
 # Cross-compile for Linux ARM64
 cross-linux-arm64:
 	@echo "Cross-compiling for Linux ARM64..."
-	$(ZIG) build -Dtarget=aarch64-linux-gnu $(ZIG_FLAGS)
+	$(ZIG) build -Dtarget=aarch64-linux-gnu -p zig-out/linux-arm64 $(ZIG_FLAGS)
 	@echo "✓ Linux ARM64 build successful"
 	@$(MAKE) cross-go-linux-arm64
 
 # Cross-compile for Linux RISC-V 64-bit
 cross-linux-riscv64:
 	@echo "Cross-compiling for Linux RISC-V 64-bit..."
-	$(ZIG) build -Dtarget=riscv64-linux-gnu $(ZIG_FLAGS)
+	$(ZIG) build -Dtarget=riscv64-linux-gnu -p zig-out/linux-riscv64 $(ZIG_FLAGS)
 	@echo "✓ Linux RISC-V 64-bit build successful"
 
 # Cross-compile for macOS x86_64
@@ -248,17 +258,29 @@ cross-macos-x86_64:
 	@echo "Cross-compiling for macOS x86_64..."
 	@# Only run on non-macOS systems or when on ARM macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "arm64" ]; then \
-		$(ZIG) build -Dtarget=x86_64-macos $(ZIG_FLAGS); \
+		$(ZIG) build -Dtarget=x86_64-macos -p zig-out/macos-x86_64 $(ZIG_FLAGS); \
 		echo "✓ macOS x86_64 build successful"; \
 	else \
 		echo "Skipping macOS x86_64 cross-compile on x86_64 macOS"; \
 	fi
 	@$(MAKE) cross-go-darwin-x86_64
 
+# Cross-compile for macOS ARM64 (Apple Silicon)
+cross-macos-arm64:
+	@echo "Cross-compiling for macOS ARM64..."
+	@# Only run on non-macOS systems or when on Intel macOS
+	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "x86_64" ]; then \
+		$(ZIG) build -Dtarget=aarch64-macos -p zig-out/macos-arm64 $(ZIG_FLAGS); \
+		echo "✓ macOS ARM64 build successful"; \
+	else \
+		echo "Skipping macOS ARM64 cross-compile on ARM64 macOS"; \
+	fi
+	@$(MAKE) cross-go-darwin-arm64
+
 # Cross-compile for Windows ARM64
 cross-windows-arm64:
 	@echo "Cross-compiling for Windows ARM64..."
-	$(ZIG) build -Dtarget=aarch64-windows-msvc $(ZIG_FLAGS)
+	$(ZIG) build -Dtarget=aarch64-windows-msvc -p zig-out/windows-arm64 $(ZIG_FLAGS)
 	@echo "✓ Windows ARM64 build successful"
 
 # Test cross-platform stdio functionality
@@ -438,9 +460,9 @@ cross-go-clients: cross-go-windows-x86_64 cross-go-linux-x86_64 cross-go-linux-a
 cross-go-windows-x86_64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for Windows x86_64..."; \
-		mkdir -p zig-out/clients/windows-x86_64; \
+		mkdir -p zig-out/windows-x86_64/bin; \
 		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o ../../../../zig-out/clients/windows-x86_64/gql-example.exe . && \
+		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o ../../../../zig-out/windows-x86_64/bin/gql-example.exe . && \
 		echo "✓ Go client example built for Windows x86_64"; \
 	fi
 
@@ -448,9 +470,9 @@ cross-go-windows-x86_64:
 cross-go-linux-x86_64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for Linux x86_64..."; \
-		mkdir -p zig-out/clients/linux-x86_64; \
+		mkdir -p zig-out/linux-x86_64/bin; \
 		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../../../../zig-out/clients/linux-x86_64/gql-example . && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../../../../zig-out/linux-x86_64/bin/gql-example . && \
 		echo "✓ Go client example built for Linux x86_64"; \
 	fi
 
@@ -458,9 +480,9 @@ cross-go-linux-x86_64:
 cross-go-linux-arm64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for Linux ARM64..."; \
-		mkdir -p zig-out/clients/linux-arm64; \
+		mkdir -p zig-out/linux-arm64/bin; \
 		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ../../../../zig-out/clients/linux-arm64/gql-example . && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ../../../../zig-out/linux-arm64/bin/gql-example . && \
 		echo "✓ Go client example built for Linux ARM64"; \
 	fi
 
@@ -468,9 +490,9 @@ cross-go-linux-arm64:
 cross-go-darwin-x86_64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for macOS x86_64..."; \
-		mkdir -p zig-out/clients/macos-x86_64; \
+		mkdir -p zig-out/macos-x86_64/bin; \
 		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o ../../../../zig-out/clients/macos-x86_64/gql-example . && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o ../../../../zig-out/macos-x86_64/bin/gql-example . && \
 		echo "✓ Go client example built for macOS x86_64"; \
 	fi
 
@@ -478,9 +500,9 @@ cross-go-darwin-x86_64:
 cross-go-darwin-arm64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for macOS ARM64..."; \
-		mkdir -p zig-out/clients/macos-arm64; \
+		mkdir -p zig-out/macos-arm64/bin; \
 		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o ../../../../zig-out/clients/macos-arm64/gql-example . && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o ../../../../zig-out/macos-arm64/bin/gql-example . && \
 		echo "✓ Go client example built for macOS ARM64"; \
 	fi
 

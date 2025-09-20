@@ -34,14 +34,12 @@ COPY . .
 
 # Build geode with multiple fallback options
 RUN echo "Building with Zig $(zig version)..." && \
-    (zig build -Drelease-safe 2>/dev/null || \
-     zig build -Doptimize=ReleaseSafe 2>/dev/null || \
+    (zig build -Doptimize=ReleaseSafe 2>/dev/null || \
      zig build 2>/dev/null || \
      (echo "Build failed, trying without optimization..." && zig build)) && \
     echo "Main build complete" && \
     # Try to build tools (optional)
-    (zig build tools -Drelease-safe 2>/dev/null || \
-     zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
+    (zig build tools -Doptimize=ReleaseSafe 2>/dev/null || \
      zig build tools 2>/dev/null || \
      echo "Note: Some tools may not have built")
 
