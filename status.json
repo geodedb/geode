@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-20T20:50:23.015547922Z",
+  "generated_at": "2025-09-20T20:56:58.130902024Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -144,6 +144,22 @@
             "TestCANARY_REQ_GQL_013_TxnCommit"
           ],
           "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Txn Conflict Matrix",
+          "aspect": "Engine",
+          "status": "BENCHED",
+          "files": [
+            "docs/NEXT.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_013_TxnConflictMatrix"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix"
+          ],
           "owner": "engine",
           "updated": "2025-09-20"
         }
@@ -552,20 +568,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_cdc_adaptive_diff_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
-          ],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "TESTED",
           "files": [
             "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
@@ -574,6 +576,20 @@
             "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_diff_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -680,7 +696,7 @@
           "aspect": "DiagnosticsExport",
           "status": "TESTED",
           "files": [
-            "src/streaming/cdc_enhanced.zig"
+            "tests/canary_cdc_diagnostics_export.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport"
@@ -694,7 +710,7 @@
           "aspect": "DiagnosticsExport",
           "status": "TESTED",
           "files": [
-            "tests/canary_cdc_diagnostics_export.zig"
+            "src/streaming/cdc_enhanced.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport"
@@ -1150,7 +1166,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 20,
+      "BENCHED": 21,
       "STUB": 2,
       "TESTED": 54
     },
@@ -1172,7 +1188,7 @@
       "E2E": 1,
       "E2ENoEngine": 1,
       "E2EUnsupported": 1,
-      "Engine": 13,
+      "Engine": 14,
       "EventCapture": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
