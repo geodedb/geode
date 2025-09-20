@@ -1,3 +1,7 @@
+// CANARY: REQ=REQ-GQL-025; FEATURE="Disk Storage"; ASPECT=Storage; STATUS=TESTED; TEST=tests/e2e_catalog_persistence_disk.zig; OWNER=storage; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-026; FEATURE="Page Management"; ASPECT=Storage; STATUS=TESTED; TEST=tests/unit_page_manager.zig; OWNER=storage; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-027; FEATURE="WAL/ARIES"; ASPECT=Storage; STATUS=TESTED; TEST=tests/e2e_wal_recovery.zig; OWNER=storage; UPDATED=2025-09-20
+
 const std = @import("std");
 const iface = @import("interface.zig");
 

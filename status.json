@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-20T22:54:50.671096969Z",
+  "generated_at": "2025-09-20T23:08:56.421093783Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -124,6 +124,82 @@
       ]
     },
     {
+      "id": "REQ-GQL-006",
+      "features": [
+        {
+          "feature": "GQL Parser",
+          "aspect": "Parser",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/e2e_protocol.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-007",
+      "features": [
+        {
+          "feature": "MATCH/OPTIONAL Parsing",
+          "aspect": "Parser",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/e2e_graph_match.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-008",
+      "features": [
+        {
+          "feature": "ORDER/LIMIT/OFFSET Parsing",
+          "aspect": "Parser",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/e2e_protocol.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-009",
+      "features": [
+        {
+          "feature": "Query Executor",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/e2e_protocol.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-010",
       "features": [
         {
@@ -212,6 +288,44 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_010_DiagnosticsFold"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-011",
+      "features": [
+        {
+          "feature": "UNION/EXCEPT/INTERSECT",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/e2e_setops_all.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-012",
+      "features": [
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/e2e_protocol_groupby_basic.zig"
           ],
           "benches": [],
           "owner": "engine",
@@ -421,6 +535,63 @@
             "BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPath"
           ],
           "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-025",
+      "features": [
+        {
+          "feature": "Disk Storage",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "src/storage/disk.zig"
+          ],
+          "tests": [
+            "tests/e2e_catalog_persistence_disk.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-026",
+      "features": [
+        {
+          "feature": "Page Management",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "src/storage/disk.zig"
+          ],
+          "tests": [
+            "tests/unit_page_manager.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-027",
+      "features": [
+        {
+          "feature": "WAL/ARIES",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "src/storage/disk.zig"
+          ],
+          "tests": [
+            "tests/e2e_wal_recovery.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
           "updated": "2025-09-20"
         }
       ]
@@ -685,6 +856,25 @@
       ]
     },
     {
+      "id": "REQ-GQL-040",
+      "features": [
+        {
+          "feature": "Raft Consensus",
+          "aspect": "Distributed",
+          "status": "STUB",
+          "files": [
+            "src/distributed/raft.zig"
+          ],
+          "tests": [
+            "tests/e2e_distributed_raft.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-042",
       "features": [
         {
@@ -775,20 +965,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_cdc_adaptive_diff_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
-          ],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "TESTED",
           "files": [
             "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
@@ -797,6 +973,20 @@
             "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_diff_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -1416,13 +1606,32 @@
           "updated": "2025-09-20"
         }
       ]
+    },
+    {
+      "id": "REQ-GQL-XXX",
+      "features": [
+        {
+          "feature": "Feature Name",
+          "aspect": "Component",
+          "status": "TESTED",
+          "files": [
+            "docs/README.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_XXX_FeatureName"
+          ],
+          "benches": [],
+          "owner": "team",
+          "updated": "2025-09-20"
+        }
+      ]
     }
   ],
   "summary": {
     "by_status": {
       "BENCHED": 29,
-      "STUB": 2,
-      "TESTED": 63
+      "STUB": 3,
+      "TESTED": 73
     },
     "by_aspect": {
       "API": 7,
@@ -1437,12 +1646,14 @@
       "CDCControlProtocol": 1,
       "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
+      "Component": 1,
       "ConstraintPerf": 1,
       "DiagnosticsExport": 1,
+      "Distributed": 1,
       "E2E": 1,
       "E2ENoEngine": 1,
       "E2EUnsupported": 1,
-      "Engine": 18,
+      "Engine": 21,
       "EventCapture": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
@@ -1451,6 +1662,7 @@
       "Ordering": 1,
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
+      "Parser": 3,
       "PathCyclePruningPerf": 1,
       "PathExpandMemPerf": 1,
       "PathPruningStatsPerf": 1,
@@ -1461,7 +1673,7 @@
       "Refactor": 1,
       "ResumeTokenRestart": 1,
       "Retention": 1,
-      "Storage": 5,
+      "Storage": 8,
       "Telemetry": 1,
       "Tooling": 3,
       "UniquePerf": 1,

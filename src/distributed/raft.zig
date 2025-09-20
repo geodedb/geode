@@ -1,3 +1,5 @@
+// CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=STUB; TEST=tests/e2e_distributed_raft.zig; OWNER=distributed; UPDATED=2025-09-20
+
 const std = @import("std");
 
 /// Raft node states

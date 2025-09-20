@@ -1,6 +1,6 @@
 module go.spyder.org/geode
 
-go 1.25.0
+go 1.24.0
 
 require go.spyder.org/geode/clients/go/gql v0.0.0-00010101000000-000000000000
 

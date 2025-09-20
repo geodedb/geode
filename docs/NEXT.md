@@ -1,85 +1,103 @@
-# NEXT — Verifiable Backlog (Aligned with Current Evidence 2025-09-20)
+# NEXT — Verifiable Backlog (CANARY Evidence-Driven 2025-09-20)
 
-Principle: Each slice introduces or upgrades at most one aspect per REQ and MUST add at least one new CANARY test or bench name. Small, reviewable, machine-verifiable.
+Principle: Each slice introduces or upgrades at most one aspect per REQ and MUST add at least one new CANARY test or bench. Small, reviewable, machine-verifiable.
 
-## NOW (Execute Immediately)
+## Current Status Summary
+- **Coverage: 97.1%** (102 of 105 aspects TESTED or BENCHED)
+- **STUB aspects: 3** (CDC API, Raft, Baseline Refresh)  
+- **TESTED: 73**
+- **BENCHED: 29**
 
-1. REQ-GQL-042 CDC Core API Lifecycle (COMPLETED: TESTED)
+## NOW (Critical STUB → TESTED Upgrades)
 
-   - Why: Core CDC API still STUB; need functional start/stop lifecycle.
-   - What: Implement minimal start (register listener) and stop (drain + close) semantics in CDC API layer.
-   - Tests: Add `TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle` (ensures idempotent stop, emits START/STOP diagnostics sequence).
-   - CANARY: Update existing CDC API line to include new test; STATUS stays STUB until implementation then IMPL auto-promotes to TESTED.
-   - Acceptance: Scan shows REQ-GQL-042 CDC API status TESTED; log contains no resource leak warnings.
+1. **REQ-GQL-042 CDC Core API** (Currently: STUB)
+   - Why: Core CDC API marked STUB but test reference exists
+   - What: Verify test implementation or implement missing start/stop lifecycle
+   - Test: Ensure `TestCANARY_REQ_GQL_042_CDC_StartStop` is implemented
+   - CANARY: Update line in docs/PROMPTS.md to STATUS=TESTED once test passes
+   - Acceptance: `canaryscan` shows REQ-GQL-042 API aspect as TESTED
 
-2. REQ-GQL-013 Transactions Bench (COMPLETED: BENCHED)
+2. **REQ-GQL-040 Raft Consensus** (Currently: STUB)  
+   - Why: Distributed foundation marked STUB
+   - What: Implement basic leader election state machine
+   - Test: Add `TestCANARY_REQ_GQL_040_RaftLeaderElection`
+   - CANARY: Update src/distributed/raft.zig STATUS to TESTED
+   - Acceptance: Basic 3-node election completes within timeout
 
-   - Why: No performance signal; need baseline conflict matrix cost.
-   - What: Add benchmark measuring commit latency under write/write conflicts.
-   - Bench: `BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix`.
-   - Acceptance: REQ-GQL-013 gains a BENCHED aspect (or existing upgraded to BENCHED) with benchmark listed.
+3. **REQ-GQL-010 Benchmark Baseline Refresh** (Currently: IMPL)
+   - Why: Tool exists but no test coverage
+   - What: Add test for baseline refresh functionality
+   - Test: `TestCANARY_REQ_GQL_010_BenchBaselineRefresh`
+   - CANARY: Update src/tools/bench_regress.zig to include test
+   - Acceptance: Baseline file update verified with known input
 
-3. REQ-GQL-017 Property Access Hot Path (COMPLETED: BENCHED)
+## NEXT (Performance & Edge Cases)
 
-   - Why: Add visibility into property lookup micro-cost.
-   - Bench: `BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPath` scanning 1M simple accesses.
-   - Acceptance: New BENCHED entry; runtime < target threshold documented (record initial ms/op baseline in README perf notes).
+1. **REQ-GQL-013 Transaction Isolation Levels**
+   - Add SSI phantom read prevention test
+   - Bench: `BenchmarkCANARY_REQ_GQL_013_SSI_PhantomPrevention`
 
-4. REQ-GQL-005 Frame Decode Micro-bench (COMPLETED: BENCHED)
+2. **REQ-GQL-028 WAL Recovery Corruption Handling**
+   - Add corrupted page recovery test
+   - Test: `TestCANARY_REQ_GQL_028_CorruptPageRecovery`
 
-   - Why: Wire performance unmeasured; ensure framing overhead tracked.
-   - Bench: `BenchmarkCANARY_REQ_GQL_005_FrameDecode` reading synthetic HELLO/PULL frames.
-   - Acceptance: BENCHED entry appears; captures bytes/sec metric in benchmark log (informational).
+3. **REQ-GQL-032 Constraint Cascading**
+   - Add complex cascade scenario bench
+   - Bench: `BenchmarkCANARY_REQ_GQL_032_CascadePerf`
 
-5. REQ-GQL-016 Path Expansion Breadth Stress (COMPLETED: BENCHED)
-   - Why: Existing benches cover pruning, mem; need pure breadth growth scaling.
-   - Bench: `BenchmarkCANARY_REQ_GQL_016_PathExpandBreadth`.
-   - Acceptance: Additional BENCHED aspect with new bench name; no regressions in existing path benches (±5%).
+4. **REQ-GQL-042 CDC Backpressure Adaptive**
+   - Add dynamic threshold adjustment test
+   - Test: `TestCANARY_REQ_GQL_042_BackpressureAdaptive`
 
-## NEXT (Queue After NOW)
+5. **REQ-GQL-046 TDE Multi-Key Support**
+   - Add key hierarchy test
+   - Test: `TestCANARY_REQ_GQL_046_KeyHierarchy`
 
-1. REQ-GQL-028 Adaptive Compaction Policy (COMPLETED)
-   - Implemented `BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicy`.
-2. REQ-GQL-032 Constraint Negative Diagnostics Matrix (COMPLETED)
-   - Added negative tests for unique + type mismatch.
-3. REQ-GQL-042 CDC Resume Tokens (COMPLETED)
-   - Added resume token generation & replay test.
-4. REQ-GQL-010 Diagnostics Large Fold Memory (COMPLETED)
-   - Added large fold benchmark.
-5. REQ-GQL-004 Pagination Policy Edge (COMPLETED)
-   - Added override toggle test.
+## LATER (Architecture & Scale)
 
-## LATER (Strategic / Design)
+1. **REQ-GQL-050 Multi-Tenancy** (NEW)
+   - Design tenant isolation model
+   - Initial CANARY: STATUS=STUB with design doc
 
-1. REQ-GQL-046 TDE Key Rotation Bench (COMPLETED) `BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput`.
-2. REQ-GQL-042 Backfill & Catch-up Latency (COMPLETED) `BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency`.
-3. REQ-GQL-016 Weighted Path Cost (COMPLETED) test `TestCANARY_REQ_GQL_016_PathWeightedCost`.
-4. REQ-GQL-028 Crash Recovery Compaction Interaction (COMPLETED) test `TestCANARY_REQ_GQL_028_RecoveryAfterCompaction`.
+2. **REQ-GQL-051 GPU Acceleration** (NEW)
+   - Path expansion on GPU
+   - Initial CANARY: STATUS=STUB with POC
 
-## Slice Template
+3. **REQ-GQL-052 Federation** (NEW)
+   - Cross-instance query routing
+   - Initial CANARY: STATUS=STUB with protocol spec
 
-```text
-// Example (replace placeholders):
-// CANARY: REQ=REQ-GQL-013; FEATURE="Txn Conflict Matrix"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_TxnConflictMatrix; BENCH=BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix; OWNER=engine; UPDATED=2025-09-20
+## Verification Commands
+
+```bash
+# Build scanner
+go build -o ./bin/canaryscan ./tools/canaryscan
+
+# Generate current status
+./bin/canaryscan --root . --out status.json --csv status.csv
+
+# Verify no over-claims
+./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
+
+# Check specific requirement
+grep "REQ-GQL-042.*API.*STUB" status.csv
 ```
 
-Every PR: include updated CANARY line(s) + new test/bench names compiled & passing. Avoid modifying historical UPDATED dates unless feature changed.
+## Success Metrics
 
-## Verification
+After NOW tasks:
+- STUB count: 0 (down from 3)
+- Coverage: 100% (all aspects TESTED or BENCHED)
+- All CI checks green with --strict
 
-Command (CI & local):
-`./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`
+## CANARY Line Template
 
-Failure modes:
+```zig
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="Name"; ASPECT=Aspect; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_XXX_Feature; BENCH=BenchmarkCANARY_REQ_GQL_XXX_Feature; OWNER=team; UPDATED=2025-09-20
+```
 
-- `CANARY_VERIFY_FAIL` if over-claim introduced.
-- `CANARY_STALE` if UPDATED > 60 days.
-
-## Progress Metrics
-
-Target after NOW:
-
-- Reduce STUB count for REQ-GQL-042 (CDC API aspects) from 2 → 0.
-- Increase BENCHED coverage for core runtime (txn, property, wire, planner) by +4 aspects.
-
-End of backlog.
+Every PR must:
+1. Add/update at least one CANARY line
+2. Include corresponding test/bench that compiles and passes
+3. Pass `canaryscan --verify --strict`
+4. Not modify UPDATED dates unless feature actually changed

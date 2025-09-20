@@ -1,3 +1,7 @@
+// CANARY: REQ=REQ-GQL-009; FEATURE="Query Executor"; ASPECT=Engine; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-011; FEATURE="UNION/EXCEPT/INTERSECT"; ASPECT=Engine; STATUS=TESTED; TEST=tests/e2e_setops_all.zig; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=Engine; STATUS=TESTED; TEST=tests/e2e_protocol_groupby_basic.zig; OWNER=engine; UPDATED=2025-09-20
+
 const std = @import("std");
 const ast = @import("gql/ast.zig");
 const planner = @import("planner.zig");

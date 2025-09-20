@@ -74,9 +74,7 @@ Before claiming a feature is implemented:
 
 Example CANARY token:
 ```zig
-// CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; 
-// STATUS=TESTED; TEST=TestCANARY_REQ_GQL_XXX_FeatureName; 
-// OWNER=team; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_XXX_FeatureName; OWNER=team; UPDATED=2025-09-20
 ```
 
 ## Historical Note
