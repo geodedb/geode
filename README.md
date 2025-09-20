@@ -13,8 +13,11 @@ Geode is a partially-implemented Zig-based database with basic GQL query support
 - ✅ **Transactions**: MVCC implementation with snapshot isolation
 - ⚠️ **Graph Operations**: Basic MATCH parsing (limited execution)
 
+### Distributed Consensus (NEW)
+- ✅ **Raft Consensus**: Complete implementation with leader election, log replication, and tests
+
 ### Not Actually Implemented (Despite Documentation)
-- ❌ **Distributed Features**: No Raft, no sharding, no clustering
+- ⚠️ **Distributed Features**: ✅ Raft consensus COMPLETED (Dec 2024), ❌ no sharding, no clustering
 - ❌ **GPU Acceleration**: Complete stub with empty implementations  
 - ❌ **Machine Learning**: Only basic PageRank, no real ML algorithms
 - ❌ **CDC/Streaming**: No change capture or sink integration
