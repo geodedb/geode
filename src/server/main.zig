@@ -65,6 +65,10 @@ const ServerState = struct {
     agg_build_bytes_last: usize = 0,
     agg_emit_bytes_last: usize = 0,
 
+    // Optional CDC engine pointer for diagnostics protocol frame
+    // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
+    cdc_engine: ?*@import("cdc_enhanced").CDCEngine = null,
+
     fn resetResult(self: *ServerState) void {
         // Free row fragments
         var i: usize = 0;
@@ -1932,9 +1936,16 @@ fn processMessage(
             return try gpa.dupe(u8, hello_response);
         },
         .CDC_DIAGNOSTICS => |_| {
-            // Placeholder: if CDC engine globally accessible later, fetch exportDiagnostics; for now emit minimal stub
-            const json = "{\"cdc\":{\"malformed_wal_records\":0}}";
-            return protocol.buildCdcDiagnosticsLine(gpa, json) catch try gpa.dupe(u8, "");
+            if (state.cdc_engine) |eng| {
+                const payload = eng.exportDiagnostics(gpa) catch {
+                    return protocol.buildCdcDiagnosticsLine(gpa, "{\"cdc_error\":\"export_failed\"}") catch try gpa.dupe(u8, "");
+                };
+                defer gpa.free(payload);
+                return protocol.buildCdcDiagnosticsLine(gpa, payload) catch try gpa.dupe(u8, "");
+            } else {
+                const json = "{\"cdc\":{\"enabled\":false}}";
+                return protocol.buildCdcDiagnosticsLine(gpa, json) catch try gpa.dupe(u8, "");
+            }
         },
         .PING => |_| {
             const ok = "{\"ok\":true}";
@@ -2318,6 +2329,26 @@ pub fn main() !void {
     }
 
     var state = ServerState{ .allocator = gpa };
+    // Initialize CDC engine if enabled via environment
+    var cdc_engine_storage: @import("cdc_enhanced").CDCEngine = undefined;
+    var cdc_inited = false;
+    if (std.process.getEnvVarOwned(gpa, "GEODE_CDC_ENABLE")) |val| {
+        defer gpa.free(val);
+        if (val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"))) {
+            var sinks_arr = [_]@import("cdc_enhanced").CDCSink{.memory};
+            const cfg = @import("cdc_enhanced").CDCConfig{ .enabled = true, .sinks = sinks_arr[0..] };
+            cdc_engine_storage = @import("cdc_enhanced").CDCEngine.init(gpa, cfg) catch blk: {
+                std.log.err("Failed to init CDC engine", .{});
+                break :blk undefined;
+            };
+            cdc_engine_storage.start() catch std.log.err("CDC engine start failed", .{});
+            state.cdc_engine = &cdc_engine_storage;
+            cdc_inited = true;
+        }
+    } else |_| {}
+    defer if (cdc_inited) {
+        cdc_engine_storage.deinit();
+    };
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
     state.wal_ptr = @ptrCast(&wal);
@@ -2400,11 +2431,25 @@ pub fn main() !void {
                 continue;
             },
             .CDC_DIAGNOSTICS => |_| {
-                const json = "{\"cdc\":{\"malformed_wal_records\":0}}"; // stub until CDC wired
-                if (protocol.buildCdcDiagnosticsLine(gpa, json)) |line| {
-                    defer gpa.free(line);
-                    _ = stdout_file.write(line) catch {};
-                } else |_| {}
+                if (state.cdc_engine) |eng| {
+                    if (eng.exportDiagnostics(gpa)) |payload| {
+                        defer gpa.free(payload);
+                        if (protocol.buildCdcDiagnosticsLine(gpa, payload)) |line| {
+                            defer gpa.free(line);
+                            _ = stdout_file.write(line) catch {};
+                        } else |_| {}
+                    } else |_| {
+                        if (protocol.buildCdcDiagnosticsLine(gpa, "{\"cdc_error\":\"export_failed\"}")) |line| {
+                            defer gpa.free(line);
+                            _ = stdout_file.write(line) catch {};
+                        } else |_| {}
+                    }
+                } else {
+                    if (protocol.buildCdcDiagnosticsLine(gpa, "{\"cdc\":{\"enabled\":false}}")) |line| {
+                        defer gpa.free(line);
+                        _ = stdout_file.write(line) catch {};
+                    } else |_| {}
+                }
                 continue;
             },
             .BEGIN => |_| {

@@ -27,6 +27,30 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedSnapshotIntervalEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
 const Allocator = std.mem.Allocator;
 
+fn writeInt(w: anytype, value: u64) !void {
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    try w.writeAll(s);
+}
+
+fn writeFloat(w: anytype, value: f64) !void {
+    var buf: [64]u8 = undefined;
+    if (@floor(value) == value and value < 9.22e18 and value >= 0) {
+        return writeInt(w, @intFromFloat(value));
+    }
+    const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    try w.writeAll(s);
+}
+
+fn writeIntSigned(w: anytype, value: i64) !void {
+    if (value < 0) {
+        try w.writeAll("-");
+        const pos: u64 = @intCast(-value);
+        return writeInt(w, pos);
+    }
+    return writeInt(w, @as(u64, @intCast(value)));
+}
+
 pub const ChangeType = enum {
     insert,
     update,
@@ -213,7 +237,11 @@ pub const CDCEngine = struct {
                 } else {
                     first = false;
                 }
-                try std.fmt.format(w, "{\"count\":{d},\"ts_ms\":{d}}", .{ self.counts[logical], self.times[logical] });
+                try w.writeAll("{\"count\":");
+                try writeInt(w, self.counts[logical]);
+                try w.writeAll(",\"ts_ms\":");
+                try writeIntSigned(w, self.times[logical]);
+                try w.writeAll("}");
             }
             try w.writeAll("]");
         }
@@ -249,7 +277,13 @@ pub const CDCEngine = struct {
             while (i < self.used and i < cfg_limit) : (i += 1) {
                 if (i > 0) try w.writeAll(",");
                 const e = self.entries[i];
-                try std.fmt.format(w, "{\"count\":{d},\"hash\":{d},\"ts_ms\":{d},\"prefix\":\"", .{ e.count, e.hash, e.ts_ms });
+                try w.writeAll("{\"count\":");
+                try writeInt(w, e.count);
+                try w.writeAll(",\"hash\":");
+                try writeInt(w, e.hash);
+                try w.writeAll(",\"ts_ms\":");
+                try writeInt(w, @as(u64, @bitCast(e.ts_ms)));
+                try w.writeAll(",\"prefix\":\"");
                 const p = e.prefix[0..e.prefix_len];
                 // hex encode prefix bytes
                 var j: usize = 0;
@@ -270,8 +304,8 @@ pub const CDCEngine = struct {
         var engine = Self{
             .allocator = allocator,
             .config = config,
-            .event_buffer = std.ArrayList(ChangeEvent).init(allocator),
-            .sinks = std.ArrayList(Sink).init(allocator),
+            .event_buffer = std.ArrayList(ChangeEvent).initCapacity(allocator, 0) catch @panic("OOM"),
+            .sinks = std.ArrayList(Sink).initCapacity(allocator, 0) catch @panic("OOM"),
             .last_flush = std.time.milliTimestamp(),
             .total_events = 0,
             .is_running = false,
@@ -309,7 +343,7 @@ pub const CDCEngine = struct {
         // Initialize sinks
         for (config.sinks) |sink_type| {
             const sink = try Sink.init(allocator, sink_type);
-            try engine.sinks.append(sink);
+            try engine.sinks.append(allocator, sink);
         }
 
         return engine;
@@ -318,17 +352,16 @@ pub const CDCEngine = struct {
     pub fn deinit(self: *Self) void {
         self.stop();
 
+        // Free any remaining events (in case not flushed)
+        for (self.event_buffer.items) |*event| {
+            freeEventInternal(self, event);
+        }
+        self.event_buffer.deinit(self.allocator);
+
         for (self.sinks.items) |*sink| {
             sink.deinit();
         }
-        self.sinks.deinit();
-
-        for (self.event_buffer.items) |*event| {
-            event.metadata.deinit();
-            if (event.before) |before| self.allocator.free(before);
-            if (event.after) |after| self.allocator.free(after);
-        }
-        self.event_buffer.deinit();
+        self.sinks.deinit(self.allocator);
     }
 
     pub fn start(self: *Self) !void {
@@ -390,7 +423,7 @@ pub const CDCEngine = struct {
         };
         self.next_sequence += 1;
 
-        try self.event_buffer.append(event);
+        try self.event_buffer.append(self.allocator, event);
         self.total_events += 1;
         if (self.event_buffer.items.len > self.peak_buffer) self.peak_buffer = self.event_buffer.items.len;
         if (self.config.adaptive_flush) {
@@ -422,7 +455,13 @@ pub const CDCEngine = struct {
 
     fn processingLoop(self: *Self) void {
         while (self.is_running) {
-            std.time.sleep(self.config.flush_interval_ms * 1_000_000);
+            // Sleep fallback for Zig 0.15: use std.time.sleep if available else busy-wait
+            if (@hasDecl(std.time, "sleep")) {
+                std.time.sleep(self.config.flush_interval_ms * 1_000_000);
+            } else {
+                const target = std.time.milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
+                while (std.time.milliTimestamp() < target) {}
+            }
 
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -451,11 +490,9 @@ pub const CDCEngine = struct {
             try sink.send(self.event_buffer.items);
         }
 
-        // Clear buffer
+        // Clear buffer freeing event-owned memory
         for (self.event_buffer.items) |*event| {
-            event.metadata.deinit();
-            if (event.before) |before| self.allocator.free(before);
-            if (event.after) |after| self.allocator.free(after);
+            freeEventInternal(self, event);
         }
         self.event_buffer.clearRetainingCapacity();
 
@@ -468,10 +505,8 @@ pub const CDCEngine = struct {
         var i: usize = 0;
         while (i < self.event_buffer.items.len) {
             if (self.event_buffer.items[i].timestamp < cutoff) {
-                const event = self.event_buffer.orderedRemove(i);
-                event.metadata.deinit();
-                if (event.before) |before| self.allocator.free(before);
-                if (event.after) |after| self.allocator.free(after);
+                var event = self.event_buffer.orderedRemove(i);
+                freeEventInternal(self, &event);
             } else {
                 i += 1;
             }
@@ -608,34 +643,73 @@ pub const CDCEngine = struct {
     pub fn malformedLogSnapshots(self: *Self, allocator: Allocator) ![]u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
-        var buf = std.ArrayList(u8).init(allocator);
-        try self.malformed_ring.writeJson(buf.writer());
-        return buf.toOwnedSlice();
+        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        const writer = buf.writer(allocator);
+        try self.malformed_ring.writeJson(writer);
+        return buf.toOwnedSlice(allocator);
     }
 
     /// Export a consolidated diagnostics JSON object (string) containing counters and ring snapshots.
     pub fn exportDiagnostics(self: *Self, allocator: Allocator) ![]u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
-        var buf = std.ArrayList(u8).init(allocator);
-        const w = buf.writer();
-        try w.writeAll("{\"malformed_wal_records\":");
+        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        const w = buf.writer(allocator);
+        try w.writeAll("{");
+        // core counters
+        try w.writeAll("\"malformed_wal_records\":");
         try std.fmt.format(w, "{d}", .{self.malformed_wal_records});
         try w.writeAll(",\"total_wal_attempts\":");
         try std.fmt.format(w, "{d}", .{self.total_wal_attempts});
         try w.writeAll(",\"malformed_ratio\":");
         const ratio = if (self.total_wal_attempts == 0) 0.0 else (@as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts)));
-        try std.fmt.format(w, "{d:.6}", .{ratio});
+        // Simpler float formatting for Zig 0.15 compatibility
+        try std.fmt.format(w, "{d}", .{ratio});
+        // state flags
         try w.writeAll(",\"guardrail_warn_triggered\":");
         try w.writeAll(if (self.guardrail_warn_triggered) "true" else "false");
         try w.writeAll(",\"guardrail_abort_triggered\":");
         try w.writeAll(if (self.guardrail_abort_triggered) "true" else "false");
+        // configuration echo
+        try w.writeAll(",\"config\":{\"enabled\":");
+        try w.writeAll(if (self.config.enabled) "true" else "false");
+        try w.writeAll(",\"malformed_snapshot_interval\":");
+        try std.fmt.format(w, "{d}", .{self.config.malformed_snapshot_interval});
+        try w.writeAll(",\"malformed_hash_retain\":");
+        try std.fmt.format(w, "{d}", .{self.config.malformed_hash_retain});
+        try w.writeAll(",\"malformed_warn_pct\":");
+        try std.fmt.format(w, "{d}", .{self.config.malformed_warn_pct});
+        try w.writeAll(",\"malformed_abort_pct\":");
+        try std.fmt.format(w, "{d}", .{self.config.malformed_abort_pct});
+        try w.writeAll(",\"flush_interval_ms\":");
+        try std.fmt.format(w, "{d}", .{self.config.flush_interval_ms});
+        try w.writeAll(",\"batch_size\":");
+        try std.fmt.format(w, "{d}", .{self.config.batch_size});
+        try w.writeAll("}");
+        // engine runtime state
+        try w.writeAll(",\"engine\":{\"is_running\":");
+        try w.writeAll(if (self.is_running) "true" else "false");
+        try w.writeAll(",\"last_flush_ms\":");
+        try std.fmt.format(w, "{d}", .{self.last_flush});
+        try w.writeAll(",\"peak_buffer\":");
+        try std.fmt.format(w, "{d}", .{self.peak_buffer});
+        try w.writeAll(",\"current_buffer\":");
+        try std.fmt.format(w, "{d}", .{self.event_buffer.items.len});
+        try w.writeAll(",\"dynamic_batch_size\":");
+        try std.fmt.format(w, "{d}", .{self.dynamic_batch_size});
+        try w.writeAll(",\"batch_adjustments\":");
+        try std.fmt.format(w, "{d}", .{self.batch_adjustments});
+        try w.writeAll("}");
+        // snapshots and hashes
         try w.writeAll(",\"malformed_snapshots\":");
         try self.malformed_ring.writeJson(w);
         try w.writeAll(",\"malformed_hashes\":");
         try self.malformed_hashes.writeJson(w, self.config.malformed_hash_retain);
+        // version & timestamp
+        try w.writeAll(",\"version\":\"v0.15.0\",\"timestamp_ms\":");
+        try std.fmt.format(w, "{d}", .{std.time.milliTimestamp()});
         try w.writeAll("}");
-        return buf.toOwnedSlice();
+        return buf.toOwnedSlice(allocator);
     }
 };
 
@@ -711,17 +785,21 @@ const MemorySink = struct {
     pub fn init(allocator: Allocator) MemorySink {
         return MemorySink{
             .allocator = allocator,
-            .events = std.ArrayList(ChangeEvent).init(allocator),
+            .events = std.ArrayList(ChangeEvent).initCapacity(allocator, 0) catch @panic("OOM"),
         };
     }
 
     pub fn deinit(self: *MemorySink) void {
-        self.events.deinit();
+        // free owned allocations inside events first
+        for (self.events.items) |*ev| {
+            freeEventShallow(self.allocator, ev);
+        }
+        self.events.deinit(self.allocator);
     }
 
     pub fn send(self: *MemorySink, events: []const ChangeEvent) !void {
         for (events) |event| {
-            try self.events.append(event);
+            try self.events.append(self.allocator, event);
         }
     }
 };
@@ -746,8 +824,8 @@ const FileSink = struct {
         for (events) |event| {
             const json = try serializeEvent(self.allocator, event);
             defer self.allocator.free(json);
-
-            try self.file.writer().print("{s}\n", .{json});
+            try self.file.writeAll(json);
+            try self.file.writeAll("\n");
         }
     }
 };
@@ -925,7 +1003,12 @@ pub const StreamingEngine = struct {
                 std.log.err("Stream processing error: {}", .{err});
             };
 
-            std.time.sleep(100_000_000); // 100ms
+            if (@hasDecl(std.time, "sleep")) {
+                std.time.sleep(100_000_000); // 100ms
+            } else {
+                const target = std.time.milliTimestamp() + 100;
+                while (std.time.milliTimestamp() < target) {}
+            }
         }
     }
 
@@ -968,7 +1051,7 @@ const Window = struct {
         return Window{
             .allocator = allocator,
             .config = config,
-            .buckets = std.ArrayList(WindowBucket).init(allocator),
+            .buckets = std.ArrayList(WindowBucket).initCapacity(allocator, 0) catch @panic("OOM"),
             .watermark = 0,
         };
     }
@@ -977,7 +1060,7 @@ const Window = struct {
         for (self.buckets.items) |*bucket| {
             bucket.deinit();
         }
-        self.buckets.deinit();
+        self.buckets.deinit(self.allocator);
     }
 };
 
@@ -988,7 +1071,10 @@ const WindowBucket = struct {
     aggregates: std.StringHashMap(f64),
 
     pub fn deinit(self: *WindowBucket) void {
-        self.events.deinit();
+        for (self.events.items) |*ev| {
+            freeEventShallow(self.allocator, ev);
+        }
+        self.events.deinit(self.allocator);
         self.aggregates.deinit();
     }
 };
@@ -996,13 +1082,13 @@ const WindowBucket = struct {
 fn serializeEvent(allocator: Allocator, event: ChangeEvent) ![]const u8 {
     return std.fmt.allocPrint(allocator,
         \\{{
-        \\  "timestamp": {},
-        \\  "transaction_id": {},
-        \\  "change_type": "{}",
-        \\  "entity_type": "{}",
-        \\  "entity_id": {},
-        \\  "before": {},
-        \\  "after": {}
+        \\  "timestamp": {d},
+        \\  "transaction_id": {d},
+        \\  "change_type": "{s}",
+        \\  "entity_type": "{s}",
+        \\  "entity_id": {d},
+        \\  "before": {s},
+        \\  "after": {s}
         \\}}
     , .{
         event.timestamp,
@@ -1013,6 +1099,31 @@ fn serializeEvent(allocator: Allocator, event: ChangeEvent) ![]const u8 {
         if (event.before) |b| b else "null",
         if (event.after) |a| a else "null",
     });
+}
+
+// Free all allocations owned by an event (before/after + metadata values + metadata table)
+fn freeEventInternal(engine: *CDCEngine, ev: *ChangeEvent) void {
+    if (ev.before) |b| engine.allocator.free(b);
+    if (ev.after) |a| engine.allocator.free(a);
+    // Free metadata values (keys are string literals, not owned)
+    var it = ev.metadata.iterator();
+    while (it.next()) |entry| {
+        engine.allocator.free(entry.value_ptr.*);
+    }
+    ev.metadata.deinit();
+    ev.before = null;
+    ev.after = null;
+}
+
+// Shallow free for contexts where we only have allocator, not engine pointer.
+fn freeEventShallow(allocator: Allocator, ev: *ChangeEvent) void {
+    if (ev.before) |b| allocator.free(b);
+    if (ev.after) |a| allocator.free(a);
+    var it = ev.metadata.iterator();
+    while (it.next()) |entry| allocator.free(entry.value_ptr.*);
+    ev.metadata.deinit();
+    ev.before = null;
+    ev.after = null;
 }
 
 // System procedures for CDC control

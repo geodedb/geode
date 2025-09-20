@@ -154,6 +154,10 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("transport/quic.zig", transport_quic_mod);
     geoded_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
 
+    // CDC enhanced streaming module (diagnostics, malformed WAL tracking)
+    const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("cdc_enhanced", cdc_enhanced_mod);
+
     const tools_cert_gen_mod = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("tools/cert_gen.zig", tools_cert_gen_mod);
     b.installArtifact(geoded_exe);
@@ -329,7 +333,7 @@ pub fn build(b: *std.Build) void {
 
     // Client builds
     const client_step = b.step("clients", "Build client libraries");
-    
+
     // Zig client library
     const zig_client_lib = b.addLibrary(.{
         .name = "geode-client",
@@ -357,7 +361,7 @@ pub fn build(b: *std.Build) void {
 
     // Cross-compilation step for clients
     const cross_clients_step = b.step("cross-clients", "Cross-compile client libraries for all platforms");
-    
+
     // Define cross-compilation targets for clients
     const client_targets = [_]struct {
         name: []const u8,
@@ -373,7 +377,7 @@ pub fn build(b: *std.Build) void {
     // Build Zig clients for each platform
     for (client_targets) |client_target| {
         const target_triple = b.resolveTargetQuery(client_target.triple);
-        
+
         const client_lib = b.addLibrary(.{
             .name = b.fmt("geode-client-{s}", .{client_target.name}),
             .root_module = b.createModule(.{
@@ -383,7 +387,7 @@ pub fn build(b: *std.Build) void {
             }),
             .linkage = .static,
         });
-        
+
         const client_exe = b.addExecutable(.{
             .name = b.fmt("geode-zig-example-{s}", .{client_target.name}),
             .root_module = b.createModule(.{
@@ -392,7 +396,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = .ReleaseSafe,
             }),
         });
-        
+
         // Install to platform-specific directories
         const install_lib = b.addInstallArtifact(client_lib, .{
             .dest_dir = .{ .override = .{ .custom = b.fmt("clients/{s}", .{client_target.name}) } },
@@ -400,14 +404,14 @@ pub fn build(b: *std.Build) void {
         const install_exe = b.addInstallArtifact(client_exe, .{
             .dest_dir = .{ .override = .{ .custom = b.fmt("clients/{s}", .{client_target.name}) } },
         });
-        
+
         cross_clients_step.dependOn(&install_lib.step);
         cross_clients_step.dependOn(&install_exe.step);
     }
 
-    // Test clients step  
+    // Test clients step
     const test_clients_step = b.step("test-clients", "Test client libraries");
-    
+
     // Zig client tests
     const zig_client_tests = b.addTest(.{
         .root_module = b.createModule(.{

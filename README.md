@@ -7,6 +7,7 @@ Geode is a partially-implemented Zig-based database with basic GQL query support
 ## Actually Working Features
 
 ### Basic Query Operations
+
 - ✅ **Simple Queries**: RETURN, ORDER BY, LIMIT, OFFSET
 - ✅ **Set Operations**: UNION, INTERSECT, EXCEPT with ALL/DISTINCT
 - ✅ **Aggregations**: GROUP BY with COUNT, SUM, AVG, MIN, MAX
@@ -14,36 +15,77 @@ Geode is a partially-implemented Zig-based database with basic GQL query support
 - ⚠️ **Graph Operations**: Basic MATCH parsing (limited execution)
 
 ### Distributed Consensus (NEW)
+
 - ✅ **Raft Consensus**: Complete implementation with leader election, log replication, and tests
 
 ### Not Actually Implemented (Despite Documentation)
-- ⚠️ **Distributed Features**: ✅ Raft consensus COMPLETED (Dec 2024), ❌ no sharding, no clustering
-- ❌ **GPU Acceleration**: Complete stub with empty implementations  
-- ❌ **Machine Learning**: Only basic PageRank, no real ML algorithms
-- ❌ **CDC/Streaming**: No change capture or sink integration
-- ❌ **Materialized Views**: Just type definitions with TODOs
-- ❌ **Query Optimization**: No adaptive or cost-based optimization
+
+- ⚠️ **Distributed Features**: ✅ Raft consensus COMPLETED (Dec 2024); ❌ sharding & clustering
+- ❌ **GPU Acceleration**: Stub only
+- ❌ **Machine Learning**: Only basic PageRank demo
+- ✅ **CDC/Streaming (Core Diagnostics)**: Basic Change Data Capture engine (in‑memory + file sinks, malformed WAL guardrails, snapshots, prefix/hash retention, `CDC_DIAGNOSTICS` frame). External sinks & streaming queries still stubs.
+- ❌ **Materialized Views**: Type defs / TODOs
+- ❌ **Query Optimization**: No adaptive / cost-based optimizer
 - ❌ **Full-Text Search**: Not implemented
-- ❌ **QUIC Transport**: Returns NotImplemented, falls back to TCP
+- ❌ **QUIC Transport**: Placeholder (falls back to TCP)
 
 ## Real Implementation Status
 
-### Actual State
-- **~25% Implemented**: Basic queries and transactions work
-- **171+ NotImplemented errors**: Throughout the codebase
 - **Extensive TODOs**: Most advanced features are stubs
-- **Not Production Ready**: Missing critical features
+- **Binary Protocol**: HELLO, RUN_GQL, PULL, CDC_DIAGNOSTICS (basic) with ISO diagnostics
+- **Fallback Modes**: TCP and stdio
+- **Result Formats**: JSON (default) and text/plain
+
+### Change Data Capture (CDC) & Diagnostics
+
+- **Engine**: In-process capture of change events (insert/update/delete) with monotonic sequence.
+- **Sinks**: Memory (tests) & File (`cdc.log`) implemented; Kafka/Kinesis/Webhook/PubSub placeholders.
+- **Malformed WAL Guardrails**: Warn / abort thresholds via `GEODE_MALFORMED_WAL_WARN_PCT` & `GEODE_MALFORMED_WAL_ABORT_PCT`.
+  - Flags: diagnostics include `guardrail_warn_triggered` and `guardrail_abort_triggered` (both **latched** once true).
+  - Latched semantics: flags remain true after triggering even if ratio later decreases (preserves audit visibility).
+- **Snapshots & Hashes**: Ring buffer of malformed counts + timestamps; prefix/hash retention for first N malformed payloads.
+- **Adaptive Flush (Experimental)**: Optional dynamic batch sizing (`CDCConfig.adaptive_flush`).
+- **Diagnostics Frame**: `CDC_DIAGNOSTICS` JSON includes counters, config echo, engine state, snapshots, hashes, version, timestamp.
+- **Enable**: Set `GEODE_CDC_ENABLE=1` when starting server.
+- **Not Production Ready**: Intended for observability / experimentation only.
+
+#### CDC Environment Variables
+
+| Variable                                | Effect                                                 |
+| --------------------------------------- | ------------------------------------------------------ |
+| `GEODE_CDC_ENABLE`                      | Enable CDC engine & diagnostics frame.                 |
+| `GEODE_MALFORMED_WAL_WARN_PCT`          | Override malformed WAL warn threshold (0-1 exclusive). |
+| `GEODE_MALFORMED_WAL_ABORT_PCT`         | Override malformed WAL abort threshold (> warn).       |
+| `GEODE_MALFORMED_WAL_SNAPSHOT_INTERVAL` | Interval for capturing malformed count snapshots.      |
+| `GEODE_WAL_COMPACT_INTERVAL`            | Trigger WAL compaction every N commits (default: 5).   |
 
 ### Documentation
+
 - [Requirements Ledger](docs/GAP_ANALYSIS.md#requirements-ledger) — Implementation status with evidence
 - [GQL Conformance Profile](docs/GAP_ANALYSIS.md#gql-conformance-profile) — Feature support matrix
 - [API Documentation](docs/API_DOCUMENTATION.md) — Complete API reference
-- [Graph Execution API](docs/GRAPH_EXECUTION_API.md) — Graph-specific operations
 - [Roadmap](docs/NEXT.md) — Future features and priorities
+- [CDC Diagnostics & Roadmap](docs/CDC_DIAGNOSTICS.md) — Change Data Capture design & future phases
+
+### CDC Diagnostics (Stdio Example)
+
+```bash
+GEODE_CDC_ENABLE=1 ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567 &
+printf '{"type":"CDC_DIAGNOSTICS"}\n' | ./zig-out/bin/geodec --stdio
+```
+
+### Selected Diagnostics Codes (Excerpt)
+
+| Code                | Meaning                                          | ISO anchor   | Example                 |
+| ------------------- | ------------------------------------------------ | ------------ | ----------------------- |
+| StoragePageChecksum | Page checksum mismatch during storage operations | 4            | Corrupted page detected |
+| CDCMalformedWarn    | Malformed WAL warn guardrail triggered (logged)  | impl-defined | Ratio >= warn pct       |
+| CDCMalformedAbort   | Malformed WAL abort guardrail triggered (logged) | impl-defined | Ratio >= abort pct      |
 
 ## Core Features (Currently Implemented)
 
 ### Query Engine
+
 - **Graph Operations**: MATCH/OPTIONAL MATCH with pattern matching, CREATE/DELETE/MERGE mutations
 - **Query Features**: RETURN with expressions, WHERE filtering, ORDER BY with sort specs, LIMIT/OFFSET with US001 policy
 - **Aggregations**: GROUP BY with COUNT, SUM, AVG, MIN, MAX, STDEV, VARIANCE
@@ -51,36 +93,42 @@ Geode is a partially-implemented Zig-based database with basic GQL query support
 - **Path Operations**: Variable-length paths `[*1..5]`, shortest path algorithms
 
 ### Expression Evaluation
+
 - **CASE Expressions**: Searched CASE with 3-valued logic
 - **String Operations**: STARTS WITH, ENDS WITH, CONTAINS predicates
 - **Temporal Support**: DATE/TIME/DATETIME literals per ISO 8601
 - **Type System**: Automatic numeric promotion with Int→Decimal→Float hierarchy
 
 ### Transaction Support
+
 - **ACID Compliance**: BEGIN/COMMIT/ROLLBACK with full isolation
 - **MVCC**: Multi-version concurrency control with conflict detection
 - **Conflict Types**: Write-write, read-write, write-read, phantom read detection
 - **ISO Status Codes**: 00000 (success), 25000 (txn state), 40001 (serialization failure)
 
 ### Storage Layer
+
 - **WAL**: Write-ahead logging with STEAL/NO-FORCE policy
 - **Page Management**: Checksummed pages with automatic recovery
 - **Graph Persistence**: Catalog integration with metadata storage
 - **Compaction**: Automatic WAL compaction with configurable intervals
 
-### Protocol & Transport  
+### Protocol & Transport
+
 - **QUIC/TLS 1.3**: Default secure high-performance transport
 - **Binary Protocol**: HELLO, RUN_GQL, PULL frames with ISO diagnostics
 - **Fallback Modes**: TCP and stdio for compatibility
 - **Output Formats**: JSON (default) and text/plain
 
 ### Client Libraries
+
 - **Zig Client**: Native client with full protocol support
 - **Go Client**: Complete driver with connection pooling and query builder
 - **Cross-Platform**: Pre-built binaries for Windows, Linux (x86_64/ARM64), macOS (x86_64/ARM64)
 - **Cross-Compilation**: Full support for all major platforms (see [docs/CROSS_COMPILATION.md](docs/CROSS_COMPILATION.md))
 
 ### Production Features
+
 - **Monitoring**: Prometheus metrics, OpenTelemetry tracing
 - **Query Optimization**: Cost-based optimizer with statistics
 - **Horizontal Scaling**: Sharding with automatic rebalancing
@@ -92,6 +140,7 @@ See [USAGE.md](USAGE.md) for commands and flags.
 ## Building from Source
 
 ### Prerequisites
+
 - Zig 0.15.1 or later
 - Git (for submodules)
 - Optional: Go 1.19+ (for Go client)
@@ -99,6 +148,7 @@ See [USAGE.md](USAGE.md) for commands and flags.
 - Optional: Wine (for testing Windows binaries on Linux)
 
 ### Quick Start
+
 ```bash
 # Clone with submodules (includes QUIC library)
 git clone --recursive https://github.com/yourusername/geode.git
@@ -121,6 +171,7 @@ make qemu-test-clients
 ```
 
 ### Available Make Targets
+
 ```bash
 make help              # Show all available targets
 make release           # Build optimized release version
@@ -131,11 +182,13 @@ make tools             # Build auxiliary tools (cert_gen, wal_compact, etc.)
 ```
 
 ### QUIC Library
+
 The QUIC transport layer is included as a git submodule at `vendor/quic/`. For more details, see [docs/QUIC_SUBMODULE_SETUP.md](docs/QUIC_SUBMODULE_SETUP.md).
 
 ## Quick Start Guide
 
 ### Starting the Server
+
 ```bash
 # QUIC mode (default, recommended)
 ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
@@ -148,6 +201,7 @@ The QUIC transport layer is included as a git submodule at `vendor/quic/`. For m
 ```
 
 ### Using the CLI Client
+
 ```bash
 # Simple query
 ./zig-out/bin/geodec "RETURN 1 AS x ORDER BY x LIMIT 1"
@@ -183,9 +237,10 @@ make docker-up-singleton
 
 See [Docker Usage Guide](docs/DOCKER_USAGE.md) for detailed deployment instructions.
 
-## Documentation
+## Additional Documentation
 
 ### Core Documentation
+
 - **[API Documentation](docs/API_DOCUMENTATION.md)**: Complete API reference
 - **[Graph Execution API](docs/GRAPH_EXECUTION_API.md)**: Graph-specific operations
 - **[Binary Protocol](docs/BINARY_PROTOCOL.md)**: Wire protocol specification
@@ -194,12 +249,14 @@ See [Docker Usage Guide](docs/DOCKER_USAGE.md) for detailed deployment instructi
 - **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)**: Docker Compose examples
 
 ### Implementation Status
+
 - **[Gap Analysis](docs/GAP_ANALYSIS.md)**: Requirements ledger and conformance profile
 - **[Current State](docs/CURRENT_STATE.md)**: Detailed implementation status
 - **[Next Steps](docs/NEXT.md)**: Prioritized roadmap and future features
 - **[Conformance Matrix](docs/CONFORMANCE_MATRIX.md)**: ISO GQL compliance tracking
 
 ### Advanced Topics
+
 - **[Numeric Promotion](docs/NUMERIC_PROMOTION.md)**: Type coercion rules
 - **[Query Engine](docs/query_engine.md)**: Internal query execution details
 - **[Profiling Guide](docs/PROFILING.md)**: Performance analysis and optimization
@@ -327,13 +384,15 @@ Updating Tests for New Ops:
 Geode implements ISO/IEC 39075:2024 numeric type coercion with the following promotion rules:
 
 ### Type Precedence (lowest to highest)
+
 1. **Int** (64-bit signed integer)
 2. **Decimal** (128-bit coefficient with scale)
 3. **Float** (64-bit IEEE 754)
 
 ### Promotion Rules
-| From    | To      | Valid? | Lossy? | Notes                                    |
-|---------|---------|--------|--------|------------------------------------------|
+
+| From    | To      | Valid? | Lossy? | Notes                                   |
+| ------- | ------- | ------ | ------ | --------------------------------------- |
 | Int     | Decimal | ✓      | ✗      | Always safe, scales coefficient by 10^n |
 | Int     | Float   | ✓      | ✗      | Safe for values within float precision  |
 | Decimal | Int     | ✓      | ✓      | Truncates fractional part               |
@@ -342,12 +401,14 @@ Geode implements ISO/IEC 39075:2024 numeric type coercion with the following pro
 | Float   | Decimal | ✓      | ✓      | May lose precision at extremes          |
 
 ### Operation Result Types
+
 - **Addition/Subtraction**: Result type is the higher precedence operand type
-- **Multiplication**: Result type is the higher precedence operand type  
+- **Multiplication**: Result type is the higher precedence operand type
 - **Division**: Result type is at least Decimal (Int÷Int→Decimal for precision)
 - **Comparison**: All numeric types are comparable through promotion
 
 ### Division by Zero Handling
+
 Division by zero operations emit `TypeMismatch.DivZero` diagnostic (ISO 16.x) instead of runtime panic.
 
 ```gql
@@ -355,21 +416,22 @@ RETURN 1/0  -- Emits TypeMismatch.DivZero with status_class 22000
 ```
 
 ### Implementation-Defined Policies
+
 - **I:NumericPromotion**: Int→Decimal widening preserves exact value
 - **I:DecimalScale**: Default scale is 2 for division results
 - **I:FloatPrecision**: IEEE 754 double precision (53-bit mantissa)
 
 ## Diagnostics (policy and ISO anchors)
 
-| Code                | Meaning                                                    | ISO anchor  | Example                        |
-| ------------------- | ---------------------------------------------------------- | ----------- | ------------------------------ |
-| US001               | LIMIT/OFFSET on unordered table (requires stable ORDER BY) | 16.18–16.19 | RETURN 1 LIMIT 10 OFFSET 5     |
-| IllegalOrderKey     | ORDER BY key must be identifier (policy: ident-only)       | 14.10       | RETURN a ORDER BY f(a)         |
-| GroupByIllegal      | Invalid GROUP BY legality (e.g., non-aggregated columns)   | 14.10       | RETURN a, SUM(b) GROUP BY a, b |
-| TypeMismatch        | Illegal cross-type comparison/ordering                     | 16.x        | RETURN 1 < "2"                 |
-| TypeMismatch.DivZero| Division by zero operation                                 | 16.x        | RETURN 1/0                     |
-| TxnState            | Transaction state error (invalid lifecycle transition)     | 8           | COMMIT without BEGIN           |
-| StoragePageChecksum | Page checksum mismatch during storage operations          | 4           | Corrupted page detected        |
+| Code                 | Meaning                                                    | ISO anchor  | Example                        |
+| -------------------- | ---------------------------------------------------------- | ----------- | ------------------------------ |
+| US001                | LIMIT/OFFSET on unordered table (requires stable ORDER BY) | 16.18–16.19 | RETURN 1 LIMIT 10 OFFSET 5     |
+| IllegalOrderKey      | ORDER BY key must be identifier (policy: ident-only)       | 14.10       | RETURN a ORDER BY f(a)         |
+| GroupByIllegal       | Invalid GROUP BY legality (e.g., non-aggregated columns)   | 14.10       | RETURN a, SUM(b) GROUP BY a, b |
+| TypeMismatch         | Illegal cross-type comparison/ordering                     | 16.x        | RETURN 1 < "2"                 |
+| TypeMismatch.DivZero | Division by zero operation                                 | 16.x        | RETURN 1/0                     |
+| TxnState             | Transaction state error (invalid lifecycle transition)     | 8           | COMMIT without BEGIN           |
+| StoragePageChecksum  | Page checksum mismatch during storage operations           | 4           | Corrupted page detected        |
 
 The CLI and server surface diagnostics with status_class/subclass per ISO 23.2. Tests assert codes/anchors via stderr.
 
@@ -386,6 +448,7 @@ The script prints any MISSING (referenced in code but absent from GAP_ANALYSIS) 
 ## Contributing
 
 Contributions are welcome! Please ensure:
+
 - All tests pass (`make test`)
 - Code is formatted (`make fmt`)
 - Cross-compilation works (`make cross-compile`)
