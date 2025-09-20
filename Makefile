@@ -4,14 +4,37 @@ ZIG ?= zig
 ZIG_FLAGS ?=
 ZIG_RELEASE_FLAGS ?= -Doptimize=ReleaseSafe
 
+# Auto-detect Wine (prefer wine64, fallback to wine) for Windows execution of cross-compiled tests/examples
+WINE64_BIN := $(shell command -v wine64 2>/dev/null)
+WINE32_BIN := $(shell command -v wine 2>/dev/null)
+ifeq ($(WINE64_BIN),)
+	ifeq ($(WINE32_BIN),)
+		WINE_AVAILABLE := 0
+		WINE_CMD :=
+	else
+		WINE_AVAILABLE := 1
+		WINE_CMD := wine
+	endif
+else
+	WINE_AVAILABLE := 1
+	WINE_CMD := wine64
+endif
+
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 
 # Default target - build everything including cross-compilation checks (non-blocking)
-all: sub build go-build test
+all: sub build go-build test cross-test
 	@echo "Running cross-compilation checks..."
 	@$(MAKE) cross-compile || echo "Warning: Some cross-compilation targets failed (see above for details)"
 	@$(MAKE) docker-ci || echo "Warning: Docker CI failed"
+
+wine-info:
+ifeq ($(WINE_AVAILABLE),1)
+	@echo "Using Wine command: $(WINE_CMD)"; $(WINE_CMD) --version | head -1 || true
+else
+	@echo "Wine not available (wine64 or wine not found)"
+endif
 
 sub:
 	git submodule update --init --recursive
@@ -288,15 +311,15 @@ cross-test:
 	@echo "Testing cross-platform stdio..."
 	$(ZIG) test tests/test_cross_platform_stdio.zig $(ZIG_FLAGS)
 	@# Test Windows cross-compilation if Wine is available
-	@if command -v wine64 >/dev/null 2>&1; then \
-		echo "Testing Windows cross-compilation with Wine..."; \
+	@if [ -n "$(WINE_CMD)" ]; then \
+		echo "Testing Windows cross-compilation with Wine ($(WINE_CMD))..."; \
 		$(ZIG) test tests/test_cross_platform_stdio.zig -target x86_64-windows -femit-bin=test_stdio_windows.exe $(ZIG_FLAGS); \
-		wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stdout" || (echo "Windows stdio test failed" && exit 1); \
-		wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stderr" || (echo "Windows stdio test failed" && exit 1); \
+		WINEDEBUG=-all $(WINE_CMD) test_stdio_windows.exe 2>&1 | grep -q "Test stdout" || (echo "Windows stdio test failed (stdout)" && exit 1); \
+		WINEDEBUG=-all $(WINE_CMD) test_stdio_windows.exe 2>&1 | grep -q "Test stderr" || (echo "Windows stdio test failed (stderr)" && exit 1); \
 		rm -f test_stdio_windows.exe test_stdio_windows.pdb; \
 		echo "✓ Windows stdio test passed"; \
 	else \
-		echo "Wine not available, skipping Windows runtime test"; \
+		echo "Wine not available (wine64/wine), skipping Windows runtime test"; \
 	fi
 
 # Server targets
@@ -525,21 +548,21 @@ test-cross-clients:
 	fi
 	
 	@# Test Windows x86_64 binaries with Wine if available
-	@if command -v wine64 >/dev/null 2>&1 && [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
-		echo "Testing Windows x86_64 Zig client with Wine..."; \
-		wine64 zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -5 || true; \
+	@if [ -n "$(WINE_CMD)" ] && [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
+		echo "Testing Windows x86_64 Zig client with Wine ($(WINE_CMD))..."; \
+		WINEDEBUG=-all $(WINE_CMD) zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -5 || true; \
 		echo "✓ Windows x86_64 Zig client executed with Wine"; \
 	else \
-		echo "⚠ wine64 not available or binary not found, skipping Windows x86_64 test"; \
+		echo "⚠ Wine not available or binary not found, skipping Windows x86_64 test"; \
 	fi
 	
 	@# Test Windows x86_64 Go client with Wine
-	@if command -v wine64 >/dev/null 2>&1 && [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
-		echo "Testing Windows x86_64 Go client with Wine..."; \
-		wine64 zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -5 || true; \
+	@if [ -n "$(WINE_CMD)" ] && [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
+		echo "Testing Windows x86_64 Go client with Wine ($(WINE_CMD))..."; \
+		WINEDEBUG=-all $(WINE_CMD) zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -5 || true; \
 		echo "✓ Windows x86_64 Go client executed with Wine"; \
 	else \
-		echo "⚠ wine64 not available or Go binary not found, skipping Windows Go test"; \
+		echo "⚠ Wine not available or Go binary not found, skipping Windows Go test"; \
 	fi
 	
 	@# Test Linux ARM64 Go client with QEMU
@@ -608,17 +631,17 @@ qemu-test-clients: cross-clients
 	fi
 	
 	@# Windows testing with Wine
-	@if command -v wine64 >/dev/null 2>&1; then \
-		echo "=== Windows x86_64 Testing (Wine) ==="; \
+	@if [ -n "$(WINE_CMD)" ]; then \
+		echo "=== Windows x86_64 Testing (Wine: $(WINE_CMD)) ==="; \
 		if [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
 			echo "Running Zig client on Windows/Wine..."; \
-			WINEDEBUG=-all wine64 \
+			WINEDEBUG=-all $(WINE_CMD) \
 				zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -10 || \
 				echo "Note: Client may fail to connect as server is not running"; \
 		fi; \
 		if [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
 			echo "Running Go client on Windows/Wine..."; \
-			WINEDEBUG=-all wine64 \
+			WINEDEBUG=-all $(WINE_CMD) \
 				zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -10 || true; \
 		fi; \
 		echo ""; \

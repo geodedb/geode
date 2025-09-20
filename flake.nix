@@ -72,6 +72,7 @@
                 tcpdump
                 tshark
                 file
+                wine
               ]);
           };
         };

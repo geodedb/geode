@@ -5,6 +5,7 @@ This document describes the cross-compilation infrastructure for Geode client li
 ## Supported Platforms
 
 ### Zig Client Library
+
 - **Linux x86_64** (native)
 - **Linux ARM64** (aarch64)
 - **Windows x86_64**
@@ -12,6 +13,7 @@ This document describes the cross-compilation infrastructure for Geode client li
 - **macOS ARM64**
 
 ### Go Client Library
+
 - **Linux x86_64** (native)
 - **Linux ARM64** (aarch64)
 - **Windows x86_64**
@@ -21,6 +23,7 @@ This document describes the cross-compilation infrastructure for Geode client li
 ## Building Cross-Compiled Clients
 
 ### Build All Clients
+
 ```bash
 # Build all client libraries for all platforms
 make cross-clients
@@ -33,6 +36,7 @@ make cross-go-clients
 ```
 
 ### Individual Platform Builds
+
 ```bash
 # Windows x86_64
 make cross-windows
@@ -47,6 +51,7 @@ make cross-macos-x86_64
 ## Testing Cross-Compiled Clients
 
 ### Automated Testing
+
 ```bash
 # Test all cross-compiled clients
 make test-cross-clients
@@ -61,6 +66,7 @@ make qemu-test-clients
 ### Manual Testing with QEMU
 
 #### Linux ARM64
+
 ```bash
 # Install QEMU
 sudo apt-get install qemu-user qemu-user-static
@@ -75,9 +81,13 @@ qemu-aarch64 -L /usr/aarch64-linux-gnu \
 ```
 
 #### Windows (using Wine)
+
 ```bash
 # Install Wine
-sudo apt-get install wine wine64
+sudo dpkg --add-architecture i386 || true
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends wine wine64
+which wine64 || which wine || echo "wine not found (execution tests will be skipped)"
 
 # Test Zig client
 wine64 zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe
@@ -127,12 +137,14 @@ Typical binary sizes for cross-compiled clients:
 ### GitHub Actions Workflow
 
 The `.github/workflows/cross-compile-clients.yml` workflow automatically:
+
 1. Cross-compiles clients for all platforms
 2. Tests them with QEMU where available
 3. Uploads artifacts for download
 4. Creates release packages when tagging
 
 ### Local CI Testing
+
 ```bash
 # Run the full CI pipeline including cross-compilation
 make ci
@@ -144,16 +156,19 @@ make cross-compile-strict
 ## Development Notes
 
 ### Zig Client
+
 - Uses minimal dependencies for maximum portability
 - Compiles to static libraries for easy integration
 - Supports Zig 0.15.1+ API
 
 ### Go Client
+
 - Built with `CGO_ENABLED=0` for pure Go binaries
 - No external C dependencies
 - Fully static binaries for all platforms
 
 ### Testing Considerations
+
 - QEMU user-mode emulation is used for ARM64 testing
 - Wine is used for Windows binary testing on Linux
 - Connection failures during testing are expected if server isn't running
@@ -162,6 +177,7 @@ make cross-compile-strict
 ## Troubleshooting
 
 ### QEMU Not Found
+
 ```bash
 # Ubuntu/Debian
 sudo apt-get install qemu-user qemu-user-static
@@ -174,11 +190,15 @@ sudo pacman -S qemu-user qemu-user-static
 ```
 
 ### Wine Not Found
+
 ```bash
 # Ubuntu/Debian
 sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install wine wine64
+sudo dpkg --add-architecture i386 || true
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends wine wine64
+echo "Using $(command -v wine64 || command -v wine || echo 'no-wine-installed') for execution"
 
 # Fedora
 sudo dnf install wine
@@ -188,13 +208,17 @@ sudo pacman -S wine
 ```
 
 ### Go Cross-Compilation Fails
+
 Ensure CGO is disabled:
+
 ```bash
 CGO_ENABLED=0 GOOS=target_os GOARCH=target_arch go build
 ```
 
 ### Zig Cross-Compilation Fails
+
 Check Zig version:
+
 ```bash
 zig version  # Should be 0.15.1 or later
 ```
