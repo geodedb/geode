@@ -1,13 +1,11 @@
 package gql
 
 import (
+	"os"
 	"testing"
 )
 
-var tcpOnce struct{
-	started bool
-}
-
 func TestMain(m *testing.M) {
-	m.Run()
+	code := m.Run()
+	os.Exit(code)
 }
