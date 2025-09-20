@@ -103,6 +103,8 @@ pub const CDCConfig = struct {
     malformed_hash_retain: u32 = 8, // retain hashes/prefixes for first N malformed payloads
     malformed_warn_pct: f64 = 0.05, // warn guardrail threshold (malformed/attempts)
     malformed_abort_pct: f64 = 0.50, // abort guardrail threshold
+    // Backpressure watermark: when pending buffered events exceeds this, set backpressure flag (0 disables)
+    pending_backpressure_watermark: u64 = 0,
 };
 
 pub const KafkaConfig = struct {
@@ -207,7 +209,11 @@ pub const CDCEngine = struct {
     total_wal_attempts: u64 = 0,
     guardrail_warn_triggered: bool = false,
     guardrail_abort_triggered: bool = false,
+    first_warn_ts_ms: i64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailTimestamps; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps; OWNER=streaming; UPDATED=2025-09-20
+    first_abort_ts_ms: i64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailTimestampsAbort; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps; OWNER=streaming; UPDATED=2025-09-20
     malformed_hashes: MalformedHashStore = .{},
+    guardrail_epoch: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailEpoch; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailEpoch; OWNER=streaming; UPDATED=2025-09-20
+    start_time_ms: i64 = 0, // engine start timestamp for uptime computations
 
     const Self = @This();
 
@@ -318,6 +324,8 @@ pub const CDCEngine = struct {
             .total_wal_attempts = 0,
             .guardrail_warn_triggered = false,
             .guardrail_abort_triggered = false,
+            .guardrail_epoch = 0,
+            .start_time_ms = std.time.milliTimestamp(),
         };
 
         // Environment variable overrides (ignore parse errors; bounds check defensively)
@@ -378,6 +386,7 @@ pub const CDCEngine = struct {
         }
 
         self.is_running = true;
+        self.start_time_ms = std.time.milliTimestamp();
         self.thread = try std.Thread.spawn(.{}, processingLoop, .{self});
     }
 
@@ -604,11 +613,15 @@ pub const CDCEngine = struct {
             const ratio = @as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts));
             if (!self.guardrail_warn_triggered and ratio >= self.config.malformed_warn_pct) {
                 self.guardrail_warn_triggered = true;
+                self.first_warn_ts_ms = std.time.milliTimestamp();
                 std.log.warn("CDC malformed WAL warn threshold triggered ratio={d:.3}", .{ratio});
+                std.log.warn("CDCMalformedWarn ratio={d:.3} ts_ms={d}", .{ ratio, self.first_warn_ts_ms });
             }
             if (!self.guardrail_abort_triggered and ratio >= self.config.malformed_abort_pct) {
                 self.guardrail_abort_triggered = true;
+                self.first_abort_ts_ms = std.time.milliTimestamp();
                 std.log.err("CDC malformed WAL abort threshold triggered ratio={d:.3}", .{ratio});
+                std.log.err("CDCMalformedAbort ratio={d:.3} ts_ms={d}", .{ ratio, self.first_abort_ts_ms });
             }
             self.mutex.unlock();
             if (count == 1 or (count % self.config.malformed_snapshot_interval == 0)) {
@@ -637,6 +650,18 @@ pub const CDCEngine = struct {
             }
         }
         return allocator.alloc(u64, 0);
+    }
+
+    /// Reset guardrail state (malformed WAL ratio tracking) clearing latched flags & timestamps while preserving counters.
+    /// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailReset; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailReset; OWNER=streaming; UPDATED=2025-09-20
+    pub fn resetGuardrailState(self: *Self) void {
+        self.mutex.lock();
+        self.guardrail_warn_triggered = false;
+        self.guardrail_abort_triggered = false;
+        self.first_warn_ts_ms = 0;
+        self.first_abort_ts_ms = 0;
+        self.guardrail_epoch += 1;
+        self.mutex.unlock();
     }
 
     /// Serialize malformed ring buffer snapshots to JSON array string.
@@ -670,6 +695,22 @@ pub const CDCEngine = struct {
         try w.writeAll(if (self.guardrail_warn_triggered) "true" else "false");
         try w.writeAll(",\"guardrail_abort_triggered\":");
         try w.writeAll(if (self.guardrail_abort_triggered) "true" else "false");
+        // first trigger timestamps (0 = not triggered)
+        try w.writeAll(",\"first_warn_ts_ms\":");
+        try std.fmt.format(w, "{d}", .{self.first_warn_ts_ms});
+        try w.writeAll(",\"first_abort_ts_ms\":");
+        try std.fmt.format(w, "{d}", .{self.first_abort_ts_ms});
+        try w.writeAll(",\"guardrail_epoch\":");
+        try std.fmt.format(w, "{d}", .{self.guardrail_epoch});
+        // uptime and backpressure
+        const now_ms = std.time.milliTimestamp();
+        const uptime_ms: i64 = if (self.start_time_ms > 0 and now_ms >= self.start_time_ms) (now_ms - self.start_time_ms) else 0;
+        try w.writeAll(",\"uptime_ms\":");
+        try std.fmt.format(w, "{d}", .{uptime_ms});
+        const pending_events: u64 = @intCast(self.event_buffer.items.len);
+        const backpressure_active = self.config.pending_backpressure_watermark > 0 and pending_events >= self.config.pending_backpressure_watermark;
+        try w.writeAll(",\"backpressure\":");
+        try w.writeAll(if (backpressure_active) "true" else "false");
         // configuration echo
         try w.writeAll(",\"config\":{\"enabled\":");
         try w.writeAll(if (self.config.enabled) "true" else "false");
@@ -685,6 +726,8 @@ pub const CDCEngine = struct {
         try std.fmt.format(w, "{d}", .{self.config.flush_interval_ms});
         try w.writeAll(",\"batch_size\":");
         try std.fmt.format(w, "{d}", .{self.config.batch_size});
+        try w.writeAll(",\"pending_backpressure_watermark\":");
+        try std.fmt.format(w, "{d}", .{self.config.pending_backpressure_watermark});
         try w.writeAll("}");
         // engine runtime state
         try w.writeAll(",\"engine\":{\"is_running\":");

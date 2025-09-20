@@ -47,4 +47,11 @@ test "CDC guardrail abort triggers (warn & abort true)" {
 
     try expectContains(diag, "\"guardrail_warn_triggered\":true");
     try expectContains(diag, "\"guardrail_abort_triggered\":true");
+    // Timestamp assertions: presence and abort ts not zero. (Warn ts should also be non-zero.)
+    try expectContains(diag, "\"first_warn_ts_ms\":");
+    try expectContains(diag, "\"first_abort_ts_ms\":");
+    // Weak heuristic to ensure abort ts not zero: absence of pattern 'first_abort_ts_ms":0,'
+    if (std.mem.indexOf(u8, diag, "\"first_abort_ts_ms\":0") != null) {
+        return error.Unexpected;
+    }
 }

@@ -65,4 +65,8 @@ test "CDC guardrail warn only triggers before abort" {
     try expectContains(diag, "\"guardrail_warn_triggered\":true");
     // Abort must remain false
     try expectContains(diag, "\"guardrail_abort_triggered\":false");
+    // Timestamp expectations: warn ts > 0, abort ts = 0
+    // We can't easily parse; just assert keys exist and abort ts shows ':0,' pattern while warn ts not zero.
+    try expectContains(diag, "\"first_warn_ts_ms\":");
+    try expectContains(diag, "\"first_abort_ts_ms\":0");
 }

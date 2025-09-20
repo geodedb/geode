@@ -1145,6 +1145,22 @@ fn trackerGet(ctx: *anyopaque) usize {
 
 const graph_exec = @import("graph/exec.zig");
 
+// Centralized CDC_CONTROL handler to eliminate duplicated logic between processMessage
+// (network path) and stdio loop. Returns a newly allocated response line or null slice on OOM.
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=IMPLEMENTED; TEST=tests/e2e_protocol_cdc_control.zig; OWNER=server; UPDATED=2025-09-20
+fn handleCdcControl(gpa: std.mem.Allocator, state: *ServerState, action: []const u8) ?[]u8 {
+    if (state.cdc_engine) |eng| {
+        if (std.ascii.eqlIgnoreCase(action, "RESET_GUARDRAILS")) {
+            eng.resetGuardrailState();
+            return protocol.buildCdcControlLine(gpa, action, "OK", eng.guardrail_epoch) catch null;
+        } else {
+            return protocol.buildCdcControlLine(gpa, action, "UNSUPPORTED", eng.guardrail_epoch) catch null;
+        }
+    } else {
+        return protocol.buildCdcControlLine(gpa, action, "NO_ENGINE", 0) catch null;
+    }
+}
+
 fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code, alloc_tracker: ?AllocTracker) ![][]const u8 {
     // Check if this is a MATCH query
     if (q.match.chains.len > 0) {
@@ -1947,6 +1963,9 @@ fn processMessage(
                 return protocol.buildCdcDiagnosticsLine(gpa, json) catch try gpa.dupe(u8, "");
             }
         },
+        .CDC_CONTROL => |cc| {
+            if (handleCdcControl(gpa, state, cc.action)) |resp| return resp else return try gpa.dupe(u8, "");
+        },
         .PING => |_| {
             const ok = "{\"ok\":true}";
             const flags = computeBaseFlags(false, false);
@@ -2449,6 +2468,13 @@ pub fn main() !void {
                         defer gpa.free(line);
                         _ = stdout_file.write(line) catch {};
                     } else |_| {}
+                }
+                continue;
+            },
+            .CDC_CONTROL => |cc| {
+                if (handleCdcControl(gpa, &state, cc.action)) |out_line| {
+                    defer gpa.free(out_line);
+                    _ = stdout_file.write(out_line) catch {};
                 }
                 continue;
             },

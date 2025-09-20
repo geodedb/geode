@@ -1,12 +1,13 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCDiagnosticsProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol; OWNER=wire; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCControlProtocol; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=wire; UPDATED=2025-09-20
 
 // Debug instrumentation toggle for protocol frame builders.
 // Set true locally when investigating length arithmetic or corruption.
 const PROTOCOL_DEBUG = false;
 
-pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING, CDC_DIAGNOSTICS };
+pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING, CDC_DIAGNOSTICS, CDC_CONTROL };
 
 pub const Hello = struct {
     client_name: []const u8,
@@ -35,6 +36,7 @@ pub const ClientMessage = union(MessageType) {
     ROLLBACK_TO: struct { name: []const u8 },
     PING: void,
     CDC_DIAGNOSTICS: void,
+    CDC_CONTROL: struct { action: []const u8 },
 };
 
 pub const ResultType = enum { SCHEMA, BINDINGS, ERROR, EXPLAIN, PROFILE };
@@ -239,6 +241,23 @@ pub fn buildCdcDiagnosticsLine(ally: std.mem.Allocator, json_payload: []const u8
     return out;
 }
 
+pub fn buildCdcControlLine(ally: std.mem.Allocator, action: []const u8, status: []const u8, epoch: u64) ![]u8 {
+    // Frame: {"status_class":"00000","result":{"type":"CDC_CONTROL","action":"<action>","status":"<status>","guardrail_epoch":<epoch>}}
+    var buf = std.ArrayList(u8).initCapacity(ally, 64) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    const w = buf.writer(ally);
+    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"CDC_CONTROL\",\"action\":\"");
+    try w.writeAll(action);
+    try w.writeAll("\",\"status\":\"");
+    try w.writeAll(status);
+    try w.writeAll("\",\"guardrail_epoch\":");
+    var tmp: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&tmp, "{d}", .{epoch}) catch "0";
+    try w.writeAll(s);
+    try w.writeAll("}}\n");
+    return buf.toOwnedSlice(ally);
+}
+
 pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);
@@ -394,6 +413,17 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         return .{ .PING = {} };
     } else if (std.mem.eql(u8, typ, "CDC_DIAGNOSTICS")) {
         return .{ .CDC_DIAGNOSTICS = {} };
+    } else if (std.mem.eql(u8, typ, "CDC_CONTROL")) {
+        // Action may be omitted; treat as empty string to allow handler to emit UNSUPPORTED
+        const av = obj.get("action");
+        if (av) |aval| {
+            if (aval != .string) return error.Invalid;
+            const act = try ally.dupe(u8, aval.string);
+            return .{ .CDC_CONTROL = .{ .action = act } };
+        } else {
+            const empty = try ally.dupe(u8, "");
+            return .{ .CDC_CONTROL = .{ .action = empty } };
+        }
     }
     return error.Invalid;
 }

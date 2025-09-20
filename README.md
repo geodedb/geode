@@ -42,12 +42,34 @@ Geode is a partially-implemented Zig-based database with basic GQL query support
 - **Sinks**: Memory (tests) & File (`cdc.log`) implemented; Kafka/Kinesis/Webhook/PubSub placeholders.
 - **Malformed WAL Guardrails**: Warn / abort thresholds via `GEODE_MALFORMED_WAL_WARN_PCT` & `GEODE_MALFORMED_WAL_ABORT_PCT`.
   - Flags: diagnostics include `guardrail_warn_triggered` and `guardrail_abort_triggered` (both **latched** once true).
-  - Latched semantics: flags remain true after triggering even if ratio later decreases (preserves audit visibility).
+  - Latched semantics: flags remain true after triggering even if ratio later decreases (preserves audit visibility) until explicitly cleared.
+  - Timestamps: `first_warn_ts_ms` / `first_abort_ts_ms` record the first trigger time (0 if not yet triggered). Monotonic relation: warn <= abort when both set.
+  - Reset API: `CDCEngine.resetGuardrailState()` clears both flags and both timestamps (counters remain). Use after remediation to re-arm monitoring without losing historical malformed counts.
 - **Snapshots & Hashes**: Ring buffer of malformed counts + timestamps; prefix/hash retention for first N malformed payloads.
 - **Adaptive Flush (Experimental)**: Optional dynamic batch sizing (`CDCConfig.adaptive_flush`).
-- **Diagnostics Frame**: `CDC_DIAGNOSTICS` JSON includes counters, config echo, engine state, snapshots, hashes, version, timestamp.
+- **Diagnostics Frame**: `CDC_DIAGNOSTICS` JSON includes counters, config echo, engine state, snapshots, hashes, version, timestamp, _uptime_, _guardrail_epoch_, _backpressure_, and _pending_backpressure_watermark_.
+- **Remote Control**: `CDC_CONTROL { action: "RESET_GUARDRAILS" }` frame resets guardrail flags/timestamps and increments `guardrail_epoch`.
 - **Enable**: Set `GEODE_CDC_ENABLE=1` when starting server.
 - **Not Production Ready**: Intended for observability / experimentation only.
+
+CDC_CONTROL response examples (stdio):
+
+```bash
+# Unsupported action
+printf '{"type":"CDC_CONTROL","action":"FOO_BAR"}\n' | ./zig-out/bin/geodec --stdio
+{"status_class":"00000","result":{"type":"CDC_CONTROL","action":"FOO_BAR","status":"UNSUPPORTED","guardrail_epoch":2}}
+
+# Engine disabled (no GEODE_CDC_ENABLE)
+printf '{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS"}\n' | ./zig-out/bin/geodec --stdio
+{"status_class":"00000","result":{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS","status":"NO_ENGINE","guardrail_epoch":0}}
+
+# Valid reset (engine enabled)
+GEODE_CDC_ENABLE=1 ./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567 &
+printf '{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS"}\n' | ./zig-out/bin/geodec --stdio
+{"status_class":"00000","result":{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS","status":"OK","guardrail_epoch":3}}
+```
+
+Backpressure: The diagnostics payload includes `backpressure` (boolean) and echoes the configured `pending_backpressure_watermark`; when `pending_events >= watermark` the flag is `true` and producers SHOULD throttle or force a flush (future API) before pushing more writes.
 
 #### CDC Environment Variables
 
@@ -71,6 +93,10 @@ Geode is a partially-implemented Zig-based database with basic GQL query support
 
 ```bash
 GEODE_CDC_ENABLE=1 ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567 &
+printf '{"type":"CDC_DIAGNOSTICS"}\n' | ./zig-out/bin/geodec --stdio
+
+# Reset guardrails remotely then fetch updated diagnostics
+printf '{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS"}\n' | ./zig-out/bin/geodec --stdio
 printf '{"type":"CDC_DIAGNOSTICS"}\n' | ./zig-out/bin/geodec --stdio
 ```
 

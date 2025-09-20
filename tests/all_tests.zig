@@ -25,6 +25,13 @@ const _e2e_quic_basic = @import("e2e_quic_basic.zig");
 const _e2e_with_clause = @import("e2e_with_clause.zig");
 const _unit_shortest_path_tiebreak = @import("unit_shortest_path_tiebreak.zig");
 const _e2e_mutations = @import("e2e_mutations.zig");
+// CDC enhanced guardrail tests
+const _cdc_guardrail_reset = @import("cdc_guardrail_reset.zig");
+const _cdc_guardrail_ts_monotonic = @import("cdc_guardrail_timestamps_monotonic.zig");
+const _e2e_protocol_cdc_control = @import("e2e_protocol_cdc_control.zig");
+const _e2e_protocol_cdc_control_unsupported = @import("e2e_protocol_cdc_control_unsupported.zig");
+const _e2e_protocol_cdc_control_no_engine = @import("e2e_protocol_cdc_control_no_engine.zig");
+const _unit_cdc_backpressure = @import("unit_cdc_backpressure.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
