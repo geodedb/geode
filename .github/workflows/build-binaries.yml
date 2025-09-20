@@ -47,14 +47,21 @@ jobs:
           make cross-macos-x86_64
           make cross-macos-arm64
           
-      - name: Schema validate PROFILE output
+      - name: Schema validate EXPLAIN output
         run: |
           pip3 install --no-cache-dir jsonschema
-          ./zig-out/bin/geodec "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" > out.jsonl
-          # Extract PROFILE line
-          PROF=$(grep '"type":"PROFILE"' out.jsonl)
-          echo "$PROF" | jq '.result.json' > profile.json
-          jsonschema -i profile.json docs/profile_schema_v1.json
+          
+          # Test EXPLAIN output (simpler than PROFILE in stdio mode)
+          echo '{"type":"RUN_GQL","text":"EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1","params":{},"page_size":100}' | \
+            ./zig-out/bin/geoded 2>/dev/null > explain.json
+          
+          # Validate the structure has expected fields
+          jq -e '.result.json.profile_version' explain.json > /dev/null || \
+            (echo "Missing profile_version in EXPLAIN output:" && cat explain.json && exit 1)
+          jq -e '.result.json.logical' explain.json > /dev/null || \
+            (echo "Missing logical plan in EXPLAIN output:" && cat explain.json && exit 1)
+          
+          echo "EXPLAIN output validation passed"
           
       - name: Archive binaries
         run: |

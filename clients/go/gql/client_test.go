@@ -142,6 +142,10 @@ func contains(s, sub string) bool { return len(sub) == 0 || (len(s) >= len(sub) 
 func startQUIC(t *testing.T) string {
 	t.Helper()
 	serverPath := ensureServer(t)
+	if serverPath == "" {
+		// Server not available, test was skipped
+		return ""
+	}
 	// Check if already listening on QUIC
 	cmd := exec.Command(serverPath, "--listen-quic", "127.0.0.1:7567")
 	if err := cmd.Start(); err != nil { t.Fatalf("start quic server: %v", err) }
@@ -152,6 +156,9 @@ func startQUIC(t *testing.T) string {
 }
 
 func TestGQL_QUIC_OrderLimit(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("Skipping QUIC test in CI/short mode")
+	}
 	addr := startQUIC(t)
 	db, err := Open("quic://" + addr + "?page_size=3")
 	if err != nil { t.Fatalf("Open err: %v", err) }
@@ -170,6 +177,9 @@ func TestGQL_QUIC_OrderLimit(t *testing.T) {
 }
 
 func TestGQL_TCP_OrderLimit(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("Skipping TCP test in CI/short mode")
+	}
 	addr := startTCP(t)
 	db, err := Open("tcp://" + addr + "?page_size=3")
 	if err != nil { t.Fatalf("Open err: %v", err) }

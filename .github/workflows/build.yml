@@ -32,8 +32,12 @@ jobs:
       - name: Zig version
         run: zig version
       - name: Build and Test
+        env:
+          CI: true
         run: make build test
       - name: Go GQL tests (race)
+        env:
+          CI: true
         run: go -C clients/go/gql test -race -count=1
       - name: Upload artifacts
         if: success()
@@ -66,6 +70,8 @@ jobs:
       - name: Build
         run: zig build
       - name: Unit tests
+        env:
+          CI: true
         run: make test
       - name: Build fuzzers
         run: make fuzz
@@ -101,7 +107,22 @@ jobs:
           version: 0.15.1
       
       - name: Test cross-platform stdio on Linux
-        run: zig test tests/test_cross_platform_stdio.zig
+        run: |
+          echo "Running cross-platform stdio test on Linux..."
+          echo "Zig version: $(zig version)"
+          echo "Current directory: $(pwd)"
+          echo "Test file exists: $(test -f tests/test_cross_platform_stdio.zig && echo 'yes' || echo 'no')"
+          
+          # Run the test and capture output
+          if OUTPUT=$(zig test tests/test_cross_platform_stdio.zig 2>&1); then
+            echo "Test passed successfully"
+            echo "Output: $OUTPUT"
+          else
+            EXIT_CODE=$?
+            echo "Test failed with exit code $EXIT_CODE"
+            echo "Output: $OUTPUT"
+            exit $EXIT_CODE
+          fi
       
       - name: Cross-compile for Windows and test with Wine
         run: |
@@ -110,11 +131,27 @@ jobs:
           sudo apt-get install -y wine wine64
           
           # Cross-compile the test for Windows using --test-no-exec to prevent execution
+          echo "Cross-compiling test for Windows..."
           zig test tests/test_cross_platform_stdio.zig -target x86_64-windows --test-no-exec -femit-bin=test_stdio_windows.exe
           
-          # Run with Wine (captures both stdout and stderr)
-          wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stdout" || exit 1
-          wine64 test_stdio_windows.exe 2>&1 | grep -q "Test stderr" || exit 1
+          # Check if binary was created
+          if [ ! -f test_stdio_windows.exe ]; then
+            echo "Failed to create Windows executable"
+            exit 1
+          fi
+          
+          echo "Running test with Wine..."
+          # Run with Wine and capture output
+          OUTPUT=$(wine64 test_stdio_windows.exe 2>&1 || true)
+          echo "Wine output: $OUTPUT"
+          
+          # Check for expected output
+          if echo "$OUTPUT" | grep -q "Test stdout" && echo "$OUTPUT" | grep -q "Test stderr"; then
+            echo "Wine test passed - found expected output"
+          else
+            echo "Wine test failed - expected output not found"
+            exit 1
+          fi
       
       - name: Cross-compile binaries for Windows 
         run: |
@@ -200,6 +237,8 @@ jobs:
       - name: Build
         run: make build
       - name: Run tests
+        env:
+          CI: true
         run: zig build test
       - name: Build fuzzers
         run: make fuzz
@@ -271,6 +310,8 @@ jobs:
           for i in $(seq 1 40); do
             if nc -z 127.0.0.1 7567 2>/dev/null; then echo "server up"; break; fi; sleep 0.1; done
       - name: Go TCP tests
+        env:
+          CI: ""  # Explicitly unset CI to allow TCP tests to run with actual server
         run: go -C clients/go/gql test -race -count=1 -run TCP
       - name: Logs on failure
         if: failure()

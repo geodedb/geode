@@ -853,7 +853,7 @@ fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, lim
         first = false;
         w.writeAll("\"distinct\":true") catch {};
     }
-    w.writeAll("}") catch {};
+    w.writeAll("}}") catch {};  // Close properties object and outer JSON object
     return buf.toOwnedSlice(ally) catch "{\"logical\":[]}";
 }
 

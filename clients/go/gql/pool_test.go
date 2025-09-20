@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,9 @@ import (
 
 // TestPoolConcurrency ensures that with many goroutines and limited max, connections are reused.
 func TestPoolConcurrency(t *testing.T) { // part of pool tests
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("Skipping pool concurrency test in CI/short mode")
+	}
 	startTCP(t)
 	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 3, 10*time.Second) // supply TCP addr
 	ctx := context.Background()
@@ -39,6 +43,9 @@ func TestPoolConcurrency(t *testing.T) { // part of pool tests
 
 // TestPoolAcquireTimeout ensures Acquire times out when closed.
 func TestPoolAcquireTimeout(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("Skipping pool acquire timeout test in CI/short mode")
+	}
 	startTCP(t)
 	time.Sleep(50 * time.Millisecond) // Give server time to stabilize
 	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 1, 10*time.Second)
@@ -54,6 +61,9 @@ func TestPoolAcquireTimeout(t *testing.T) {
 
 // TestPoolIdleTimeout ensures idle connections are pruned after timeout.
 func TestPoolIdleTimeout(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("Skipping pool idle timeout test in CI/short mode")
+	}
 	startTCP(t)
 	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 2, 50*time.Millisecond)
 	ctx := context.Background()

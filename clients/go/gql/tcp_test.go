@@ -3,12 +3,16 @@ package gql
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestGQL_TCP_OrderLimit_Legacy(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("Skipping TCP legacy test in CI/short mode")
+	}
 	startTCP(t)
 	db, oerr := Open("tcp:127.0.0.1:7567?page_size=3")
 	if oerr != nil { t.Fatalf("Open tcp err: %v", oerr) }
