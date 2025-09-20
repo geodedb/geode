@@ -1,4 +1,5 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
 
 // Debug instrumentation toggle for protocol frame builders.
 // Set true locally when investigating length arithmetic or corruption.

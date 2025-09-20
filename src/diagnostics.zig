@@ -1,4 +1,5 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Precedence & Folding"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_DiagnosticsFold; OWNER=engine; UPDATED=2025-09-20
 
 pub const Code = enum(u16) {
     US001 = 1, // Pagination unordered

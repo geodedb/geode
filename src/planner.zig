@@ -1,4 +1,5 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-017; FEATURE="Path Expansion Operator"; ASPECT=Planner; STATUS=STUB; TEST=TestCANARY_REQ_GQL_017_PathExpandBfs; OWNER=planner; UPDATED=2025-09-20
 const ast = @import("gql/ast.zig");
 const mem = std.mem;
 const temporal = @import("temporal.zig");

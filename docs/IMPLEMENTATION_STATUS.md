@@ -3,6 +3,7 @@
 ## Completed Features (December 2024)
 
 ### ✅ Time-Series Core
+
 - **Location**: `src/timeseries/`
 - **Status**: 100% Complete
 - **Features**:
@@ -13,6 +14,7 @@
   - Efficient point sorting and binary search for time-based queries
 
 ### ✅ Chunked Storage with Compression
+
 - **Location**: `src/timeseries/chunk_storage.zig`
 - **Status**: 100% Complete
 - **Features**:
@@ -24,6 +26,7 @@
   - Automatic retention policy enforcement
 
 ### ✅ Backup and Restore
+
 - **Location**: `src/storage/backup.zig`
 - **Status**: 100% Complete
 - **Features**:
@@ -35,6 +38,7 @@
   - Backup chain management for efficient storage
 
 ### ✅ Federated Queries (Scaffold)
+
 - **Location**: `src/distributed/federation.zig`
 - **Status**: 40% Complete (Framework Ready)
 - **Completed**:
@@ -51,6 +55,7 @@
   - Partition-aware query routing
 
 ### ✅ Grey Cardinal Documentation
+
 - **Location**: `docs/grey-cardinal/`
 - **Status**: 100% Complete
 - **Contents**:
@@ -63,17 +68,20 @@
 ## Performance Metrics Achieved
 
 ### Time-Series Performance
+
 - **Write Throughput**: 750K points/sec (target: 1M)
 - **Compression Ratio**: 10 bytes/value (target: 8)
 - **Query Latency P99**: 12ms (target: < 10ms)
 - **Memory Usage**: < 20 bytes per point in memory
 
 ### Storage Efficiency
+
 - **Gorilla Compression**: 35-40% compression ratio
 - **Chunk Index Overhead**: < 1% of data size
 - **Retention Processing**: < 100ms for 1M points
 
 ### Backup Performance
+
 - **Full Backup**: Not yet benchmarked (target: < 5 min/100GB)
 - **Incremental Backup**: Not yet benchmarked (target: < 30 sec)
 - **Recovery Time**: Not yet benchmarked (target: < 10 min/100GB)
@@ -81,13 +89,17 @@
 ## Integration Points
 
 ### Parser Integration (Pending)
+
 The time-series functions need to be wired into the GQL parser:
+
 1. Add function recognition in `src/parser.zig`
 2. Add evaluation logic in `src/eval.zig`
 3. Add protocol support for time-series results
 
 ### Storage Integration (Pending)
+
 The chunked storage needs WAL integration:
+
 1. WAL records for time-series operations
 2. Recovery of time-series data from WAL
 3. Checkpoint coordination with chunk flushes
@@ -95,6 +107,7 @@ The chunked storage needs WAL integration:
 ## Testing Coverage
 
 ### Unit Tests
+
 - ✅ Time-series store operations
 - ✅ Compression algorithms
 - ✅ Retention policies
@@ -102,6 +115,7 @@ The chunked storage needs WAL integration:
 - ✅ Federation manager setup
 
 ### Integration Tests
+
 - ✅ End-to-end time-series queries
 - ✅ Chunk storage with compression
 - ✅ Performance benchmarks
@@ -109,6 +123,7 @@ The chunked storage needs WAL integration:
 - ⏳ WAL recovery tests (pending)
 
 ### Performance Tests
+
 - ✅ 1M point write benchmark: 750K points/sec
 - ✅ Compression ratio: 10 bytes/value
 - ✅ Query performance: < 100ms for complex aggregations
@@ -116,18 +131,21 @@ The chunked storage needs WAL integration:
 ## Next Steps
 
 ### Immediate (This Week)
+
 1. Wire time-series functions into GQL parser
 2. Complete WAL integration for time-series
 3. Run full performance benchmarks
 4. Update API documentation
 
 ### Short Term (Next Sprint)
+
 1. Complete federation network protocol
 2. Implement distributed query execution
 3. Add streaming support for large results
 4. Optimize compression for better ratios
 
 ### Long Term (Q1 2025)
+
 1. Full federation deployment
 2. Multi-region support
 3. Advanced time-series analytics (FFT, anomaly detection)
@@ -135,11 +153,13 @@ The chunked storage needs WAL integration:
 
 ## Known Issues
 
-1. **ArrayList API Changes**: Code uses Zig 0.15.1 but was written for 0.13.0
+1. **ArrayList API Changes**: Code uses Zig 0.15.1 but was written for 0.15.1
+
    - **Impact**: Minor compilation adjustments needed
    - **Resolution**: Use correct initialization patterns
 
 2. **Import Paths**: Some modules have circular dependencies
+
    - **Impact**: Test isolation issues
    - **Resolution**: Refactor to break cycles
 
@@ -150,6 +170,7 @@ The chunked storage needs WAL integration:
 ## Configuration
 
 ### Time-Series Settings
+
 ```zig
 // Recommended production settings
 const ts_config = .{
@@ -160,6 +181,7 @@ const ts_config = .{
 ```
 
 ### Backup Settings
+
 ```zig
 // Recommended production settings
 const backup_config = .{
@@ -171,6 +193,7 @@ const backup_config = .{
 ```
 
 ### Federation Settings
+
 ```zig
 // Recommended production settings
 const fed_config = .{
@@ -184,9 +207,11 @@ const fed_config = .{
 ```
 
 ## License
+
 MIT License - See LICENSE file for details
 
 ## Contributors
+
 - Engine Team: Time-series core implementation
 - Storage Team: Chunked storage and compression
 - Federation Team: Distributed query framework

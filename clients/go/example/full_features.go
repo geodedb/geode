@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	
-	"../gql"
+
+	gql "go.spyder.org/geode/clients/go/gql"
 )
 
 func main() {

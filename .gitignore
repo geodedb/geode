@@ -5,6 +5,17 @@ core
 external/
 dist/
 out/
+results
+
+test_io
+test_formatter
+test_writer
+test_arraylist
+user_auth
+root
+auth
+*.log
+*.txt
 
 .direnv/
 .zig-cache/

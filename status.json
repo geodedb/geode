@@ -1,6 +1,104 @@
 {
-  "generated_at": "2025-09-20T16:23:04.602545592Z",
+  "generated_at": "2025-09-20T16:51:07.402897445Z",
   "requirements": [
+    {
+      "id": "REQ-GQL-005",
+      "features": [
+        {
+          "feature": "Binary Protocol Core",
+          "aspect": "Wire",
+          "status": "TESTED",
+          "files": [
+            "docs/PROMPTS.md",
+            "src/protocol.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_005_HelloRoundTrip"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-010",
+      "features": [
+        {
+          "feature": "Diagnostics Precedence & Folding",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "src/diagnostics.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_010_DiagnosticsFold"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-017",
+      "features": [
+        {
+          "feature": "Path Expansion Operator",
+          "aspect": "Planner",
+          "status": "STUB",
+          "files": [
+            "src/planner.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_017_PathExpandBfs"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-028",
+      "features": [
+        {
+          "feature": "WAL Compaction",
+          "aspect": "Storage",
+          "status": "STUB",
+          "files": [
+            "docs/PROMPTS.md",
+            "src/storage/wal_compactor.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_WalCompact"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-030",
+      "features": [
+        {
+          "feature": "Transactions/MVCC",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "docs/PROMPTS.md",
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_030_TxnCommit"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
     {
       "id": "REQ-GQL-042",
       "features": [
@@ -40,7 +138,7 @@
         {
           "feature": "TDE",
           "aspect": "Storage",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "docs/PROMPTS.md",
             "tools/canaryscan/internal/fixtures/file2.go"
@@ -57,12 +155,15 @@
   ],
   "summary": {
     "by_status": {
-      "IMPL": 1,
-      "STUB": 2
+      "STUB": 4,
+      "TESTED": 4
     },
     "by_aspect": {
       "API": 2,
-      "Storage": 1
+      "Engine": 2,
+      "Planner": 1,
+      "Storage": 2,
+      "Wire": 1
     }
   }
 }

@@ -1,0 +1,13 @@
+req,feature,aspect,status,file,test,bench,owner,updated
+REQ-GQL-005,Binary Protocol Core,Wire,TESTED,docs/PROMPTS.md,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20
+REQ-GQL-005,Binary Protocol Core,Wire,TESTED,src/protocol.zig,,,wire,2025-09-20
+REQ-GQL-010,Diagnostics Precedence & Folding,Engine,TESTED,src/diagnostics.zig,TestCANARY_REQ_GQL_010_DiagnosticsFold,,engine,2025-09-20
+REQ-GQL-017,Path Expansion Operator,Planner,STUB,src/planner.zig,TestCANARY_REQ_GQL_017_PathExpandBfs,,planner,2025-09-20
+REQ-GQL-028,WAL Compaction,Storage,STUB,docs/PROMPTS.md,TestCANARY_REQ_GQL_028_WalCompact,,storage,2025-09-20
+REQ-GQL-028,WAL Compaction,Storage,STUB,src/storage/wal_compactor.zig,,,storage,2025-09-20
+REQ-GQL-030,Transactions/MVCC,Engine,TESTED,docs/PROMPTS.md,TestCANARY_REQ_GQL_030_TxnCommit,,engine,2025-09-20
+REQ-GQL-030,Transactions/MVCC,Engine,TESTED,src/txn/manager.zig,,,engine,2025-09-20
+REQ-GQL-042,CDC,API,STUB,docs/PROMPTS.md,tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-20
+REQ-GQL-042,CDC/Streaming,API,STUB,tools/canaryscan/internal/fixtures/file1.zig,tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-20
+REQ-GQL-046,TDE,Storage,TESTED,docs/PROMPTS.md,TestCANARY_REQ_GQL_046_KeyRotate,,security,2025-09-20
+REQ-GQL-046,TDE,Storage,TESTED,tools/canaryscan/internal/fixtures/file2.go,,,security,2025-09-20

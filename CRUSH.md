@@ -35,7 +35,7 @@ Lint/format/typecheck
 
 Project conventions
 
-- Language: Zig 0.13.0; Linux x86_64; default JSON output (TXT via --format=txt)
+- Language: Zig 0.15.1; Linux x86_64; default JSON output (TXT via --format=txt)
 - Transport: QUIC with TLS 1.3 (default), TCP (legacy), stdio (backward compat)
 - Imports: prefer std; avoid dynamic net deps; versions pinned if any third-party used
 - File organization mirrors modules under src/ (gql/, parser/, planner.zig, exec.zig, protocol.zig, server/, client/, transport/)
@@ -60,27 +60,32 @@ feat(transport): add QUIC with TLS 1.3 support for client-server communication
 New Features Implemented:
 
 Core GQL Features:
+
 - MATCH pattern matching with graph traversal (src/graph/pattern_matcher.zig)
 - Property access for nodes and edges
 - GROUP BY with aggregations (COUNT, SUM, AVG, MIN, MAX, STDEV, VARIANCE) (src/graph/aggregator.zig)
 - Graph mutations (CREATE, UPDATE, DELETE, MERGE operations)
 
 Storage Enhancements:
+
 - Automatic WAL compaction with configurable thresholds (src/storage/wal_compactor.zig)
 - B-tree indexes for property lookups (src/index/btree.zig)
 - Cost-based query optimizer with statistics (src/planner/optimizer.zig)
 
 Distributed Features:
+
 - Raft consensus for leader election (src/distributed/raft_consensus.zig)
 - Two-phase commit coordinator (src/distributed/twophase.zig)
 - Consistent hashing for sharding (src/distributed/sharding.zig)
 
 Performance & Monitoring:
+
 - Comprehensive metrics collection (counters, gauges, histograms, timers) (src/monitoring/metrics.zig)
 - Query profiling with detailed execution plans
 - Prometheus export format support
 
 Developer Experience:
+
 - Complete API documentation (docs/API_DOCUMENTATION.md)
 - Go query builder library (clients/go/gql/query_builder.go)
 - Advanced query examples (examples/advanced_queries.gql)
@@ -98,30 +103,35 @@ Notes for agents
 ## Recent Feature Implementations (December 2024)
 
 ### Graph Pattern Matching Enhancements
+
 - OPTIONAL MATCH: src/server/graph/exec.zig:executeOptionalMatch
-- Variable-length paths: src/server/graph/exec.zig:pathExpand  
+- Variable-length paths: src/server/graph/exec.zig:pathExpand
 - Path tie-breaking: src/server/graph/exec.zig:applyPathTieBreaking
 - NULL handling in bindings for unmatched patterns
 
 ### Transaction Management
+
 - Enhanced MVCC: src/server/txn/mvcc.zig:detectConflict
 - Conflict types: WriteWrite, ReadWrite, WriteRead, PhantomRead
 - ISO 40001 error mapping: conflictToError
 - Transaction validation: validateTransaction
 
 ### Storage Persistence
+
 - Graph metadata: src/storage/catalog.zig:GraphMetadata
 - Page-based storage for nodes/edges/adjacency/properties
 - Integration with --data_dir flag
 - Fallback to JSONL format
 
 ### Testing
+
 - OPTIONAL MATCH tests: tests/e2e_optional_match.zig
 - Variable-length path tests included
 - MVCC conflict detection tests included
 - Storage persistence tests included
 
 ### Time-Series Integration (December 19, 2024)
+
 - Core time-series store: src/timeseries/timeseries.zig
 - Gorilla compression: src/timeseries/chunk_storage.zig
 - GQL UDF functions: last_value, value_at, sample_by, interpolate, moving_avg, rate, derivative
@@ -130,6 +140,7 @@ Notes for agents
 - Retention policies with automatic pruning
 
 ### Backup and Restore (December 19, 2024)
+
 - Backup manager: src/storage/backup.zig
 - Full and incremental backups
 - Point-in-time recovery
@@ -137,6 +148,7 @@ Notes for agents
 - Backup chain management
 
 ### Federated Queries Framework (December 19, 2024)
+
 - Federation manager: src/distributed/federation.zig
 - Remote node registration and health monitoring
 - Connection pooling per remote node

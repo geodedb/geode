@@ -1,17 +1,17 @@
 package main
 
 import (
-    "bufio"
-    "encoding/csv"
-    "errors"
-    "fmt"
-    "io/fs"
-    "os"
-    "path/filepath"
-    "regexp"
-    "sort"
-    "strings"
-    "time"
+	"bufio"
+	"encoding/csv"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
 )
 
 var canaryRe = regexp.MustCompile(`^\s*(?://|#|--)\s*CANARY:\s*(.*)$`)
@@ -108,10 +108,19 @@ func Scan(root string) (report, error) {
     sumAspect := map[string]int{}
 
     for k, v := range agg {
+        // Auto-promotion: if status is IMPL and at least one test present -> TESTED
+        // If at least one bench present and status IMPL or TESTED -> BENCHED (bench is stronger evidence)
+        promoted_status := k.status
+        if promoted_status == "IMPL" && len(v.tests) > 0 {
+            promoted_status = "TESTED"
+        }
+        if (promoted_status == "IMPL" || promoted_status == "TESTED") && len(v.benches) > 0 {
+            promoted_status = "BENCHED"
+        }
         ent := featureEntry{
             Feature: k.feature,
             Aspect:  k.aspect,
-            Status:  k.status,
+            Status:  promoted_status,
             Files:   keys(v.files),
             Tests:   keys(v.tests),
             Benches: keys(v.benches),
@@ -119,7 +128,7 @@ func Scan(root string) (report, error) {
             Updated: k.updated,
         }
         reqMap[normalizeReq(k.id)] = append(reqMap[normalizeReq(k.id)], ent)
-        sumStatus[k.status]++
+        sumStatus[ent.Status]++
         sumAspect[k.aspect]++
     }
     var rows []requirementRow

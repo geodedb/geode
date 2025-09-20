@@ -1,4 +1,5 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=Storage; STATUS=STUB; TEST=TestCANARY_REQ_GQL_028_WalCompact; OWNER=storage; UPDATED=2025-09-20
 const Allocator = std.mem.Allocator;
 
 // Automatic WAL compaction based on configurable thresholds
