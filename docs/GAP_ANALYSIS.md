@@ -1,37 +1,116 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-21)
 
-This file is regenerated directly from the current `status.json` produced by `./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict`.
+This authoritative ledger is generated from `status.json` emitted by:
 
-Legend (Status column):
+```bash
+./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
+```
 
-Updated with current scan (status.csv). All aspects are either TESTED or BENCHED; no STUB or bare IMPL remain under the enforced policy.
+No manual edits should diverge from scanner evidence; contradictions must be resolved by adding/updating CANARY lines or tests/benches.
 
-- TESTED: At least one associated test (either explicitly declared or auto‑promoted from IMPL).
-- BENCHED: At least one benchmark (strongest; may also have tests).
+## 1. Evidence Summary
 
-Auto‑promotion rules (scanner): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. Dates (`UPDATED`) must be ≤60 days old under `--strict` (all current rows pass; 100% aspects now TESTED or BENCHED).
+| Metric | Count |
+| ------ | ----- |
+| Total aspects (rows) | 193 |
+| BENCHED | 85 |
+| TESTED (non‑BENCHED) | 107 |
+| STUB | 0 |
+| IMPL (unpromoted) | 0 |
+| Coverage (TESTED or BENCHED) | 100% |
+| Stale (>60d) | 0 |
 
-## Evidence Summary Snapshot
+Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
 
-Current scanner summary (derived from status.csv):
+## 2. Conformance / Scope Snapshot (ISO/IEC 39075:2024)
 
-Total aspect rows (status.csv rows): 193
-Distinct BENCHED aspects: 85
-Distinct TESTED aspects (non‑BENCHED): 107
-Remaining STUB / IMPL: 0
-Coverage (TESTED or BENCHED): 100%
+| Domain | Status | Notes / Gaps (ISO anchors) |
+| ------ | ------ | -------------------------- |
+| Core Query Parsing (RETURN, ORDER, SET OPS) | TESTED | Basic linear composition (§14), ORDER/LIMIT legality (§16.16–16.19) enforced (US001). |
+| Set Operations (UNION/INTERSECT/EXCEPT) | TESTED | Distinct vs ALL semantics validated; no advanced duplicate elimination costs tracked. |
+| Aggregation / GROUP BY | TESTED | Basic group + SUM; advanced aggregates, HAVING, grouping sets (§14.x) absent. |
+| Paths / Pattern Matching | PARTIAL | Simple expansion; optional patterns & quantified variable lengths incomplete; tie-break (UA005/UA006) policy documented but limited execution. |
+| Transactions (MVCC) | TESTED | Snapshot isolation; phantom prevention bench; full SSI conflict detection coverage incomplete (§17). |
+| Diagnostics | BENCHED/TESTED | Folding & precedence mapping (§23) covered; multi-diagnostic precedence verified. |
+| Conformance Profile / Flagger | PARTIAL | Profile doc exists; automated flagger outputs limited; implementation-defined catalog incomplete (§24). |
+| Storage (Pages + WAL + Recovery) | TESTED/BENCHED | WAL compaction, adaptive policy, flush, recycle variance guarded; crash recovery basic; no ARIES physiological redo optimizations beyond baseline. |
+| Distributed / Raft | EMERGING | Leader election benchmark & test; log replication, membership changes, snapshotting absent. |
+| Security (TDE) | LIMITED | Key hierarchy + rotation bench; no KMS / envelope keys; no auditing of key use. |
+| Advanced Graph Analytics (Centrality, Flows, Matching) | MIXED | Several benches (PageRank, Betweenness, etc.); others still STUB-level in algorithm sources though benches exist for higher-level wrappers. |
 
-Below is a truncated sample (full canonical table can be regenerated via scanner). For brevity we retain representative rows; verification relies on scanner output, not manual duplication.
+## 3. High-Priority Gaps (Top 8)
 
-## Evidence Table (Representative Rows)
+| # | Gap | Impact | Required Evidence to Close | Target Status |
+| - | ---- | ------ | -------------------------- | ------------- |
+| 1 | Path quantifiers & deterministic tie-break full exec | Query correctness on complex patterns | Add tests for bounded variable-length expand; verify UA005/UA006 enforcement | TESTED |
+| 2 | Aggregation breadth (COUNT DISTINCT, AVG, HAVING) | Conformance breadth (§14) | Implement ops + tests & variance bench for hash agg spill | BENCHED |
+| 3 | Raft log replication & commit index advancement | Durability & HA claims | Implement appendEntries flow + tests (success, term mismatch) | TESTED |
+| 4 | Storage ARIES refinement (physiological redo optimizations) | Recovery performance | Bench redo scan vs optimized path; add variance guard | BENCHED |
+| 5 | MVCC phantom prevention robustness (range locks / predicate indexing) | Isolation correctness (§17) | Add targeted phantom test matrix & benchmark overhead | TESTED/BENCHED |
+| 6 | Flagger completeness (impl-defined / dependent items) | Conformance transparency (§24) | Enumerate & test flag outputs for all impl-defined behaviors | TESTED |
+| 7 | Cost model phase stability (planner) | Future optimization reliability | Implement PlannerCostModelPhaseVarianceEnvelope bench | BENCHED |
+| 8 | Path cache implementation + lookup variance | Performance & repeated pattern efficiency | Implement cache + tests + PathCacheLookupVarianceEnvelope | BENCHED |
 
-| Requirement | Feature                                       | Aspect                                   | Status  | Files (sample)                                                                                             | Tests (sample)                                                      | Benches (sample)                                     | UPDATED    |
-| ----------- | --------------------------------------------- | ---------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------- | ---------- |
-| REQ-GQL-001 | Binary Protocol Frames                        | Wire                                     | TESTED  | src/canary.zig                                                                                             | TestCANARY_REQ_GQL_001_WireMalformedFrame, TestCANARY_REQ_GQL_005_H | –                                                    | 2025-09-20 |
-| REQ-GQL-002 | HELLO Capabilities                            | Wire                                     | TESTED  | src/canary.zig                                                                                             | TestCANARY_REQ_GQL_002_WireUnsupportedCapability, TestCANARY_REQ_GQ | –                                                    | 2025-09-20 |
-| REQ-GQL-004 | Pagination Legality (US001)                   | Planner                                  | TESTED  | src/canary.zig                                                                                             | TestCANARY_REQ_GQL_004_UnorderedLimitReject                         | –                                                    | 2025-09-20 |
-| REQ-GQL-004 | Pagination Policy Override                    | Planner                                  | TESTED  | src/canary.zig, tests/canary_pagination_policy_t                                                           | TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle               | –                                                    | 2025-09-20 |
-| REQ-GQL-005 | Binary Protocol Core                          | Wire                                     | TESTED  | docs/PROMPTS.md, src/protocol.zig                                                                          | TestCANARY_REQ_GQL_005_HelloRoundTrip                               | –                                                    | 2025-09-20 |
+## 4. Implementation-Defined / Dependent Items (Current Catalog – INCOMPLETE)
+
+| Code | Category | Description | Evidence | Status |
+| ---- | -------- | ----------- | -------- | ------ |
+| US001 | Policy | Reject LIMIT/OFFSET without ORDER (default) | Tests: TestCANARY_REQ_GQL_004_UnorderedLimitReject | ENFORCED |
+| UA005/UA006 | Tie-break | Deterministic path expansion tie-break ordering | Tests (basic); missing multi-criteria stress | PARTIAL |
+| (Pending) | Collation | Binary collation default (Unicode collation future optional) | Not yet flagged | MISSING |
+| (Pending) | Null ordering policy override | Configurable but not fully surfaced in flagger | Partial tests | PARTIAL |
+
+## 5. Representative Evidence Rows
+
+Below is a concise representative subset (see `status.csv` for the full authoritative table). Rows reflect current BENCHED/TESTED aspects across critical domains.
+
+| Requirement | Feature | Aspect | Status | UPDATED |
+| ----------- | ------- | ------ | ------ | -------- |
+| REQ-GQL-005 | Binary Protocol Core | Wire | TESTED | 2025-09-20 |
+| REQ-GQL-010 | Diagnostics Precedence | Engine | BENCHED | 2025-09-20 |
+| REQ-GQL-013 | Txn Conflict Matrix | Engine | BENCHED | 2025-09-20 |
+| REQ-GQL-016 | Path Expand Breadth | Planner | BENCHED | 2025-09-20 |
+| REQ-GQL-021 | Planner Rewrite Pass | Planner | BENCHED | 2025-09-20 |
+| REQ-GQL-028 | WAL Segment Recycle | WALSegmentRecycleLatencyVarianceEnvelope | BENCHED | 2025-09-21 |
+| REQ-GQL-032 | Schema Constraints Performance | ConstraintPerf | BENCHED | 2025-09-20 |
+| REQ-GQL-042 | CDC Adaptive Flush | AdaptiveFlush | BENCHED | 2025-09-20 |
+| REQ-GQL-046 | TDE Key Rotation Throughput | Storage | BENCHED | 2025-09-20 |
+| REQ-GQL-060 | Core Graph Builders | ConcurrencySafeGraph | TESTED | 2025-09-20 |
+| REQ-GQL-063 | Dijkstra | Dijkstra | BENCHED | 2025-09-20 |
+| REQ-GQL-064 | Biconnected Components | BiconnectedComponents | BENCHED | 2025-09-20 |
+| REQ-GQL-065 | Kruskal | Kruskal | BENCHED | 2025-09-21 |
+| REQ-GQL-067 | PageRank | PageRankVarianceEnvelope | BENCHED | 2025-09-20 |
+
+## 6. Closing Plan (Rolling)
+
+| Slice | Focus | Exit Criteria | Owner | Planned Evidence |
+| ----- | ----- | ------------- | ----- | ---------------- |
+| S1 | Path Quantifiers & Tie-break Hardening | Tests for bounded variable expand; deterministic ordering multi-branch | planner | New tests + bench (PathExpansionHeuristicVarianceEnvelope already) |
+| S2 | Aggregation Completeness | COUNT DISTINCT, AVG, HAVING tests; spill guard bench | engine | New groupby tests + HashAggVarianceEnvelope |
+| S3 | Raft Replication Minimum Viable | AppendEntries success/failure tests; leader commit advancement | dist | RaftReplicationTests + term mismatch test |
+| S4 | Cost Model Phase Stability | Introduce PlannerCostModelPhaseVarianceEnvelope | planner | New variance bench added |
+| S5 | Path Cache Implementation | Functional cache hits/misses + lookup variance bench | engine | PathCache tests + PathCacheLookupVarianceEnvelope |
+| S6 | ARIES Redo Optimization | Redo scan optimized vs baseline; variance bench | storage | RedoOptimizedBench + time delta assertion |
+| S7 | Flagger Completeness | All impl-defined items enumerated & tests verify presence | docs | FlaggerOutputTests |
+
+## 7. Regeneration & Integrity
+
+Regenerate anytime after code changes:
+
+```bash
+go build -o ./bin/canaryscan ./tools/canaryscan
+./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
+```
+
+If `--verify` fails: address stale dates (>60d), missing evidence, or over-claims then re-run. Do NOT hand-edit counts.
+
+## 8. Legend
+
+Status: TESTED (evidence via tests) | BENCHED (has benchmark) | STUB (placeholder) | IMPL (implementation sans test) — last two must remain at 0 under policy.
+
+---
+
+End of generated ledger (representative subset only; authoritative source: `status.csv`).
 | REQ-GQL-005 | Frame Decode                                  | Wire                                     | BENCHED | tests/benchmark_frame_decode.zig                                                                           | –                                                                   | BenchmarkCANARY_REQ_GQL_005_FrameDecode              | 2025-09-20 |
 | REQ-GQL-005 | Set Operations                                | Engine                                   | TESTED  | src/canary.zig                                                                                             | TestCANARY_REQ_GQL_005_SetOpsDistinct                               | –                                                    | 2025-09-20 |
 | REQ-GQL-006 | GQL Parser                                    | Parser                                   | TESTED  | src/gql/parser.zig                                                                                         | tests/e2e_protocol.zig                                              | –                                                    | 2025-09-20 |
