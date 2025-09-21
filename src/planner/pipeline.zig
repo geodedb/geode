@@ -4,6 +4,7 @@ const path_cache_mod = @import("path_cache.zig");
 const phase_timing_mod = @import("phase_timing.zig");
 const adaptive_replan_mod = @import("adaptive_replan.zig");
 const rewrite_hooks = @import("rewrite.zig");
+const structural_key = @import("structural_key.zig");
 
 // High-level planner pipeline orchestration integrating PathCache, PhaseTiming, AdaptiveReplan.
 // This provides a deterministic synthetic pipeline used for integration tests & variance bench.
@@ -148,6 +149,39 @@ pub fn planQueryWithPipeline(
     return .{ .ordered = plan.ordered, .note = plan.note, .pipeline = pip };
 }
 
+// PathCache integration hook: future real planner phases will call this to attempt to fetch
+// previously computed path pattern expansions based on a deterministic signature derived from
+// query structural features (labels, degree buckets, variable-length bounds). For now this is
+// a stub that returns null; a follow-up slice will implement real key derivation.
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCachePlannerHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCachePlannerHook; OWNER=planner; UPDATED=2025-09-21
+// Planner PathCache hook now derives a structural key from the query's graph pattern.
+// Variable identifiers and literal property VALUES are ignored; only structural shape
+// (labels, property predicate counts, relationship directions, quantifier bounds) are encoded.
+// Returns the cached value (if any). Caller is responsible for inserting on miss.
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyDerivation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence; OWNER=planner; UPDATED=2025-09-21
+pub fn plannerPathCacheLookup(
+    allocator: std.mem.Allocator,
+    pc: ?*path_cache_mod.PathCache,
+    q: planner_root.ast.Query,
+) !?[]const u8 {
+    if (pc == null) return null;
+    const key = try structural_key.deriveStructuralKey(allocator, q);
+    defer allocator.free(key);
+    return pc.?.get(key);
+}
+
+// Helper to insert structural key after a miss (avoids recomputation by caller if desired).
+pub fn plannerPathCacheInsert(
+    allocator: std.mem.Allocator,
+    pc: *path_cache_mod.PathCache,
+    q: planner_root.ast.Query,
+    value: []const u8,
+) !void {
+    const key = try structural_key.deriveStructuralKey(allocator, q);
+    defer allocator.free(key);
+    pc.put(key, value);
+}
+
 // Real phase timing integration wrapper (coarse) - times internal logical phases of planQuery.
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerPhaseRealTimingIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration; OWNER=planner; UPDATED=2025-09-21
 pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerOptions) !struct { plan: planner_root.Plan, timings: phase_timing_mod.PhaseTimings } {
@@ -236,4 +270,112 @@ test "TestCANARY_REQ_GQL_021_AdaptiveReplanExecutionIntegration" {
     const res = try runPipeline(gpa.allocator(), .{ .adaptive_threshold_ppm = 50_000 }, &cache, q);
     // With threshold 5% and deviation chosen up to 20%, we expect frequent triggers.
     try std.testing.expect(res.replan_triggered);
+}
+
+test "TestCANARY_REQ_GQL_021_PathCachePlannerHook" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 8);
+    defer cache.deinit();
+    // Fabricate two semantically identical queries differing only by variable names.
+    // Pattern: (x:Person)-[]->(y:Animal)
+    var q1: planner_root.ast.Query = .{
+        .optional_match = false,
+        .match = .{ .chains = &.{} },
+        .where_clause = null,
+        .with_clause = null,
+        .group_by = null,
+        .having = null,
+        .ret = .{ .items = &.{}, .distinct = false },
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    };
+    // Provide a minimal chain with one hop
+    const left_node = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"Person"}, .props = null };
+    const right_node = planner_root.ast.NodePattern{ .name = "y", .labels = &.{"Animal"}, .props = null };
+    const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+    const hop = planner_root.ast.Hop{ .left = left_node, .rel = rel, .right = right_node };
+    const chain = planner_root.ast.Chain{ .name = null, .hops = &.{hop} };
+    q1.match = .{ .chains = &.{chain} };
+
+    var q2 = q1; // copy
+    // Rename variables (should NOT change structural key)
+    const left_node2 = planner_root.ast.NodePattern{ .name = "a", .labels = &.{"Person"}, .props = null };
+    const right_node2 = planner_root.ast.NodePattern{ .name = "b", .labels = &.{"Animal"}, .props = null };
+    const hop2 = planner_root.ast.Hop{ .left = left_node2, .rel = rel, .right = right_node2 };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
+    q2.match = .{ .chains = &.{chain2} };
+
+    // First lookup should miss.
+    try std.testing.expect((try plannerPathCacheLookup(gpa.allocator(), &cache, q1)) == null);
+    try plannerPathCacheInsert(gpa.allocator(), &cache, q1, "v");
+    const got = try plannerPathCacheLookup(gpa.allocator(), &cache, q2);
+    try std.testing.expect(got != null);
+}
+
+test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    // Two queries differing in property literal values but same property key counts
+    var q1: planner_root.ast.Query = .{
+        .optional_match = false,
+        .match = .{ .chains = &.{} },
+        .where_clause = null,
+        .with_clause = null,
+        .group_by = null,
+        .having = null,
+        .ret = .{ .items = &.{}, .distinct = false },
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    };
+    var q2 = q1;
+    // Build hop with properties on left node (ignored values)
+    var prop_val1 = planner_root.ast.Expr{ .Int = 1 };
+    var prop_val2 = planner_root.ast.Expr{ .Int = 999 };
+    var prop1 = planner_root.ast.Property{ .key = "p", .value = &prop_val1 };
+    var prop2 = planner_root.ast.Property{ .key = "p", .value = &prop_val2 };
+    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{prop1} };
+    const left2 = planner_root.ast.NodePattern{ .name = "n2", .labels = &.{"L"}, .props = &.{prop2} };
+    const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
+    const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .undirected, .min_len = 1, .max_len = 3 };
+    const hop1 = planner_root.ast.Hop{ .left = left1, .rel = rel, .right = right };
+    const hop2 = planner_root.ast.Hop{ .left = left2, .rel = rel, .right = right };
+    const chain1 = planner_root.ast.Chain{ .name = null, .hops = &.{hop1} };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
+    q1.match = .{ .chains = &.{chain1} };
+    q2.match = .{ .chains = &.{chain2} };
+    const key1 = try structural_key.deriveStructuralKey(gpa.allocator(), q1);
+    defer gpa.allocator().free(key1);
+    const key2 = try structural_key.deriveStructuralKey(gpa.allocator(), q2);
+    defer gpa.allocator().free(key2);
+    try std.testing.expect(std.mem.eql(u8, key1, key2));
+}
+
+test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    // Two queries differing only in property KEY sets should yield different structural keys.
+    var q1: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var q2 = q1;
+    var valA = planner_root.ast.Expr{ .Int = 1 };
+    var valB = planner_root.ast.Expr{ .Int = 2 };
+    const pa = planner_root.ast.Property{ .key = "a", .value = &valA };
+    const pb = planner_root.ast.Property{ .key = "b", .value = &valB };
+    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{pa} };
+    const left2 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{ pa, pb } };
+    const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
+    const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+    const hop1 = planner_root.ast.Hop{ .left = left1, .rel = rel, .right = right };
+    const hop2 = planner_root.ast.Hop{ .left = left2, .rel = rel, .right = right };
+    const chain1 = planner_root.ast.Chain{ .name = null, .hops = &.{hop1} };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
+    q1.match = .{ .chains = &.{chain1} };
+    q2.match = .{ .chains = &.{chain2} };
+    const k1 = try structural_key.deriveStructuralKey(gpa.allocator(), q1);
+    defer gpa.allocator().free(k1);
+    const k2 = try structural_key.deriveStructuralKey(gpa.allocator(), q2);
+    defer gpa.allocator().free(k2);
+    try std.testing.expect(!std.mem.eql(u8, k1, k2));
 }

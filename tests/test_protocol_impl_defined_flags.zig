@@ -28,4 +28,6 @@ test "TestCANARY_REQ_GQL_024_ImplDefinedFlagsProtocolIntegration" {
     const line = try protocol.buildSchemaLine(ally, &.{}, &.{}, codes);
     defer ally.free(line);
     try std.testing.expect(hasSubstring(line, "ZeroLengthPathExcluded"));
+    try std.testing.expect(hasSubstring(line, "CollationBinaryDefault"));
+    try std.testing.expect(hasSubstring(line, "NullOrderPolicyDefault"));
 }

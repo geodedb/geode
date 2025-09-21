@@ -33,13 +33,13 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 - The planner/executor implements basic operations only. Graph operators (NodeScan, Expand) have minimal implementation. No query optimization. ❌
 - **Offset pushdown requires explicit order** (testable rule). ✅
-- Path planning honors **UA005/UA006** (deterministic tie-break documented). ❌ _No path execution_
+  Path planning honors **UA005/UA006** (deterministic tie-break for bounded multi-branch expansion TESTED — see CANARY aspects: BoundedQuantifierDeterminism & PathQuantifierBoundedVarianceEnvelope). MATCH node label + single property equality predicate execution TESTED/BENCHED (REQ-GQL-017: MatchLabelPropertyVarianceEnvelope); OPTIONAL MATCH null-preserving semantics TESTED (OptionalMatchNullPreserve). Added structural pattern cache (PathCache) with canonical structural key derivation ignoring variable identifiers and literal property values (aspect `PathCacheStructuralKeyDerivation` TESTED) plus hit/miss latency variance envelope (`PathCacheHitMissVarianceEnvelope` BENCHED). Enriched structural key now encodes sorted property key sets (`PathCacheStructuralKeyEnrichment` TESTED) and collision envelope benchmark (`PathCacheStructuralKeyCollisionEnvelope` BENCHED) enforces ≥90% unique structural signatures under randomized pattern generation. ⚠️ _Partial path execution (remaining gaps: property predicates over variable-length expansions, chained OPTIONAL over variable-length patterns)_
 
 ## 3a. Storage Modes (testable)
 
-- The system SHALL provide an in-memory storage option that mirrors the on-disk page/record interfaces for development and testing. ✅
-- The preferred/default storage mode is disk-backed; both modes SHALL share invariants (page headers, slotted layout contracts, id alloc semantics). ⚠️
-- Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, while performance and durability tests MUST use disk.
+The system SHALL provide an in-memory storage option that mirrors the on-disk page/record interfaces for development and testing. ✅
+The preferred/default storage mode is disk-backed; both modes SHALL share invariants (page headers, slotted layout contracts, id alloc semantics). ⚠️
+Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, while performance and durability tests MUST use disk.
 
 ## 4. Distributed System Requirements ❌ (COMPLETELY UNIMPLEMENTED - STUBS ONLY)
 

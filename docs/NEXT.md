@@ -81,7 +81,7 @@ From latest scan (see `status.json`):
 - STUB/IMPL: 0
 - Variance Guards Landed: 32 (all passing thresholds)
 
-Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, PlannerRewritePass, PlannerCardinalityEstimate, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic.
+Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, PlannerRewritePass, PlannerCardinalityEstimate, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic, PathCacheHitMissVarianceEnvelope, PathCacheStructuralKeyCollisionEnvelope.
 
 Update 2025-09-21 (post-slice execution):
 
@@ -110,6 +110,15 @@ Update 2025-09-21 (post-slice execution):
     - Added high-branch determinism test (`PathHighBranchDeterminism`) for width=8 star+second layer ensuring stable ordering across reruns.
     - Added high-branch expansion variance envelope bench (`PathHighBranchVarianceEnvelope`) with Graph Analytics class thresholds (CV≤0.23, p95/mean≤2.60) – initial run passing.
     - Added allocation variance envelope for variable-length expansion (`PathExpandAllocVarianceEnvelope`) enforcing hot-path thresholds (CV≤0.18, p95/mean≤2.40) using counting allocator wrapper.
+  - Added multi-source deeper branching determinism variance envelope (`PathMultiBranchDeterminismVarianceEnvelope`) BENCHED (Graph Analytics thresholds CV≤0.23, p95/mean≤2.60) covering multiple start nodes ordering stability.
+  - Added Raft commit advancement variance envelope (`CommitAdvancementVarianceEnvelope`) BENCHED with control-path thresholds (CV≤0.22, p95/mean≤2.55) validating stable majority ack commit latency.
+  - Extended protocol implementation-defined flagger test to assert presence of `CollationBinaryDefault` and `NullOrderPolicyDefault` in schema frame outputs (evidence for transparent surfacing of impl-defined policies §24).
+  - Implemented OPTIONAL MATCH null-preserving semantics test (`OptionalMatchNullPreserve` aspect) complementing existing MATCH label+property predicate execution; remaining path gaps: property predicates over variable-length expansions and chained OPTIONAL over variable-length patterns.
+  - Added structural query key derivation module (`structural_key.zig`) and PathCache hook upgrade from raw bytes to structural signature ignoring variable names & literal values (aspect `PathCacheStructuralKeyDerivation` TESTED).
+  - Added structural key equivalence test `TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence` ensuring same structural pattern with different variable names / literal property values map to identical cache key.
+  - Added hit vs miss latency variance envelope benchmark `BenchmarkCANARY_REQ_GQL_021_PathCacheHitMissVarianceEnvelope` (aspect `PathCacheHitMissVarianceEnvelope` BENCHED) asserting mean_hit ≤ mean_miss and CV/p95 thresholds for both distributions.
+  - Enriched structural key to encode sorted property key name sets (aspect `PathCacheStructuralKeyEnrichment` TESTED) increasing discrimination beyond counts-only; equivalence still normalizes variable names & literal values.
+  - Added collision rate benchmark `BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope` (aspect `PathCacheStructuralKeyCollisionEnvelope` BENCHED) requiring ≥90% unique keys (unique_ratio ≥0.90) across 1500 randomized structural patterns.
 
 ## 8. ROLLING PLAN (30 / 14 / 7 Day)
 

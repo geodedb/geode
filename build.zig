@@ -287,6 +287,20 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(bench_regress_exe);
     tools_step.dependOn(&bench_regress_exe.step);
 
+    // Variance benchmark runner tool (aggregates benchmarks that don't surface via test harness)
+    const run_variance_benches_exe = b.addExecutable(.{
+        .name = "run_variance_benches",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/run_variance_benches.zig"), .target = target, .optimize = optimize }),
+    });
+    run_variance_benches_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(run_variance_benches_exe);
+    tools_step.dependOn(&run_variance_benches_exe.step);
+    // Dedicated step to build only the variance benchmark runner (useful for CI or manual metric capture)
+    const variance_step = b.step("variance", "Build variance benchmark runner (run_variance_benches)");
+    variance_step.dependOn(&run_variance_benches_exe.step);
+    // Ensure the artifact is actually installed to zig-out/bin when invoking just `zig build variance`.
+    variance_step.dependOn(b.getInstallStep());
+
     // Implementation reality delta tool
     const impl_reality_delta_exe = b.addExecutable(.{
         .name = "impl_reality_delta",

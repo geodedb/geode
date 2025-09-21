@@ -168,6 +168,9 @@ pub fn nodeScan(
     graph: *const GraphStorage,
     labels: []const []const u8,
     var_name: ?[]const u8,
+    // Optional single property predicate (key,value) for equality filtering.
+    prop_key: ?[]const u8,
+    prop_val: ?PropertyValue,
 ) ![]Binding {
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
 
@@ -190,6 +193,18 @@ pub fn nodeScan(
             if (!matches) continue;
         }
 
+        // Apply simple property predicate if present
+        if (prop_key) |k| {
+            if (prop_val) |v| {
+                var keep = false;
+                if (node.properties.get(k)) |existing| {
+                    // Equality comparison (type + value). String compare by bytes.
+                    keep = propertyEquals(existing, v);
+                }
+                if (!keep) continue;
+            }
+        }
+
         // Create binding for this node
         var binding = Binding.init(allocator);
         if (var_name) |name| {
@@ -199,6 +214,17 @@ pub fn nodeScan(
     }
 
     return results.toOwnedSlice(allocator);
+}
+
+// Property equality helper (strict value + variant match)
+fn propertyEquals(a: PropertyValue, b: PropertyValue) bool {
+    return switch (a) {
+        .Null => b == .Null,
+        .Bool => |av| b == .Bool and b.Bool == av,
+        .Int => |ai| b == .Int and b.Int == ai,
+        .String => |as| b == .String and std.mem.eql(u8, as, b.String),
+        .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
+    };
 }
 
 // Expand operator - traverse edges from a node
@@ -430,6 +456,18 @@ fn evalToPropertyValue(val: eval.Value) PropertyValue {
     };
 }
 
+// Convert a literal AST expression to PropertyValue (subset)
+fn exprToPropertyValue(e: ast.Expr) !PropertyValue {
+    return switch (e) {
+        .Null => PropertyValue{ .Null = {} },
+        .Bool => |b| PropertyValue{ .Bool = b },
+        .Int => |i| PropertyValue{ .Int = i },
+        .String => |s| PropertyValue{ .String = s },
+        .Decimal => |d| PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        else => error.UnsupportedLiteral,
+    };
+}
+
 // Execute a MATCH pattern and return bindings
 pub fn executeMatch(
     allocator: std.mem.Allocator,
@@ -450,7 +488,18 @@ pub fn executeMatch(
         var chain_bindings: []Binding = &.{};
         for (chain.hops, 0..) |hop, i| {
             if (i == 0) {
-                chain_bindings = try nodeScan(allocator, graph, hop.left.labels, hop.left.name);
+                // Extract at most one property predicate (key = literal) from hop.left.props
+                var prop_key: ?[]const u8 = null;
+                var prop_val: ?PropertyValue = null;
+                if (hop.left.props) |props| {
+                    if (props.len > 0) {
+                        const p = props[0];
+                        // Only support literal equality for now (Expr kinds String/Int/Bool/Null)
+                        prop_key = p.key;
+                        prop_val = exprToPropertyValue(p.value.*) catch null;
+                    }
+                }
+                chain_bindings = try nodeScan(allocator, graph, hop.left.labels, hop.left.name, prop_key, prop_val);
                 if (chain_idx > 0 and current_bindings.len > 0 and chain_bindings.len > 0) {
                     var joined = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
                     for (current_bindings) |lb| {
@@ -943,7 +992,16 @@ fn executeMatchFromBinding(
                     );
                 } else {
                     // Need to scan for this node
-                    const scan_results = try nodeScan(allocator, graph, hop.left.labels, hop.left.name);
+                    var prop_key: ?[]const u8 = null;
+                    var prop_val: ?PropertyValue = null;
+                    if (hop.left.props) |props| {
+                        if (props.len > 0) {
+                            const p = props[0];
+                            prop_key = p.key;
+                            prop_val = exprToPropertyValue(p.value.*) catch null;
+                        }
+                    }
+                    const scan_results = try nodeScan(allocator, graph, hop.left.labels, hop.left.name, prop_key, prop_val);
 
                     // Join with current bindings
                     var joined = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;

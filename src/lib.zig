@@ -86,6 +86,11 @@ pub const gpu = struct {
     pub const flagger = @import("gpu/flagger.zig");
 };
 
+// Distributed consensus primitives (Raft) for tests/benchmarks
+pub const distributed = struct {
+    pub const raft = @import("distributed/raft_consensus.zig");
+};
+
 // (Note) Streaming and txn modules are added as separate build modules; tests import them directly as needed.
 
 // Lightweight helper to carry parameter bindings across subsystems

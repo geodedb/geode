@@ -14,29 +14,36 @@
 ## C. Optional features claimed (Annex D)
 
 Currently implemented:
+
 - **GQ03 UNION** - DISTINCT and ALL variants working
-- **GQ04/5 EXCEPT** - DISTINCT and ALL variants working  
+- **GQ04/5 EXCEPT** - DISTINCT and ALL variants working
 - **GQ06/7 INTERSECT** - DISTINCT and ALL variants working
 - **GQ12 OFFSET** - With US001 policy enforcement
 - **GQ13 LIMIT** - Working with ORDER BY requirements
 
 Planned but not implemented:
+
 - **G060 bounded quantifiers** - Path patterns not yet supported
 - Graph pattern features pending implementation
 
 ## D. Implementation‑defined / dependent behaviors
 
 Implemented:
+
 - **US001**: OFFSET/LIMIT on unordered tables rejected with diagnostic (ISO 16.16–16.19)
 - **UA002**: Multiple diagnostic conditions use precedence rules (ISO 23.2)
+- **UA005/UA006**: Deterministic path tie‑break (Length then stable internal id) for variable length expansions
 - **I:ORDER**: ORDER BY keys restricted to identifiers by default (configurable via --order-keys expr)
-- **I:NULLS**: NULLS FIRST default, NULLS LAST via GEODE_NULLS_LAST env var
-- **I:COLLATION**: Binary comparison for strings
+- **I:NULLS** / `NullOrderPolicyDefault`: NULLS FIRST default, NULLS LAST via `GEODE_NULLS_LAST` env var (flag surfaced as `NullOrderPolicyDefault` in protocol findings)
+- **I:COLLATION** / `CollationBinaryDefault`: Binary collation for string comparison (flag surfaced as `CollationBinaryDefault`)
 - **I:DECIMAL**: Decimal values normalized to canonical form
 - **I:NUMERIC**: Int→Decimal promotion in mixed arithmetic
 
-Not yet implemented:
-- **UA005/UA006**: Path tie‑break rules (no path execution yet)
+Recent additions reflected in protocol Flagger (see tests): `CollationBinaryDefault`, `NullOrderPolicyDefault`.
+
+Deferred / pending clarification:
+
+- None in this category presently (path tie‑break now implemented)
 
 ## E. Extensions / Options
 
@@ -54,6 +61,7 @@ Not yet implemented:
 ## G. Current Limitations
 
 The following core GQL features are **not yet implemented**:
+
 1. **MATCH patterns** - Parser recognizes but cannot execute graph traversal
 2. **Property access** - Cannot access node/edge properties (n.name syntax)
 3. **Node/edge labels** - No label-based filtering
