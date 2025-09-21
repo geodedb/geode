@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T18:10:25.361738991Z",
+  "generated_at": "2025-09-21T18:32:46.90936656Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -380,6 +380,20 @@
       "features": [
         {
           "feature": "Transactions",
+          "aspect": "MVCCVersionPruneVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_mvcc_version_prune_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_013_MVCCVersionPruneVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Transactions",
           "aspect": "SSIPhantomPrevention",
           "status": "TESTED",
           "files": [
@@ -493,6 +507,25 @@
       ]
     },
     {
+      "id": "REQ-GQL-015",
+      "features": [
+        {
+          "feature": "Set Operations",
+          "aspect": "SetOpDistinctDedupVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_setop_distinct_dedup_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_015_SetOpDistinctDedupVarianceEnvelope"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-016",
       "features": [
         {
@@ -578,6 +611,20 @@
           ],
           "owner": "planner",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Paths",
+          "aspect": "PathExpansionHeuristicVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_expansion_heuristic_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_016_PathExpansionHeuristicVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
         },
         {
           "feature": "Planner Paths",
@@ -674,6 +721,39 @@
           ],
           "owner": "engine",
           "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-021",
+      "features": [
+        {
+          "feature": "Query Planner",
+          "aspect": "PlannerRewritePassVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_planner_rewrite_pass_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PlannerRewritePassVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
+          "aspect": "QueryPlanCacheEvictVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_query_plan_cache_evict_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -824,6 +904,34 @@
           "tests": [],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_028_WalCompactionVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "WAL Flush Batch",
+          "aspect": "WALFlushBatchVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_wal_flush_batch_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WALFlushBatchVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "WAL I/O Throttle",
+          "aspect": "WALIOThrottleVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_wal_io_throttle_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WALIOThrottleVarianceEnvelope"
           ],
           "owner": "storage",
           "updated": "2025-09-21"
@@ -1102,6 +1210,20 @@
           ],
           "owner": "schema",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Schema Constraints Performance",
+          "aspect": "UniquePerfVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_unique_perf_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope"
+          ],
+          "owner": "schema",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -1169,6 +1291,20 @@
             "BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope"
           ],
           "owner": "streaming",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "CDC",
+          "aspect": "CDCWatermarkAdvanceVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_watermark_advance_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDCWatermarkAdvanceVarianceEnvelope"
+          ],
+          "owner": "cdc",
           "updated": "2025-09-21"
         },
         {
@@ -1259,20 +1395,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_cdc_adaptive_diff_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
-          ],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "TESTED",
           "files": [
             "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
@@ -1281,6 +1403,20 @@
             "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_diff_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -1899,6 +2035,20 @@
       "features": [
         {
           "feature": "TDE",
+          "aspect": "EncryptionKeyDeriveVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_encryption_key_derive_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_046_EncryptionKeyDeriveVarianceEnvelope"
+          ],
+          "owner": "security",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "TDE",
           "aspect": "KeyHierarchy",
           "status": "TESTED",
           "files": [
@@ -1954,6 +2104,20 @@
           ],
           "owner": "security",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "TDE Multi-Key",
+          "aspect": "TDERotationVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_tde_rotation_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_046_TDERotationVarianceEnvelope"
+          ],
+          "owner": "security",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -2817,7 +2981,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "src/graph/containers/count_min_sketch.zig"
+            "tests/benchmark_count_min_sketch_container.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -2833,7 +2997,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
+            "src/graph/containers/count_min_sketch.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -3051,7 +3215,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 92,
+      "BENCHED": 103,
       "TESTED": 103
     },
     "by_aspect": {
@@ -3080,6 +3244,7 @@
       "CDCControlProtocol": 1,
       "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
+      "CDCWatermarkAdvanceVarianceEnvelope": 1,
       "CascadePerf": 2,
       "ClosenessCentrality": 1,
       "ClosenessVarianceEnvelope": 1,
@@ -3106,6 +3271,7 @@
       "EdmondsKarp": 2,
       "EigenvectorCentrality": 1,
       "EigenvectorVarianceEnvelope": 1,
+      "EncryptionKeyDeriveVarianceEnvelope": 1,
       "Engine": 21,
       "EventCapture": 1,
       "FailureInjection": 1,
@@ -3131,6 +3297,7 @@
       "LFUCache": 1,
       "LRUCache": 1,
       "MVCCRepairThroughputVarianceEnvelope": 1,
+      "MVCCVersionPruneVarianceEnvelope": 1,
       "MixedWorkload": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
@@ -3142,15 +3309,18 @@
       "PathCyclePruningPerf": 1,
       "PathExpandBreadthVarianceEnvelope": 1,
       "PathExpandMemPerf": 1,
+      "PathExpansionHeuristicVarianceEnvelope": 1,
       "PathPruningStatsPerf": 1,
       "PatternPerf": 1,
       "PatternStateDedupMem": 1,
       "PatternStateDedupPerf": 1,
       "Planner": 7,
+      "PlannerRewritePassVarianceEnvelope": 1,
       "PredictiveSkewFilter": 2,
       "PredictiveVersionCheck": 1,
       "Prim": 1,
       "PropertyAccessHotPathVarianceEnvelope": 1,
+      "QueryPlanCacheEvictVarianceEnvelope": 1,
       "RaftPartitionSimulation": 1,
       "Refactor": 1,
       "RepairThroughputBench": 1,
@@ -3158,10 +3328,12 @@
       "Retention": 1,
       "SSIPhantomPrevention": 2,
       "SSIPhantomPreventionVariance": 1,
+      "SetOpDistinctDedupVarianceEnvelope": 1,
       "SkipList": 1,
       "SnapshotReadView": 1,
       "StatusFreshnessGuard": 1,
       "Storage": 9,
+      "TDERotationVarianceEnvelope": 1,
       "TarjanSCC": 1,
       "Telemetry": 1,
       "TenantRegistry": 1,
@@ -3174,7 +3346,10 @@
       "TxnConflictMatrixVarianceEnvelope": 1,
       "UnionFind": 1,
       "UniquePerf": 1,
+      "UniquePerfVarianceEnvelope": 1,
       "UnweightedBFSPaths": 2,
+      "WALFlushBatchVarianceEnvelope": 1,
+      "WALIOThrottleVarianceEnvelope": 1,
       "WALTail": 1,
       "WALTailDisabled": 1,
       "WALTailMalformed": 1,

@@ -38,7 +38,10 @@ pub const timeseries = @import("timeseries/timeseries.zig");
 pub const storage = struct {
     // Note: CSR is available to the server binary via build.zig module injection; tests import it directly.
     pub const csr = @import("storage/csr_adjacency.zig");
+    // pub const constraints = @import("storage/constraints.zig");
 };
+
+// Re-export wire protocol definitions for tests/benchmarks needing Value / frame types
 
 // Graph analytics (lightweight builders and centrality algorithms)
 pub const graph = struct {

@@ -17,7 +17,7 @@ Recent BENCH promotions include: Dijkstra, Biconnected Components, Bridges/Artic
 
 Objectives:
 
-1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- IMPLEMENTED (17 guards landed): GreyCardinalComposite, TxnConflictMatrix, SSIPhantomPrevention, PageRank, Betweenness, PropertyAccessHotPath, PathExpandBreadth, Closeness, Eigenvector, CDCApplyBatchLatency, WALAdaptivePolicyLatency, MVCCRepairThroughput, GraphBuilderThroughput, ConstraintPerfVariance, WalCompactionVariance, TenantRegistryVariance, GPUFlaggerEnumerationVariance.
+1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- IMPLEMENTED (28 guards landed): GreyCardinalComposite, TxnConflictMatrix, SSIPhantomPrevention, PageRank, Betweenness, PropertyAccessHotPath, PathExpandBreadth, Closeness, Eigenvector, CDCApplyBatchLatency, WALAdaptivePolicyLatency, MVCCRepairThroughput, GraphBuilderThroughput, ConstraintPerfVariance, WalCompactionVariance, TenantRegistryVariance, GPUFlaggerEnumerationVariance, UniquePerfVarianceEnvelope, WALFlushBatchVarianceEnvelope, PlannerRewritePassVarianceEnvelope, SetOpDistinctDedupVarianceEnvelope, TDERotationVarianceEnvelope, PathExpansionHeuristicVarianceEnvelope, WALIOThrottleVarianceEnvelope, QueryPlanCacheEvictVarianceEnvelope, MVCCVersionPruneVarianceEnvelope, CDCWatermarkAdvanceVarianceEnvelope, EncryptionKeyDeriveVarianceEnvelope.
 2. Freshness guard: pre-empt staleness by flagging UPDATED dates approaching 50 days. -- Tool implemented (StatusFreshnessGuard) monitoring WARN>=50 FAIL>=60 days.
 3. Hardening: WAL failure injection, Raft partition simulation, CDC adaptive threshold jitter tests.
 4. Documentation linking: auto-generate summary deltas into `IMPLEMENTATION_REALITY.md`.
@@ -84,8 +84,17 @@ Objectives:
 
 Result: Trie + KMP added; remaining STUB aspects focus on advanced DOT, Yen K-shortest, PathCache, Cursor/SignaledQueue, BloomFilterMultiHash, RabinKarp, and advanced MVCC / analytics specs.
 
-Next Candidate Slice: GreyCardinalComposite variance breakdown (add per-metric timing & coefficient of variation guard) OR CDC adaptive heuristics stress harness.
-Next Candidate Slice (updated): Additional variance envelopes (PropertyAccessHotPath, PageExpandBreadth) and CDC batch apply latency variance. CDC AdaptiveStressHarness BENCHED; PageRank & Betweenness variance envelopes landed.
+### Variance Envelopes Expansion Status
+
+All initially proposed expansion envelopes have now landed (total 28). Next potential candidates for future variance guarding (not yet implemented, exploratory):
+
+1. GreyCardinalCompositeMetricBreakdownVarianceEnvelope – per-metric decomposition stability.
+2. CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope – decision path latency stabilization.
+3. WALSegmentRecycleLatencyVarianceEnvelope – latency of recycled segment preparation.
+4. PlannerCardinalityEstimateVarianceEnvelope – variance in heuristic cardinality estimator.
+5. PathCacheLookupVarianceEnvelope – path cache hit/miss resolution jitter.
+
+Next Candidate Slice: Evaluate feasibility of GreyCardinalComposite per-metric variance breakdown vs. Planner cardinality estimation guard; select one for guarded implementation.
 
 ## Verification Commands
 
