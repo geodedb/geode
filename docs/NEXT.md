@@ -4,18 +4,18 @@ Principle: Each slice introduces or upgrades at most one aspect per REQ and MUST
 
 ## Current Status Summary
 
-Status snapshot includes recent BENCH promotions (Dijkstra shortest paths, Biconnected Components connectivity) following Raft & CDC umbrella reconciliation.
+Status snapshot includes recent BENCH promotions (Dijkstra shortest paths, Biconnected Components connectivity, Bridges/Articulation), A\* heuristic pathfinding, Kruskal (MST), Union-Find container, Prim (MST heap variant), PageRank, Eigenvector, Betweenness, Closeness, BridgeLeverage, and GreyCardinalComposite (composite centrality).
 
-- **Coverage: 94.5%** (All legacy core aspects covered; remaining strategic STUBs retained for future incubation)
-- **STUB aspects: 6**
-- **TESTED: 71**
-- **BENCHED: 33**
+- **Coverage: 99.0%** (GreyCardinalComposite promoted; remaining STUB set strategic)
+- **STUB aspects: 1**
+- **TESTED: 87**
+- **BENCHED: 52**
 
 ## NOW (All Aspects Covered)
 
 No remaining STUB aspects. Focus shifts to:
 
-1. Selective BENCH upgrades for high-impact graph algorithms (completed: Dijkstra, Biconnected; next: A\* heuristic, Bridges/Articulation, Kruskal/Prim).
+1. Selective BENCH upgrades for high-impact graph algorithms (completed: Dijkstra, Biconnected, Bridges/Articulation, A\*, Kruskal, Union-Find, Prim, PageRank, EigenvectorCentrality, BetweennessCentrality, ClosenessCentrality, BridgeLeverage; next: GreyCardinalComposite planning).
 2. New feature incubation (Multi-Tenancy, GPU Acceleration, Federation) — introduce as STUB only when initial design doc or POC lands in-tree (to avoid premature registry growth).
 3. Hardening passes: failure injection for WAL recovery, Raft under partitions with timing jitter, CDC adaptive heuristics stress.
 

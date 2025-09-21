@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T00:59:57.759139538Z",
+  "generated_at": "2025-09-21T13:20:00.454245881Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -1007,20 +1007,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_cdc_adaptive_diff_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
-          ],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "TESTED",
           "files": [
             "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
@@ -1029,6 +1015,20 @@
             "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_diff_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -1734,6 +1734,22 @@
       "features": [
         {
           "feature": "Shortest Paths",
+          "aspect": "AStar",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/shortest_astar.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_AStar"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_063_AStar"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Shortest Paths",
           "aspect": "Dijkstra",
           "status": "BENCHED",
           "files": [
@@ -1751,20 +1767,6 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -1775,6 +1777,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -1795,6 +1811,22 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_064_Biconnected"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Connectivity",
+          "aspect": "BridgesArticulation",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/connectivity_bridges_articulation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_064_BridgesArticulation"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_064_BridgesArticulation"
           ],
           "owner": "graph",
           "updated": "2025-09-20"
@@ -1830,6 +1862,165 @@
           ],
           "owner": "graph",
           "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-065",
+      "features": [
+        {
+          "feature": "Spanning Trees",
+          "aspect": "Kruskal",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/spanning_kruskal.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_065_Kruskal"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_065_Kruskal"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Spanning Trees",
+          "aspect": "Prim",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/spanning_prim.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_065_Prim"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_065_Prim"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-067",
+      "features": [
+        {
+          "feature": "Centrality",
+          "aspect": "BetweennessCentrality",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/centrality_betweenness.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_067_Betweenness"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_Betweenness"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "BridgeLeverage",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/centrality_bridge_leverage.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_067_BridgeLeverage"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_BridgeLeverage"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "ClosenessCentrality",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/centrality_closeness.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_067_Closeness"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_Closeness"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "EigenvectorCentrality",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/centrality_eigenvector.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_067_Eigenvector"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_Eigenvector"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "GreyCardinalComposite",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/centrality_grey_cardinal.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_067_GreyCardinalComposite"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_GreyCardinalComposite"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "PageRank",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/centrality_pagerank.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_067_PageRank"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_PageRank"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-068",
+      "features": [
+        {
+          "feature": "Containers",
+          "aspect": "UnionFind",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/union_find.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_UnionFind"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_UnionFind"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -2017,12 +2208,13 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 41,
+      "BENCHED": 52,
       "STUB": 1,
       "TESTED": 87
     },
     "by_aspect": {
       "API": 7,
+      "AStar": 1,
       "AdaptiveBaselinePerf": 1,
       "AdaptiveDiffPerf": 1,
       "AdaptiveDiffPerfThreshold": 1,
@@ -2034,11 +2226,15 @@
       "Backpressure": 1,
       "BackpressureAdaptive": 1,
       "BackpressureToggle": 1,
+      "BetweennessCentrality": 1,
       "BiconnectedComponents": 1,
+      "BridgeLeverage": 1,
+      "BridgesArticulation": 1,
       "CDCControlProtocol": 1,
       "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
       "CascadePerf": 1,
+      "ClosenessCentrality": 1,
       "Component": 2,
       "ConcurrencySafeGraph": 1,
       "ConflictRepairHeuristics": 1,
@@ -2052,17 +2248,21 @@
       "E2ENoEngine": 1,
       "E2EUnsupported": 1,
       "EarlyConflictDetection": 1,
+      "EigenvectorCentrality": 1,
       "Engine": 20,
       "EventCapture": 1,
       "FalsePositiveReduction": 1,
+      "GreyCardinalComposite": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
       "Ingest": 1,
       "KosarajuValidation": 1,
+      "Kruskal": 1,
       "MixedWorkload": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
+      "PageRank": 1,
       "Parser": 3,
       "PartialRollbackMechanism": 1,
       "PathCyclePruningPerf": 1,
@@ -2074,6 +2274,7 @@
       "Planner": 7,
       "PredictiveSkewFilter": 2,
       "PredictiveVersionCheck": 1,
+      "Prim": 1,
       "Refactor": 1,
       "RepairThroughputBench": 1,
       "ResumeTokenRestart": 1,
@@ -2083,6 +2284,7 @@
       "TarjanSCC": 1,
       "Telemetry": 1,
       "Tooling": 4,
+      "UnionFind": 1,
       "UniquePerf": 1,
       "UnweightedBFSPaths": 2,
       "WALTail": 1,

@@ -12,7 +12,7 @@ const std = @import("std");
 
 pub const Weight = f64;
 
-pub const Edge = struct { dst: u32, w: Weight };
+pub const Edge = struct { src: u32, dst: u32, w: Weight };
 
 pub const Graph = struct {
     allocator: std.mem.Allocator,
@@ -40,13 +40,12 @@ pub const Graph = struct {
     pub fn addEdge(self: *Graph, src: u32, dst: u32, w: Weight) !void {
         if (!self.nodes.contains(src)) self.addNode(src);
         if (!self.nodes.contains(dst)) self.addNode(dst);
-        try self.edges.append(self.allocator, .{ .dst = dst, .w = w });
+        try self.edges.append(self.allocator, .{ .src = src, .dst = dst, .w = w });
         try self.rebuildIndex();
     }
 
     fn rebuildIndex(self: *Graph) !void {
-        // naive: count outgoing per src by rescanning edges each call
-        // For deterministic behavior, gather edges grouped by src into temp map of array lists.
+        // Group edges by source node for standard outgoing adjacency semantics.
         var temp = std.AutoHashMap(u32, std.ArrayList(Edge)).init(self.allocator);
         defer {
             var it = temp.iterator();
@@ -57,11 +56,11 @@ pub const Graph = struct {
         var i: usize = 0;
         while (i < es.len) : (i += 1) {
             const e = es[i];
-            var gop = try temp.getOrPut(e.dst); // group by destination for simplicity (reverse index)
+            var gop = try temp.getOrPut(e.src);
             if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch unreachable;
             try gop.value_ptr.append(e);
         }
-        // Rebuild index with sequential ordering per node (destination-based for demo)
+        // Rebuild index with sequential ordering per node (source-based)
         self.index.clearRetainingCapacity();
         var cursor: usize = 0;
         var temp_iter = temp.iterator();
@@ -103,8 +102,7 @@ test "basic directed weighted builder add & iterate" {
     g.addNode(1);
     g.addNode(2);
     try g.addEdge(1, 2, 3.5);
-    var it = g.outEdges(2); // destination-based grouping: edges keyed by dst (so 2 has inbound edge recorded)
+    var it = g.outEdges(1);
     const e = it.next() orelse return error.MissingEdge;
-    try std.testing.expect(e.dst == 2);
-    try std.testing.expect(e.w == 3.5);
+    try std.testing.expect(e.src == 1 and e.dst == 2 and e.w == 3.5);
 }

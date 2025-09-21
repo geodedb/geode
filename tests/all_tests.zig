@@ -32,6 +32,15 @@ const _e2e_protocol_cdc_control = @import("e2e_protocol_cdc_control.zig");
 const _e2e_protocol_cdc_control_unsupported = @import("e2e_protocol_cdc_control_unsupported.zig");
 const _e2e_protocol_cdc_control_no_engine = @import("e2e_protocol_cdc_control_no_engine.zig");
 const _unit_cdc_backpressure = @import("unit_cdc_backpressure.zig");
+// Centrality algorithm tests
+const _canary_pagerank = @import("canary_pagerank.zig");
+const _benchmark_pagerank = @import("benchmark_pagerank.zig");
+const _canary_eigenvector = @import("canary_eigenvector.zig");
+const _benchmark_eigenvector = @import("benchmark_eigenvector.zig");
+const _canary_betweenness = @import("canary_betweenness.zig");
+const _benchmark_betweenness = @import("benchmark_betweenness.zig");
+const _canary_closeness = @import("canary_closeness.zig");
+const _benchmark_closeness = @import("benchmark_closeness.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

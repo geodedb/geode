@@ -40,6 +40,17 @@ pub const storage = struct {
     pub const csr = @import("storage/csr_adjacency.zig");
 };
 
+// Graph analytics (lightweight builders and centrality algorithms)
+pub const graph = struct {
+    pub const builders = @import("graph/builders.zig");
+    pub const pagerank = @import("graph/centrality_pagerank.zig");
+    pub const eigenvector = @import("graph/centrality_eigenvector.zig");
+    pub const betweenness = @import("graph/centrality_betweenness.zig");
+    pub const closeness = @import("graph/centrality_closeness.zig");
+    pub const bridge_leverage = @import("graph/centrality_bridge_leverage.zig");
+    pub const grey_cardinal = @import("graph/centrality_grey_cardinal.zig");
+};
+
 // Lightweight helper to carry parameter bindings across subsystems
 pub const ParamBindings = struct {
     names: []const []const u8,
