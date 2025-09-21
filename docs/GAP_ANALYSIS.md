@@ -53,12 +53,12 @@ Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED)
 
 ## 4. Implementation-Defined / Dependent Items (Current Catalog – INCOMPLETE)
 
-| Code        | Category                      | Description                                                  | Evidence                                           | Status   |
-| ----------- | ----------------------------- | ------------------------------------------------------------ | -------------------------------------------------- | -------- |
-| US001       | Policy                        | Reject LIMIT/OFFSET without ORDER (default)                  | Tests: TestCANARY_REQ_GQL_004_UnorderedLimitReject | ENFORCED |
-| UA005/UA006 | Tie-break                     | Deterministic path expansion tie-break ordering              | Tests (basic); missing multi-criteria stress       | PARTIAL  |
-| (Pending)   | Collation                     | Binary collation default (Unicode collation future optional) | Not yet flagged                                    | MISSING  |
-| (Pending)   | Null ordering policy override | Configurable but not fully surfaced in flagger               | Partial tests                                      | PARTIAL  |
+| Code                   | Category             | Description                                                            | Evidence                                                   | Status   |
+| ---------------------- | -------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | -------- |
+| US001                  | Policy               | Reject LIMIT/OFFSET without ORDER (default)                            | Tests: TestCANARY_REQ_GQL_004_UnorderedLimitReject         | ENFORCED |
+| UA005/UA006            | Tie-break            | Deterministic path expansion tie-break ordering                        | Tests (basic); missing multi-criteria stress               | PARTIAL  |
+| CollationBinaryDefault | Collation            | Binary collation default (Unicode collation optional feature disabled) | TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering | TESTED   |
+| NullOrderPolicyDefault | Null ordering policy | NULLS LAST default ordering policy surfaced via flagger                | TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering | TESTED   |
 
 ## 5. Representative Evidence Rows
 

@@ -95,6 +95,7 @@ Update 2025-09-21 (post-slice execution):
 - Integrated new synthetic `planner/pipeline.zig` orchestrating rewrite/cardinality/cost phases with PathCache + AdaptiveReplan; added integration tests (phase timing >0, cache second-run hit, replan trigger) and `BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope` (CV thresholds rewrite/cardinality/cost ≤0.20). CANARY aspects promoted: PlannerPipelineOrchestration, PathCachePlannerIntegration, AdaptiveReplanExecutionIntegration (IMPL awaiting auto-promotion after next evidence scan).
   - Promotions completed (now BENCHED) after evidence scan; added `planQueryWithPipeline` wrapper integrating real `planQuery` legality check with instrumentation plus wrapper test `TestCANARY_REQ_GQL_021_PlannerPipelineWrapperIntegration`.
   - Added real phase timing integration wrapper `planQueryRealTimed` (coarse phase mapping) with CANARY test `TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration`.
+  - Replaced synthetic rewrite/cardinality spins with actual AST rewrite & group validation hooks (`rewrite.zig`), adding aspects `RewriteHookImplementation`, `GroupValidationHookImplementation`, and pipeline integration tests (`RewriteHookPipelineIntegration`, `GroupValidationHookPipelineIntegration`). Synthetic spin logic removed from `pipeline.zig`.
   - Added new variance envelope benchmark `BenchmarkCANARY_REQ_GQL_021_PlannerPipelineP95MeanVarianceEnvelope` enforcing combined CV (≤0.20) and p95/mean (≤2.4) per phase; added CANARY aspect `PlannerPipelineP95MeanVarianceEnvelope`.
   - Promoted `PlannerCostModelPhaseTiming` aspect to BENCHED (variance envelope already present) and added snapshot method to phase timer for safe copy semantics.
   - Added AVG aggregation variance envelope `BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope` (CV≤0.22, p95/mean≤2.55) with CANARY aspect `AvgVarianceEnvelope` (BENCHED).
@@ -103,6 +104,12 @@ Update 2025-09-21 (post-slice execution):
   - Added decimal overflow guard tests for SUM and AVG (`TestCANARY_REQ_GQL_012_DecimalOverflowSum` / `...Avg`) ensuring overflow returns NULL (DecimalOverflowSum / DecimalOverflowAvg TESTED).
   - Confirmed planner pipeline variance bench already enforces p95/mean guard (≤2.4) across rewrite/card/cost; no upgrade required—documented to avoid duplicate envelope.
   - Spill Phase-2 (planned): binary serialization of AggregateState to segment files + eviction + merge-on-read; forthcoming aspects: HashAggSpillEvict (TESTED) and HashAggSpillEvictVarianceEnvelope (BENCHED).
+  - Added bounded path quantifier execution tests (`PathQuantifierBoundedExecution`) and multi-branch tie-break determinism test (`PathTieBreakMultiBranchDeterminism`), plus variance envelope `PathQuantifierBoundedVarianceEnvelope` (CV≤0.22, p95/mean≤2.55) covering variable-length expansion stability. - Added multi-source deeper branching determinism test (`PathMultiBranchDeterminism`) extending UA005/UA006 evidence to multiple start nodes. - Added Raft commit advancement test (`AppendEntriesCommitAdvance`) validating majority replication commit index update. - Expanded implementation-defined flagger outputs with `CollationBinaryDefault` and `NullOrderPolicyDefault` (tests: `TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering`), surfacing conformance transparency (§24) for collation and NULL ordering policies.
+    - Added cycle stress determinism test (`PathCycleStressDeterminism`) validating UA005/UA006 ordering under overlapping cycles (1↔2↔3 plus side cycles) with repeat-run ordering equality.
+    - Added zero-length inclusion policy test (`PathZeroLengthInclusionPolicy`) asserting implementation-defined exclusion of zero-length paths even when min_hops=0 (documented; future flagger hook pending).
+    - Added high-branch determinism test (`PathHighBranchDeterminism`) for width=8 star+second layer ensuring stable ordering across reruns.
+    - Added high-branch expansion variance envelope bench (`PathHighBranchVarianceEnvelope`) with Graph Analytics class thresholds (CV≤0.23, p95/mean≤2.60) – initial run passing.
+    - Added allocation variance envelope for variable-length expansion (`PathExpandAllocVarianceEnvelope`) enforcing hot-path thresholds (CV≤0.18, p95/mean≤2.40) using counting allocator wrapper.
 
 ## 8. ROLLING PLAN (30 / 14 / 7 Day)
 
@@ -111,7 +118,11 @@ Update 2025-09-21 (post-slice execution):
 1. Integrate real planner sub-phase hooks (rewrite passes, group validation, cost heuristic) replacing synthetic spins.
 2. Extend variance envelopes with component p95/mean metrics where still CV-only (legacy benches).
 3. Harden path quantifier execution & deterministic tie-break multi-branch (UA005/UA006 stress tests).
+
+   - (Partially Done) Initial bounded quantifier + multi-branch tie-break tests and variance envelope landed.
+
 4. Aggregation breadth (COUNT DISTINCT + HAVING + AVG + variance envelopes: baseline distinct, high-card distinct, AVG, spill) — remaining: extended numeric numeric types, additional HAVING predicate mixes, decimal AVG overflow edge tests.
+
 5. Raft log replication minimal (AppendEntries success/failure) instrumentation & variance.
 
 ### 14 Day (Commitment)
@@ -123,7 +134,7 @@ Update 2025-09-21 (post-slice execution):
 
 ### 7 Day (Immediate Slices)
 
-1. (Done) Real rewrite hook timing split (PlannerRewritePreValidationTiming & PlannerGroupValidationTiming TESTED); update `planQueryRealTimed` future: integrate sub-phase rather than synthetic spin.
+1. (Done) Real rewrite hook timing split (PlannerRewritePreValidationTiming & PlannerGroupValidationTiming TESTED); sub-phase integration completed (synthetic spins removed) via `rewrite.zig` hooks.
 2. (Resolved) PlannerPipelineVarianceEnvelope already has p95 guard; no separate upgrade slice required (documented to avoid duplicate effort).
 3. Draft COUNT DISTINCT aggregation implementation skeleton with CANARY IMPL + test harness (promotion path to TESTED within 48h).
 

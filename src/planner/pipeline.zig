@@ -3,6 +3,7 @@ const planner_root = @import("../planner.zig");
 const path_cache_mod = @import("path_cache.zig");
 const phase_timing_mod = @import("phase_timing.zig");
 const adaptive_replan_mod = @import("adaptive_replan.zig");
+const rewrite_hooks = @import("rewrite.zig");
 
 // High-level planner pipeline orchestration integrating PathCache, PhaseTiming, AdaptiveReplan.
 // This provides a deterministic synthetic pipeline used for integration tests & variance bench.
@@ -51,12 +52,25 @@ pub fn runPipeline(
     // Sub-phase: pre-validation timing (synthetic) -- splits rewrite into two logical sub-parts.
     const sub_pre_start = std.time.nanoTimestamp();
 
-    // Derive synthetic signature from query; simulate pattern rewrite
+    // Derive synthetic signature from query; perform real rewrite hook pass on a tiny fabricated Query.
     timer.begin(.rewrite);
     const signature_hash = hashQueryBytes(query_bytes);
-    // Simulate some work proportional to small fraction of hash bits for determinism
-    var spin: u64 = signature_hash & 0x3FFF;
-    while (spin > 0) : (spin -= 1) std.mem.doNotOptimizeAway(spin);
+    // Fabricate minimal query AST to drive rewrite hook (RETURN <signature_hash & 1> AS x)
+    const expr_node = planner_root.ast.Expr{ .Int = @intCast(signature_hash & 1) };
+    const ret_item = planner_root.ast.ReturnItem{ .expr = expr_node, .alias = null };
+    var mini_q: planner_root.ast.Query = .{
+        .optional_match = false,
+        .match = .{ .chains = &.{} },
+        .where_clause = null,
+        .with_clause = null,
+        .group_by = null,
+        .having = null,
+        .ret = .{ .items = &.{ret_item}, .distinct = false },
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    };
+    _ = rewrite_hooks.performRewrite(&mini_q);
     timer.end(.rewrite);
     const sub_pre_end = std.time.nanoTimestamp();
     const pre_validation_ns: u64 = @intCast(sub_pre_end - sub_pre_start);
@@ -74,9 +88,13 @@ pub fn runPipeline(
         }
     }
 
-    // Cardinality estimation phase (we embed a synthetic group validation sub-phase at start)
+    // Cardinality estimation phase (embed real group validation hook sub-phase at start)
     const sub_group_start = std.time.nanoTimestamp();
     timer.begin(.cardinality);
+    // Group validation hook over same fabricated query (adds negligible overhead)
+    _ = rewrite_hooks.performGroupValidation(&mini_q) catch |err| switch (err) {
+        error.GroupKeyMissing, error.NonGroupReturn => {}, // ignored for synthetic mini query
+    };
     // Synthetic expected rows derived from hash high bits + 1 (avoid zero)
     const expected_rows: u64 = (signature_hash >> 17) % 10_000 + 1;
     // Simulate actual production with small deterministic deviation (hash based)

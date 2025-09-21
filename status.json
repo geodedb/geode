@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T21:27:17.171829935Z",
+  "generated_at": "2025-09-21T21:37:51.16634672Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -782,6 +782,20 @@
       "features": [
         {
           "feature": "Path Cycle Determinism",
+          "aspect": "PathTieBreakMultiBranchDeterminism",
+          "status": "TESTED",
+          "files": [
+            "tests/test_path_quantifier_bounded.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathTieBreakMultiBranchDeterminism"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Path Cycle Determinism",
           "aspect": "Planner",
           "status": "TESTED",
           "files": [
@@ -889,6 +903,104 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathCycleStressDeterminism",
+          "status": "TESTED",
+          "files": [
+            "tests/test_path_quantifier_stress.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathCycleStressDeterminism"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathExpandAllocVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_expand_alloc_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_016_PathExpandAllocVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathHighBranchDeterminism",
+          "status": "TESTED",
+          "files": [
+            "tests/test_path_quantifier_stress.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathHighBranchDeterminism"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathHighBranchVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_quantifier_high_branch_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_016_PathHighBranchVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathQuantifierBoundedExecution",
+          "status": "TESTED",
+          "files": [
+            "tests/test_path_quantifier_bounded.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathQuantifierBoundedExecution"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathQuantifierBoundedVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_quantifier_bounded_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_016_PathQuantifierBoundedVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Variable Length Path Expand",
+          "aspect": "PathZeroLengthInclusionPolicy",
+          "status": "TESTED",
+          "files": [
+            "tests/test_path_quantifier_stress.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_016_PathZeroLengthInclusionPolicy"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-21"
         },
@@ -1091,6 +1203,34 @@
         },
         {
           "feature": "Query Planner",
+          "aspect": "GroupValidationHookImplementation",
+          "status": "TESTED",
+          "files": [
+            "src/planner/rewrite.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_GroupValidationHookImplementation"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
+          "aspect": "GroupValidationHookPipelineIntegration",
+          "status": "TESTED",
+          "files": [
+            "tests/test_planner_real_subphases.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_GroupValidationHookPipelineIntegration"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
           "aspect": "PlannerAdaptiveReplanTrigger",
           "status": "BENCHED",
           "files": [
@@ -1288,6 +1428,34 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
+          "aspect": "RewriteHookImplementation",
+          "status": "TESTED",
+          "files": [
+            "src/planner/rewrite.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_RewriteHookImplementation"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
+          "aspect": "RewriteHookPipelineIntegration",
+          "status": "TESTED",
+          "files": [
+            "tests/test_planner_real_subphases.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_RewriteHookPipelineIntegration"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-21"
         }
@@ -2940,20 +3108,6 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -2966,6 +3120,20 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -3105,20 +3273,6 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -3129,6 +3283,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -3265,7 +3433,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -3281,7 +3449,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -3822,8 +3990,8 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 129,
-      "TESTED": 119
+      "BENCHED": 132,
+      "TESTED": 128
     },
     "by_aspect": {
       "API": 7,
@@ -3899,6 +4067,8 @@
       "GreyCardinalComposite": 1,
       "GreyCardinalCompositeMetricBreakdownVarianceEnvelope": 1,
       "GreyCardinalVarianceEnvelope": 1,
+      "GroupValidationHookImplementation": 1,
+      "GroupValidationHookPipelineIntegration": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
       "HashAggDecimalEarlyState": 1,
@@ -3939,10 +4109,18 @@
       "PathCacheLookupVarianceEnvelope": 1,
       "PathCachePlannerIntegration": 1,
       "PathCyclePruningPerf": 1,
+      "PathCycleStressDeterminism": 1,
+      "PathExpandAllocVarianceEnvelope": 1,
       "PathExpandBreadthVarianceEnvelope": 1,
       "PathExpandMemPerf": 1,
       "PathExpansionHeuristicVarianceEnvelope": 1,
+      "PathHighBranchDeterminism": 1,
+      "PathHighBranchVarianceEnvelope": 1,
       "PathPruningStatsPerf": 1,
+      "PathQuantifierBoundedExecution": 1,
+      "PathQuantifierBoundedVarianceEnvelope": 1,
+      "PathTieBreakMultiBranchDeterminism": 1,
+      "PathZeroLengthInclusionPolicy": 1,
       "PatternPerf": 1,
       "PatternStateDedupMem": 1,
       "PatternStateDedupPerf": 1,
@@ -3973,6 +4151,8 @@
       "RepairThroughputBench": 1,
       "ResumeTokenRestart": 1,
       "Retention": 1,
+      "RewriteHookImplementation": 1,
+      "RewriteHookPipelineIntegration": 1,
       "SSIPhantomPrevention": 2,
       "SSIPhantomPreventionVariance": 1,
       "SetOpDistinctDedupVarianceEnvelope": 1,

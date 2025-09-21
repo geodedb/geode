@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const geode = @import("geode");
 const protocol = @import("protocol");
+const impl_flagger = @import("flagger_impl_defined.zig");
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const exec = geode.exec;
@@ -220,7 +221,8 @@ inline fn nullsFlag() []const u8 {
     return if (g_nulls_last) F_NULLS_LAST else F_NULLS_FIRST;
 }
 
-var flags_buf_base: [5][]const u8 = undefined; // room for adaptive flag
+// Expanded base buffer to accommodate impl-defined findings (e.g., ZeroLengthPathExcluded)
+var flags_buf_base: [12][]const u8 = undefined; // room for adaptive + impl-defined additions
 var flags_buf_ext: [7][]const u8 = undefined; // room for adaptive + union phases + deprecation
 var g_adapt_estimates: bool = false; // env or future CLI toggled
 var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
@@ -229,6 +231,24 @@ var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive
 var g_graph_storage: ?*graph_exec.GraphStorage = null;
 // Global MVCC manager for transaction conflict detection
 var g_mvcc_manager: ?*mvcc.MVCCManager = null;
+
+// Implementation-defined flag cache (codes only). Allocated once on first use.
+var g_impl_defined_codes: [][]const u8 = &.{};
+var g_impl_defined_inited: bool = false;
+
+fn initImplDefinedFlags(ally: std.mem.Allocator) void {
+    if (g_impl_defined_inited) return;
+    if (impl_flagger.collect(ally, .{ .zero_length_paths_excluded = true, .collation_binary_default = true, .null_order_policy_default = true })) |findings| {
+        // Extract codes slice
+        const codes = ally.alloc([]const u8, findings.len) catch return;
+        var i: usize = 0;
+        while (i < findings.len) : (i += 1) codes[i] = findings[i].code;
+        g_impl_defined_codes = codes;
+        g_impl_defined_inited = true;
+    } else |_| {
+        return; // leave empty on failure
+    }
+}
 
 fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
     if (g_mvcc_manager) |mgr| {
@@ -431,6 +451,8 @@ fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorag
 }
 
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
+    // Ensure impl-defined flags initialized (page allocator single-shot)
+    if (!g_impl_defined_inited) initImplDefinedFlags(std.heap.page_allocator);
     var n: usize = 0;
     flags_buf_base[n] = F_ILLEGAL;
     n += 1;
@@ -447,6 +469,14 @@ fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
     if (g_adapt_estimates) {
         flags_buf_base[n] = F_ADAPT_EST;
         n += 1;
+    }
+    // Append impl-defined codes (e.g., ZeroLengthPathExcluded)
+    if (g_impl_defined_inited and g_impl_defined_codes.len > 0) {
+        var i: usize = 0;
+        while (i < g_impl_defined_codes.len and n < flags_buf_base.len) : (i += 1) {
+            flags_buf_base[n] = g_impl_defined_codes[i];
+            n += 1;
+        }
     }
     return flags_buf_base[0..n];
 }
