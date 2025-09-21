@@ -74,6 +74,8 @@ pub const graph = struct {
     };
 };
 
+// (Note) Streaming and txn modules are added as separate build modules; tests import them directly as needed.
+
 // Lightweight helper to carry parameter bindings across subsystems
 pub const ParamBindings = struct {
     names: []const []const u8,

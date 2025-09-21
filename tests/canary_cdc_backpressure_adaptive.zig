@@ -1,5 +1,5 @@
 const std = @import("std");
-const cdc = @import("../src/streaming/cdc_enhanced.zig");
+const cdc = @import("cdc_enhanced");
 // TestCANARY_REQ_GQL_042_BackpressureAdaptive
 // Simulates buffer growth & shrink cycles and validates adaptive watermark adjustments.
 

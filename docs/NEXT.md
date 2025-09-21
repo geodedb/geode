@@ -17,8 +17,8 @@ Recent BENCH promotions include: Dijkstra, Biconnected Components, Bridges/Artic
 
 Objectives:
 
-1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression).
-2. Freshness guard: pre-empt staleness by flagging UPDATED dates approaching 50 days.
+1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- GreyCardinalComposite + TxnConflictMatrix + SSIPhantomPrevention variance envelopes IMPLEMENTED (3 guards landed).
+2. Freshness guard: pre-empt staleness by flagging UPDATED dates approaching 50 days. -- Tool implemented (StatusFreshnessGuard) monitoring WARN>=50 FAIL>=60 days.
 3. Hardening: WAL failure injection, Raft partition simulation, CDC adaptive threshold jitter tests.
 4. Documentation linking: auto-generate summary deltas into `IMPLEMENTATION_REALITY.md`.
 
@@ -39,10 +39,9 @@ Objectives:
    - Add complex cascade scenario bench
    - Bench: `BenchmarkCANARY_REQ_GQL_032_CascadePerf`
 
-4. **REQ-GQL-042 CDC Backpressure Adaptive**
+4. **REQ-GQL-042 CDC Backpressure Adaptive** (COMPLETED)
 
-   - Add dynamic threshold adjustment test
-   - Test: `TestCANARY_REQ_GQL_042_BackpressureAdaptive`
+   - Dynamic threshold adjustment test implemented (`TestCANARY_REQ_GQL_042_BackpressureAdaptive`).
 
 5. **REQ-GQL-046 TDE Multi-Key Support**
    - Add key hierarchy test
@@ -86,6 +85,7 @@ Objectives:
 Result: Trie + KMP added; remaining STUB aspects focus on advanced DOT, Yen K-shortest, PathCache, Cursor/SignaledQueue, BloomFilterMultiHash, RabinKarp, and advanced MVCC / analytics specs.
 
 Next Candidate Slice: GreyCardinalComposite variance breakdown (add per-metric timing & coefficient of variation guard) OR CDC adaptive heuristics stress harness.
+Next Candidate Slice (updated): CDC adaptive heuristics stress harness (BackpressureAdaptive + first three variance envelopes completed) and PageRank variance envelope (target CV < 0.18).
 
 ## Verification Commands
 
