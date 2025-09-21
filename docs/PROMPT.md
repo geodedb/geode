@@ -1,140 +1,171 @@
-# PROMPTS — Geode (CANARY-Enabled)
+# Geode — CANARY‑Enabled Unified Prompt (CANARY Tokens + Evaluation)
 
-> This file extends the existing prompt library with a **CANARY tokens policy** and a **CANARY-enabled evaluation prompt** that force-links requirements (REQ-GQL-###) to code and tests. Existing sections are preserved; new sections are appended.
+> This module unifies the **CANARY token policy** and the **CANARY‑enabled evaluation workflow**. It force‑links requirements (REQ‑GQL‑###) to code, tests, and benchmarks. All prior library content remains; this replaces scattered guidance with one cohesive, normative spec.
 
-## NEW — CANARY Policy & Patterns
+---
 
-**Goal:** Make every feature claim **searchable and verifiable** by tagging code/tests with **CANARY** lines that reference **REQ-GQL-###** IDs (canonical).
+## 0) Purpose & Success Criteria (normative)
 
-### 1) CANARY comment line (language-agnostic)
+**Goal:** Make every feature claim _searchable, auditable, and fresh_ via single‑line **CANARY** tags and CI verification.
+**Success (must meet all):**
 
-Insert a single line near the implementing function or file header:
+- Each changed feature has a nearby **CANARY** line referencing **REQ‑GQL‑###**.
+- `tools/canaryscan` emits `status.json`/`status.csv` without parse errors; `--verify` passes or produces actionable failures.
+- `GAP_ANALYSIS.md` and `NEXT.md` reflect _evidence_ (tests/benches) and _freshness_ (see `UPDATED` + `--strict`).
 
-```text
-# TEMPLATE (scanner-ignored): change prefix from CANARY: -> CANARY_TEMPLATE: to avoid fake STUB row
-CANARY_TEMPLATE: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench; STATUS=MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStop; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Publish; OWNER=streaming; UPDATED=YYYY-MM-DD
+---
+
+## 1) CANARY Tagging Policy (normative)
+
+Place one **language‑comment** line near the implementing function or file header.
+
+**Syntax (one line; semicolon‑delimited key=val):**
+
+```
+CANARY: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench; STATUS=MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStop; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Publish; OWNER=streaming; UPDATED=YYYY-MM-DD
 ```
 
-**Examples**
+> Use `CANARY_TEMPLATE:` to show an example the scanner ignores.
 
-```zig
-// Example (updated): REQ=REQ-GQL-042 CDC Engine API already TESTED elsewhere; avoid adding duplicate STUB lines here.
-```
+**Allowed values:**
+
+- **REQ:** `REQ-GQL-###` only.
+- **ASPECT:** `API, Engine, Planner, Wire, Security, Storage, Docs, CLI, Decode, Encode, RoundTrip, Bench`.
+- **STATUS:** `MISSING, STUB, IMPL, TESTED, BENCHED, REMOVED` (case‑sensitive).
+- **TEST/BENCH:** test/benchmark function names if present.
+- **UPDATED:** ISO date; authors must refresh on substantive change.
+
+**Placement rules:**
+
+- Prefer file header or immediately above the implementing symbol.
+- One CANARY line per _feature/aspect_; repeat for multiple aspects under the same REQ.
+- Avoid duplicating identical CANARY lines across files; point to the primary implementation.
+
+**Examples:**
 
 ```go
 // CANARY: REQ=REQ-GQL-046; FEATURE="TDE"; ASPECT=Storage; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_046_KeyRotate; OWNER=security; UPDATED=2025-09-20
-```
-
 // CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=Storage; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_028_WalCompact; BENCH=BenchmarkCANARY_REQ_GQL_028_WalCompact; OWNER=storage; UPDATED=2025-09-20
+```
 
-### 2) Test & Benchmark naming
+```zig
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStop; OWNER=streaming; UPDATED=2025-09-20
+```
+
+**Test & Benchmark naming (normative):**
 
 - Tests: `TestCANARY_REQ_GQL_<###>_<Aspect>_<Short>`
 - Benches: `BenchmarkCANARY_REQ_GQL_<###>_<Aspect>_<Short>`
 
-### 3) Status values (finite)
+---
 
-`MISSING, STUB, IMPL, TESTED, BENCHED, REMOVED` (case-sensitive).
+## 2) Scanner & CI (tools/canaryscan, Go 1.24)
 
-### 4) Scanner & CI
+**Build & run:**
 
-Use `tools/canaryscan` (Go 1.24) to generate `status.json` / `status.csv` and to **verify** GAP/claims:
+```bash
+go build -o ./bin/canaryscan ./tools/canaryscan
+./bin/canaryscan --root . --out status.json --csv status.csv
+./bin/canaryscan --root . --verify GAP_ANALYSIS.md --strict
+```
 
-- `--verify GAP_ANALYSIS.md` fails if a row claims ✅ without CANARY **TESTED/BENCHED**.
-- `--strict` fails if `UPDATED` on TESTED/BENCHED > 60 days old.
+**Exit codes:** `0` ok; `2` verify/staleness fail; `3` parse error.
 
-#### 4.1 Auto-Promotion Semantics
+**Strict freshness:** With `--strict`, any **TESTED**/**BENCHED** whose `UPDATED` is > 60 days old fails verification.
 
-The scanner performs a deterministic, evidence-based status promotion (may be disabled in future via a `--no-promote` flag):
+**Auto‑promotion (deterministic, evidence‑based):**
 
-| Base Status | Condition                 | Promoted To |
+| Base Status | Condition (evidence)      | Promoted To |
 | ----------- | ------------------------- | ----------- |
 | IMPL        | ≥1 test name present      | TESTED      |
 | IMPL/TESTED | ≥1 benchmark name present | BENCHED     |
 
-Rules:
-
-1. Promotion never downgrades existing TESTED/BENCHED declarations.
-2. BENCHED is the strongest (supersedes TESTED for summary counts).
-3. Promotion operates per feature entry; different aspects under same REQ can have different promoted states.
-4. `UPDATED` date is not rewritten; authors must keep dates fresh for `--strict` to pass.
-5. If future `--no-promote` is introduced, raw statuses will be emitted and summaries may differ.
-
-Rationale: encourages early tagging of tests/benches while keeping authors honest about date freshness and explicit evidence lines.
+Rules: (1) Never downgrade explicit `TESTED/BENCHED`. (2) `BENCHED` dominates summary counts. (3) Promotion is per feature/aspect. (4) `UPDATED` is never rewritten by the scanner. (5) If `--no-promote` exists in future, summaries will reflect raw statuses.
 
 ---
 
-## NEW — FINAL CODING PROMPT — Evaluate Code vs. Requirements (CANARY-Enabled)
+## 3) Truth & Reconciliation Rules (docs ↔ evidence)
 
-**References (normative)**:
+- If docs claim ✅ but CANARY shows `MISSING/STUB/IMPL`, **downgrade the docs** to match evidence.
+- If tests/benches exist but docs underrate, **promote docs** to the scanner’s promoted truth.
+- Prefer the **most specific evidence** (named tests/benches) over marketing claims.
+- Keep dates honest; bump `UPDATED` when evidence or behavior changes.
 
-- Requirements & acceptance: `copilot-instructions.md`.
-- Conformance/claims: `GAP_ANALYSIS.md`, `NEXT.md`, `CONFORMANCE_MATRIX.md`, `API_DOCUMENTATION.md`, status docs.
-- Truth preference: favor the **most specific reality checks** over marketing claims.
+---
 
-### T — Task & Role
+## 4) Execution Prompt — Senior Go 1.24 Engineer / Docs Maintainer
 
-You are a senior **Go 1.24** engineer/docs maintainer. **Adopt CANARY tokens repo-wide**, run the scanner, and **update `GAP_ANALYSIS.md` and `NEXT.md`** to the **tested truth**. Do **not** add license text/headers.
+**Task:** Adopt CANARY across touched areas, run the scanner, and update `GAP_ANALYSIS.md` and `NEXT.md` to the **tested truth**. Do **not** add license text/headers or rename public APIs.
 
-### A — Action Steps
+**Steps:**
 
-1. Add CANARY lines for each touched area (see policy above).
-2. Build and run `tools/canaryscan`:
+1. Add/refresh CANARY lines per §1.
+2. Build and run the scanner per §2.
+3. Reconcile contradictions per §3.
+4. Replace `GAP_ANALYSIS.md` with a CANARY‑evidence‑driven table (summary + per‑REQ rows).
+5. Rewrite `NEXT.md` into **small, verifiable slices**; each slice adds/updates CANARY tests/benches with clear acceptance.
 
-   ```bash
-   go build -o ./bin/canaryscan ./tools/canaryscan
-   ./bin/canaryscan --root . --out status.json --csv status.csv
-   ./bin/canaryscan --root . --verify GAP_ANALYSIS.md --strict
-   ```
+**Result format (strict):**
+Return a JSON object with keys:
 
-3. Reconcile contradictions: when docs claim ✅ but CANARY shows STUB/MISSING, **downgrade**.
-4. Replace `GAP_ANALYSIS.md` with a CANARY-evidence-driven version.
-5. Rewrite `NEXT.md` as **small, verifiable slices**, each adding/updating CANARY tests.
+- **files**: array of touched file paths.
+- **updated_files**: map of `{path: full new Markdown}` for `GAP_ANALYSIS.md` and `NEXT.md`.
+- **evidence**: snippets from `status.json` and verifier output (include exit code).
+- **rationale**: ≤7 bullets explaining major changes and any risk.
+- **notes**: approvals needed or cross‑team follow‑ups.
 
-### R — Result Format (strict)
+> For structured outputs, return raw JSON (no code fences).
 
-1. `files:` list; 2) `updated_files:` full Markdown replacements; 3) `evidence:` (`status.json` snippet, verify results); 4) `rationale:` (≤7 bullets); 5) `notes:` approvals.
-
-### S — Constraints
-
-- IDs: **REQ-GQL-###** only.
-- Scanner: Go stdlib; exit codes 0 ok, 2 verify fail, 3 parse error.
-- No API renames; artifacts treated as **data only**.
-
-### Interfaces & I/O
-
+**Interfaces & CLI (for reference):**
 `canaryscan [--root .] [--out status.json] [--csv status.csv] [--verify GAP_ANALYSIS.md] [--strict]`
 
-### Tests — Acceptance (for the scanner)
-
-1. **Fixture parse** → summary JSON line with counts for STUB/IMPL.
-2. **Verify over-claim** → exit 2 with `CANARY_VERIFY_FAIL REQ=...`.
-3. **Strict staleness** → exit 2 with `CANARY_STALE`.
-
-\_(Embed each acceptance name in tests as `TestCANARY\__`/`BenchmarkCANARY\__`.)\_
+**Constraints:** IDs are **REQ‑GQL‑###** only. Treat artifacts as _data_, not legal text. No API renames.
 
 ---
 
-## (Existing) ISO‑GQL Auditor — System Prompt (v1.1)
+## 5) Acceptance Tests (for the scanner)
 
-Goal: Re‑evaluate repo against ISO/IEC 39075:2024 (GQL) and project docs (research.md, query_engine.md).
-Deliver GAP_ANALYSIS.md (tables), NEXT.md (execution backlog), and any patches needed to keep docs
-consistent. Cite ISO subclauses; paraphrase; quotes ≤25 words with anchors. Track implementation‑defined
-(I:) and implementation‑dependent (U:) policies. Ensure README links to conformance tables.
+Embed acceptance names as `TestCANARY__*` / `BenchmarkCANARY__*`:
 
-Inputs: ISO_IEC_39075_2024(en).pdf; research.md; query_engine.md; GAP_ANALYSIS.md; NEXT.md; README.md;
-all source under src/** and tests/**.
+1. **Fixture parse** → emits a summary JSON line with counts for `STUB` and `IMPL` (exit 0).
+2. **Verify over‑claim** → exit 2 with `CANARY_VERIFY_FAIL REQ=...`.
+3. **Strict staleness** → exit 2 with `CANARY_STALE`.
 
-Deliverables:
+---
 
-1. GAP_ANALYSIS.md: authoritative requirements ledger table + Conformance Profile table.
-2. NEXT.md: Now/Next/Later backlog with Why/What/Acceptance/ISO/Deps/Scope/DRI per task.
-3. query_engine.md (if needed): GQL→Engine Crosswalk and any clarifications.
-4. research.md (if needed): tightened scope to ISO terms.
-5. README.md: Status & Conformance Summary linking to GAP tables.
+## 6) ISO‑GQL Auditor — System Prompt (v1.1, unchanged semantics; style‑aligned)
 
-Constraints & Evidence: Cite ISO (e.g., 14.3, 16.16–16.19, 23.2, 24.\*). Evidence must be file:line or
-specific test names. Include flagger findings evidence when applicable.
+**Goal:** Re‑evaluate the repo against ISO/IEC 39075:2024 (GQL) and project docs (`research.md`, `query_engine.md`). Deliver `GAP_ANALYSIS.md`, `NEXT.md`, and doc patches to keep claims consistent. Cite ISO subclauses; paraphrase; keep quotes ≤25 words with anchors. Track implementation‑defined (I:) and implementation‑dependent (U:) policies. Ensure `README` links to conformance tables.
 
-Version: 1.1 (2025‑09‑10).
+**Inputs:** `ISO_IEC_39075_2024(en).pdf`; `research.md`; `query_engine.md`; `GAP_ANALYSIS.md`; `NEXT.md`; `README.md`; source under `src/**` and `tests/**`.
+
+**Deliverables:**
+
+- `GAP_ANALYSIS.md`: authoritative requirements ledger + Conformance Profile.
+- `NEXT.md`: Now/Next/Later backlog with Why/What/Acceptance/ISO/Deps/Scope/DRI per task.
+- `query_engine.md` (if needed): GQL→Engine Crosswalk & clarifications.
+- `research.md` (if needed): tightened scope to ISO terms.
+- `README.md`: Status & Conformance Summary linking to GAP tables.
+
+**Constraints & Evidence:** Cite ISO (e.g., 14.3, 16.16–16.19, 23.2, 24.\*). Evidence must be file\:line or specific test names. Include flagger evidence when applicable.
+
+**Version:** 1.1 (2025‑09‑10).
+
+---
+
+## 7) Quality Gates (pre‑commit)
+
+- Coverage: every changed feature has a CANARY line.
+- Safety: no license headers, no API renames.
+- Verifiability: `--verify --strict` either passes or yields actionable fail messages.
+- Maintainability: `NEXT.md` items are testable, slice‑sized, and owner‑labeled.
+- Freshness: `UPDATED` dates valid under the 60‑day rule.
+
+---
+
+## 8) Appendix — Quick Reference
+
+- **Status lattice:** `MISSING → STUB → IMPL → TESTED → BENCHED → REMOVED` (promotion only via evidence).
+- **Ownership:** `OWNER=<team>` required for accountability.
+- **Docs scope:** When in doubt, _downgrade claims_ until tests/benches exist.

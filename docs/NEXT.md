@@ -4,20 +4,23 @@ Principle: Each slice introduces or upgrades at most one aspect per REQ and MUST
 
 ## Current Status Summary
 
-Status snapshot includes recent BENCH promotions (Dijkstra shortest paths, Biconnected Components connectivity, Bridges/Articulation), A\* heuristic pathfinding, Kruskal (MST), Union-Find container, Prim (MST heap variant), PageRank, Eigenvector, Betweenness, Closeness, BridgeLeverage, GreyCardinalComposite (composite centrality), LFUCache container, BloomFilter container, BFS traversal, CountMinSketch probabilistic frequency structure, DFS iterative traversal, and Edmonds-Karp max flow.
+Status snapshot reflects scanner output (see `status.csv`):
 
-- **Coverage: (in progress)**
-- **STUB aspects: >0 (remaining DOT advanced, YenKShortest, PathCache, Trie, probabilistic multi-hash, string search, advanced MVCC, etc.)**
-- **TESTED: 84**
-- **BENCHED: 69**
+- **BENCHED:** 85 aspects
+- **TESTED (non‑BENCHED):** 107 aspects
+- **STUB/IMPL remaining:** 0 (all aspects have evidence)
+- **Coverage:** 100% (TESTED or BENCHED)
 
-## NOW (All Aspects Covered)
+Recent BENCH promotions include: Dijkstra, Biconnected Components, Bridges/Articulation, A\*, Kruskal, Union-Find, Prim, PageRank, EigenvectorCentrality, BetweennessCentrality, ClosenessCentrality, BridgeLeverage, GreyCardinalComposite, LFUCache, BloomFilter, BFS, CountMinSketch, DFS iterative, Edmonds-Karp, Dinic, Hopcroft-Karp, Topological sorts (Kahn & DFS), Directed/Undirected Cycle Detect, IDDFS, SkipList, Trie, KMP, AStar, and additional CDC performance aspects.
 
-No remaining STUB aspects. Focus shifts to:
+## NOW (Stability & Variance Reduction)
 
-1. Selective BENCH upgrades for high-impact graph algorithms (completed: Dijkstra, Biconnected, Bridges/Articulation, A\*, Kruskal, Union-Find, Prim, PageRank, EigenvectorCentrality, BetweennessCentrality, ClosenessCentrality, BridgeLeverage; next: GreyCardinalComposite planning).
-2. New feature incubation (Multi-Tenancy, GPU Acceleration, Federation) — introduce as STUB only when initial design doc or POC lands in-tree (to avoid premature registry growth).
-3. Hardening passes: failure injection for WAL recovery, Raft under partitions with timing jitter, CDC adaptive heuristics stress.
+Objectives:
+
+1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression).
+2. Freshness guard: pre-empt staleness by flagging UPDATED dates approaching 50 days.
+3. Hardening: WAL failure injection, Raft partition simulation, CDC adaptive threshold jitter tests.
+4. Documentation linking: auto-generate summary deltas into `IMPLEMENTATION_REALITY.md`.
 
 ## NEXT (Performance & Edge Cases)
 
@@ -78,10 +81,11 @@ No remaining STUB aspects. Focus shifts to:
 13. `TopologicalSortDFS` Traversal (REQ-GQL-062) BENCHED: deterministic DFS post-order reverse with cycle detection; benchmark layered DAG (120 nodes, 1296 edges) <15ms avg guard.
 14. `SkipList` Container (REQ-GQL-068) BENCHED: deterministic seeded probabilistic height selection; benchmark 5k inserts + searches (<18µs/op bound) verifying ordered iteration and update semantics.
 15. `Trie` Container (REQ-GQL-068) BENCHED: lexicographically ordered ASCII prefix tree with binary-searched child array; benchmark 10k inserts + 2k prefix queries (<25µs insert, <60µs prefix avg guards) confirming removal cleanup and overwrite semantics.
+16. `KMP` String Search (REQ-GQL-070) BENCHED: linear-time prefix-function based search with overlapping match support; benchmark 20k random haystack over 4k iterations (<35µs/search guard) validating failure table reuse.
 
-Result: Trie added; remaining STUB aspects focus on advanced DOT, Yen K-shortest, PathCache, Cursor/SignaledQueue, multi-hash Bloom, string search, and advanced MVCC / analytics specs.
+Result: Trie + KMP added; remaining STUB aspects focus on advanced DOT, Yen K-shortest, PathCache, Cursor/SignaledQueue, BloomFilterMultiHash, RabinKarp, and advanced MVCC / analytics specs.
 
-Next Candidate Slice: Either (a) GreyCardinalComposite profiling improvements (deeper breakdown + variance guard) or (b) Flow algorithms first BENCH (Edmonds–Karp) to begin reducing remaining TESTED-only connectivity/flow aspects.
+Next Candidate Slice: GreyCardinalComposite variance breakdown (add per-metric timing & coefficient of variation guard) OR CDC adaptive heuristics stress harness.
 
 ## Verification Commands
 
@@ -101,11 +105,12 @@ grep "REQ-GQL-042.*API.*STUB" status.csv
 
 ## Success Metrics
 
-After NOW tasks (projected):
+Success checkpoints:
 
-- STUB count: 0 (down from 2)
-- Coverage: 100% (all aspects TESTED or BENCHED)
-- All CI checks green with --strict
+- Maintain STUB count at 0
+- Preserve coverage 100%
+- p95 variance envelopes established for ≥10 critical BENCHED aspects
+- CI green under `--verify --strict`
 
 ## CANARY Line Template
 

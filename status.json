@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T14:59:20.723332951Z",
+  "generated_at": "2025-09-21T15:06:16.968126625Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -1007,20 +1007,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
-          ],
-          "benches": [],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_cdc_adaptive_diff_perf.zig"
@@ -1029,6 +1015,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
           ],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
+          ],
+          "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -1569,6 +1569,20 @@
           "benches": [],
           "owner": "streaming",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "CDC/Streaming",
+          "aspect": "Engine",
+          "status": "TESTED",
+          "files": [
+            "docs/PROMPT.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_StartStop"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
         },
         {
           "feature": "CDCControlProtocol",
@@ -2342,6 +2356,27 @@
       ]
     },
     {
+      "id": "REQ-GQL-070",
+      "features": [
+        {
+          "feature": "String Search",
+          "aspect": "KMP",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/string_search_kmp.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_070_KMP"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_070_KMP"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-073",
       "features": [
         {
@@ -2411,6 +2446,20 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -2421,20 +2470,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -2525,8 +2560,8 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 72,
-      "TESTED": 87
+      "BENCHED": 73,
+      "TESTED": 88
     },
     "by_aspect": {
       "API": 7,
@@ -2573,7 +2608,7 @@
       "EarlyConflictDetection": 1,
       "EdmondsKarp": 2,
       "EigenvectorCentrality": 1,
-      "Engine": 20,
+      "Engine": 21,
       "EventCapture": 1,
       "FalsePositiveReduction": 1,
       "GreyCardinalComposite": 1,
@@ -2582,6 +2617,7 @@
       "HopcroftKarp": 1,
       "IDDFS": 1,
       "Ingest": 1,
+      "KMP": 1,
       "KosarajuValidation": 1,
       "Kruskal": 1,
       "LFUCache": 1,

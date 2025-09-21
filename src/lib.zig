@@ -69,6 +69,9 @@ pub const graph = struct {
         pub const skiplist = @import("graph/container_skiplist.zig");
         pub const trie = @import("graph/container_trie.zig");
     };
+    pub const string_search = struct {
+        pub const kmp = @import("graph/string_search_kmp.zig");
+    };
 };
 
 // Lightweight helper to carry parameter bindings across subsystems
