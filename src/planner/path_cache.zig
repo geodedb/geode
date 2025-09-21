@@ -5,7 +5,8 @@ const std = @import("std");
 // used for S-002 (PathCacheLookup TESTED) and future variance envelope S-003.
 // Keys and values are arbitrary byte slices; hashing uses a fixed seed for determinism.
 //
-// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheCore; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PathCacheLookup; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheLookup; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheEviction; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheEviction; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 
 pub const Entry = struct {
     key_hash: u64,
@@ -100,7 +101,7 @@ pub const PathCache = struct {
     }
 };
 
-test "path cache basic put/get/evict" {
+test "TestCANARY_REQ_GQL_021_PathCacheEviction" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try PathCache.init(gpa.allocator(), 3);

@@ -71,10 +71,16 @@ Below is a concise representative subset (see `status.csv` for the full authorit
 | REQ-GQL-013 | Txn Conflict Matrix            | Engine                                    | BENCHED | 2025-09-20 |
 | REQ-GQL-016 | Path Expand Breadth            | Planner                                   | BENCHED | 2025-09-20 |
 | REQ-GQL-021 | Planner Rewrite Pass           | Planner                                   | BENCHED | 2025-09-20 |
+| REQ-GQL-021 | Query Planner                  | PlannerRewritePreValidationTiming         | TESTED  | 2025-09-21 |
+| REQ-GQL-021 | Query Planner                  | PlannerGroupValidationTiming              | TESTED  | 2025-09-21 |
 | REQ-GQL-028 | WAL Segment Recycle            | WALSegmentRecycleLatencyVarianceEnvelope  | BENCHED | 2025-09-21 |
+| REQ-GQL-028 | WAL Page Flush Queue Depth     | WALPageFlushQueueDepthVarianceEnvelope    | BENCHED | 2025-09-21 |
 | REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillPersistence           | TESTED  | 2025-09-21 |
 | REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalSpillMerge                  | TESTED  | 2025-09-21 |
 | REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillEvictVarianceEnvelope | BENCHED | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillAccurateMerge         | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalEarlyState                  | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctMergeVarianceEnvelope      | BENCHED | 2025-09-21 |
 | REQ-GQL-021 | PathCache                      | PathCacheLookup                           | TESTED  | 2025-09-21 |
 | REQ-GQL-032 | Schema Constraints Performance | ConstraintPerf                            | BENCHED | 2025-09-20 |
 | REQ-GQL-042 | CDC Adaptive Flush             | AdaptiveFlush                             | BENCHED | 2025-09-20 |

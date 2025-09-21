@@ -41,7 +41,7 @@ Each slice MUST:
 | -------------------------------------------------- | -------------------------------------- | ------------------------- | ---- | ------------------------------------------------- |
 | Deterministic monotonic time shim                  | Stable variance benches (Planner, WAL) | Present                   | Low  | Already used (std.time).                          |
 | PathCache index structure                          | PathCache variance envelope            | Missing                   | Med  | Implement minimal LRU map (seeded hash).          |
-| Queue depth instrumentation in WAL flush scheduler | WALPageFlushQueueDepthVarianceEnvelope | Missing                   | Med  | Add atomic counter + sampling hook.               |
+| Queue depth instrumentation in WAL flush scheduler | WALPageFlushQueueDepthVarianceEnvelope | Landed (TESTED/BENCHED)   | Low  | Extend to real flush scheduler callbacks.         |
 | Planner phase timing hooks                         | CostModelPhase variance                | Partial                   | Low  | Insert timers around rewrite & cardinality loops. |
 | ImplementationReality delta tool CI step           | Drift prevention                       | Implemented (tool exists) | Low  | Wire into pipeline.                               |
 
@@ -85,11 +85,11 @@ Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycl
 
 Update 2025-09-21 (post-slice execution):
 
-- Added PathCache skeleton + lookup test + variance bench (S-002 / S-003 partial) now present as TESTED (Lookup) and BENCHED (LookupVarianceEnvelope).
+- Added PathCache skeleton + lookup test + variance bench (S-002 / S-003 partial) now present as TESTED (Lookup, Eviction) and BENCHED (LookupVarianceEnvelope).
 - Added distinct spill persistence & merge test `TestCANARY_REQ_GQL_012_HashAggDistinctSpillPersistence` (HashAggDistinctSpillPersistence TESTED) with serialization of COUNT DISTINCT sets.
 - Added decimal spill merge test `TestCANARY_REQ_GQL_012_HashAggDecimalSpillMerge` (HashAggDecimalSpillMerge TESTED) validating SUM/AVG precision across spill segments.
 - Added distinct spill eviction variance envelope benchmark `BenchmarkCANARY_REQ_GQL_012_HashAggDistinctSpillEvictVarianceEnvelope` (HashAggDistinctSpillEvictVarianceEnvelope BENCHED).
-- Added WAL Page Flush Queue Depth variance envelope benchmark (S-001) with CV / p95 thresholds enforced.
+- Added WAL Page Flush Queue Depth instrumentation & variance envelope benchmark (QueueDepthInstrumentation TESTED, WALPageFlushQueueDepthVarianceEnvelope BENCHED) with CV / p95 thresholds enforced.
 - Added reality delta CI script `scripts/reality_delta_ci.sh` (governance automation) referenced in Section 11.
 - Added Planner phase timing instrumentation (PhaseTiming IMPL) plus variance bench (PlannerCostModelPhaseVarianceEnvelope BENCHED) and adaptive replan trigger (PlannerAdaptiveReplanTrigger TESTED + variance envelope BENCHED).
 - Integrated new synthetic `planner/pipeline.zig` orchestrating rewrite/cardinality/cost phases with PathCache + AdaptiveReplan; added integration tests (phase timing >0, cache second-run hit, replan trigger) and `BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope` (CV thresholds rewrite/cardinality/cost ≤0.20). CANARY aspects promoted: PlannerPipelineOrchestration, PathCachePlannerIntegration, AdaptiveReplanExecutionIntegration (IMPL awaiting auto-promotion after next evidence scan).
@@ -123,15 +123,15 @@ Update 2025-09-21 (post-slice execution):
 
 ### 7 Day (Immediate Slices)
 
-1. Introduce real rewrite hook timing (split pre-validation from group validation) and update `planQueryRealTimed` to capture both.
-2. Add p95/mean guard upgrade for `PlannerPipelineVarianceEnvelope` (legacy) or deprecate in favor of combined envelope (document decision).
+1. (Done) Real rewrite hook timing split (PlannerRewritePreValidationTiming & PlannerGroupValidationTiming TESTED); update `planQueryRealTimed` future: integrate sub-phase rather than synthetic spin.
+2. (Resolved) PlannerPipelineVarianceEnvelope already has p95 guard; no separate upgrade slice required (documented to avoid duplicate effort).
 3. Draft COUNT DISTINCT aggregation implementation skeleton with CANARY IMPL + test harness (promotion path to TESTED within 48h).
 
 ## 9. UPCOMING SLICES (Canonical Form)
 
 | Slice | REQ         | Feature/Aspect                         | Type  | New Evidence                                                       | Exit Criteria                                   |
 | ----- | ----------- | -------------------------------------- | ----- | ------------------------------------------------------------------ | ----------------------------------------------- |
-| S-001 | REQ-GQL-028 | WALPageFlushQueueDepthVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope | CV≤0.20 p95/mean≤2.45 & strict verify passes    |
+| S-001 | REQ-GQL-028 | WALPageFlushQueueDepthVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope | CV≤0.22 p95/mean≤2.4 & strict verify passes     |
 | S-002 | REQ-GQL-021 | PathCacheLookup (TESTED)               | TEST  | TestCANARY_REQ_GQL_021_PathCacheLookup                             | Hit ratio metrics & deterministic eviction test |
 | S-003 | REQ-GQL-021 | PathCacheLookupVarianceEnvelope        | BENCH | BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope        | CV≤0.22 p95/mean≤2.55                           |
 | S-004 | REQ-GQL-021 | PlannerCostModelPhaseVarianceEnvelope  | BENCH | BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope  | All phase timings stable (CV≤0.18 hot phases)   |

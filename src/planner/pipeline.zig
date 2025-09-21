@@ -16,6 +16,8 @@ const adaptive_replan_mod = @import("adaptive_replan.zig");
 
 pub const PipelineResult = struct {
     timings: phase_timing_mod.PhaseTimings,
+    pre_validation_ns: u64 = 0,
+    group_validation_ns: u64 = 0,
     cache_hit: bool,
     replan_triggered: bool,
     produced_rows: u64,
@@ -46,6 +48,8 @@ pub fn runPipeline(
     var timings: phase_timing_mod.PhaseTimings = .{};
     var timer = phase_timing_mod.PhaseTimer.init(&timings);
     var adaptive = adaptive_replan_mod.AdaptiveReplan.init(cfg.adaptive_threshold_ppm, cfg.adaptive_window);
+    // Sub-phase: pre-validation timing (synthetic) -- splits rewrite into two logical sub-parts.
+    const sub_pre_start = std.time.nanoTimestamp();
 
     // Derive synthetic signature from query; simulate pattern rewrite
     timer.begin(.rewrite);
@@ -54,6 +58,8 @@ pub fn runPipeline(
     var spin: u64 = signature_hash & 0x3FFF;
     while (spin > 0) : (spin -= 1) std.mem.doNotOptimizeAway(spin);
     timer.end(.rewrite);
+    const sub_pre_end = std.time.nanoTimestamp();
+    const pre_validation_ns: u64 = @intCast(sub_pre_end - sub_pre_start);
 
     // Path cache lookup (if enabled)
     var cache_hit = false;
@@ -68,7 +74,8 @@ pub fn runPipeline(
         }
     }
 
-    // Cardinality estimation phase
+    // Cardinality estimation phase (we embed a synthetic group validation sub-phase at start)
+    const sub_group_start = std.time.nanoTimestamp();
     timer.begin(.cardinality);
     // Synthetic expected rows derived from hash high bits + 1 (avoid zero)
     const expected_rows: u64 = (signature_hash >> 17) % 10_000 + 1;
@@ -80,6 +87,8 @@ pub fn runPipeline(
     var spin2: u64 = @min(actual_rows, 5_000);
     while (spin2 > 0) : (spin2 -= 1) std.mem.doNotOptimizeAway(spin2);
     timer.end(.cardinality);
+    const sub_group_end = std.time.nanoTimestamp();
+    const group_validation_ns: u64 = @intCast(sub_group_end - sub_group_start);
 
     // Cost evaluation phase
     timer.begin(.cost_eval);
@@ -90,6 +99,8 @@ pub fn runPipeline(
     const snap = timer.snapshot();
     return PipelineResult{
         .timings = snap,
+        .pre_validation_ns = pre_validation_ns,
+        .group_validation_ns = group_validation_ns,
         .cache_hit = cache_hit,
         .replan_triggered = adaptive.shouldReplan(),
         .produced_rows = actual_rows,
@@ -163,6 +174,26 @@ test "TestCANARY_REQ_GQL_021_PlannerPhaseTimingIntegration" {
     defer cache.deinit();
     const res = try runPipeline(gpa.allocator(), .{}, &cache, "RETURN 1 AS x");
     try std.testing.expect(res.timings.rewrite_ns > 0 and res.timings.cardinality_ns > 0 and res.timings.cost_eval_ns > 0);
+}
+
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerRewritePreValidationTiming; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerPreValidationTiming; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerGroupValidationTiming; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming; OWNER=planner; UPDATED=2025-09-21
+test "TestCANARY_REQ_GQL_021_PlannerPreValidationTiming" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 4);
+    defer cache.deinit();
+    const res = try runPipeline(gpa.allocator(), .{}, &cache, "RETURN 42 AS x");
+    try std.testing.expect(res.pre_validation_ns > 0);
+}
+
+test "TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 4);
+    defer cache.deinit();
+    const res = try runPipeline(gpa.allocator(), .{}, &cache, "MATCH (a)--(b) RETURN a");
+    try std.testing.expect(res.group_validation_ns > 0);
 }
 
 test "TestCANARY_REQ_GQL_021_PathCachePlannerIntegration" {

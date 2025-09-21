@@ -1344,25 +1344,48 @@ pub const HashAggregator = struct {
             dst.Avg.sum.Int += src.Avg.sum.Int;
             dst.Avg.count += src.Avg.count;
         } else if (dst.* == .CountDistinctState and src == .CountDistinctState) {
-            // merge sets: append new distinct encodings not already present (naive O(n^2) acceptable for spill path scale here)
+            // Precise merge: build a temporary open-addressed hash set of existing + incoming values.
+            // Recompute exact distinct count; avoid over-estimation.
             const existing = dst.CountDistinctState.values;
-            var i: usize = 0;
-            while (i < src.CountDistinctState.values.len) : (i += 1) {
-                const v = src.CountDistinctState.values[i];
-                var found = false;
-                var j: usize = 0;
-                while (j < existing.len) : (j += 1) if (std.mem.eql(u8, existing[j], v)) {
-                    found = true;
-                    break;
-                };
-                if (!found) {
-                    // NOTE: we reuse allocator from dst later; for now skip deep copy (assume value slices owned by src and freed after merge). For safety clone.
-                    const dup = std.heap.page_allocator.alloc(u8, v.len) catch continue;
-                    @memcpy(dup, v);
-                    // Expand array manually (cannot append to unknown underlying slice). For simplicity, skip if capacity constraints.
+            const incoming = src.CountDistinctState.values;
+            var cap: usize = 16;
+            const need = existing.len + incoming.len;
+            while (cap < need * 2) cap <<= 1; // load factor <=0.5
+            const SetEntry = struct { hash: u64, val: []const u8 };
+            const set = std.heap.page_allocator.alloc(?SetEntry, cap) catch return;
+            defer std.heap.page_allocator.free(set);
+            @memset(set, null);
+            const mask = cap - 1;
+            var new_vals = std.ArrayList([]const u8).init(std.heap.page_allocator);
+            defer new_vals.deinit();
+            var insertFn = struct {
+                fn insert(slots: []?SetEntry, slot_mask: usize, v: []const u8, store: *std.ArrayList([]const u8)) void {
+                    const h = std.hash.Wyhash.hash(0, v);
+                    var idx: usize = @intCast(h & slot_mask);
+                    while (true) {
+                        if (slots[idx] == null) {
+                            // copy value
+                            const dup = std.heap.page_allocator.alloc(u8, v.len) catch return; // best effort
+                            @memcpy(dup, v);
+                            store.append(dup) catch return;
+                            slots[idx] = SetEntry{ .hash = h, .val = dup };
+                            return;
+                        } else if (slots[idx].?.hash == h and std.mem.eql(u8, slots[idx].?.val, v)) {
+                            return; // already present
+                        }
+                        idx = (idx + 1) & slot_mask;
+                    }
                 }
-            }
-            dst.CountDistinctState.count += src.CountDistinctState.count; // counts may over-estimate if duplicates overlapped; future optimization will adjust.
+            };
+            // load existing
+            var i: usize = 0;
+            while (i < existing.len) : (i += 1) insertFn.insert(set, mask, existing[i], &new_vals);
+            // add incoming
+            i = 0;
+            while (i < incoming.len) : (i += 1) insertFn.insert(set, mask, incoming[i], &new_vals);
+            // Free old values (shallow) - NOTE: underlying alloc ownership ambiguous; skipping free to avoid double-free risk.
+            dst.CountDistinctState.values = new_vals.toOwnedSlice();
+            dst.CountDistinctState.count = @intCast(dst.CountDistinctState.values.len);
         } else if (dst.* == .DecSum and src == .DecSum) {
             if (dst.DecSum.scale == src.DecSum.scale) {
                 dst.DecSum.coeff += src.DecSum.coeff;
