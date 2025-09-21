@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T19:10:06.962099214Z",
+  "generated_at": "2025-09-21T19:41:47.780025321Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -2451,20 +2451,6 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -2477,6 +2463,20 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
