@@ -3,7 +3,7 @@ name: CANARY Verify
 on:
   pull_request:
   push:
-    branches: [ main, trunk, master ]
+    branches: [main, trunk, master]
 
 jobs:
   canary:
@@ -19,3 +19,11 @@ jobs:
         run: ./bin/canaryscan --root . --out status.json --csv status.csv
       - name: Verify GAP + Strict freshness
         run: ./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
+      - name: Reality Delta CI Gate
+        run: |
+          if [ -x scripts/reality_delta_ci.sh ]; then
+            bash scripts/reality_delta_ci.sh
+          else
+            echo "scripts/reality_delta_ci.sh missing or not executable" >&2
+            exit 1
+          fi

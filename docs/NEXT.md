@@ -83,6 +83,15 @@ From latest scan (see `status.json`):
 
 Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, PlannerRewritePass, PlannerCardinalityEstimate, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic.
 
+Update 2025-09-21 (post-slice execution):
+
+- Added PathCache skeleton + lookup test + variance bench (S-002 / S-003 partial) now present as TESTED (Lookup) and BENCHED (LookupVarianceEnvelope).
+- Added WAL Page Flush Queue Depth variance envelope benchmark (S-001) with CV / p95 thresholds enforced.
+- Added reality delta CI script `scripts/reality_delta_ci.sh` (governance automation) referenced in Section 11.
+- Added Planner phase timing instrumentation (PhaseTiming IMPL) plus variance bench (PlannerCostModelPhaseVarianceEnvelope BENCHED) and adaptive replan trigger (PlannerAdaptiveReplanTrigger TESTED + variance envelope BENCHED).
+- Integrated new synthetic `planner/pipeline.zig` orchestrating rewrite/cardinality/cost phases with PathCache + AdaptiveReplan; added integration tests (phase timing >0, cache second-run hit, replan trigger) and `BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope` (CV thresholds rewrite/cardinality/cost ≤0.20). CANARY aspects promoted: PlannerPipelineOrchestration, PathCachePlannerIntegration, AdaptiveReplanExecutionIntegration (IMPL awaiting auto-promotion after next evidence scan).
+  - Promotions completed (now BENCHED) after evidence scan; added `planQueryWithPipeline` wrapper integrating real `planQuery` legality check with instrumentation plus wrapper test `TestCANARY_REQ_GQL_021_PlannerPipelineWrapperIntegration`.
+
 ## 8. ROLLING PLAN (30 / 14 / 7 Day)
 
 ### 30 Day (Thematic)
@@ -131,6 +140,8 @@ Deviations require explicit doc note + CANARY comment `// VARIANCE_EXCEPTION: re
 ## 11. AUTOMATION & GOVERNANCE
 
 Pipelines enforce: freshness, variance, over-claim, reality delta, and (soon) slice naming pattern `S-###`. Failure in any gate blocks merge.
+
+New: `scripts/reality_delta_ci.sh` validates `IMPLEMENTATION_REALITY.md` numeric counts against live CANARY scan (`status.json`) and fails on divergence (exit 2 with REALITY_DELTA_FAIL message).
 
 ## 12. PR CHECKLIST (Operational)
 
