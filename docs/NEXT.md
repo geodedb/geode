@@ -17,7 +17,7 @@ Recent BENCH promotions include: Dijkstra, Biconnected Components, Bridges/Artic
 
 Objectives:
 
-1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- IMPLEMENTED (28 guards landed): GreyCardinalComposite, TxnConflictMatrix, SSIPhantomPrevention, PageRank, Betweenness, PropertyAccessHotPath, PathExpandBreadth, Closeness, Eigenvector, CDCApplyBatchLatency, WALAdaptivePolicyLatency, MVCCRepairThroughput, GraphBuilderThroughput, ConstraintPerfVariance, WalCompactionVariance, TenantRegistryVariance, GPUFlaggerEnumerationVariance, UniquePerfVarianceEnvelope, WALFlushBatchVarianceEnvelope, PlannerRewritePassVarianceEnvelope, SetOpDistinctDedupVarianceEnvelope, TDERotationVarianceEnvelope, PathExpansionHeuristicVarianceEnvelope, WALIOThrottleVarianceEnvelope, QueryPlanCacheEvictVarianceEnvelope, MVCCVersionPruneVarianceEnvelope, CDCWatermarkAdvanceVarianceEnvelope, EncryptionKeyDeriveVarianceEnvelope.
+1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- IMPLEMENTED (32 guards landed): GreyCardinalComposite, TxnConflictMatrix, SSIPhantomPrevention, PageRank, Betweenness, PropertyAccessHotPath, PathExpandBreadth, Closeness, Eigenvector, CDCApplyBatchLatency, WALAdaptivePolicyLatency, MVCCRepairThroughput, GraphBuilderThroughput, ConstraintPerfVariance, WalCompactionVariance, TenantRegistryVariance, GPUFlaggerEnumerationVariance, UniquePerfVarianceEnvelope, WALFlushBatchVarianceEnvelope, PlannerRewritePassVarianceEnvelope, SetOpDistinctDedupVarianceEnvelope, TDERotationVarianceEnvelope, PathExpansionHeuristicVarianceEnvelope, WALIOThrottleVarianceEnvelope, QueryPlanCacheEvictVarianceEnvelope, MVCCVersionPruneVarianceEnvelope, CDCWatermarkAdvanceVarianceEnvelope, EncryptionKeyDeriveVarianceEnvelope, GreyCardinalCompositeMetricBreakdownVarianceEnvelope, PlannerCardinalityEstimateVarianceEnvelope, CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope, WALSegmentRecycleLatencyVarianceEnvelope.
 2. Freshness guard: pre-empt staleness by flagging UPDATED dates approaching 50 days. -- Tool implemented (StatusFreshnessGuard) monitoring WARN>=50 FAIL>=60 days.
 3. Hardening: WAL failure injection, Raft partition simulation, CDC adaptive threshold jitter tests.
 4. Documentation linking: auto-generate summary deltas into `IMPLEMENTATION_REALITY.md`.
@@ -86,15 +86,14 @@ Result: Trie + KMP added; remaining STUB aspects focus on advanced DOT, Yen K-sh
 
 ### Variance Envelopes Expansion Status
 
-All initially proposed expansion envelopes have now landed (total 28). Next potential candidates for future variance guarding (not yet implemented, exploratory):
+All initially proposed expansion envelopes plus optional extensions have now landed (total 32). Next potential candidates for future variance guarding (not yet implemented, exploratory):
 
-1. GreyCardinalCompositeMetricBreakdownVarianceEnvelope – per-metric decomposition stability.
-2. CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope – decision path latency stabilization.
-3. WALSegmentRecycleLatencyVarianceEnvelope – latency of recycled segment preparation.
-4. PlannerCardinalityEstimateVarianceEnvelope – variance in heuristic cardinality estimator.
-5. PathCacheLookupVarianceEnvelope – path cache hit/miss resolution jitter.
+1. PathCacheLookupVarianceEnvelope – path cache hit/miss resolution jitter (pending PathCache implementation).
+2. WALPageFlushQueueDepthVarianceEnvelope – queue depth stabilization for pending flush pages.
+3. PlannerCostModelPhaseVarianceEnvelope – per-phase cost model stability (new candidate).
+4. PlannerAdaptiveReplanVarianceEnvelope – variance on adaptive re-planning trigger latency (stretch).
 
-Next Candidate Slice: Evaluate feasibility of GreyCardinalComposite per-metric variance breakdown vs. Planner cardinality estimation guard; select one for guarded implementation.
+Next Candidate Slice: WALPageFlushQueueDepthVarianceEnvelope (storage queue dynamics) OR PathCacheLookupVarianceEnvelope once cache implemented.
 
 ## Verification Commands
 
