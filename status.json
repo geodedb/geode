@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T18:48:18.289132135Z",
+  "generated_at": "2025-09-21T19:10:06.962099214Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -728,6 +728,54 @@
       "id": "REQ-GQL-021",
       "features": [
         {
+          "feature": "PathCache",
+          "aspect": "PathCacheCore",
+          "status": "BENCHED",
+          "files": [
+            "src/planner/path_cache.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheLookup"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheLookup",
+          "status": "BENCHED",
+          "files": [
+            "tests/test_path_cache_lookup.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheLookup"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheLookupVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_cache_lookup_variance.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheLookup"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
           "feature": "Query Planner",
           "aspect": "PlannerCardinalityEstimateVarianceEnvelope",
           "status": "BENCHED",
@@ -946,6 +994,36 @@
           "tests": [],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_028_WALIOThrottleVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "WAL Page Flush Queue Depth",
+          "aspect": "QueueDepthInstrumentation",
+          "status": "BENCHED",
+          "files": [
+            "src/storage/wal_queue_depth.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_WALPageFlushQueueDepthInstrumentation"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "WAL Page Flush Queue Depth",
+          "aspect": "WALPageFlushQueueDepthVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_wal_page_flush_queue_depth_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope"
           ],
           "owner": "storage",
           "updated": "2025-09-21"
@@ -1437,20 +1515,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_cdc_adaptive_diff_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
-          ],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "TESTED",
           "files": [
             "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
@@ -1459,6 +1523,20 @@
             "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_diff_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -2373,6 +2451,20 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -2385,20 +2477,6 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -2538,20 +2616,6 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -2562,6 +2626,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -2698,7 +2776,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -2714,7 +2792,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -3157,20 +3235,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -3181,6 +3245,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -3238,22 +3316,6 @@
         },
         {
           "feature": "Name",
-          "aspect": "Aspect",
-          "status": "BENCHED",
-          "files": [
-            "docs/NEXT.md"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_XXX_Feature"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_XXX_Feature"
-          ],
-          "owner": "team",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Name",
           "aspect": "Component",
           "status": "TESTED",
           "files": [
@@ -3271,7 +3333,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 107,
+      "BENCHED": 111,
       "TESTED": 103
     },
     "by_aspect": {
@@ -3285,7 +3347,6 @@
       "AdaptiveFlush": 1,
       "AdaptiveJitterThresholds": 1,
       "AdaptiveStressHarness": 1,
-      "Aspect": 1,
       "BFS": 2,
       "Backpressure": 1,
       "BackpressureAdaptive": 1,
@@ -3364,6 +3425,9 @@
       "PageRankVarianceEnvelope": 1,
       "Parser": 3,
       "PartialRollbackMechanism": 1,
+      "PathCacheCore": 1,
+      "PathCacheLookup": 1,
+      "PathCacheLookupVarianceEnvelope": 1,
       "PathCyclePruningPerf": 1,
       "PathExpandBreadthVarianceEnvelope": 1,
       "PathExpandMemPerf": 1,
@@ -3380,6 +3444,7 @@
       "Prim": 1,
       "PropertyAccessHotPathVarianceEnvelope": 1,
       "QueryPlanCacheEvictVarianceEnvelope": 1,
+      "QueueDepthInstrumentation": 1,
       "RaftPartitionSimulation": 1,
       "Refactor": 1,
       "RepairThroughputBench": 1,
@@ -3409,6 +3474,7 @@
       "UnweightedBFSPaths": 2,
       "WALFlushBatchVarianceEnvelope": 1,
       "WALIOThrottleVarianceEnvelope": 1,
+      "WALPageFlushQueueDepthVarianceEnvelope": 1,
       "WALSegmentRecycleLatencyVarianceEnvelope": 1,
       "WALTail": 1,
       "WALTailDisabled": 1,

@@ -80,7 +80,7 @@ pub const RpcClient = struct {
     allocator: Allocator,
     peer_address: net.Address,
     connection: ?net.Stream,
-    
+
     pub fn sendMessage(self: *RpcClient, msg: Message) !void {
         _ = self;
         _ = msg;
@@ -92,18 +92,18 @@ pub const RpcClient = struct {
 pub const Transport = struct {
     allocator: Allocator,
     socket: ?net.Server,
-    
+
     pub fn init(allocator: Allocator) Transport {
         return .{
             .allocator = allocator,
             .socket = null,
         };
     }
-    
+
     pub fn deinit(self: *Transport) void {
         if (self.socket) |*s| s.deinit();
     }
-    
+
     pub fn send(self: *Transport, address: net.Address, data: []const u8) !void {
         _ = self;
         _ = address;
@@ -119,7 +119,7 @@ pub const PersistentStorage = struct {
     current_term_file: ?std.fs.File,
     voted_for_file: ?std.fs.File,
     log_file: ?std.fs.File,
-    
+
     pub fn init(allocator: Allocator, data_dir: []const u8) !PersistentStorage {
         return PersistentStorage{
             .allocator = allocator,
@@ -129,39 +129,39 @@ pub const PersistentStorage = struct {
             .log_file = null,
         };
     }
-    
+
     pub fn close(self: *PersistentStorage) void {
         if (self.current_term_file) |f| f.close();
         if (self.voted_for_file) |f| f.close();
         if (self.log_file) |f| f.close();
     }
-    
+
     pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
         _ = self;
         return null; // Implementation would read from file
     }
-    
+
     pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
         _ = self;
         _ = term;
     }
-    
+
     pub fn getVotedFor(self: *PersistentStorage) !?u64 {
         _ = self;
         return null;
     }
-    
+
     pub fn saveVotedFor(self: *PersistentStorage, node_id: ?u64) !void {
         _ = self;
         _ = node_id;
     }
-    
+
     pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) ![]LogEntry {
         _ = self;
         _ = allocator;
         return &[_]LogEntry{};
     }
-    
+
     pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
         _ = self;
         _ = entry;
@@ -183,7 +183,7 @@ pub const RequestVote = struct {
     candidate_id: u64,
     last_log_index: u64,
     last_log_term: u64,
-    pre_vote: bool,  // Pre-vote optimization
+    pre_vote: bool, // Pre-vote optimization
 };
 
 pub const RequestVoteResponse = struct {
@@ -268,7 +268,7 @@ pub const RaftNode = struct {
         election_timeout_ms: u64,
     ) !RaftNode {
         const log_list = try std.ArrayList(LogEntry).initCapacity(allocator, 10);
-        
+
         var node = RaftNode{
             .allocator = allocator,
             .id = id,
@@ -334,7 +334,7 @@ pub const RaftNode = struct {
 
     pub fn setStorage(self: *RaftNode, storage: *PersistentStorage) !void {
         self.storage = storage;
-        
+
         // Restore persistent state
         if (try storage.getCurrentTerm()) |term| {
             self.current_term = term;
@@ -342,11 +342,11 @@ pub const RaftNode = struct {
         if (try storage.getVotedFor()) |voted| {
             self.voted_for = voted;
         }
-        
+
         // Restore log entries
         const entries = try storage.getLogEntries(self.allocator);
         defer self.allocator.free(entries);
-        
+
         self.log.clearRetainingCapacity();
         for (entries) |entry| {
             try self.log.append(self.allocator, entry);
@@ -366,7 +366,7 @@ pub const RaftNode = struct {
 
     pub fn tick(self: *RaftNode) !void {
         if (self.state == .shutdown) return;
-        
+
         const now = std.time.milliTimestamp();
 
         switch (self.state) {
@@ -388,7 +388,7 @@ pub const RaftNode = struct {
                     self.last_heartbeat = now;
                     self.stats.heartbeats_sent += @as(u64, @intCast(self.peers.len));
                 }
-                
+
                 // Check for dead peers
                 for (self.peers) |*peer| {
                     if (peer.id == self.id) continue;
@@ -402,7 +402,7 @@ pub const RaftNode = struct {
             },
             .shutdown => {},
         }
-        
+
         // Apply committed entries
         try self.applyCommittedEntries();
     }
@@ -424,19 +424,15 @@ pub const RaftNode = struct {
         self.voted_for = self.id;
         self.election_round += 1;
         self.resetElectionTimer();
-        
+
         // Persist state
         if (self.storage) |storage| {
             try storage.saveCurrentTerm(self.current_term);
             try storage.saveVotedFor(self.voted_for);
         }
 
-        log.info("Node {} starting election for term {} (round {})", .{ 
-            self.id, 
-            self.current_term, 
-            self.election_round 
-        });
-        
+        log.info("Node {} starting election for term {} (round {})", .{ self.id, self.current_term, self.election_round });
+
         self.stats.elections_called += 1;
 
         // Clear previous votes and vote for self
@@ -489,7 +485,7 @@ pub const RaftNode = struct {
         // Initialize leader state
         if (self.next_index) |*ni| ni.deinit();
         if (self.match_index) |*mi| mi.deinit();
-        
+
         self.next_index = std.AutoHashMap(u64, u64).init(self.allocator);
         self.match_index = std.AutoHashMap(u64, u64).init(self.allocator);
 
@@ -510,12 +506,12 @@ pub const RaftNode = struct {
             .client_id = null,
             .serial_number = null,
         };
-        
+
         try self.log.append(self.allocator, noop_entry);
         if (self.storage) |storage| {
             try storage.appendLogEntry(noop_entry);
         }
-        
+
         self.stats.entries_appended += 1;
 
         // Send initial heartbeat with noop
@@ -551,7 +547,7 @@ pub const RaftNode = struct {
             self.current_term = rv.term;
             self.state = .follower;
             self.voted_for = null;
-            
+
             if (self.storage) |storage| {
                 try storage.saveCurrentTerm(self.current_term);
                 try storage.saveVotedFor(null);
@@ -571,11 +567,11 @@ pub const RaftNode = struct {
                 vote_granted = true;
                 self.voted_for = rv.candidate_id;
                 self.resetElectionTimer();
-                
+
                 if (self.storage) |storage| {
                     try storage.saveVotedFor(rv.candidate_id);
                 }
-                
+
                 reason = "log up-to-date";
             } else {
                 reason = "log not up-to-date";
@@ -612,7 +608,7 @@ pub const RaftNode = struct {
             self.state = .follower;
             self.voted_for = null;
             self.stats.elections_lost += 1;
-            
+
             if (self.storage) |storage| {
                 try storage.saveCurrentTerm(self.current_term);
                 try storage.saveVotedFor(null);
@@ -626,17 +622,17 @@ pub const RaftNode = struct {
 
         if (rvr.vote_granted) {
             try self.votes_received.put(rvr.voter_id, true);
-            
+
             // Count votes
             var votes: u64 = 0;
             var iter = self.votes_received.iterator();
             while (iter.next()) |entry| {
                 if (entry.value_ptr.*) votes += 1;
             }
-            
+
             const alive_peers = self.countAlivePeers();
             const majority = (alive_peers / 2) + 1;
-            
+
             log.debug("Node {} has {} votes out of {} needed for majority", .{
                 self.id,
                 votes,
@@ -649,7 +645,7 @@ pub const RaftNode = struct {
         } else {
             try self.votes_received.put(rvr.voter_id, false);
         }
-        
+
         // Mark peer as alive
         if (self.getPeer(from)) |peer| {
             peer.alive = true;
@@ -789,7 +785,7 @@ pub const RaftNode = struct {
             if (self.apply_callback) |callback| {
                 _ = try callback(self.allocator, entry.command);
             }
-            
+
             self.stats.entries_applied += 1;
             log.info("Applied entry with index {}", .{self.last_applied});
         }
@@ -815,11 +811,11 @@ pub const RaftNode = struct {
 
     fn sendMessage(self: *RaftNode, peer: Peer, msg: Message) !void {
         if (!peer.alive) return;
-        
+
         if (self.transport) |transport| {
             // TODO: Implement proper serialization
             const dummy_data = "message";
-            
+
             transport.send(peer.address, dummy_data) catch |err| {
                 log.warn("Failed to send message to peer {}: {}", .{ peer.id, err });
                 // Don't mark peer as dead immediately, could be transient
@@ -879,12 +875,12 @@ pub const RaftNode = struct {
         if (self.storage) |storage| {
             try storage.appendLogEntry(entry);
         }
-        
+
         self.stats.entries_appended += 1;
 
         // Send to followers immediately
         try self.replicateEntry(entry.index);
-        
+
         return entry.index;
     }
 
@@ -894,7 +890,7 @@ pub const RaftNode = struct {
             if (!peer.alive) continue;
 
             const next_idx = self.next_index.?.get(peer.id) orelse 1;
-            
+
             // Only send if this peer needs this entry
             if (next_idx <= index) {
                 try self.sendAppendEntriesToPeer(peer);
@@ -937,16 +933,16 @@ pub const RaftNode = struct {
 test "raft initialization" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
         .{ .id = 2, .address = try net.Address.parseIp("127.0.0.1", 8002), .alive = true, .last_contact = 0, .rpc_client = null },
         .{ .id = 3, .address = try net.Address.parseIp("127.0.0.1", 8003), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     try testing.expect(node.state == .follower);
     try testing.expect(node.current_term == 0);
     try testing.expect(node.voted_for == null);
@@ -958,17 +954,17 @@ test "raft initialization" {
 test "raft single node becomes leader" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     // Start election
     try node.startElection();
-    
+
     try testing.expect(node.state == .leader);
     try testing.expect(node.current_term == 1);
     try testing.expect(node.voted_for == 1);
@@ -978,23 +974,23 @@ test "raft single node becomes leader" {
 test "raft propose command as leader" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     // Become leader
     try node.startElection();
     try testing.expect(node.state == .leader);
-    
+
     // Propose a command
     const cmd = Command{ .write = "test data" };
     const index = try node.propose(cmd);
-    
-    try testing.expect(index == 2); // Index 0: init noop, 1: leader noop, 2: our command  
+
+    try testing.expect(index == 2); // Index 0: init noop, 1: leader noop, 2: our command
     try testing.expect(node.log.items.len == 3);
     try testing.expect(node.stats.entries_appended == 2);
 }
@@ -1002,15 +998,15 @@ test "raft propose command as leader" {
 test "raft request vote logic" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
         .{ .id = 2, .address = try net.Address.parseIp("127.0.0.1", 8002), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     // Test vote request with higher term
     const vote_req = RequestVote{
         .term = 2,
@@ -1019,9 +1015,9 @@ test "raft request vote logic" {
         .last_log_term = 0,
         .pre_vote = false,
     };
-    
+
     try node.handleRequestVote(vote_req, 2);
-    
+
     // Should update term and grant vote
     try testing.expect(node.current_term == 2);
     try testing.expect(node.state == .follower);
@@ -1031,15 +1027,15 @@ test "raft request vote logic" {
 test "raft append entries as follower" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
         .{ .id = 2, .address = try net.Address.parseIp("127.0.0.1", 8002), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     // Create append entries from leader
     var entries = [_]LogEntry{
         .{
@@ -1051,7 +1047,7 @@ test "raft append entries as follower" {
             .serial_number = null,
         },
     };
-    
+
     const append_req = AppendEntries{
         .term = 1,
         .leader_id = 2,
@@ -1060,9 +1056,9 @@ test "raft append entries as follower" {
         .entries = &entries,
         .leader_commit = 0,
     };
-    
+
     try node.handleAppendEntries(append_req, 2);
-    
+
     // Should accept entries
     try testing.expect(node.current_term == 1);
     try testing.expect(node.state == .follower);
@@ -1072,24 +1068,24 @@ test "raft append entries as follower" {
 test "raft deduplication of client requests" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     // Become leader
     try node.startElection();
-    
+
     // Propose command with client info
     const cmd = Command{ .write = "test data" };
     const index1 = try node.proposeWithClientInfo(cmd, 100, 1);
-    
+
     // Try to propose same command again (should return same index)
     const index2 = try node.proposeWithClientInfo(cmd, 100, 1);
-    
+
     try testing.expect(index1 == index2);
     try testing.expect(node.log.items.len == 3); // Not 4, because duplicate was detected
 }
@@ -1097,21 +1093,21 @@ test "raft deduplication of client requests" {
 test "raft statistics tracking" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    
+
     var peers = [_]Peer{
         .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
     };
-    
+
     var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
-    
+
     // Initial stats
     try testing.expect(node.stats.elections_called == 0);
     try testing.expect(node.stats.elections_won == 0);
-    
+
     // Start election
     try node.startElection();
-    
+
     try testing.expect(node.stats.elections_called == 1);
     try testing.expect(node.stats.elections_won == 1);
     try testing.expect(node.stats.entries_appended == 1); // Leader noop

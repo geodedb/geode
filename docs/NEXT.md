@@ -18,68 +18,68 @@ Sustain fully evidence-backed GQL conformance while hardening runtime determinis
 
 Each slice MUST:
 
-* Add ≥1 new CANARY line (STATUS=TESTED or BENCHED) with UPDATED=today.
-* Introduce exactly one aspect promotion per requirement (avoid multi‑aspect hidden bundling).
-* Provide test name `TestCANARY_REQ_GQL_<id>_<Aspect>`; bench (if any) `BenchmarkCANARY_REQ_GQL_<id>_<Aspect>`.
-* Pass: `./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`.
-* If variance guard: assert (a) CV ≤ 0.22 (unless documented exception), (b) p95/mean ≤ 2.55.
-* If introducing performance envelope on existing BENCHED aspect, show prior baseline JSON delta in PR description (auto-generated script accepted).
+- Add ≥1 new CANARY line (STATUS=TESTED or BENCHED) with UPDATED=today.
+- Introduce exactly one aspect promotion per requirement (avoid multi‑aspect hidden bundling).
+- Provide test name `TestCANARY_REQ_GQL_<id>_<Aspect>`; bench (if any) `BenchmarkCANARY_REQ_GQL_<id>_<Aspect>`.
+- Pass: `./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`.
+- If variance guard: assert (a) CV ≤ 0.22 (unless documented exception), (b) p95/mean ≤ 2.55.
+- If introducing performance envelope on existing BENCHED aspect, show prior baseline JSON delta in PR description (auto-generated script accepted).
 
 ## 3. ISO REFERENCES (Anchor Catalog — paraphrased)
 
-| Theme | ISO Clause Anchor | Paraphrased Intent |
-|-------|-------------------|--------------------|
-| Pagination legality | §16.18–16.19 | ORDER required for deterministic pagination unless impl-defined override flagged. |
-| Diagnostics precedence | §23.x | Highest precedence diagnostic reported; others folded with code list. |
-| Conformance profile | §24.x | Declare minimum + optional feature set; flag extensions. |
-| Set operations DISTINCT | §14.x | Duplicate elimination semantics governed by binding table equivalence. |
-| Transaction isolation | §8.x | Serializable isolation: prevent phantoms & write skew (SSI instrumentation). |
+| Theme                   | ISO Clause Anchor | Paraphrased Intent                                                                |
+| ----------------------- | ----------------- | --------------------------------------------------------------------------------- |
+| Pagination legality     | §16.18–16.19      | ORDER required for deterministic pagination unless impl-defined override flagged. |
+| Diagnostics precedence  | §23.x             | Highest precedence diagnostic reported; others folded with code list.             |
+| Conformance profile     | §24.x             | Declare minimum + optional feature set; flag extensions.                          |
+| Set operations DISTINCT | §14.x             | Duplicate elimination semantics governed by binding table equivalence.            |
+| Transaction isolation   | §8.x              | Serializable isolation: prevent phantoms & write skew (SSI instrumentation).      |
 
 ## 4. DEPS / BLOCKERS
 
-| Dependency | Needed For | Status | Risk | Mitigation |
-|------------|-----------|--------|------|-----------|
-| Deterministic monotonic time shim | Stable variance benches (Planner, WAL) | Present | Low | Already used (std.time). |
-| PathCache index structure | PathCache variance envelope | Missing | Med | Implement minimal LRU map (seeded hash). |
-| Queue depth instrumentation in WAL flush scheduler | WALPageFlushQueueDepthVarianceEnvelope | Missing | Med | Add atomic counter + sampling hook. |
-| Planner phase timing hooks | CostModelPhase variance | Partial | Low | Insert timers around rewrite & cardinality loops. |
-| ImplementationReality delta tool CI step | Drift prevention | Implemented (tool exists) | Low | Wire into pipeline. |
+| Dependency                                         | Needed For                             | Status                    | Risk | Mitigation                                        |
+| -------------------------------------------------- | -------------------------------------- | ------------------------- | ---- | ------------------------------------------------- |
+| Deterministic monotonic time shim                  | Stable variance benches (Planner, WAL) | Present                   | Low  | Already used (std.time).                          |
+| PathCache index structure                          | PathCache variance envelope            | Missing                   | Med  | Implement minimal LRU map (seeded hash).          |
+| Queue depth instrumentation in WAL flush scheduler | WALPageFlushQueueDepthVarianceEnvelope | Missing                   | Med  | Add atomic counter + sampling hook.               |
+| Planner phase timing hooks                         | CostModelPhase variance                | Partial                   | Low  | Insert timers around rewrite & cardinality loops. |
+| ImplementationReality delta tool CI step           | Drift prevention                       | Implemented (tool exists) | Low  | Wire into pipeline.                               |
 
 ## 5. SCOPE (In / Out)
 
 IN:
 
-* Variance envelopes: WAL flush queue depth, planner cost model phase, adaptive replan trigger, path cache lookup.
-* PathCache (read-mostly, size-bounded, eviction metric) minimal version.
-* Recovery corruption latency probe (optional bench if instability detected).
-* Automation: reality delta CI gate.
+- Variance envelopes: WAL flush queue depth, planner cost model phase, adaptive replan trigger, path cache lookup.
+- PathCache (read-mostly, size-bounded, eviction metric) minimal version.
+- Recovery corruption latency probe (optional bench if instability detected).
+- Automation: reality delta CI gate.
 
 OUT (Future Release):
 
-* Full distributed (multi-leader) consensus paths.
-* GPU operator kernels (beyond flagger).
-* Cross-shard 2PC executor.
-* Advanced multi-key TDE rotation scheduling.
+- Full distributed (multi-leader) consensus paths.
+- GPU operator kernels (beyond flagger).
+- Cross-shard 2PC executor.
+- Advanced multi-key TDE rotation scheduling.
 
 ## 6. DRI / OWNERS
 
-| Area | Owner | Backup |
-|------|-------|--------|
-| Storage (WAL, queue) | storage | engine |
-| Planner variance & phases | planner | engine |
-| PathCache | planner | engine |
-| CDC adaptive heuristics | cdc | streaming |
-| Freshness / Reality tooling | tooling | infra |
-| Constraints perf | schema | engine |
+| Area                        | Owner   | Backup    |
+| --------------------------- | ------- | --------- |
+| Storage (WAL, queue)        | storage | engine    |
+| Planner variance & phases   | planner | engine    |
+| PathCache                   | planner | engine    |
+| CDC adaptive heuristics     | cdc     | streaming |
+| Freshness / Reality tooling | tooling | infra     |
+| Constraints perf            | schema  | engine    |
 
 ## 7. CURRENT EVIDENCE SNAPSHOT
 
 From latest scan (see `status.json`):
 
-* BENCHED aspects: 85
-* TESTED (non-BENCHED): 107
-* STUB/IMPL: 0
-* Variance Guards Landed: 32 (all passing thresholds)
+- BENCHED aspects: 85
+- TESTED (non-BENCHED): 107
+- STUB/IMPL: 0
+- Variance Guards Landed: 32 (all passing thresholds)
 
 Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, PlannerRewritePass, PlannerCardinalityEstimate, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic.
 
@@ -107,24 +107,24 @@ Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycl
 
 ## 9. UPCOMING SLICES (Canonical Form)
 
-| Slice | REQ | Feature/Aspect | Type | New Evidence | Exit Criteria |
-|-------|-----|----------------|------|--------------|---------------|
-| S-001 | REQ-GQL-028 | WALPageFlushQueueDepthVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope | CV≤0.20 p95/mean≤2.45 & strict verify passes |
-| S-002 | REQ-GQL-021 | PathCacheLookup (TESTED) | TEST | TestCANARY_REQ_GQL_021_PathCacheLookup | Hit ratio metrics & deterministic eviction test |
-| S-003 | REQ-GQL-021 | PathCacheLookupVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope | CV≤0.22 p95/mean≤2.55 |
-| S-004 | REQ-GQL-021 | PlannerCostModelPhaseVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope | All phase timings stable (CV≤0.18 hot phases) |
-| S-005 | REQ-GQL-021 | PlannerAdaptiveReplanTrigger (TESTED) | TEST | TestCANARY_REQ_GQL_021_AdaptiveReplanTrigger | Deterministic replan threshold test |
-| S-006 | REQ-GQL-021 | PlannerAdaptiveReplanVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope | Trigger latency CV≤0.22 |
-| S-007 | REQ-GQL-028 | CorruptRecoveryLatency (optional) | BENCH | BenchmarkCANARY_REQ_GQL_028_CorruptRecoveryLatency | Only if CV>0.20 observed in probe |
+| Slice | REQ         | Feature/Aspect                         | Type  | New Evidence                                                       | Exit Criteria                                   |
+| ----- | ----------- | -------------------------------------- | ----- | ------------------------------------------------------------------ | ----------------------------------------------- |
+| S-001 | REQ-GQL-028 | WALPageFlushQueueDepthVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope | CV≤0.20 p95/mean≤2.45 & strict verify passes    |
+| S-002 | REQ-GQL-021 | PathCacheLookup (TESTED)               | TEST  | TestCANARY_REQ_GQL_021_PathCacheLookup                             | Hit ratio metrics & deterministic eviction test |
+| S-003 | REQ-GQL-021 | PathCacheLookupVarianceEnvelope        | BENCH | BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope        | CV≤0.22 p95/mean≤2.55                           |
+| S-004 | REQ-GQL-021 | PlannerCostModelPhaseVarianceEnvelope  | BENCH | BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope  | All phase timings stable (CV≤0.18 hot phases)   |
+| S-005 | REQ-GQL-021 | PlannerAdaptiveReplanTrigger (TESTED)  | TEST  | TestCANARY_REQ_GQL_021_AdaptiveReplanTrigger                       | Deterministic replan threshold test             |
+| S-006 | REQ-GQL-021 | PlannerAdaptiveReplanVarianceEnvelope  | BENCH | BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope  | Trigger latency CV≤0.22                         |
+| S-007 | REQ-GQL-028 | CorruptRecoveryLatency (optional)      | BENCH | BenchmarkCANARY_REQ_GQL_028_CorruptRecoveryLatency                 | Only if CV>0.20 observed in probe               |
 
 ## 10. VARIANCE ENVELOPE POLICY (Active)
 
-| Class | Target CV | Max p95/mean | Notes |
-|-------|-----------|--------------|-------|
-| Hot Path (PropertyAccess, Planner phases) | ≤0.18 | ≤2.40 | Re-run 2x if fail then flag regression |
-| Storage / WAL Adaptive | ≤0.21 | ≤2.55 | Allow moderate I/O jitter |
-| CDC Adaptive / Heuristic | ≤0.22 | ≤2.55 | External event timing noise |
-| Graph Analytics (Large) | ≤0.23 | ≤2.60 | Iteration count drift acceptable |
+| Class                                     | Target CV | Max p95/mean | Notes                                  |
+| ----------------------------------------- | --------- | ------------ | -------------------------------------- |
+| Hot Path (PropertyAccess, Planner phases) | ≤0.18     | ≤2.40        | Re-run 2x if fail then flag regression |
+| Storage / WAL Adaptive                    | ≤0.21     | ≤2.55        | Allow moderate I/O jitter              |
+| CDC Adaptive / Heuristic                  | ≤0.22     | ≤2.55        | External event timing noise            |
+| Graph Analytics (Large)                   | ≤0.23     | ≤2.60        | Iteration count drift acceptable       |
 
 Deviations require explicit doc note + CANARY comment `// VARIANCE_EXCEPTION: reason`.
 
@@ -150,9 +150,9 @@ go build -o ./bin/canaryscan ./tools/canaryscan
 
 ## 14. APPENDIX (Historical Context Condensed)
 
-* 32 variance envelopes landed; no pending STUB aspects.
-* Transitioned from broad algorithm BENCH promotions to subsystem variance stabilization.
-* Freshness & reality delta tools reduce governance overhead and prevent drift.
+- 32 variance envelopes landed; no pending STUB aspects.
+- Transitioned from broad algorithm BENCH promotions to subsystem variance stabilization.
+- Freshness & reality delta tools reduce governance overhead and prevent drift.
 
 ---
 

@@ -37,7 +37,7 @@ pub const RLSEngine = struct {
     audit_logger: AuditLogger,
 
     const Self = @This();
-    
+
     fn dummyLogWriter(event: AuditLogger.AuditEvent) void {
         _ = event;
         // No-op for module compilation
@@ -165,8 +165,6 @@ pub const RLSEngine = struct {
         all_access,
         detailed,
     };
-
-
 
     pub fn init(allocator: Allocator) !Self {
         return Self{
@@ -897,7 +895,7 @@ pub const ABACAttributeRule = struct {
 pub const AttributeBasedAccessControl = struct {
     allocator: Allocator,
     attribute_definitions: std.StringHashMap(AttributeDefinition),
-    attribute_rules: []ABACAttributeRule,  // Changed from ArrayList to slice
+    attribute_rules: []ABACAttributeRule, // Changed from ArrayList to slice
     attribute_evaluator: AttributeEvaluator,
 
     pub const AttributeDefinition = struct {
@@ -949,8 +947,6 @@ pub const AttributeBasedAccessControl = struct {
         };
     };
 
-
-
     pub const AttributeEvaluator = struct {
         allocator: Allocator,
         attribute_cache: std.StringHashMap(CachedAttribute),
@@ -978,7 +974,7 @@ pub const AttributeBasedAccessControl = struct {
         return AttributeBasedAccessControl{
             .allocator = allocator,
             .attribute_definitions = std.StringHashMap(AttributeDefinition).init(allocator),
-            .attribute_rules = try allocator.alloc(ABACAttributeRule, 0),  // Empty slice
+            .attribute_rules = try allocator.alloc(ABACAttributeRule, 0), // Empty slice
             .attribute_evaluator = AttributeEvaluator{
                 .allocator = allocator,
                 .attribute_cache = std.StringHashMap(AttributeEvaluator.CachedAttribute).init(allocator),
@@ -988,7 +984,7 @@ pub const AttributeBasedAccessControl = struct {
 
     pub fn deinit(self: *AttributeBasedAccessControl) void {
         self.attribute_definitions.deinit();
-        self.allocator.free(self.attribute_rules);  // Free the slice
+        self.allocator.free(self.attribute_rules); // Free the slice
         self.attribute_evaluator.attribute_cache.deinit();
     }
 };
@@ -1065,7 +1061,7 @@ pub const AuditLogger = struct {
             .allocator = allocator,
             .log_writer = writer,
             .audit_policies = try allocator.alloc(AuditPolicy, 0),
-            .event_queue = try allocator.alloc(AuditEvent, 100),  // Pre-allocate buffer
+            .event_queue = try allocator.alloc(AuditEvent, 100), // Pre-allocate buffer
             .event_queue_len = 0,
         };
     }

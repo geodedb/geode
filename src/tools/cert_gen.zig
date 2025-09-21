@@ -7,7 +7,7 @@ const builtin = @import("builtin");
 pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8, cert_path: []const u8, key_path: []const u8) !void {
     // Extract directory from cert_path
     const cert_dir = std.fs.path.dirname(cert_path) orelse ".";
-    
+
     // Create certificate directory if it doesn't exist
     std.fs.cwd().makePath(cert_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
