@@ -49,6 +49,26 @@ pub const graph = struct {
     pub const closeness = @import("graph/centrality_closeness.zig");
     pub const bridge_leverage = @import("graph/centrality_bridge_leverage.zig");
     pub const grey_cardinal = @import("graph/centrality_grey_cardinal.zig");
+    pub const dfs_iterative = @import("graph/traversal_dfs_iterative.zig");
+    pub const iddfs = @import("graph/traversal_iddfs.zig");
+    pub const topo_kahn = @import("graph/topological_sort_kahn.zig");
+    pub const topo_dfs = @import("graph/topological_sort_dfs.zig");
+    pub const cycle_directed = @import("graph/cycle_detect_directed.zig");
+    pub const cycle_undirected = @import("graph/cycle_detect_undirected.zig");
+    pub const dag_shortest = @import("graph/shortest_dag_path.zig");
+    pub const flow = struct {
+        pub const edmonds_karp = @import("graph/flow_edmonds_karp.zig");
+        pub const dinic = @import("graph/flow_dinic.zig");
+        pub const hopcroft_karp = @import("graph/flow_hopcroft_karp.zig");
+    };
+    pub const containers = struct {
+        pub const lru = @import("graph/containers/lru.zig");
+        pub const lfu = @import("graph/containers/lfu.zig");
+        pub const bloom_filter = @import("graph/containers/bloom_filter.zig");
+        pub const count_min_sketch = @import("graph/containers/count_min_sketch.zig");
+        pub const skiplist = @import("graph/container_skiplist.zig");
+        pub const trie = @import("graph/container_trie.zig");
+    };
 };
 
 // Lightweight helper to carry parameter bindings across subsystems

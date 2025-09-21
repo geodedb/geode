@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T13:20:00.454245881Z",
+  "generated_at": "2025-09-21T14:59:20.723332951Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -83,7 +83,7 @@
           "aspect": "Wire",
           "status": "TESTED",
           "files": [
-            "docs/PROMPTS.md",
+            "docs/PROMPT.md",
             "src/protocol.zig"
           ],
           "tests": [
@@ -660,7 +660,7 @@
           "aspect": "Storage",
           "status": "BENCHED",
           "files": [
-            "docs/PROMPTS.md",
+            "docs/PROMPT.md",
             "src/canary.zig",
             "src/storage/wal_compactor.zig"
           ],
@@ -1636,7 +1636,7 @@
           "aspect": "Storage",
           "status": "TESTED",
           "files": [
-            "docs/PROMPTS.md",
+            "docs/PROMPT.md",
             "tools/canaryscan/internal/fixtures/file2.go"
           ],
           "tests": [
@@ -1714,6 +1714,38 @@
       "id": "REQ-GQL-062",
       "features": [
         {
+          "feature": "TopologicalSortDFS",
+          "aspect": "Traversal",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/topological_sort_dfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_TopoDFS"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_TopoDFS"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_bfs_traversal.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_BFS"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
           "feature": "Traversals",
           "aspect": "BFS",
           "status": "TESTED",
@@ -1726,6 +1758,88 @@
           "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "CycleDetectDirected",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/cycle_detect_directed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_CycleDirected"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_CycleDirected"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "CycleDetectUndirected",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/cycle_detect_undirected.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_CycleUndirected"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_CycleUndirected"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "DFSIterative",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/traversal_dfs_iterative.zig",
+            "tests/benchmark_dfs_iterative.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_DFSIterative"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_DFSIterative"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "IDDFS",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/traversal_iddfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_IDDFSBasics"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_IDDFS"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "TopologicalSortKahn",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/topological_sort_kahn.zig",
+            "tests/benchmark_toposort_kahn.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_TopoKahn"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_062_TopoKahn"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -1744,6 +1858,22 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_AStar"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "DagShortestPath",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/shortest_dag_path.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_DagShortestPath"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_063_DagShortestPath"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -1850,9 +1980,10 @@
         {
           "feature": "Connectivity",
           "aspect": "TarjanSCC",
-          "status": "STUB",
+          "status": "BENCHED",
           "files": [
-            "src/graph/connectivity_tarjan_scc.zig"
+            "src/graph/connectivity_tarjan_scc.zig",
+            "tests/benchmark_connectivity_tarjan_scc.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_064_TarjanSCC"
@@ -1861,7 +1992,7 @@
             "BenchmarkCANARY_REQ_GQL_064_TarjanSCC"
           ],
           "owner": "graph",
-          "updated": "2025-09-20"
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -1896,6 +2027,75 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_065_Prim"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-066",
+      "features": [
+        {
+          "feature": "Flow/Matching",
+          "aspect": "Dinic",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/flow_dinic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_066_DinicBasic"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_066_Dinic"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Flow/Matching",
+          "aspect": "EdmondsKarp",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_flow_edmonds_karp.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_066_EdmondsKarp"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_066_EdmondsKarp"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Flow/Matching",
+          "aspect": "EdmondsKarp",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/flow_edmonds_karp.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_066_EdmondsKarp"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_066_EdmondsKarp"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Flow/Matching",
+          "aspect": "HopcroftKarp",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/flow_hopcroft_karp.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_066_HopcroftKarpBasic"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_066_HopcroftKarp"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -2008,6 +2208,86 @@
       "features": [
         {
           "feature": "Containers",
+          "aspect": "BloomFilterContainer",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/containers/bloom_filter.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_BloomFilter"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_BloomFilter"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Containers",
+          "aspect": "LFUCache",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/containers/lfu.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_LFU"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_LFU"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Containers",
+          "aspect": "LRUCache",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/containers/lru.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_LRU"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_LRU"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Containers",
+          "aspect": "SkipList",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/container_skiplist.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_SkipList"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_SkipList"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Containers",
+          "aspect": "Trie",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/container_trie.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_Trie"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_Trie"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Containers",
           "aspect": "UnionFind",
           "status": "BENCHED",
           "files": [
@@ -2018,6 +2298,43 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_068_UnionFind"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-069",
+      "features": [
+        {
+          "feature": "Probabilistic",
+          "aspect": "CountMinSketch",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/containers/count_min_sketch.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_069_CountMinSketch"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_069_CountMinSketch"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Probabilistic",
+          "aspect": "CountMinSketch",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_count_min_sketch_container.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_069_CountMinSketch"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_069_CountMinSketch"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -2094,20 +2411,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -2118,6 +2421,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -2208,8 +2525,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 52,
-      "STUB": 1,
+      "BENCHED": 72,
       "TESTED": 87
     },
     "by_aspect": {
@@ -2222,12 +2538,13 @@
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
       "AdaptiveFlush": 1,
       "Aspect": 1,
-      "BFS": 1,
+      "BFS": 2,
       "Backpressure": 1,
       "BackpressureAdaptive": 1,
       "BackpressureToggle": 1,
       "BetweennessCentrality": 1,
       "BiconnectedComponents": 1,
+      "BloomFilterContainer": 1,
       "BridgeLeverage": 1,
       "BridgesArticulation": 1,
       "CDCControlProtocol": 1,
@@ -2240,14 +2557,21 @@
       "ConflictRepairHeuristics": 1,
       "ConstraintPerf": 1,
       "CorruptPageRecovery": 1,
+      "CountMinSketch": 2,
+      "CycleDetectDirected": 1,
+      "CycleDetectUndirected": 1,
+      "DFSIterative": 1,
+      "DagShortestPath": 1,
       "DiagnosticsExport": 1,
       "Dijkstra": 1,
+      "Dinic": 1,
       "DirectedWeightedBuilders": 1,
       "Distributed": 1,
       "E2E": 1,
       "E2ENoEngine": 1,
       "E2EUnsupported": 1,
       "EarlyConflictDetection": 1,
+      "EdmondsKarp": 2,
       "EigenvectorCentrality": 1,
       "Engine": 20,
       "EventCapture": 1,
@@ -2255,9 +2579,13 @@
       "GreyCardinalComposite": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
+      "HopcroftKarp": 1,
+      "IDDFS": 1,
       "Ingest": 1,
       "KosarajuValidation": 1,
       "Kruskal": 1,
+      "LFUCache": 1,
+      "LRUCache": 1,
       "MixedWorkload": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
@@ -2280,10 +2608,14 @@
       "ResumeTokenRestart": 1,
       "Retention": 1,
       "SSIPhantomPrevention": 1,
+      "SkipList": 1,
       "Storage": 9,
       "TarjanSCC": 1,
       "Telemetry": 1,
       "Tooling": 4,
+      "TopologicalSortKahn": 1,
+      "Traversal": 1,
+      "Trie": 1,
       "UnionFind": 1,
       "UniquePerf": 1,
       "UnweightedBFSPaths": 2,
