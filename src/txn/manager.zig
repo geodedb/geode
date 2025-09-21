@@ -138,6 +138,29 @@ pub const Manager = struct {
         return txn;
     }
 
+    // Represents a consistent read view (snapshot) capturing the current timestamp frontier
+    // and a list of active (in-progress) transaction ids for future phantom / conflict checks.
+    pub const Snapshot = struct {
+        ts: Timestamp,
+        active: []TxnId,
+    };
+
+    pub fn captureSnapshot(self: *Manager, ally: std.mem.Allocator) Snapshot {
+        const snap_ts = self.next_ts - 1; // last issued timestamp is visible frontier
+        var count: usize = 0;
+        var iter_count = self.active_txns.iterator();
+        while (iter_count.next()) |_| count += 1;
+        var arr = ally.alloc(TxnId, count) catch @panic("OOM snapshot alloc");
+        var iter = self.active_txns.iterator();
+        var i: usize = 0;
+        while (iter.next()) |entry| : (i += 1) arr[i] = entry.value_ptr.id;
+        return .{ .ts = snap_ts, .active = arr };
+    }
+
+    pub fn releaseSnapshot(_: *Manager, ally: std.mem.Allocator, snap: Snapshot) void {
+        ally.free(snap.active);
+    }
+
     pub fn commit(self: *Manager, txn: *Txn) !void {
         if (self.advanced) |*adv| {
             var iter = self.active_txns.iterator();

@@ -86,6 +86,9 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    // Provide cdc_enhanced module to test aggregator for CDC variance benchmarks
+    const cdc_enhanced_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("cdc_enhanced", cdc_enhanced_mod_for_tests);
 
     const storage_catalog_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
     storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
@@ -280,6 +283,21 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(bench_regress_exe);
     tools_step.dependOn(&bench_regress_exe.step);
+
+    // Implementation reality delta tool
+    const impl_reality_delta_exe = b.addExecutable(.{
+        .name = "impl_reality_delta",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/implementation_reality_delta.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(impl_reality_delta_exe);
+    tools_step.dependOn(&impl_reality_delta_exe.step);
+    const delta_run = b.addRunArtifact(impl_reality_delta_exe);
+    // Provide args placeholders: status.json docs/IMPLEMENTATION_REALITY.md prev snapshot path
+    if (b.args) |a| delta_run.addArgs(a) else {
+        delta_run.addArgs(&.{ "status.json", "docs/IMPLEMENTATION_REALITY.md", "docs/.implementation_reality_prev.json" });
+    }
+    const delta_step = b.step("delta", "Append implementation reality delta section");
+    delta_step.dependOn(&delta_run.step);
 
     const wal_compact_exe = b.addExecutable(.{
         .name = "wal_compact",

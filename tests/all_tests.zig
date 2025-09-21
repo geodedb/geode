@@ -46,6 +46,13 @@ const _benchmark_grey_cardinal_variance = @import("benchmark_grey_cardinal_varia
 const _canary_freshness_guard = @import("canary_freshness_guard.zig");
 const _canary_cdc_backpressure_adaptive = @import("canary_cdc_backpressure_adaptive.zig");
 const _benchmark_txn_conflict_variance = @import("benchmark_txn_conflict_matrix_variance.zig");
+const _benchmark_betweenness_variance = @import("benchmark_betweenness_variance.zig");
+const _benchmark_property_access_hotpath_variance = @import("benchmark_property_access_hotpath_variance.zig");
+const _benchmark_path_expand_breadth_variance = @import("benchmark_path_expand_breadth_variance.zig");
+const _benchmark_closeness_variance = @import("benchmark_closeness_variance.zig");
+const _benchmark_eigenvector_variance = @import("benchmark_eigenvector_variance.zig");
+const _benchmark_cdc_apply_batch_variance = @import("benchmark_cdc_apply_batch_variance.zig");
+const _canary_txn_snapshot_readview = @import("canary_txn_snapshot_readview.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

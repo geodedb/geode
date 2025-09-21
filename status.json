@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T15:20:31.988127518Z",
+  "generated_at": "2025-09-21T15:33:05.041662994Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -449,6 +449,20 @@
           "updated": "2025-09-21"
         },
         {
+          "feature": "Transactions/MVCC",
+          "aspect": "SnapshotReadView",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_txn_snapshot_readview.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_013_SnapshotReadView"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
           "feature": "Txn Conflict Matrix",
           "aspect": "Engine",
           "status": "BENCHED",
@@ -552,6 +566,20 @@
           "updated": "2025-09-20"
         },
         {
+          "feature": "Planner Paths",
+          "aspect": "PathExpandBreadthVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_expand_breadth_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
           "feature": "Variable Length Path Expand",
           "aspect": "Planner",
           "status": "BENCHED",
@@ -604,6 +632,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Property Access",
+          "aspect": "PropertyAccessHotPathVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_property_access_hotpath_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPathVarianceEnvelope"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-21"
         },
         {
           "feature": "Property Access Hot Path",
@@ -1042,6 +1084,34 @@
             "TestCANARY_REQ_GQL_042_CDC_JitterThresholds"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "CDC",
+          "aspect": "AdaptiveStressHarness",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_stress.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness"
+          ],
+          "owner": "streaming",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "CDC",
+          "aspect": "CDCApplyBatchLatencyVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_apply_batch_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope"
+          ],
           "owner": "streaming",
           "updated": "2025-09-21"
         },
@@ -2296,6 +2366,20 @@
         },
         {
           "feature": "Centrality",
+          "aspect": "BetweennessVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_betweenness_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_BetweennessVarianceEnvelope"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
           "aspect": "BridgeLeverage",
           "status": "BENCHED",
           "files": [
@@ -2328,6 +2412,20 @@
         },
         {
           "feature": "Centrality",
+          "aspect": "ClosenessVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_closeness_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
           "aspect": "EigenvectorCentrality",
           "status": "BENCHED",
           "files": [
@@ -2338,6 +2436,20 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_067_Eigenvector"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "EigenvectorVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_eigenvector_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_EigenvectorVarianceEnvelope"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -2384,6 +2496,20 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_067_PageRank"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Centrality",
+          "aspect": "PageRankVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_pagerank_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -2499,7 +2625,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "src/graph/containers/count_min_sketch.zig"
+            "tests/benchmark_count_min_sketch_container.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -2515,7 +2641,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
+            "src/graph/containers/count_min_sketch.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -2619,20 +2745,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -2643,6 +2755,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -2733,8 +2859,8 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 77,
-      "TESTED": 96
+      "BENCHED": 85,
+      "TESTED": 97
     },
     "by_aspect": {
       "API": 7,
@@ -2746,21 +2872,25 @@
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
       "AdaptiveFlush": 1,
       "AdaptiveJitterThresholds": 1,
+      "AdaptiveStressHarness": 1,
       "Aspect": 1,
       "BFS": 2,
       "Backpressure": 1,
       "BackpressureAdaptive": 1,
       "BackpressureToggle": 1,
       "BetweennessCentrality": 1,
+      "BetweennessVarianceEnvelope": 1,
       "BiconnectedComponents": 1,
       "BloomFilterContainer": 1,
       "BridgeLeverage": 1,
       "BridgesArticulation": 1,
+      "CDCApplyBatchLatencyVarianceEnvelope": 1,
       "CDCControlProtocol": 1,
       "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
       "CascadePerf": 2,
       "ClosenessCentrality": 1,
+      "ClosenessVarianceEnvelope": 1,
       "Component": 2,
       "ConcurrencySafeGraph": 1,
       "ConflictRepairHeuristics": 1,
@@ -2782,6 +2912,7 @@
       "EarlyConflictDetection": 1,
       "EdmondsKarp": 2,
       "EigenvectorCentrality": 1,
+      "EigenvectorVarianceEnvelope": 1,
       "Engine": 21,
       "EventCapture": 1,
       "FailureInjection": 1,
@@ -2805,9 +2936,11 @@
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
       "PageRank": 1,
+      "PageRankVarianceEnvelope": 1,
       "Parser": 3,
       "PartialRollbackMechanism": 1,
       "PathCyclePruningPerf": 1,
+      "PathExpandBreadthVarianceEnvelope": 1,
       "PathExpandMemPerf": 1,
       "PathPruningStatsPerf": 1,
       "PatternPerf": 1,
@@ -2817,6 +2950,7 @@
       "PredictiveSkewFilter": 2,
       "PredictiveVersionCheck": 1,
       "Prim": 1,
+      "PropertyAccessHotPathVarianceEnvelope": 1,
       "RaftPartitionSimulation": 1,
       "Refactor": 1,
       "RepairThroughputBench": 1,
@@ -2825,6 +2959,7 @@
       "SSIPhantomPrevention": 2,
       "SSIPhantomPreventionVariance": 1,
       "SkipList": 1,
+      "SnapshotReadView": 1,
       "StatusFreshnessGuard": 1,
       "Storage": 9,
       "TarjanSCC": 1,
