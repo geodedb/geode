@@ -103,6 +103,21 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_custom_tests.step);
 
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
+
+    // MVCC Advanced tests (expanded)
+    const mvcc_adv_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/txn/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
+    const mvcc_adv_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mvcc_advanced.zig"), .target = target, .optimize = optimize }) });
+    mvcc_adv_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    test_step.dependOn(&mvcc_adv_tests.step);
+    const txn_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
+    txn_mod_for_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    const mvcc_adv_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mvcc_adv_integration.zig"), .target = target, .optimize = optimize }) });
+    mvcc_adv_integration_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    mvcc_adv_integration_tests.root_module.addImport("txn", txn_mod_for_tests);
+    test_step.dependOn(&mvcc_adv_integration_tests.step);
+    const mvcc_adv_bench_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_mvcc_repair_throughput.zig"), .target = target, .optimize = optimize }) });
+    mvcc_adv_bench_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    test_step.dependOn(&mvcc_adv_bench_tests.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
@@ -130,10 +145,18 @@ pub fn build(b: *std.Build) void {
     storage_csr_mod.addImport("storage_page_manager", storage_page_manager_shared);
     geoded_exe.root_module.addImport("storage/csr_adjacency.zig", storage_csr_mod);
 
+    const mvcc_adv_mod = b.createModule(.{ .root_source_file = b.path("src/txn/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
+    txn_mod.addImport("mvcc_adv", mvcc_adv_mod);
     geoded_exe.root_module.addImport("txn", txn_mod);
+    geoded_exe.root_module.addImport("mvcc_adv", mvcc_adv_mod);
+    root_mod.addImport("mvcc_adv", mvcc_adv_mod);
     const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    // Security TDE hierarchy module
+    const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
     geoded_exe.root_module.addImport("wal", wal_mod);
+    geoded_exe.root_module.addImport("tde_hierarchy", tde_hierarchy_mod);
     const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("distributed", distributed_mod);
 
@@ -263,6 +286,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/wal_compact.zig"), .target = target, .optimize = optimize }),
     });
     const wal_scan_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    wal_scan_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
     wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
     wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     b.installArtifact(wal_compact_exe);

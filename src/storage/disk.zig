@@ -41,12 +41,16 @@ pub const Disk = struct {
             const hex = std.process.getEnvVarOwned(ally, "GEODE_DISK_KEY_HEX") catch null;
             if (hex == null or hex.?.len != 64) return error.InvalidKey;
             defer ally.free(hex.?);
-            // parse hex into 32 bytes
+            // parse hex into master key then derive data key
+            var master: [32]u8 = undefined;
             var i: usize = 0;
             while (i < 32) : (i += 1) {
                 const b = try std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16);
-                d.key[i] = b;
+                master[i] = b;
             }
+            const tde = @import("tde_hierarchy");
+            const kh = tde.KeyHierarchy.init(master);
+            d.key = kh.data_key; // store derived data key (master not retained beyond this scope)
         }
         return d;
     }
@@ -61,7 +65,7 @@ pub const Disk = struct {
 
     fn encryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
-        var tweak_u128 = tweakFor(page_id, 0);
+        const tweak_u128 = tweakFor(page_id, 0);
         var tweak: [16]u8 = undefined;
         // encode tweak_u128 little-endian
         var ti: usize = 0;
@@ -84,7 +88,7 @@ pub const Disk = struct {
 
     fn decryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
-        var tweak_u128 = tweakFor(page_id, 0);
+        const tweak_u128 = tweakFor(page_id, 0);
         var tweak: [16]u8 = undefined;
         var ti: usize = 0;
         while (ti < 16) : (ti += 1) tweak[ti] = @as(u8, @intCast((tweak_u128 >> @as(u7, @intCast(ti * 8))) & 0xFF));

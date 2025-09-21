@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-20T23:08:56.421093783Z",
+  "generated_at": "2025-09-21T00:59:57.759139538Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -203,6 +203,20 @@
       "id": "REQ-GQL-010",
       "features": [
         {
+          "feature": "Benchmark Baseline Refresh",
+          "aspect": "Tooling",
+          "status": "TESTED",
+          "files": [
+            "src/tools/bench_regress.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_010_BenchBaselineRefresh"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-20"
+        },
+        {
           "feature": "Benchmark Extraction",
           "aspect": "Tooling",
           "status": "TESTED",
@@ -351,20 +365,18 @@
           "updated": "2025-09-20"
         },
         {
-          "feature": "Txn Conflict Matrix",
-          "aspect": "Engine",
-          "status": "BENCHED",
+          "feature": "Transactions/MVCC",
+          "aspect": "SSIPhantomPrevention",
+          "status": "TESTED",
           "files": [
-            "docs/NEXT.md"
+            "src/txn/manager.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_013_TxnConflictMatrix"
+            "TestCANARY_REQ_GQL_013_SSIPhantomPrevention"
           ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix"
-          ],
+          "benches": [],
           "owner": "engine",
-          "updated": "2025-09-20"
+          "updated": "2025-09-21"
         },
         {
           "feature": "Txn Conflict Matrix",
@@ -631,6 +643,20 @@
         },
         {
           "feature": "WAL Compaction",
+          "aspect": "CorruptPageRecovery",
+          "status": "TESTED",
+          "files": [
+            "src/wal/wal.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_CorruptPageRecovery"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "WAL Compaction",
           "aspect": "Storage",
           "status": "BENCHED",
           "files": [
@@ -692,6 +718,20 @@
             "TestCANARY_REQ_GQL_032_CompositeUnique"
           ],
           "benches": [],
+          "owner": "schema",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Constraint Cascading",
+          "aspect": "CascadePerf",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_constraints_cascade_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_032_CascadePerf"
+          ],
           "owner": "schema",
           "updated": "2025-09-20"
         },
@@ -861,36 +901,24 @@
         {
           "feature": "Raft Consensus",
           "aspect": "Distributed",
-          "status": "STUB",
+          "status": "BENCHED",
           "files": [
             "src/distributed/raft.zig"
           ],
           "tests": [
-            "tests/e2e_distributed_raft.zig"
+            "TestCANARY_REQ_GQL_040_RaftLeaderElection"
           ],
-          "benches": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency"
+          ],
           "owner": "distributed",
-          "updated": "2025-09-20"
+          "updated": "2025-09-21"
         }
       ]
     },
     {
       "id": "REQ-GQL-042",
       "features": [
-        {
-          "feature": "CDC",
-          "aspect": "API",
-          "status": "STUB",
-          "files": [
-            "docs/PROMPTS.md"
-          ],
-          "tests": [
-            "tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop"
-          ],
-          "benches": [],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
         {
           "feature": "CDC Backfill Latency",
           "aspect": "API",
@@ -903,6 +931,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency"
           ],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Core API",
+          "aspect": "API",
+          "status": "TESTED",
+          "files": [
+            "src/cdc/core.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_CoreStartStop"
+          ],
+          "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -965,20 +1007,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
-          ],
-          "benches": [],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_cdc_adaptive_diff_perf.zig"
@@ -987,6 +1015,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
           ],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
+          ],
+          "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -1027,6 +1069,20 @@
           ],
           "tests": [
             "unit_CDC_backpressure_flag"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "BackpressureAdaptive",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_BackpressureAdaptive"
           ],
           "benches": [],
           "owner": "streaming",
@@ -1503,16 +1559,16 @@
         {
           "feature": "CDC/Streaming",
           "aspect": "API",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "tools/canaryscan/internal/fixtures/file1.zig"
           ],
           "tests": [
-            "tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop"
+            "TestCANARY_REQ_GQL_042_CDC_StartStop"
           ],
           "benches": [],
           "owner": "streaming",
-          "updated": "2025-09-20"
+          "updated": "2025-09-21"
         },
         {
           "feature": "CDCControlProtocol",
@@ -1591,6 +1647,20 @@
           "updated": "2025-09-20"
         },
         {
+          "feature": "TDE Key Hierarchy",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "src/security/tde_hierarchy.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_046_KeyHierarchy"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-20"
+        },
+        {
           "feature": "TDE Key Rotation Throughput",
           "aspect": "Storage",
           "status": "BENCHED",
@@ -1603,6 +1673,294 @@
             "BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput"
           ],
           "owner": "security",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-060",
+      "features": [
+        {
+          "feature": "Core Graph Builders",
+          "aspect": "ConcurrencySafeGraph",
+          "status": "TESTED",
+          "files": [
+            "src/graph/concurrency_safe.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_060_ConcurrencySafe"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Core Graph Builders",
+          "aspect": "DirectedWeightedBuilders",
+          "status": "TESTED",
+          "files": [
+            "src/graph/builders.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_060_CoreGraphBuilders"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-062",
+      "features": [
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-063",
+      "features": [
+        {
+          "feature": "Shortest Paths",
+          "aspect": "Dijkstra",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/shortest_dijkstra.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_Dijkstra"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_063_Dijkstra"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-064",
+      "features": [
+        {
+          "feature": "Connectivity",
+          "aspect": "BiconnectedComponents",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/connectivity_biconnected.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_064_Biconnected"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_064_Biconnected"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Connectivity",
+          "aspect": "KosarajuValidation",
+          "status": "BENCHED",
+          "files": [
+            "src/graph/connectivity_kosaraju.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_064_Kosaraju"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_064_Kosaraju"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Connectivity",
+          "aspect": "TarjanSCC",
+          "status": "STUB",
+          "files": [
+            "src/graph/connectivity_tarjan_scc.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_064_TarjanSCC"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_064_TarjanSCC"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-073",
+      "features": [
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "ConflictRepairHeuristics",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/mvcc_adv/conflict_repair_heuristics.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_ConflictRepairHeuristics"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_073_ConflictRepairHeuristics"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "EarlyConflictDetection",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/mvcc_adv/early_detect.zig",
+            "tests/canary_mvcc_adv_integration.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_EarlyConflictDetection",
+            "TestCANARY_REQ_GQL_073_EarlyConflictDetectionIntegration"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_073_EarlyConflictDetection"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "FalsePositiveReduction",
+          "status": "TESTED",
+          "files": [
+            "src/txn/mvcc_adv/early_detect.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_FalsePositiveReduction"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PartialRollbackMechanism",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/mvcc_adv/partial_rollback.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PartialRollbackMechanism"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_073_PartialRollbackMechanism"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/mvcc_adv/predictive_skew_filter.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveVersionCheck",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/mvcc_adv/predictive_version_check.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveVersionCheck"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_073_PredictiveVersionCheck"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "RepairThroughputBench",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/mvcc_adv/repair_throughput_bench.zig",
+            "tests/benchmark_mvcc_repair_throughput.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_RepairThroughputBench"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench"
+          ],
+          "owner": "txn",
           "updated": "2025-09-20"
         }
       ]
@@ -1623,15 +1981,45 @@
           "benches": [],
           "owner": "team",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Name",
+          "aspect": "Aspect",
+          "status": "BENCHED",
+          "files": [
+            "docs/NEXT.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_XXX_Feature"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_XXX_Feature"
+          ],
+          "owner": "team",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Name",
+          "aspect": "Component",
+          "status": "TESTED",
+          "files": [
+            "docs/CANARY_ADOPTION_SUMMARY.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_XXX_Feature"
+          ],
+          "benches": [],
+          "owner": "team",
+          "updated": "2025-09-20"
         }
       ]
     }
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 29,
-      "STUB": 3,
-      "TESTED": 73
+      "BENCHED": 41,
+      "STUB": 1,
+      "TESTED": 87
     },
     "by_aspect": {
       "API": 7,
@@ -1641,28 +2029,42 @@
       "AdaptiveDiffPerfThresholdEnv": 2,
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
       "AdaptiveFlush": 1,
+      "Aspect": 1,
+      "BFS": 1,
       "Backpressure": 1,
+      "BackpressureAdaptive": 1,
       "BackpressureToggle": 1,
+      "BiconnectedComponents": 1,
       "CDCControlProtocol": 1,
       "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
-      "Component": 1,
+      "CascadePerf": 1,
+      "Component": 2,
+      "ConcurrencySafeGraph": 1,
+      "ConflictRepairHeuristics": 1,
       "ConstraintPerf": 1,
+      "CorruptPageRecovery": 1,
       "DiagnosticsExport": 1,
+      "Dijkstra": 1,
+      "DirectedWeightedBuilders": 1,
       "Distributed": 1,
       "E2E": 1,
       "E2ENoEngine": 1,
       "E2EUnsupported": 1,
-      "Engine": 21,
+      "EarlyConflictDetection": 1,
+      "Engine": 20,
       "EventCapture": 1,
+      "FalsePositiveReduction": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
       "Ingest": 1,
+      "KosarajuValidation": 1,
       "MixedWorkload": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
       "Parser": 3,
+      "PartialRollbackMechanism": 1,
       "PathCyclePruningPerf": 1,
       "PathExpandMemPerf": 1,
       "PathPruningStatsPerf": 1,
@@ -1670,13 +2072,19 @@
       "PatternStateDedupMem": 1,
       "PatternStateDedupPerf": 1,
       "Planner": 7,
+      "PredictiveSkewFilter": 2,
+      "PredictiveVersionCheck": 1,
       "Refactor": 1,
+      "RepairThroughputBench": 1,
       "ResumeTokenRestart": 1,
       "Retention": 1,
-      "Storage": 8,
+      "SSIPhantomPrevention": 1,
+      "Storage": 9,
+      "TarjanSCC": 1,
       "Telemetry": 1,
-      "Tooling": 3,
+      "Tooling": 4,
       "UniquePerf": 1,
+      "UnweightedBFSPaths": 2,
       "WALTail": 1,
       "WALTailDisabled": 1,
       "WALTailMalformed": 1,

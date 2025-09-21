@@ -11,13 +11,14 @@
 Insert a single line near the implementing function or file header:
 
 ```text
-CANARY: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench; STATUS=MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStop; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Publish; OWNER=streaming; UPDATED=YYYY-MM-DD
+# TEMPLATE (scanner-ignored): change prefix from CANARY: -> CANARY_TEMPLATE: to avoid fake STUB row
+CANARY_TEMPLATE: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench; STATUS=MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStop; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Publish; OWNER=streaming; UPDATED=YYYY-MM-DD
 ```
 
 **Examples**
 
 ```zig
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=API; STATUS=STUB; TEST=tests/e2e_cdc.zig:TestCANARY_REQ_GQL_042_CDC_StartStop; OWNER=streaming; UPDATED=2025-09-20
+// Example (updated): REQ=REQ-GQL-042 CDC Engine API already TESTED elsewhere; avoid adding duplicate STUB lines here.
 ```
 
 ```go

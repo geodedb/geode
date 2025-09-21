@@ -1,4 +1,5 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=CorruptPageRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecovery; OWNER=storage; UPDATED=2025-09-20
 // Page manager imported via build alias to avoid relative path escaping module root.
 const storage = @import("storage_page_manager");
 
@@ -114,8 +115,12 @@ pub const Wal = struct {
                 self.enc_enabled = false;
             } else {
                 defer self.ally.free(hex.?);
+                var master: [32]u8 = undefined;
                 var i: usize = 0;
-                while (i < 32) : (i += 1) self.enc_key[i] = std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16) catch 0;
+                while (i < 32) : (i += 1) master[i] = std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16) catch 0;
+                const tde = @import("tde_hierarchy");
+                const kh = tde.KeyHierarchy.init(master);
+                self.enc_key = kh.wal_key;
             }
         }
     }

@@ -27,6 +27,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailWarnEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedGuardrailAbortEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedSnapshotIntervalEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=BackpressureAdaptive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_BackpressureAdaptive; OWNER=streaming; UPDATED=2025-09-20
 const Allocator = std.mem.Allocator;
 
 fn writeInt(w: anytype, value: u64) !void {
@@ -107,6 +108,14 @@ pub const CDCConfig = struct {
     malformed_abort_pct: f64 = 0.50, // abort guardrail threshold
     // Backpressure watermark: when pending buffered events exceeds this, set backpressure flag (0 disables)
     pending_backpressure_watermark: u64 = 0,
+    // Adaptive backpressure tuning (if enabled via watermark>0 and adaptive_backpressure=true)
+    adaptive_backpressure: bool = false,
+    backpressure_high_pct: f64 = 0.85, // if peak/ watermark >= this sustain shrink
+    backpressure_low_pct: f64 = 0.30, // if moving avg / watermark <= this sustain grow
+    backpressure_adjust_min_events: u32 = 2000, // minimum events between adjustments
+    backpressure_min_watermark: u64 = 1_000,
+    backpressure_max_watermark: u64 = 512_000,
+    backpressure_step_pct: f64 = 0.25, // grow/shrink factor (multiplicative)
 };
 
 pub const KafkaConfig = struct {
@@ -207,6 +216,8 @@ pub const CDCEngine = struct {
     dynamic_batch_size: u32 = 0,
     peak_buffer: usize = 0,
     batch_adjustments: u32 = 0,
+    backpressure_moving_avg: f64 = 0,
+    backpressure_events_accum: u32 = 0,
     malformed_wal_records: u64 = 0,
     malformed_ring: MalformedRing = .{},
     total_wal_attempts: u64 = 0,
@@ -361,6 +372,54 @@ pub const CDCEngine = struct {
         }
 
         return engine;
+    }
+
+    fn updateBackpressureStats(self: *Self) void {
+        if (!self.config.adaptive_backpressure or self.config.pending_backpressure_watermark == 0) return;
+        const pending: usize = self.event_buffer.items.len;
+        // peak tracking
+        if (pending > self.peak_buffer) self.peak_buffer = pending;
+        // exponential moving average (EMA) with alpha based on adapt window fraction
+        const alpha: f64 = 0.1;
+        const p_f = @as(f64, @floatFromInt(pending));
+        if (self.backpressure_moving_avg == 0) {
+            self.backpressure_moving_avg = p_f;
+        } else {
+            self.backpressure_moving_avg = alpha * p_f + (1.0 - alpha) * self.backpressure_moving_avg;
+        }
+        self.backpressure_events_accum += 1;
+        if (self.backpressure_events_accum < self.config.backpressure_adjust_min_events) return;
+        // Evaluate adjustments
+        const wm = @as(f64, @floatFromInt(self.config.pending_backpressure_watermark));
+        if (wm == 0) return;
+        const peak_ratio = @as(f64, @floatFromInt(self.peak_buffer)) / wm;
+        const avg_ratio = self.backpressure_moving_avg / wm;
+        var new_wm: u64 = self.config.pending_backpressure_watermark;
+        var changed = false;
+        if (peak_ratio >= self.config.backpressure_high_pct) {
+            // shrink watermark
+            const shrunk = @as(f64, @floatFromInt(new_wm)) * (1.0 - self.config.backpressure_step_pct);
+            const bounded = @max(@as(f64, @floatFromInt(self.config.backpressure_min_watermark)), shrunk);
+            new_wm = @intFromFloat(bounded);
+            changed = true;
+        } else if (avg_ratio <= self.config.backpressure_low_pct) {
+            const grown = @as(f64, @floatFromInt(new_wm)) * (1.0 + self.config.backpressure_step_pct);
+            const bounded = @min(@as(f64, @floatFromInt(self.config.backpressure_max_watermark)), grown);
+            new_wm = @intFromFloat(bounded);
+            changed = true;
+        }
+        if (changed and new_wm != self.config.pending_backpressure_watermark) {
+            self.config.pending_backpressure_watermark = new_wm;
+            self.batch_adjustments += 1; // reuse metric counter for watermark adjustments
+        }
+        // reset evaluation window
+        self.backpressure_events_accum = 0;
+        self.peak_buffer = self.event_buffer.items.len;
+    }
+
+    pub fn adaptiveTick(self: *Self) void {
+        // Called after ingest or periodically
+        self.updateBackpressureStats();
     }
 
     pub fn deinit(self: *Self) void {

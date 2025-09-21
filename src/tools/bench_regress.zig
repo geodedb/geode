@@ -2,6 +2,7 @@ const std = @import("std");
 
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Regression Check"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchRegressionCompare; OWNER=engine; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Regression JSON Summary"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchRegressionJsonSummary; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Baseline Refresh"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchBaselineRefresh; OWNER=engine; UPDATED=2025-09-20
 
 pub const Metric = struct {
     kind: []const u8,
@@ -93,6 +94,17 @@ pub fn main() !void {
     try emitSummary(&.{ .baseline_path = baseline_path, .current_path = current_path }, tolerance_pct, failures, total_compared, regression_list.items);
 
     if (failures > 0) return error.RegressionDetected;
+}
+
+/// Exposed helper for test to exercise writeBaseline path deterministically without CLI args
+pub fn testWriteBaseline(ally: std.mem.Allocator, out_path: []const u8) !void {
+    // create minimal metric map with single kind and metric
+    var m = MetricMap.init(ally);
+    defer freeMetricMap(ally, &m);
+    var inner = std.StringHashMap(u64).init(ally);
+    try inner.put(try allyDup(ally, "elapsed_ns"), 1234);
+    try m.put(try allyDup(ally, "KIND1"), inner);
+    try writeBaseline(out_path, &m);
 }
 
 fn withinTolerance(base: u64, cur: u64, tol_pct: f64) bool {

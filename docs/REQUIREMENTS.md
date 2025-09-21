@@ -33,7 +33,7 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 - The planner/executor implements basic operations only. Graph operators (NodeScan, Expand) have minimal implementation. No query optimization. ❌
 - **Offset pushdown requires explicit order** (testable rule). ✅
-- Path planning honors **UA005/UA006** (deterministic tie-break documented). ❌ *No path execution*
+- Path planning honors **UA005/UA006** (deterministic tie-break documented). ❌ _No path execution_
 
 ## 3a. Storage Modes (testable)
 
@@ -67,12 +67,258 @@ This system is working toward a distributed, ACID property-graph DB that will **
 - Graph feature tests pending implementation of core functionality.
 
 ## Implementation Status Legend
+
 - ✅ Actually working (tested and functional)
 - ⚠️ Partially implemented (incomplete or limited)
 - ❌ Not implemented (stub, fake, or missing)
 
 ## Reality Check
+
 - ~25% of documented features actually work
 - 171+ NotImplemented errors in codebase
 - Most "advanced" features are elaborate type definitions
 - Documentation significantly overstates capabilities
+
+## 8. Graph Algorithms & Supporting Data Structures (Planned Adoption)
+
+These requirements introduce a tracked backlog of core graph / network algorithms and supporting containers needed for advanced planning, analytics, and future GQL graph pattern optimization. All begin at **STUB** status (no functional code) unless otherwise stated. Each requirement uses CANARY markers to enable evidence‑driven promotion (TESTED/BENCHED) when implementations and tests land. Dates reflect initial registration.
+
+### 8.1 Core Graph Structures
+
+- Generic vertex/edge builders (directed + weighted), concurrency‑safe graph (RWMutex wrapping mutation / reader snapshot semantics)
+
+```text
+CANARY: REQ=REQ-GQL-060; FEATURE="Core Graph Builders"; ASPECT=DirectedWeightedBuilders; STATUS=STUB; TEST=TestCANARY_REQ_GQL_060_CoreGraphBuilders; BENCH=BenchmarkCANARY_REQ_GQL_060_CoreGraphBuilders; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-060; FEATURE="Core Graph Builders"; ASPECT=ConcurrencySafeGraph; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_060_ConcurrencySafe; BENCH=BenchmarkCANARY_REQ_GQL_060_ConcurrencySafe; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.2 DOT Codec
+
+- Canonical marshal (stable attribute ordering)
+- Advanced parse: subgraphs, ports, HTML‑ish labels, default attribute scopes
+
+```text
+CANARY: REQ=REQ-GQL-061; FEATURE="DOT Codec"; ASPECT=DotMarshalCanonical; STATUS=STUB; TEST=TestCANARY_REQ_GQL_061_DotMarshalCanonical; BENCH=BenchmarkCANARY_REQ_GQL_061_DotMarshalCanonical; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-061; FEATURE="DOT Codec"; ASPECT=DotParseAdvanced; STATUS=STUB; TEST=TestCANARY_REQ_GQL_061_DotParseAdvanced; BENCH=BenchmarkCANARY_REQ_GQL_061_DotParseAdvanced; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.3 Traversal Algorithms
+
+- BFS, DFS (iterative), IDDFS, Topological Sort (Kahn + DFS variants), Cycle Detection (directed & undirected)
+
+```text
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=BFS; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_062_BFS; BENCH=BenchmarkCANARY_REQ_GQL_062_BFS; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=DFSIterative; STATUS=STUB; TEST=TestCANARY_REQ_GQL_062_DFSIterative; BENCH=BenchmarkCANARY_REQ_GQL_062_DFSIterative; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=IDDFS; STATUS=STUB; TEST=TestCANARY_REQ_GQL_062_IDDFS; BENCH=BenchmarkCANARY_REQ_GQL_062_IDDFS; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=TopologicalSortKahn; STATUS=STUB; TEST=TestCANARY_REQ_GQL_062_TopoKahn; BENCH=BenchmarkCANARY_REQ_GQL_062_TopoKahn; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=TopologicalSortDFS; STATUS=STUB; TEST=TestCANARY_REQ_GQL_062_TopoDFS; BENCH=BenchmarkCANARY_REQ_GQL_062_TopoDFS; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=CycleDetectDirected; STATUS=STUB; TEST=TestCANARY_REQ_GQL_062_CycleDirected; BENCH=BenchmarkCANARY_REQ_GQL_062_CycleDirected; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-062; FEATURE="Traversals"; ASPECT=CycleDetectUndirected; STATUS=STUB; TEST=TestCANARY_REQ_GQL_062_CycleUndirected; BENCH=BenchmarkCANARY_REQ_GQL_062_CycleUndirected; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.4 Shortest Paths
+
+- Unweighted BFS paths, Dijkstra (non‑negative weights), A\*, DAG shortest path, Yen K‑shortest, path cache (memo of resolved segments)
+
+```text
+CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=UnweightedBFSPaths; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_063_UnweightedBFSPaths; BENCH=BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=Dijkstra; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_063_Dijkstra; BENCH=BenchmarkCANARY_REQ_GQL_063_Dijkstra; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=AStar; STATUS=STUB; TEST=TestCANARY_REQ_GQL_063_AStar; BENCH=BenchmarkCANARY_REQ_GQL_063_AStar; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=DagShortestPath; STATUS=STUB; TEST=TestCANARY_REQ_GQL_063_DagShortestPath; BENCH=BenchmarkCANARY_REQ_GQL_063_DagShortestPath; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=YenKShortest; STATUS=STUB; TEST=TestCANARY_REQ_GQL_063_YenKShortest; BENCH=BenchmarkCANARY_REQ_GQL_063_YenKShortest; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=PathCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_063_PathCache; BENCH=BenchmarkCANARY_REQ_GQL_063_PathCache; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.5 Connectivity
+
+- Tarjan SCC (authoritative), Kosaraju (validation via Tarjan), Biconnected components, Bridges & Articulation points
+
+```text
+CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=TarjanSCC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_064_TarjanSCC; BENCH=BenchmarkCANARY_REQ_GQL_064_TarjanSCC; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=KosarajuValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_064_Kosaraju; BENCH=BenchmarkCANARY_REQ_GQL_064_Kosaraju; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=BiconnectedComponents; STATUS=STUB; TEST=TestCANARY_REQ_GQL_064_Biconnected; BENCH=BenchmarkCANARY_REQ_GQL_064_Biconnected; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=BridgesArticulation; STATUS=STUB; TEST=TestCANARY_REQ_GQL_064_BridgesArticulation; BENCH=BenchmarkCANARY_REQ_GQL_064_BridgesArticulation; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.6 Spanning Trees
+
+- Kruskal (Union‑Find), Prim (binary heap)
+
+```text
+CANARY: REQ=REQ-GQL-065; FEATURE="Spanning Trees"; ASPECT=Kruskal; STATUS=STUB; TEST=TestCANARY_REQ_GQL_065_Kruskal; BENCH=BenchmarkCANARY_REQ_GQL_065_Kruskal; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-065; FEATURE="Spanning Trees"; ASPECT=Prim; STATUS=STUB; TEST=TestCANARY_REQ_GQL_065_Prim; BENCH=BenchmarkCANARY_REQ_GQL_065_Prim; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.7 Flow & Matching
+
+- Edmonds–Karp, Dinic, Hopcroft–Karp
+
+```text
+CANARY: REQ=REQ-GQL-066; FEATURE="Flow/Matching"; ASPECT=EdmondsKarp; STATUS=STUB; TEST=TestCANARY_REQ_GQL_066_EdmondsKarp; BENCH=BenchmarkCANARY_REQ_GQL_066_EdmondsKarp; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-066; FEATURE="Flow/Matching"; ASPECT=Dinic; STATUS=STUB; TEST=TestCANARY_REQ_GQL_066_Dinic; BENCH=BenchmarkCANARY_REQ_GQL_066_Dinic; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-066; FEATURE="Flow/Matching"; ASPECT=HopcroftKarp; STATUS=STUB; TEST=TestCANARY_REQ_GQL_066_HopcroftKarp; BENCH=BenchmarkCANARY_REQ_GQL_066_HopcroftKarp; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.8 Centrality Metrics
+
+- Betweenness, Closeness, Eigenvector, PageRank, Bridge/Leverage, Grey Cardinal composite
+
+```text
+CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=BetweennessCentrality; STATUS=STUB; TEST=TestCANARY_REQ_GQL_067_Betweenness; BENCH=BenchmarkCANARY_REQ_GQL_067_Betweenness; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=ClosenessCentrality; STATUS=STUB; TEST=TestCANARY_REQ_GQL_067_Closeness; BENCH=BenchmarkCANARY_REQ_GQL_067_Closeness; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=EigenvectorCentrality; STATUS=STUB; TEST=TestCANARY_REQ_GQL_067_Eigenvector; BENCH=BenchmarkCANARY_REQ_GQL_067_Eigenvector; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=PageRank; STATUS=STUB; TEST=TestCANARY_REQ_GQL_067_PageRank; BENCH=BenchmarkCANARY_REQ_GQL_067_PageRank; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=BridgeLeverage; STATUS=STUB; TEST=TestCANARY_REQ_GQL_067_BridgeLeverage; BENCH=BenchmarkCANARY_REQ_GQL_067_BridgeLeverage; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=GreyCardinalComposite; STATUS=STUB; TEST=TestCANARY_REQ_GQL_067_GreyCardinalComposite; BENCH=BenchmarkCANARY_REQ_GQL_067_GreyCardinalComposite; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.9 Containers & Auxiliary Structures
+
+- Cursor, Queue (signaled), LRU, LFU, Bloom Filter, Skip List, Trie, Union‑Find
+
+```text
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=CursorContainer; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_Cursor; BENCH=BenchmarkCANARY_REQ_GQL_068_Cursor; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=SignaledQueue; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_SignaledQueue; BENCH=BenchmarkCANARY_REQ_GQL_068_SignaledQueue; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=LRUCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_LRU; BENCH=BenchmarkCANARY_REQ_GQL_068_LRU; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=LFUCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_LFU; BENCH=BenchmarkCANARY_REQ_GQL_068_LFU; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=BloomFilterContainer; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_BloomFilter; BENCH=BenchmarkCANARY_REQ_GQL_068_BloomFilter; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=SkipList; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_SkipList; BENCH=BenchmarkCANARY_REQ_GQL_068_SkipList; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=Trie; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_Trie; BENCH=BenchmarkCANARY_REQ_GQL_068_Trie; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=UnionFind; STATUS=STUB; TEST=TestCANARY_REQ_GQL_068_UnionFind; BENCH=BenchmarkCANARY_REQ_GQL_068_UnionFind; OWNER=graph; UPDATED=2025-09-20
+```
+
+// CDC Core API (added post initial registration but tracked under REQ-GQL-042)
+CANARY: REQ=REQ-GQL-042; FEATURE="CDC Core API"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_CoreStartStop; OWNER=streaming; UPDATED=2025-09-20
+// Umbrella CDC integrative aspects promoted via new integrative tests (no code changes → keep original date)
+CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=APIUmbrella; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_E2EUmbrella; OWNER=streaming; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-042; FEATURE="CDC/Streaming"; ASPECT=APIUmbrella; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella; OWNER=streaming; UPDATED=2025-09-20
+
+### 8.10 Probabilistic Structures
+
+- Bloom Filter (multi‑hash), Count‑Min Sketch (planned)
+
+```text
+CANARY: REQ=REQ-GQL-069; FEATURE="Probabilistic"; ASPECT=BloomFilterMultiHash; STATUS=STUB; TEST=TestCANARY_REQ_GQL_069_BloomFilterMultiHash; BENCH=BenchmarkCANARY_REQ_GQL_069_BloomFilterMultiHash; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-069; FEATURE="Probabilistic"; ASPECT=CountMinSketch; STATUS=STUB; TEST=TestCANARY_REQ_GQL_069_CountMinSketch; BENCH=BenchmarkCANARY_REQ_GQL_069_CountMinSketch; OWNER=graph; UPDATED=2025-09-20
+```
+
+### 8.11 String Search (Partial)
+
+- KMP, Rabin–Karp (pending slice utilities refactor) — initially registered as STUB for tracking
+
+```text
+CANARY: REQ=REQ-GQL-070; FEATURE="String Search"; ASPECT=KMP; STATUS=STUB; TEST=TestCANARY_REQ_GQL_070_KMP; BENCH=BenchmarkCANARY_REQ_GQL_070_KMP; OWNER=graph; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-070; FEATURE="String Search"; ASPECT=RabinKarp; STATUS=STUB; TEST=TestCANARY_REQ_GQL_070_RabinKarp; BENCH=BenchmarkCANARY_REQ_GQL_070_RabinKarp; OWNER=graph; UPDATED=2025-09-20
+```
+
+### Promotion Criteria (All Graph Algorithm Requirements)
+
+1. TESTED: Deterministic correctness tests (small canonical graphs) + edge cases (empty graph, disconnected, negative or zero weights where valid, multi‑component, pathological ordering).
+2. BENCHED: Performance harness on synthetic + scale graphs (power‑law and uniform) with fixed seeds; memory & time metrics captured.
+3. Optional: Cross‑validation against reference outputs (e.g., PageRank tolerance, centrality ranking stability) with documented tolerances.
+
+Initial prioritization sequence (execution path enablement): 060 → 062 → 063 → 064/065 → 067 (PageRank first) → 066 (flow) → 068 (containers for optimizations) → 061 (DOT import/export) → 069/070.
+
+## 9. Advanced Domain Specifications: Grey Cardinal & Hyperledger Integration (Planned)
+
+These requirements formalize research outputs from `specs/grey-cardinal` and `specs/hyperledger` into tracked, evidence‑gated implementation targets. They extend the core system with composite centrality analytics (Grey Cardinal) and blockchain / ledger‑aware transactional semantics (Hyperledger-inspired conflict control & graph isomorphism for MVCC validation). All start at **STUB** status.
+
+### 9.1 Grey Cardinal Composite Analytics
+
+Scope: Compose multiple centrality measures with weighting + normalization to produce a single Grey Cardinal score and ranked output; support incremental recomputation and explainability metadata (component contributions). Research sources in `specs/grey-cardinal/`.
+
+Deliverables / Aspects:
+
+- Metric Composition Engine (weighted aggregation + z-score or min-max normalization)
+- Incremental Update (affected subgraph delta propagation)
+- Explainability Export (per-node component vector + final score)
+- Ranking Stability Bench (sensitivity under minor edge perturbations)
+- API Surface (GQL extension function `GREY_CARDINAL(node)` guarded by Flagger)
+
+```text
+CANARY: REQ=REQ-GQL-071; FEATURE="GreyCardinal"; ASPECT=MetricCompositionEngine; STATUS=STUB; TEST=TestCANARY_REQ_GQL_071_MetricComposition; BENCH=BenchmarkCANARY_REQ_GQL_071_MetricComposition; OWNER=analytics; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-071; FEATURE="GreyCardinal"; ASPECT=IncrementalUpdate; STATUS=STUB; TEST=TestCANARY_REQ_GQL_071_IncrementalUpdate; BENCH=BenchmarkCANARY_REQ_GQL_071_IncrementalUpdate; OWNER=analytics; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-071; FEATURE="GreyCardinal"; ASPECT=ExplainabilityExport; STATUS=STUB; TEST=TestCANARY_REQ_GQL_071_ExplainabilityExport; BENCH=BenchmarkCANARY_REQ_GQL_071_ExplainabilityExport; OWNER=analytics; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-071; FEATURE="GreyCardinal"; ASPECT=RankingStabilityBench; STATUS=STUB; TEST=TestCANARY_REQ_GQL_071_RankingStability; BENCH=BenchmarkCANARY_REQ_GQL_071_RankingStability; OWNER=analytics; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-071; FEATURE="GreyCardinal"; ASPECT=GqlApiFunction; STATUS=STUB; TEST=TestCANARY_REQ_GQL_071_GqlApiFunction; BENCH=BenchmarkCANARY_REQ_GQL_071_GqlApiFunction; OWNER=analytics; UPDATED=2025-09-20
+```
+
+### 9.2 Hyperledger‑Inspired Graph MVCC & Conflict Control
+
+Scope: Integrate concepts from Fabric transaction conflict handling & graph isomorphism validation for multi-statement GQL transactions to detect semantic conflicts beyond simple key/version checks. Research sources in `specs/hyperledger/`.
+
+Deliverables / Aspects:
+
+- Read/Write Set Graph Projection (capture property & structural dependencies per txn)
+- Isomorphic Conflict Detection (pattern equivalence rather than raw id collision)
+- Deferred Validation Phase (pre-commit validation window & abort classification)
+- Conflict Classification Diagnostics (extended status codes mapping to ISO additional statuses)
+- Benchmark: Conflict Throughput & Abort Ratio under mixed workloads
+
+```text
+CANARY: REQ=REQ-GQL-072; FEATURE="HyperledgerGraphMVCC"; ASPECT=RwSetGraphProjection; STATUS=STUB; TEST=TestCANARY_REQ_GQL_072_RwSetGraphProjection; BENCH=BenchmarkCANARY_REQ_GQL_072_RwSetGraphProjection; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-072; FEATURE="HyperledgerGraphMVCC"; ASPECT=IsomorphicConflictDetection; STATUS=STUB; TEST=TestCANARY_REQ_GQL_072_IsomorphicConflict; BENCH=BenchmarkCANARY_REQ_GQL_072_IsomorphicConflict; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-072; FEATURE="HyperledgerGraphMVCC"; ASPECT=DeferredValidationPhase; STATUS=STUB; TEST=TestCANARY_REQ_GQL_072_DeferredValidation; BENCH=BenchmarkCANARY_REQ_GQL_072_DeferredValidation; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-072; FEATURE="HyperledgerGraphMVCC"; ASPECT=ConflictClassificationDiagnostics; STATUS=STUB; TEST=TestCANARY_REQ_GQL_072_ConflictClassification; BENCH=BenchmarkCANARY_REQ_GQL_072_ConflictClassification; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-072; FEATURE="HyperledgerGraphMVCC"; ASPECT=ConflictThroughputBench; STATUS=STUB; TEST=TestCANARY_REQ_GQL_072_ConflictThroughput; BENCH=BenchmarkCANARY_REQ_GQL_072_ConflictThroughput; OWNER=txn; UPDATED=2025-09-20
+```
+
+### Promotion Criteria (Advanced Specs)
+
+Grey Cardinal: Promote aspects to TESTED with deterministic multi-metric fusion tests (fixed seed graphs). BENCHED requires stability variance < specified epsilon across perturbation trials.
+
+Hyperledger MVCC: TESTED requires simulation harness generating conflicting & non-conflicting txns with correct classification; BENCHED adds throughput + abort ratio metrics at target concurrency.
+
+### 9.3 MVCC Advanced Early Conflict Detection & Repair (Planned)
+
+Scope: Extend baseline and Hyperledger-inspired MVCC (REQ-GQL-013 / REQ-GQL-072) with proactive detection and mitigation techniques from research artifacts in `specs/mvcc/` (e.g., early read-write dependency prediction, partial rollback strategies, heuristic reordering). Objective: reduce abort ratio and latency variance under high contention workloads while maintaining Snapshot Isolation semantics (future upgrade path to Serializable Snapshot Isolation documented separately).
+
+Deliverables / Aspects:
+
+- Early Conflict Detection (speculative dependency graph; pre-validation during statement execution)
+- Predictive Version Check (lightweight bloom / summary filters to detect impending version skew before commit window)
+- Conflict Repair Heuristics (local reordering of non-committed operations when safe via commutativity rules)
+- Partial Rollback Mechanism (rollback last statement or subgraph mutation set instead of whole transaction when isolation not violated)
+- Repair Throughput Bench (contention stress harness measuring aborted txn reduction & added overhead)
+
+```text
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=EarlyConflictDetection; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_EarlyConflictDetection; BENCH=BenchmarkCANARY_REQ_GQL_073_EarlyConflictDetection; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveVersionCheck; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_PredictiveVersionCheck; BENCH=BenchmarkCANARY_REQ_GQL_073_PredictiveVersionCheck; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=ConflictRepairHeuristics; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_ConflictRepairHeuristics; BENCH=BenchmarkCANARY_REQ_GQL_073_ConflictRepairHeuristics; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PartialRollbackMechanism; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_PartialRollbackMechanism; BENCH=BenchmarkCANARY_REQ_GQL_073_PartialRollbackMechanism; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=RepairThroughputBench; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_RepairThroughputBench; BENCH=BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench; OWNER=txn; UPDATED=2025-09-20
+```
+
+Promotion Criteria (MVCC Advanced):
+
+1. TESTED: Harness generates high-contention workload (configurable hot set %) validating: (a) early detection triggers prior to final validation; (b) false-positive rate bounded (document threshold). Partial rollback tests ensure transaction-level atomicity is preserved.
+2. BENCHED: Measure abort ratio reduction ≥ target (document baseline vs improved) and added latency overhead ≤ threshold percentage; publish JSON metrics.
+3. Evidence must link to isolation invariants: no phenomena violating Snapshot Isolation (G0, G1 anomalies) introduced by heuristics / partial rollback.
+
+#### 9.3.1 MVCC Advanced Phase 2 (Extended Roadmap)
+
+Additional optional enhancements (tracking under the same requirement id) targeting abort ratio reduction, improved precision of early detection, and richer observability. All start at STUB.
+
+Deliverables / New Aspects:
+
+- Sub‑Transaction Rollback Integration (stacked sub‑txn scopes, partial undo without full abort)
+- False Positive Reduction (refined early conflict decision requiring write overlap / access classification)
+- Predictive Skew Filter (enhanced version summary with lightweight probabilistic mismatch filter)
+- Topological Repair Heuristic (dependency graph + safe operation reordering pass)
+- Advanced MVCC Telemetry (exposed counters & snapshot API)
+- Realistic Contention Benchmark (parametric workload: read/write ratio, hot set %, deterministic RNG)
+
+```text
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=SubTxnRollbackIntegration; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_SubTxnRollbackIntegration; BENCH=BenchmarkCANARY_REQ_GQL_073_SubTxnRollbackIntegration; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=FalsePositiveReduction; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_FalsePositiveReduction; BENCH=BenchmarkCANARY_REQ_GQL_073_FalsePositiveReduction; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; BENCH=BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=TopologicalRepairHeuristic; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_TopologicalRepairHeuristic; BENCH=BenchmarkCANARY_REQ_GQL_073_TopologicalRepairHeuristic; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=AdvancedMvccTelemetry; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_AdvancedMvccTelemetry; BENCH=BenchmarkCANARY_REQ_GQL_073_AdvancedMvccTelemetry; OWNER=txn; UPDATED=2025-09-20
+CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=RealisticContentionBenchmark; STATUS=STUB; TEST=TestCANARY_REQ_GQL_073_RealisticContentionBenchmark; BENCH=BenchmarkCANARY_REQ_GQL_073_RealisticContentionBenchmark; OWNER=txn; UPDATED=2025-09-20
+```
+
+Phase 2 Promotion Criteria:
+
+1. TESTED: Each aspect backed by deterministic unit/integration test demonstrating functional semantics (e.g., sub‑txn rollback only reverts inner scope writes; false positive reduction lowers early aborts on pure read overlaps).
+2. BENCHED: Benchmark harness captures abort ratio delta vs baseline (≥ defined improvement threshold) and exports JSON metrics; contention benchmark emits structured stats (attempts, early_aborts, repaired, partial_rollbacks, false_positive_estimate).
+3. Telemetry counters stable across repeated runs (variance <5% for identical seed) ensuring observability reliability.

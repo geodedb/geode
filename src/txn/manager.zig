@@ -1,5 +1,8 @@
 const std = @import("std");
+const mvcc_adv = @import("mvcc_adv");
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_TxnCommit; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SSIPhantomPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=engine; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-21
 
 pub const TxnId = u64;
 
@@ -79,6 +82,7 @@ pub const Manager = struct {
     wait_for_graph: std.AutoHashMap(TxnId, std.ArrayList(TxnId)) = undefined, // deadlock detection
     conflict_matrix: ConflictMatrix = undefined, // write-write conflict detection
     allocator: std.mem.Allocator,
+    advanced: ?mvcc_adv.Aggregator = null, // advanced MVCC instrumentation (optional)
 
     pub fn init(self: *Manager, ally: std.mem.Allocator) void {
         self.* = .{
@@ -93,6 +97,7 @@ pub const Manager = struct {
     }
 
     pub fn deinit(self: *Manager) void {
+        if (self.advanced) |*adv| adv.deinit();
         // Clean up lock lists and keys
         var lock_iter = self.locks.iterator();
         while (lock_iter.next()) |entry| {
@@ -112,6 +117,17 @@ pub const Manager = struct {
         self.active_txns.deinit();
     }
 
+    pub fn enableAdvanced(self: *Manager) !void {
+        if (self.advanced == null) {
+            self.advanced = try mvcc_adv.Aggregator.init(self.allocator);
+        }
+    }
+
+    pub fn enablePredictiveSkew(self: *Manager) !void {
+        try self.enableAdvanced();
+        if (self.advanced) |*adv| adv.enableSkew();
+    }
+
     pub fn begin(self: *Manager) Txn {
         const id = self.next_id;
         self.next_id += 1;
@@ -123,6 +139,18 @@ pub const Manager = struct {
     }
 
     pub fn commit(self: *Manager, txn: *Txn) !void {
+        if (self.advanced) |*adv| {
+            var iter = self.active_txns.iterator();
+            while (iter.next()) |entry| {
+                const other = entry.value_ptr.*;
+                if (other.id == txn.id) continue;
+                if (adv.predictOverlap(txn.id, other.id)) {
+                    if (txn.id > other.id and other.state == .Active) {
+                        return error.EarlyConflict;
+                    }
+                }
+            }
+        }
         // Check for write-write conflicts before committing
         if (try self.hasWriteWriteConflicts(txn.id)) {
             return error.SerializationFailure;
@@ -202,6 +230,11 @@ pub const Manager = struct {
 
     // Enhanced lock acquisition with conflict detection
     pub fn acquireLock(self: *Manager, key: []const u8, txn: *Txn, mode: LockMode, ally: std.mem.Allocator) !void {
+        if (mode == .Exclusive) {
+            if (self.advanced) |*adv| if (adv.skew) |*f| {
+                if (f.isHot(key)) return error.HotSkew;
+            };
+        }
         const entry = try self.locks.getOrPut(key);
         if (!entry.found_existing) {
             entry.key_ptr.* = try ally.dupe(u8, key);
@@ -262,6 +295,23 @@ pub const Manager = struct {
 
         // Grant the lock
         try lock_list.append(self.allocator, LockEntry{ .txn_id = txn.id, .mode = mode });
+        if (self.advanced) |*adv| {
+            if (mode == .Exclusive) {
+                adv.noteWrite(txn.id, key, txn.start_ts) catch {};
+            } else {
+                adv.noteRead(txn.id, key) catch {};
+            }
+        }
+    }
+
+    // existing enableAdvanced relocated above
+
+    pub fn recordRead(self: *Manager, key: []const u8, txn: *Txn) void {
+        if (self.advanced) |*adv| adv.noteRead(txn.id, key) catch {};
+    }
+
+    pub fn recordWrite(self: *Manager, key: []const u8, txn: *Txn) void {
+        if (self.advanced) |*adv| adv.noteWrite(txn.id, key, txn.start_ts) catch {};
     }
 
     fn addWaitFor(self: *Manager, waiter: TxnId, holder: TxnId) !void {

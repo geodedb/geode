@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=STUB; TEST=tests/e2e_distributed_raft.zig; OWNER=distributed; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_040_RaftLeaderElection; BENCH=BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency; OWNER=distributed; UPDATED=2025-09-21
 
 const std = @import("std");
 
@@ -274,7 +274,7 @@ pub const RaftNode = struct {
         return self.log.items[self.log.items.len - 1].term;
     }
 
-    fn startElection(self: *RaftNode) !void {
+    pub fn startElection(self: *RaftNode) !void { // made public for test forcing election deterministically
         if (!self.enable_leader_election) return;
 
         self.state = .candidate;
@@ -289,7 +289,7 @@ pub const RaftNode = struct {
 
         try self.resetElectionTimer();
 
-        // Send RequestVote to all peers
+        // Send RequestVote to all peers (test harness may directly inject responses)
         if (self.send_message_callback) |callback| {
             const request = RequestVoteRequest{
                 .term = self.current_term,
