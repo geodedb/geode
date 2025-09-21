@@ -53,6 +53,13 @@ const _benchmark_closeness_variance = @import("benchmark_closeness_variance.zig"
 const _benchmark_eigenvector_variance = @import("benchmark_eigenvector_variance.zig");
 const _benchmark_cdc_apply_batch_variance = @import("benchmark_cdc_apply_batch_variance.zig");
 const _canary_txn_snapshot_readview = @import("canary_txn_snapshot_readview.zig");
+const _benchmark_wal_adaptive_policy_latency_variance = @import("benchmark_wal_adaptive_policy_latency_variance.zig");
+const _benchmark_mvcc_repair_throughput_variance = @import("benchmark_mvcc_repair_throughput_variance.zig");
+const _benchmark_graph_builder_throughput_variance = @import("benchmark_graph_builder_throughput_variance.zig");
+const _benchmark_constraint_perf_variance = @import("benchmark_constraint_perf_variance.zig");
+const _benchmark_wal_compaction_variance = @import("benchmark_wal_compaction_variance.zig");
+const _benchmark_tenant_registry_variance = @import("benchmark_tenant_registry_variance.zig");
+const _benchmark_gpu_flagger_enumeration_variance = @import("benchmark_gpu_flagger_enumeration_variance.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

@@ -17,7 +17,7 @@ Recent BENCH promotions include: Dijkstra, Biconnected Components, Bridges/Artic
 
 Objectives:
 
-1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- IMPLEMENTED (10 guards landed): GreyCardinalComposite, TxnConflictMatrix, SSIPhantomPrevention, PageRank, Betweenness, PropertyAccessHotPath, PathExpandBreadth, Closeness, Eigenvector, CDCApplyBatchLatency. Next candidates: WALAdaptivePolicyLatency, MVCCRepairThroughput, GraphBuilderThroughput.
+1. Variance profiling for BENCHED aspects (establish p95 runtime envelopes; fail CI on >15% regression). -- IMPLEMENTED (17 guards landed): GreyCardinalComposite, TxnConflictMatrix, SSIPhantomPrevention, PageRank, Betweenness, PropertyAccessHotPath, PathExpandBreadth, Closeness, Eigenvector, CDCApplyBatchLatency, WALAdaptivePolicyLatency, MVCCRepairThroughput, GraphBuilderThroughput, ConstraintPerfVariance, WalCompactionVariance, TenantRegistryVariance, GPUFlaggerEnumerationVariance.
 2. Freshness guard: pre-empt staleness by flagging UPDATED dates approaching 50 days. -- Tool implemented (StatusFreshnessGuard) monitoring WARN>=50 FAIL>=60 days.
 3. Hardening: WAL failure injection, Raft partition simulation, CDC adaptive threshold jitter tests.
 4. Documentation linking: auto-generate summary deltas into `IMPLEMENTATION_REALITY.md`.
@@ -49,19 +49,19 @@ Objectives:
 
 ## LATER (Architecture & Scale)
 
-1. **REQ-GQL-050 Multi-Tenancy** (NEW)
+1. **REQ-GQL-050 Multi-Tenancy** (IN PROGRESS)
 
-   - Design tenant isolation model
-   - Initial CANARY: STATUS=STUB with design doc
+   - Tenant registry stub implemented (TenantRegistry & TenantRegistryBasic aspects TESTED)
+   - Future: isolation enforcement, per-tenant resource quotas
 
-2. **REQ-GQL-051 GPU Acceleration** (NEW)
+2. **REQ-GQL-051 GPU Acceleration** (IN PROGRESS)
 
-   - Path expansion on GPU
-   - Initial CANARY: STATUS=STUB with POC
+   - GPU flagger stub implemented (GPUFlagger & GPUFlaggerUnsupported aspects TESTED)
+   - Future: kernel dispatch abstraction, device capability querying
 
-3. **REQ-GQL-052 Federation** (NEW)
-   - Cross-instance query routing
-   - Initial CANARY: STATUS=STUB with protocol spec
+3. **REQ-GQL-052 Federation** (IN PROGRESS)
+   - Federation router stub implemented (FederationRouter & FederationRouterUnsupported aspects TESTED)
+   - Future: shard map, routing policy, cross-shard txn strategy
 
 ## Recently Completed Slices (Traversal + Probabilistic)
 

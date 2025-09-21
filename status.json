@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T15:33:05.041662994Z",
+  "generated_at": "2025-09-21T18:10:25.361738991Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -436,6 +436,20 @@
         },
         {
           "feature": "Transactions/MVCC",
+          "aspect": "MVCCRepairThroughputVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_mvcc_repair_throughput_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_013_MVCCRepairThroughputVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Transactions/MVCC",
           "aspect": "SSIPhantomPrevention",
           "status": "TESTED",
           "files": [
@@ -754,6 +768,20 @@
           "updated": "2025-09-20"
         },
         {
+          "feature": "WAL Adaptive Policy",
+          "aspect": "WalAdaptivePolicyLatencyVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_wal_adaptive_policy_latency_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicyLatencyVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-21"
+        },
+        {
           "feature": "WAL Compaction",
           "aspect": "CorruptPageRecovery",
           "status": "TESTED",
@@ -785,6 +813,20 @@
           ],
           "owner": "storage",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "WAL Compaction",
+          "aspect": "WalCompactionVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_wal_compaction_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_WalCompactionVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-21"
         },
         {
           "feature": "WAL/Recovery",
@@ -1032,6 +1074,20 @@
           ],
           "owner": "schema",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "Schema Constraints Performance",
+          "aspect": "ConstraintPerfVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_constraint_perf_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_032_ConstraintPerfVarianceEnvelope"
+          ],
+          "owner": "schema",
+          "updated": "2025-09-21"
         },
         {
           "feature": "Schema Constraints Performance",
@@ -1917,6 +1973,128 @@
           "benches": [],
           "owner": "dist",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Multi-Tenancy",
+          "aspect": "TenantRegistry",
+          "status": "TESTED",
+          "files": [
+            "src/multitenancy/registry.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_050_TenantRegistryBasic"
+          ],
+          "benches": [],
+          "owner": "dist",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Multi-Tenancy",
+          "aspect": "TenantRegistryBasic",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_tenant_registry_basic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_050_TenantRegistryBasic"
+          ],
+          "benches": [],
+          "owner": "dist",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Multi-Tenancy",
+          "aspect": "TenantRegistryVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_tenant_registry_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_050_TenantRegistryVarianceEnvelope"
+          ],
+          "owner": "dist",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-051",
+      "features": [
+        {
+          "feature": "GPU Acceleration",
+          "aspect": "GPUFlagger",
+          "status": "TESTED",
+          "files": [
+            "src/gpu/flagger.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_051_GPUFlaggerUnsupported"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GPU Acceleration",
+          "aspect": "GPUFlaggerEnumerationVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_gpu_flagger_enumeration_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_051_GPUFlaggerEnumerationVarianceEnvelope"
+          ],
+          "owner": "exec",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GPU Acceleration",
+          "aspect": "GPUFlaggerUnsupported",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_gpu_flagger_unsupported.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_051_GPUFlaggerUnsupportedStandalone"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-052",
+      "features": [
+        {
+          "feature": "Federation",
+          "aspect": "FederationRouter",
+          "status": "TESTED",
+          "files": [
+            "src/federation/router.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationRouterUnsupported"
+          ],
+          "benches": [],
+          "owner": "dist",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Federation",
+          "aspect": "FederationRouterUnsupported",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_federation_router_unsupported.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationRouterUnsupported"
+          ],
+          "benches": [],
+          "owner": "dist",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -1948,6 +2126,20 @@
             "TestCANARY_REQ_GQL_060_CoreGraphBuilders"
           ],
           "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Core Graph Builders",
+          "aspect": "GraphBuilderThroughputVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_graph_builder_throughput_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_060_GraphBuilderThroughputVarianceEnvelope"
+          ],
           "owner": "graph",
           "updated": "2025-09-21"
         }
@@ -2300,7 +2492,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -2316,7 +2508,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -2625,7 +2817,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
+            "src/graph/containers/count_min_sketch.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -2641,7 +2833,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "src/graph/containers/count_min_sketch.zig"
+            "tests/benchmark_count_min_sketch_container.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -2745,6 +2937,20 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -2755,20 +2961,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -2859,8 +3051,8 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 85,
-      "TESTED": 97
+      "BENCHED": 92,
+      "TESTED": 103
     },
     "by_aspect": {
       "API": 7,
@@ -2895,6 +3087,7 @@
       "ConcurrencySafeGraph": 1,
       "ConflictRepairHeuristics": 1,
       "ConstraintPerf": 1,
+      "ConstraintPerfVarianceEnvelope": 1,
       "CorruptPageRecovery": 2,
       "CountMinSketch": 2,
       "CycleDetectDirected": 1,
@@ -2917,6 +3110,12 @@
       "EventCapture": 1,
       "FailureInjection": 1,
       "FalsePositiveReduction": 1,
+      "FederationRouter": 1,
+      "FederationRouterUnsupported": 1,
+      "GPUFlagger": 1,
+      "GPUFlaggerEnumerationVarianceEnvelope": 1,
+      "GPUFlaggerUnsupported": 1,
+      "GraphBuilderThroughputVarianceEnvelope": 1,
       "GreyCardinalComposite": 1,
       "GreyCardinalVarianceEnvelope": 1,
       "GuardrailReset": 1,
@@ -2931,6 +3130,7 @@
       "Kruskal": 1,
       "LFUCache": 1,
       "LRUCache": 1,
+      "MVCCRepairThroughputVarianceEnvelope": 1,
       "MixedWorkload": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
@@ -2964,6 +3164,9 @@
       "Storage": 9,
       "TarjanSCC": 1,
       "Telemetry": 1,
+      "TenantRegistry": 1,
+      "TenantRegistryBasic": 1,
+      "TenantRegistryVarianceEnvelope": 1,
       "Tooling": 4,
       "TopologicalSortKahn": 1,
       "Traversal": 1,
@@ -2986,6 +3189,8 @@
       "WALTailMalformedPayloadHash": 1,
       "WALTailMalformedSnapshotInterval": 1,
       "WALTailMalformedSnapshotIntervalEnv": 1,
+      "WalAdaptivePolicyLatencyVarianceEnvelope": 1,
+      "WalCompactionVarianceEnvelope": 1,
       "Wire": 4
     }
   }
