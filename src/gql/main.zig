@@ -648,6 +648,12 @@ pub fn main() !void {
                                 try sig_buf.appendSlice(gpa, gb_key_s);
                                 try sig_buf.append(gpa, ')');
                             },
+                            .CountDistinct => {
+                                // Demo harness does not yet distinguish argument; reuse group key for signature context.
+                                try sig_buf.appendSlice(gpa, "countdistinct(");
+                                try sig_buf.appendSlice(gpa, gb_key_s);
+                                try sig_buf.append(gpa, ')');
+                            },
                             .Sum => {
                                 try sig_buf.appendSlice(gpa, "sum(");
                                 try sig_buf.appendSlice(gpa, gb_key_s);

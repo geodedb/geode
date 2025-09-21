@@ -141,6 +141,42 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
     return buf.toOwnedSlice(ally);
 }
 
+/// Enumerate implementation-defined / dependent behavior flags surfaced in protocol frames.
+/// These are prefixed with categories:
+///  I: Implementation-defined
+///  U: Usage / policy toggle
+/// Returned slice lifetime: caller owned (single allocation of joined strings).
+pub fn collectImplementationFlags(ally: std.mem.Allocator) ![][]const u8 {
+    // For now, static list; future: driven by runtime config (collation, null ordering, tie-break).
+    const entries = [_][]const u8{
+        "I:IllegalOrderKeyPolicy=ident-only",
+        "I:NullsFirstPolicy", // default null ordering (NULLS FIRST) policy
+        "I:PathTieBreak=LengthId", // UA005/UA006 deterministic ordering
+        "I:Collation=binary", // binary collation default
+    };
+    var out = try ally.alloc([]const u8, entries.len);
+    var i: usize = 0;
+    while (i < entries.len) : (i += 1) out[i] = entries[i];
+    return out;
+}
+
+test "TestCANARY_REQ_GQL_005_ProtocolImplementationFlagsEnumeration" {
+    const flags = try collectImplementationFlags(std.testing.allocator);
+    defer std.testing.allocator.free(flags);
+    // Basic presence checks
+    var found_illegal: bool = false;
+    var found_nulls: bool = false;
+    var found_tiebreak: bool = false;
+    var found_collation: bool = false;
+    for (flags) |f| {
+        if (std.mem.eql(u8, f, "I:IllegalOrderKeyPolicy=ident-only")) found_illegal = true;
+        if (std.mem.eql(u8, f, "I:NullsFirstPolicy")) found_nulls = true;
+        if (std.mem.eql(u8, f, "I:PathTieBreak=LengthId")) found_tiebreak = true;
+        if (std.mem.eql(u8, f, "I:Collation=binary")) found_collation = true;
+    }
+    try std.testing.expect(found_illegal and found_nulls and found_tiebreak and found_collation);
+}
+
 pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
     errdefer buf.deinit(ally);

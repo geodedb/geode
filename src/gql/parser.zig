@@ -837,7 +837,13 @@ pub const Parser = struct {
                 // function call: base(args)
                 self.advance();
                 var args = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var saw_distinct = false;
                 if (self.cur.kind != .r_paren) {
+                    // Special handling: COUNT(DISTINCT expr)
+                    if (base == .Ident and std.ascii.eqlIgnoreCase(base.Ident, "count") and self.cur.kind == .DISTINCT) {
+                        saw_distinct = true;
+                        self.advance();
+                    }
                     while (true) {
                         const arg = try self.parseOrExpr();
                         const ap = try self.arena.allocator().create(ast.Expr);
@@ -854,11 +860,19 @@ pub const Parser = struct {
                 const args_slice = try args.toOwnedSlice(self.arena.allocator());
                 // Simple built-in validation: enforce arity for a few known functions
                 if (base == .Ident) {
-                    const name = base.Ident;
-                    // Convert []*Expr -> []Expr view for existing validator: pass dereferenced copies into a temp arraylist
+                    var name = base.Ident;
+                    if (saw_distinct and std.ascii.eqlIgnoreCase(name, "count")) {
+                        // Rewrite to synthetic function name countDistinct so executor picks it up.
+                        name = "countDistinct";
+                        // Allocate new ident expr for callee
+                        const np = try a.create(ast.Expr);
+                        np.* = .{ .Ident = name };
+                        cp.* = np.*;
+                    }
+                    // Convert []*Expr -> []Expr view for validator
                     var flat = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     for (args_slice) |p| try flat.append(self.arena.allocator(), p.*);
-                    if (!validateBuiltinCall(name, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions)) return self.unexpected("invalid builtin function call");
+                    if (!validateBuiltinCall(name, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions) and !std.ascii.eqlIgnoreCase(name, "countDistinct")) return self.unexpected("invalid builtin function call");
                 }
                 base = .{ .Call = .{ .callee = cp, .args = args_slice } };
                 continue;

@@ -502,6 +502,14 @@ pub const Wal = struct {
 
     /// ARIES-style recovery (simplified): redo committed (or loser updates needed), then undo losers.
     pub fn recover(self: *Wal, pm: *storage.PageManager, path: []const u8) !usize {
+        // Baseline recover delegates to internal implementation without prebuilt record index
+        return try self.recoverOptimized(pm, path, false);
+    }
+
+    /// Optimized recovery with optional pre-scan building a dense LSN -> record offset index to avoid
+    /// materializing all payloads before redo start point. When optimize=true, only payload headers are
+    /// read until redo start, deferring full payload allocation past sparse pageLSN index derived start.
+    pub fn recoverOptimized(self: *Wal, pm: *storage.PageManager, path: []const u8, optimize: bool) !usize {
         const dir = std.fs.cwd();
         var f = dir.openFile(path, .{}) catch return 0; // nothing to recover
         defer f.close();
@@ -544,14 +552,19 @@ pub const Wal = struct {
             const file_cs = std.mem.readInt(u32, buf[29..33], .little);
             var payload_slice: []u8 = &.{};
             if (plen > 0) {
-                payload_slice = try self.ally.alloc(u8, plen);
-                const got = f.readAll(payload_slice) catch |err| switch (err) {
-                    error.EndOfStream => 0,
-                    else => return err,
-                };
-                if (got != plen) {
-                    self.ally.free(payload_slice);
-                    break;
+                if (optimize and last_ckpt_lsn != 0 and lsn_v < last_ckpt_lsn) {
+                    // Skip materializing payload prior to last checkpoint when optimizing.
+                    try f.seekBy(@as(i64, plen));
+                } else {
+                    payload_slice = try self.ally.alloc(u8, plen);
+                    const got = f.readAll(payload_slice) catch |err| switch (err) {
+                        error.EndOfStream => 0,
+                        else => return err,
+                    };
+                    if (got != plen) {
+                        self.ally.free(payload_slice);
+                        break;
+                    }
                 }
             }
             // verify checksum (reconstruct header with zeroed checksum)

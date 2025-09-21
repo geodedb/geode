@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T20:25:31.647748238Z",
+  "generated_at": "2025-09-21T21:03:19.232333626Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -360,6 +360,104 @@
       "id": "REQ-GQL-012",
       "features": [
         {
+          "feature": "Aggregation COUNT DISTINCT",
+          "aspect": "CountDistinct",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_CountDistinctExec"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Aggregation COUNT DISTINCT",
+          "aspect": "CountDistinctParser",
+          "status": "TESTED",
+          "files": [
+            "tests/test_count_distinct_parser.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_CountDistinctParser"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Aggregation COUNT DISTINCT",
+          "aspect": "CountDistinctVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_count_distinct_variance.zig"
+          ],
+          "tests": [
+            "BenchmarkCANARY_REQ_GQL_012_CountDistinctVarianceEnvelope"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Aggregation COUNT DISTINCT",
+          "aspect": "HashAggDistinctSpillEvictVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_hashagg_distinct_spill_evict_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctSpillEvictVarianceEnvelope"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "AvgVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_avg_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "DecimalOverflowAvg",
+          "status": "TESTED",
+          "files": [
+            "tests/test_decimal_overflow_aggregates.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_DecimalOverflowAvg"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "DecimalOverflowSum",
+          "status": "TESTED",
+          "files": [
+            "tests/test_decimal_overflow_aggregates.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_DecimalOverflowSum"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
           "feature": "GROUP BY/Aggregation",
           "aspect": "Engine",
           "status": "TESTED",
@@ -372,6 +470,90 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "HashAggDistinctHighCardVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_hashagg_distinct_variance.zig"
+          ],
+          "tests": [
+            "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "HashAggSpillEvict",
+          "status": "TESTED",
+          "files": [
+            "tests/test_hashagg_spill_evict.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_HashAggSpillEvict"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "HashAggSpillEvictVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_hashagg_spill_evict_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_012_HashAggSpillEvictVarianceEnvelope"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "HashAggSpillFlag",
+          "status": "TESTED",
+          "files": [
+            "tests/test_hashagg_spill_flag.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_HashAggSpillFlag"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "HashAggSpillVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_hashagg_spill_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope"
+          ],
+          "owner": "engine",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "GROUP BY/Aggregation",
+          "aspect": "HavingCountDistinctFilter",
+          "status": "TESTED",
+          "files": [
+            "tests/test_groupby_having_count_distinct.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_012_HavingCountDistinctFilter"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -883,6 +1065,20 @@
         },
         {
           "feature": "Query Planner",
+          "aspect": "PlannerPhaseRealTimingIntegration",
+          "status": "TESTED",
+          "files": [
+            "src/planner/pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
           "aspect": "PlannerPipelineOrchestration",
           "status": "BENCHED",
           "files": [
@@ -893,6 +1089,20 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
+          "aspect": "PlannerPipelineP95MeanVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_planner_pipeline_p95_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineP95MeanVarianceEnvelope"
           ],
           "owner": "planner",
           "updated": "2025-09-21"
@@ -922,6 +1132,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_PlannerRewritePassVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "Query Planner",
+          "aspect": "PlannerSubPhaseHooks",
+          "status": "TESTED",
+          "files": [
+            "src/planner.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-21"
         },
@@ -1637,20 +1861,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
-          ],
-          "benches": [],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_cdc_adaptive_diff_perf.zig"
@@ -1659,6 +1869,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
           ],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
+          ],
+          "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -2573,6 +2797,20 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -2585,20 +2823,6 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -2738,20 +2962,6 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -2762,6 +2972,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -2898,7 +3122,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -2914,7 +3138,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -3357,6 +3581,20 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -3367,20 +3605,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -3455,8 +3679,8 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 119,
-      "TESTED": 103
+      "BENCHED": 126,
+      "TESTED": 112
     },
     "by_aspect": {
       "API": 7,
@@ -3470,6 +3694,7 @@
       "AdaptiveJitterThresholds": 1,
       "AdaptiveReplanExecutionIntegration": 1,
       "AdaptiveStressHarness": 1,
+      "AvgVarianceEnvelope": 1,
       "BFS": 2,
       "Backpressure": 1,
       "BackpressureAdaptive": 1,
@@ -3495,11 +3720,16 @@
       "ConstraintPerf": 1,
       "ConstraintPerfVarianceEnvelope": 1,
       "CorruptPageRecovery": 2,
+      "CountDistinct": 1,
+      "CountDistinctParser": 1,
+      "CountDistinctVarianceEnvelope": 1,
       "CountMinSketch": 2,
       "CycleDetectDirected": 1,
       "CycleDetectUndirected": 1,
       "DFSIterative": 1,
       "DagShortestPath": 1,
+      "DecimalOverflowAvg": 1,
+      "DecimalOverflowSum": 1,
       "DiagnosticsExport": 1,
       "Dijkstra": 1,
       "Dinic": 1,
@@ -3528,6 +3758,13 @@
       "GreyCardinalVarianceEnvelope": 1,
       "GuardrailReset": 1,
       "GuardrailTimestampsMonotonic": 1,
+      "HashAggDistinctHighCardVarianceEnvelope": 1,
+      "HashAggDistinctSpillEvictVarianceEnvelope": 1,
+      "HashAggSpillEvict": 1,
+      "HashAggSpillEvictVarianceEnvelope": 1,
+      "HashAggSpillFlag": 1,
+      "HashAggSpillVarianceEnvelope": 1,
+      "HavingCountDistinctFilter": 1,
       "HopcroftKarp": 1,
       "IDDFS": 1,
       "ImplementationRealityDeltaTool": 1,
@@ -3566,9 +3803,12 @@
       "PlannerCardinalityEstimateVarianceEnvelope": 1,
       "PlannerCostModelPhaseTiming": 1,
       "PlannerCostModelPhaseVarianceEnvelope": 1,
+      "PlannerPhaseRealTimingIntegration": 1,
       "PlannerPipelineOrchestration": 1,
+      "PlannerPipelineP95MeanVarianceEnvelope": 1,
       "PlannerPipelineVarianceEnvelope": 1,
       "PlannerRewritePassVarianceEnvelope": 1,
+      "PlannerSubPhaseHooks": 1,
       "PredictiveSkewFilter": 2,
       "PredictiveVersionCheck": 1,
       "Prim": 1,

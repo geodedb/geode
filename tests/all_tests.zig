@@ -61,6 +61,8 @@ const _benchmark_wal_compaction_variance = @import("benchmark_wal_compaction_var
 const _benchmark_tenant_registry_variance = @import("benchmark_tenant_registry_variance.zig");
 const _benchmark_gpu_flagger_enumeration_variance = @import("benchmark_gpu_flagger_enumeration_variance.zig");
 const _benchmark_unique_perf_variance = @import("benchmark_unique_perf_variance.zig");
+const _path_quantifier_tiebreak_stress = @import("test_path_quantifier_tiebreak_stress.zig");
+const _benchmark_wal_redo_optimized_variance = @import("benchmark_wal_redo_optimized_variance.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

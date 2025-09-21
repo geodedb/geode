@@ -4,7 +4,7 @@ const std = @import("std");
 // Provides lightweight timers for rewrite, cardinality estimation, and cost evaluation phases.
 // Collected metrics are used by variance envelope benchmark PlannerCostModelPhaseVarianceEnvelope.
 //
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerCostModelPhaseTiming; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PlannerCostModelPhaseTiming; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerCostModelPhaseTiming; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_021_PlannerCostModelPhaseTiming; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 
 pub const Phase = enum { rewrite, cardinality, cost_eval };
 
@@ -39,6 +39,12 @@ pub const PhaseTimer = struct {
             }
             self.current = null;
         }
+    }
+
+    pub fn snapshot(self: *PhaseTimer) PhaseTimings {
+        // Return a copy; ensures any in-progress phase accounted if needed
+        if (self.current) |_| self.end();
+        return self.timings.*;
     }
 };
 

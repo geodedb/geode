@@ -10,89 +10,92 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 
 ## 1. Evidence Summary
 
-| Metric | Count |
-| ------ | ----- |
-| Total aspects (rows) | 193 |
-| BENCHED | 85 |
-| TESTED (non‑BENCHED) | 107 |
-| STUB | 0 |
-| IMPL (unpromoted) | 0 |
-| Coverage (TESTED or BENCHED) | 100% |
-| Stale (>60d) | 0 |
+| Metric                       | Count |
+| ---------------------------- | ----- |
+| Total aspects (rows)         | 193   |
+| BENCHED                      | 85    |
+| TESTED (non‑BENCHED)         | 107   |
+| STUB                         | 0     |
+| IMPL (unpromoted)            | 0     |
+| Coverage (TESTED or BENCHED) | 100%  |
+| Stale (>60d)                 | 0     |
 
 Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
 
 ## 2. Conformance / Scope Snapshot (ISO/IEC 39075:2024)
 
-| Domain | Status | Notes / Gaps (ISO anchors) |
-| ------ | ------ | -------------------------- |
-| Core Query Parsing (RETURN, ORDER, SET OPS) | TESTED | Basic linear composition (§14), ORDER/LIMIT legality (§16.16–16.19) enforced (US001). |
-| Set Operations (UNION/INTERSECT/EXCEPT) | TESTED | Distinct vs ALL semantics validated; no advanced duplicate elimination costs tracked. |
-| Aggregation / GROUP BY | TESTED | Basic group + SUM; advanced aggregates, HAVING, grouping sets (§14.x) absent. |
-| Paths / Pattern Matching | PARTIAL | Simple expansion; optional patterns & quantified variable lengths incomplete; tie-break (UA005/UA006) policy documented but limited execution. |
-| Transactions (MVCC) | TESTED | Snapshot isolation; phantom prevention bench; full SSI conflict detection coverage incomplete (§17). |
-| Diagnostics | BENCHED/TESTED | Folding & precedence mapping (§23) covered; multi-diagnostic precedence verified. |
-| Conformance Profile / Flagger | PARTIAL | Profile doc exists; automated flagger outputs limited; implementation-defined catalog incomplete (§24). |
-| Storage (Pages + WAL + Recovery) | TESTED/BENCHED | WAL compaction, adaptive policy, flush, recycle variance guarded; crash recovery basic; no ARIES physiological redo optimizations beyond baseline. |
-| Distributed / Raft | EMERGING | Leader election benchmark & test; log replication, membership changes, snapshotting absent. |
-| Security (TDE) | LIMITED | Key hierarchy + rotation bench; no KMS / envelope keys; no auditing of key use. |
-| Advanced Graph Analytics (Centrality, Flows, Matching) | MIXED | Several benches (PageRank, Betweenness, etc.); others still STUB-level in algorithm sources though benches exist for higher-level wrappers. |
+| Domain                                                 | Status         | Notes / Gaps (ISO anchors)                                                                                                                         |
+| ------------------------------------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core Query Parsing (RETURN, ORDER, SET OPS)            | TESTED         | Basic linear composition (§14), ORDER/LIMIT legality (§16.16–16.19) enforced (US001).                                                              |
+| Set Operations (UNION/INTERSECT/EXCEPT)                | TESTED         | Distinct vs ALL semantics validated; no advanced duplicate elimination costs tracked.                                                              |
+| Aggregation / GROUP BY                                 | TESTED         | Basic group + SUM; advanced aggregates, HAVING, grouping sets (§14.x) absent.                                                                      |
+| Paths / Pattern Matching                               | PARTIAL        | Simple expansion; optional patterns & quantified variable lengths incomplete; tie-break (UA005/UA006) policy documented but limited execution.     |
+| Transactions (MVCC)                                    | TESTED         | Snapshot isolation; phantom prevention bench; full SSI conflict detection coverage incomplete (§17).                                               |
+| Diagnostics                                            | BENCHED/TESTED | Folding & precedence mapping (§23) covered; multi-diagnostic precedence verified.                                                                  |
+| Conformance Profile / Flagger                          | PARTIAL        | Profile doc exists; automated flagger outputs limited; implementation-defined catalog incomplete (§24).                                            |
+| Storage (Pages + WAL + Recovery)                       | TESTED/BENCHED | WAL compaction, adaptive policy, flush, recycle variance guarded; crash recovery basic; no ARIES physiological redo optimizations beyond baseline. |
+| Distributed / Raft                                     | EMERGING       | Leader election benchmark & test; log replication, membership changes, snapshotting absent.                                                        |
+| Security (TDE)                                         | LIMITED        | Key hierarchy + rotation bench; no KMS / envelope keys; no auditing of key use.                                                                    |
+| Advanced Graph Analytics (Centrality, Flows, Matching) | MIXED          | Several benches (PageRank, Betweenness, etc.); others still STUB-level in algorithm sources though benches exist for higher-level wrappers.        |
 
 ## 3. High-Priority Gaps (Top 8)
 
-| # | Gap | Impact | Required Evidence to Close | Target Status |
-| - | ---- | ------ | -------------------------- | ------------- |
-| 1 | Path quantifiers & deterministic tie-break full exec | Query correctness on complex patterns | Add tests for bounded variable-length expand; verify UA005/UA006 enforcement | TESTED |
-| 2 | Aggregation breadth (COUNT DISTINCT, AVG, HAVING) | Conformance breadth (§14) | Implement ops + tests & variance bench for hash agg spill | BENCHED |
-| 3 | Raft log replication & commit index advancement | Durability & HA claims | Implement appendEntries flow + tests (success, term mismatch) | TESTED |
-| 4 | Storage ARIES refinement (physiological redo optimizations) | Recovery performance | Bench redo scan vs optimized path; add variance guard | BENCHED |
-| 5 | MVCC phantom prevention robustness (range locks / predicate indexing) | Isolation correctness (§17) | Add targeted phantom test matrix & benchmark overhead | TESTED/BENCHED |
-| 6 | Flagger completeness (impl-defined / dependent items) | Conformance transparency (§24) | Enumerate & test flag outputs for all impl-defined behaviors | TESTED |
-| 7 | Cost model phase stability (planner) | Future optimization reliability | Implement PlannerCostModelPhaseVarianceEnvelope bench | BENCHED |
-| 8 | Path cache implementation + lookup variance | Performance & repeated pattern efficiency | Implement cache + tests + PathCacheLookupVarianceEnvelope | BENCHED |
+| #   | Gap                                                                   | Impact                                    | Required Evidence to Close                                                   | Target Status  |
+| --- | --------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------- | -------------- |
+| 1   | Path quantifiers & deterministic tie-break full exec                  | Query correctness on complex patterns     | Add tests for bounded variable-length expand; verify UA005/UA006 enforcement | TESTED         |
+| 2   | Aggregation breadth (COUNT DISTINCT, AVG, HAVING)                     | Conformance breadth (§14)                 | Implement ops + tests & variance bench for hash agg spill                    | BENCHED        |
+| 3   | Raft log replication & commit index advancement                       | Durability & HA claims                    | Implement appendEntries flow + tests (success, term mismatch)                | TESTED         |
+| 4   | Storage ARIES refinement (physiological redo optimizations)           | Recovery performance                      | Bench redo scan vs optimized path; add variance guard                        | BENCHED        |
+| 5   | MVCC phantom prevention robustness (range locks / predicate indexing) | Isolation correctness (§17)               | Add targeted phantom test matrix & benchmark overhead                        | TESTED/BENCHED |
+| 6   | Flagger completeness (impl-defined / dependent items)                 | Conformance transparency (§24)            | Enumerate & test flag outputs for all impl-defined behaviors                 | TESTED         |
+| 7   | Cost model phase stability (planner)                                  | Future optimization reliability           | Implement PlannerCostModelPhaseVarianceEnvelope bench                        | BENCHED        |
+| 8   | Path cache implementation + lookup variance                           | Performance & repeated pattern efficiency | Implement cache + tests + PathCacheLookupVarianceEnvelope                    | BENCHED        |
 
 ## 4. Implementation-Defined / Dependent Items (Current Catalog – INCOMPLETE)
 
-| Code | Category | Description | Evidence | Status |
-| ---- | -------- | ----------- | -------- | ------ |
-| US001 | Policy | Reject LIMIT/OFFSET without ORDER (default) | Tests: TestCANARY_REQ_GQL_004_UnorderedLimitReject | ENFORCED |
-| UA005/UA006 | Tie-break | Deterministic path expansion tie-break ordering | Tests (basic); missing multi-criteria stress | PARTIAL |
-| (Pending) | Collation | Binary collation default (Unicode collation future optional) | Not yet flagged | MISSING |
-| (Pending) | Null ordering policy override | Configurable but not fully surfaced in flagger | Partial tests | PARTIAL |
+| Code        | Category                      | Description                                                  | Evidence                                           | Status   |
+| ----------- | ----------------------------- | ------------------------------------------------------------ | -------------------------------------------------- | -------- |
+| US001       | Policy                        | Reject LIMIT/OFFSET without ORDER (default)                  | Tests: TestCANARY_REQ_GQL_004_UnorderedLimitReject | ENFORCED |
+| UA005/UA006 | Tie-break                     | Deterministic path expansion tie-break ordering              | Tests (basic); missing multi-criteria stress       | PARTIAL  |
+| (Pending)   | Collation                     | Binary collation default (Unicode collation future optional) | Not yet flagged                                    | MISSING  |
+| (Pending)   | Null ordering policy override | Configurable but not fully surfaced in flagger               | Partial tests                                      | PARTIAL  |
 
 ## 5. Representative Evidence Rows
 
 Below is a concise representative subset (see `status.csv` for the full authoritative table). Rows reflect current BENCHED/TESTED aspects across critical domains.
 
-| Requirement | Feature | Aspect | Status | UPDATED |
-| ----------- | ------- | ------ | ------ | -------- |
-| REQ-GQL-005 | Binary Protocol Core | Wire | TESTED | 2025-09-20 |
-| REQ-GQL-010 | Diagnostics Precedence | Engine | BENCHED | 2025-09-20 |
-| REQ-GQL-013 | Txn Conflict Matrix | Engine | BENCHED | 2025-09-20 |
-| REQ-GQL-016 | Path Expand Breadth | Planner | BENCHED | 2025-09-20 |
-| REQ-GQL-021 | Planner Rewrite Pass | Planner | BENCHED | 2025-09-20 |
-| REQ-GQL-028 | WAL Segment Recycle | WALSegmentRecycleLatencyVarianceEnvelope | BENCHED | 2025-09-21 |
-| REQ-GQL-021 | PathCache | PathCacheLookup | TESTED | 2025-09-21 |
-| REQ-GQL-032 | Schema Constraints Performance | ConstraintPerf | BENCHED | 2025-09-20 |
-| REQ-GQL-042 | CDC Adaptive Flush | AdaptiveFlush | BENCHED | 2025-09-20 |
-| REQ-GQL-046 | TDE Key Rotation Throughput | Storage | BENCHED | 2025-09-20 |
-| REQ-GQL-060 | Core Graph Builders | ConcurrencySafeGraph | TESTED | 2025-09-20 |
-| REQ-GQL-063 | Dijkstra | Dijkstra | BENCHED | 2025-09-20 |
-| REQ-GQL-064 | Biconnected Components | BiconnectedComponents | BENCHED | 2025-09-20 |
-| REQ-GQL-065 | Kruskal | Kruskal | BENCHED | 2025-09-21 |
-| REQ-GQL-067 | PageRank | PageRankVarianceEnvelope | BENCHED | 2025-09-20 |
+| Requirement | Feature                        | Aspect                                    | Status  | UPDATED    |
+| ----------- | ------------------------------ | ----------------------------------------- | ------- | ---------- |
+| REQ-GQL-005 | Binary Protocol Core           | Wire                                      | TESTED  | 2025-09-20 |
+| REQ-GQL-010 | Diagnostics Precedence         | Engine                                    | BENCHED | 2025-09-20 |
+| REQ-GQL-013 | Txn Conflict Matrix            | Engine                                    | BENCHED | 2025-09-20 |
+| REQ-GQL-016 | Path Expand Breadth            | Planner                                   | BENCHED | 2025-09-20 |
+| REQ-GQL-021 | Planner Rewrite Pass           | Planner                                   | BENCHED | 2025-09-20 |
+| REQ-GQL-028 | WAL Segment Recycle            | WALSegmentRecycleLatencyVarianceEnvelope  | BENCHED | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillPersistence           | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalSpillMerge                  | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillEvictVarianceEnvelope | BENCHED | 2025-09-21 |
+| REQ-GQL-021 | PathCache                      | PathCacheLookup                           | TESTED  | 2025-09-21 |
+| REQ-GQL-032 | Schema Constraints Performance | ConstraintPerf                            | BENCHED | 2025-09-20 |
+| REQ-GQL-042 | CDC Adaptive Flush             | AdaptiveFlush                             | BENCHED | 2025-09-20 |
+| REQ-GQL-046 | TDE Key Rotation Throughput    | Storage                                   | BENCHED | 2025-09-20 |
+| REQ-GQL-060 | Core Graph Builders            | ConcurrencySafeGraph                      | TESTED  | 2025-09-20 |
+| REQ-GQL-063 | Dijkstra                       | Dijkstra                                  | BENCHED | 2025-09-20 |
+| REQ-GQL-064 | Biconnected Components         | BiconnectedComponents                     | BENCHED | 2025-09-20 |
+| REQ-GQL-065 | Kruskal                        | Kruskal                                   | BENCHED | 2025-09-21 |
+| REQ-GQL-067 | PageRank                       | PageRankVarianceEnvelope                  | BENCHED | 2025-09-20 |
 
 ## 6. Closing Plan (Rolling)
 
-| Slice | Focus | Exit Criteria | Owner | Planned Evidence |
-| ----- | ----- | ------------- | ----- | ---------------- |
-| S1 | Path Quantifiers & Tie-break Hardening | Tests for bounded variable expand; deterministic ordering multi-branch | planner | New tests + bench (PathExpansionHeuristicVarianceEnvelope already) |
-| S2 | Aggregation Completeness | COUNT DISTINCT, AVG, HAVING tests; spill guard bench | engine | New groupby tests + HashAggVarianceEnvelope |
-| S3 | Raft Replication Minimum Viable | AppendEntries success/failure tests; leader commit advancement | dist | RaftReplicationTests + term mismatch test |
-| S4 | Cost Model Phase Stability | Introduce PlannerCostModelPhaseVarianceEnvelope | planner | New variance bench added |
-| S5 | Path Cache Implementation | Functional cache hits/misses + lookup variance bench | engine | PathCache tests + PathCacheLookupVarianceEnvelope |
-| S6 | ARIES Redo Optimization | Redo scan optimized vs baseline; variance bench | storage | RedoOptimizedBench + time delta assertion |
-| S7 | Flagger Completeness | All impl-defined items enumerated & tests verify presence | docs | FlaggerOutputTests |
+| Slice | Focus                                  | Exit Criteria                                                          | Owner   | Planned Evidence                                                   |
+| ----- | -------------------------------------- | ---------------------------------------------------------------------- | ------- | ------------------------------------------------------------------ |
+| S1    | Path Quantifiers & Tie-break Hardening | Tests for bounded variable expand; deterministic ordering multi-branch | planner | New tests + bench (PathExpansionHeuristicVarianceEnvelope already) |
+| S2    | Aggregation Completeness               | COUNT DISTINCT, AVG, HAVING tests; spill guard bench                   | engine  | New groupby tests + HashAggVarianceEnvelope                        |
+| S3    | Raft Replication Minimum Viable        | AppendEntries success/failure tests; leader commit advancement         | dist    | RaftReplicationTests + term mismatch test                          |
+| S4    | Cost Model Phase Stability             | Introduce PlannerCostModelPhaseVarianceEnvelope                        | planner | New variance bench added                                           |
+| S5    | Path Cache Implementation              | Functional cache hits/misses + lookup variance bench                   | engine  | PathCache tests + PathCacheLookupVarianceEnvelope                  |
+| S6    | ARIES Redo Optimization                | Redo scan optimized vs baseline; variance bench                        | storage | RedoOptimizedBench + time delta assertion                          |
+| S7    | Flagger Completeness                   | All impl-defined items enumerated & tests verify presence              | docs    | FlaggerOutputTests                                                 |
 
 ## 7. Regeneration & Integrity
 

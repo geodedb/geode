@@ -86,6 +86,9 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    // Provide WAL module for recovery optimization benchmarks
+    const wal_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("wal", wal_mod_for_tests);
     // Provide cdc_enhanced module to test aggregator for CDC variance benchmarks
     const cdc_enhanced_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("cdc_enhanced", cdc_enhanced_mod_for_tests);
