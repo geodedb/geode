@@ -379,3 +379,108 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation" {
     defer gpa.allocator().free(k2);
     try std.testing.expect(!std.mem.eql(u8, k1, k2));
 }
+
+test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    // Two queries identical except value type (Int vs String) for same property key
+    var q1: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var q2 = q1;
+    var valInt = planner_root.ast.Expr{ .Int = 7 };
+    var valStr = planner_root.ast.Expr{ .String = "7" };
+    const pInt = planner_root.ast.Property{ .key = "p", .value = &valInt };
+    const pStr = planner_root.ast.Property{ .key = "p", .value = &valStr };
+    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{pInt} };
+    const left2 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{pStr} };
+    const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
+    const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+    const hop1 = planner_root.ast.Hop{ .left = left1, .rel = rel, .right = right };
+    const hop2 = planner_root.ast.Hop{ .left = left2, .rel = rel, .right = right };
+    const chain1 = planner_root.ast.Chain{ .name = null, .hops = &.{hop1} };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
+    q1.match = .{ .chains = &.{chain1} };
+    q2.match = .{ .chains = &.{chain2} };
+    const k1 = try structural_key.deriveStructuralKey(gpa.allocator(), q1);
+    defer gpa.allocator().free(k1);
+    const k2 = try structural_key.deriveStructuralKey(gpa.allocator(), q2);
+    defer gpa.allocator().free(k2);
+    try std.testing.expect(!std.mem.eql(u8, k1, k2));
+}
+
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeySelectivityEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding; OWNER=planner; UPDATED=2025-09-21
+test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    // Build three queries with 0,1,2,4 properties to exercise Z,L,M,H classes on left node.
+    var base: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    // Helper to make prop expr
+    var v1 = planner_root.ast.Expr{ .Int = 1 };
+    var v2 = planner_root.ast.Expr{ .Int = 2 };
+    var v3 = planner_root.ast.Expr{ .Int = 3 };
+    var v4 = planner_root.ast.Expr{ .Int = 4 };
+    const p1 = planner_root.ast.Property{ .key = "a", .value = &v1 };
+    const p2 = planner_root.ast.Property{ .key = "b", .value = &v2 };
+    const p3 = planner_root.ast.Property{ .key = "c", .value = &v3 };
+    const p4 = planner_root.ast.Property{ .key = "d", .value = &v4 };
+    const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+
+    // Z (zero props)
+    var qZ = base;
+    const leftZ = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = null };
+    const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
+    const hopZ = planner_root.ast.Hop{ .left = leftZ, .rel = rel, .right = right };
+    const chainZ = planner_root.ast.Chain{ .name = null, .hops = &.{hopZ} };
+    qZ.match = .{ .chains = &.{chainZ} };
+    const kZ = try structural_key.deriveStructuralKey(gpa.allocator(), qZ);
+    defer gpa.allocator().free(kZ);
+    try std.testing.expect(std.mem.indexOf(u8, kZ, "SZ") != null);
+
+    // L (one prop)
+    var qL = base;
+    const leftL = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{p1} };
+    const hopL = planner_root.ast.Hop{ .left = leftL, .rel = rel, .right = right };
+    const chainL = planner_root.ast.Chain{ .name = null, .hops = &.{hopL} };
+    qL.match = .{ .chains = &.{chainL} };
+    const kL = try structural_key.deriveStructuralKey(gpa.allocator(), qL);
+    defer gpa.allocator().free(kL);
+    try std.testing.expect(std.mem.indexOf(u8, kL, "SL") != null);
+
+    // M (2-3 props)
+    var qM = base;
+    const leftM = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{ p1, p2 } };
+    const hopM = planner_root.ast.Hop{ .left = leftM, .rel = rel, .right = right };
+    const chainM = planner_root.ast.Chain{ .name = null, .hops = &.{hopM} };
+    qM.match = .{ .chains = &.{chainM} };
+    const kM = try structural_key.deriveStructuralKey(gpa.allocator(), qM);
+    defer gpa.allocator().free(kM);
+    try std.testing.expect(std.mem.indexOf(u8, kM, "SM") != null);
+
+    // H (4+ props)
+    var qH = base;
+    const leftH = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{ p1, p2, p3, p4 } };
+    const hopH = planner_root.ast.Hop{ .left = leftH, .rel = rel, .right = right };
+    const chainH = planner_root.ast.Chain{ .name = null, .hops = &.{hopH} };
+    qH.match = .{ .chains = &.{chainH} };
+    const kH = try structural_key.deriveStructuralKey(gpa.allocator(), qH);
+    defer gpa.allocator().free(kH);
+    try std.testing.expect(std.mem.indexOf(u8, kH, "SH") != null);
+}
+
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyDegreeBucketEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; OWNER=planner; UPDATED=2025-09-21
+test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    // Single hop pattern; ensure DBU appears twice (left/right) in key.
+    var q: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    const left = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = null };
+    const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{"R"}, .props = null };
+    const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+    const hop = planner_root.ast.Hop{ .left = left, .rel = rel, .right = right };
+    const chain = planner_root.ast.Chain{ .name = null, .hops = &.{hop} };
+    q.match = .{ .chains = &.{chain} };
+    const key = try structural_key.deriveStructuralKey(gpa.allocator(), q);
+    defer gpa.allocator().free(key);
+    const first = std.mem.indexOf(u8, key, "DBU") orelse return error.NotFound;
+    const second = std.mem.indexOfPos(u8, key, first + 3, "DBU") orelse return error.NotFound;
+    try std.testing.expect(second > first);
+}

@@ -5,6 +5,7 @@ const planner_root = @import("../src/planner.zig");
 // Random structural pattern generator collision benchmark.
 // Generates N random queries and derives structural keys; tracks unique ratio.
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyCollisionEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyCollisionTightened; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope; OWNER=planner; UPDATED=2025-09-21
 
 var seed: u64 = 0x9e3779b97f4a7c15;
 fn rng() u64 {
@@ -115,10 +116,10 @@ test "BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope" {
     }
     const unique = set.count();
     const unique_ratio = @as(f64, @floatFromInt(unique)) / @as(f64, @floatFromInt(N));
-    // Expect structural key enrichment to yield low collision rate: >=90% unique.
-    if (unique_ratio < 0.90) {
-        std.debug.print("VARIANCE_FAIL PathCacheStructuralKeyCollisionEnvelope unique_ratio={d:.3}\n", .{unique_ratio});
+    // Tightened expectation: >=92% unique.
+    if (unique_ratio < 0.92) {
+        std.debug.print("VARIANCE_FAIL PathCacheStructuralKeyCollisionEnvelope unique_ratio={d:.3} (<0.92)\n", .{unique_ratio});
         return error.CollisionRateTooHigh;
     }
-    std.debug.print("VARIANCE_OK PathCacheStructuralKeyCollisionEnvelope unique_ratio={d:.3}\n", .{unique_ratio});
+    std.debug.print("VARIANCE_OK PathCacheStructuralKeyCollisionEnvelope unique_ratio={d:.3} (>=0.92)\n", .{unique_ratio});
 }

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-21T23:33:31.375409422Z",
+  "generated_at": "2025-09-21T23:51:39.25464588Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -44,6 +44,21 @@
     {
       "id": "REQ-GQL-004",
       "features": [
+        {
+          "feature": "Pagination",
+          "aspect": "PaginationOrderedVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_pagination_order_variance.zig",
+            "src/benchmarks/pagination_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_004_PaginationOrderedVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
         {
           "feature": "Pagination Legality (US001)",
           "aspect": "Planner",
@@ -1343,6 +1358,20 @@
         },
         {
           "feature": "PathCache",
+          "aspect": "PathCacheMetricsExport",
+          "status": "TESTED",
+          "files": [
+            "src/planner/path_cache.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheMetricsExport"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
           "aspect": "PathCachePlannerHook",
           "status": "TESTED",
           "files": [
@@ -1389,6 +1418,48 @@
         },
         {
           "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeyCollisionTightened",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_cache_structural_collision.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeyDegreeBucketEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeyDegreeBucketEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/structural_key.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
           "aspect": "PathCacheStructuralKeyDerivation",
           "status": "TESTED",
           "files": [
@@ -1410,6 +1481,48 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeySelectivityEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeySelectivityEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/structural_key.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeyValueShapeEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/structural_key.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation"
           ],
           "benches": [],
           "owner": "planner",
@@ -3414,20 +3527,6 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -3440,6 +3539,20 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -3579,6 +3692,20 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -3589,20 +3716,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -3739,7 +3852,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -3755,7 +3868,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -4078,7 +4191,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
+            "src/graph/containers/count_min_sketch.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -4094,7 +4207,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "src/graph/containers/count_min_sketch.zig"
+            "tests/benchmark_count_min_sketch_container.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -4366,8 +4479,8 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 140,
-      "TESTED": 146
+      "BENCHED": 142,
+      "TESTED": 152
     },
     "by_aspect": {
       "API": 7,
@@ -4495,6 +4608,7 @@
       "OrderingPerf": 1,
       "PageRank": 1,
       "PageRankVarianceEnvelope": 1,
+      "PaginationOrderedVarianceEnvelope": 1,
       "Parser": 3,
       "PartialRollbackMechanism": 1,
       "PathCacheCore": 1,
@@ -4502,11 +4616,16 @@
       "PathCacheHitMissVarianceEnvelope": 1,
       "PathCacheLookup": 1,
       "PathCacheLookupVarianceEnvelope": 1,
+      "PathCacheMetricsExport": 1,
       "PathCachePlannerHook": 1,
       "PathCachePlannerIntegration": 1,
       "PathCacheStructuralKeyCollisionEnvelope": 1,
+      "PathCacheStructuralKeyCollisionTightened": 1,
+      "PathCacheStructuralKeyDegreeBucketEnrichment": 2,
       "PathCacheStructuralKeyDerivation": 1,
       "PathCacheStructuralKeyEnrichment": 1,
+      "PathCacheStructuralKeySelectivityEnrichment": 2,
+      "PathCacheStructuralKeyValueShapeEnrichment": 1,
       "PathCyclePruningPerf": 1,
       "PathCycleStressDeterminism": 1,
       "PathExpandAllocVarianceEnvelope": 1,

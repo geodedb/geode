@@ -14,9 +14,10 @@ const planner_root = @import("../planner.zig");
 // Format (BNF-ish):
 //   key := 'c' <chain_count> '|' chain { '||' chain }*
 //   chain := hop { ';' hop }*
-//   hop := 'L[' labels ']P[' prop_keys ']' 'D' <dir> 'Q' <min> ',' <max> 'R[' labels ']P[' prop_keys ']'
+//   hop := 'L[' labels ']P[' prop_keys ']V[' value_shape ']S' <sel_left> 'DB' <deg_left> 'D' <dir> 'Q' <min> ',' <max> 'R[' labels ']P[' prop_keys ']V[' value_shape ']S' <sel_right> 'DB' <deg_right>
 //   labels := label { '+' label }*   -- labels sorted lexicographically
 //   prop_keys := key { '+' key }*     -- property keys sorted; empty if none
+//   value_shape := class { '+' class }* -- value shape classes (N,S,B,U,A,O) sorted unique per side
 //   <dir> one of '>' '<' '-'
 //   <min>/<max>: decimal integers; '*' for unbounded (null)
 // Example: single hop (a:Person {name:"Alice"})-[:T*1..3]->(b:Animal)
@@ -27,6 +28,9 @@ const planner_root = @import("../planner.zig");
 // beyond counts). Keeping it compact aids cache key locality.
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyValueShapeEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeySelectivityEnrichment; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyDegreeBucketEnrichment; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; OWNER=planner; UPDATED=2025-09-21
 pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Query) ![]u8 {
     var buf = std.ArrayList(u8).init(allocator);
     errdefer buf.deinit();
@@ -42,7 +46,14 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writeSortedLabels(writer, hop.left.labels);
             try writer.writeAll("]P[");
             try writeSortedPropKeys(writer, hop.left.props);
+            try writer.writeAll("]V[");
+            try writeValueShape(writer, hop.left.props);
             try writer.writeByte(']');
+            // Selectivity class for left node based on property key count (Z=0, L=1, M=2-3, H=4+)
+            try writer.writeAll("S");
+            try writer.writeByte(selectivityClass(hop.left.props));
+            // Degree bucket placeholder (U=unknown). Future: actual in/out degree classification.
+            try writer.writeAll("DBU");
             // Relationship direction + quantifier
             try writer.writeAll("D");
             try writer.writeByte(directionChar(hop.rel.dir));
@@ -55,7 +66,12 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writeSortedLabels(writer, hop.right.labels);
             try writer.writeAll("]P[");
             try writeSortedPropKeys(writer, hop.right.props);
+            try writer.writeAll("]V[");
+            try writeValueShape(writer, hop.right.props);
             try writer.writeByte(']');
+            try writer.writeAll("S");
+            try writer.writeByte(selectivityClass(hop.right.props));
+            try writer.writeAll("DBU");
         }
     }
     return buf.toOwnedSlice();
@@ -78,6 +94,45 @@ fn writeSortedPropKeys(writer: anytype, props: ?[]planner_root.ast.Property) !vo
         if (i != 0) try writer.writeByte('+');
         try writer.writeAll(k);
     }
+}
+
+fn writeValueShape(writer: anytype, props: ?[]planner_root.ast.Property) !void {
+    if (props == null or props.?.len == 0) return; // empty
+    // Collect shape classes into fixed bool set
+    var have = [6]bool{ false, false, false, false, false, false }; // N,S,B,U,A,O
+    for (props.?) |p| {
+        if (p.value) |expr_ptr| {
+            const expr = expr_ptr.*;
+            const cls_index = switch (expr) {
+                .Int, .Decimal => 0, // N
+                .String => 1, // S
+                .Bool => 2, // B
+                .Null => 3, // U
+                .Array => 4, // A
+                else => 5, // O (object / other / map / complex)
+            };
+            have[cls_index] = true;
+        }
+    }
+    const codes = [_]u8{ 'N', 'S', 'B', 'U', 'A', 'O' };
+    var first = true;
+    var i: usize = 0;
+    while (i < have.len) : (i += 1) {
+        if (have[i]) {
+            if (!first) {
+                try writer.writeByte('+');
+            } else {
+                first = false;
+            }
+            try writer.writeByte(codes[i]);
+        }
+    }
+}
+
+fn selectivityClass(props: ?[]planner_root.ast.Property) u8 {
+    if (props == null) return 'Z';
+    const len = props.?.len;
+    return if (len == 0) 'Z' else if (len == 1) 'L' else if (len <= 3) 'M' else 'H';
 }
 
 fn directionChar(dir: planner_root.ast.RelDir) u8 {

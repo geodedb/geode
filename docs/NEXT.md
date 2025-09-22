@@ -119,6 +119,8 @@ Update 2025-09-21 (post-slice execution):
   - Added hit vs miss latency variance envelope benchmark `BenchmarkCANARY_REQ_GQL_021_PathCacheHitMissVarianceEnvelope` (aspect `PathCacheHitMissVarianceEnvelope` BENCHED) asserting mean_hit ≤ mean_miss and CV/p95 thresholds for both distributions.
   - Enriched structural key to encode sorted property key name sets (aspect `PathCacheStructuralKeyEnrichment` TESTED) increasing discrimination beyond counts-only; equivalence still normalizes variable names & literal values.
   - Added collision rate benchmark `BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope` (aspect `PathCacheStructuralKeyCollisionEnvelope` BENCHED) requiring ≥90% unique keys (unique_ratio ≥0.90) across 1500 randomized structural patterns.
+  - Enriched structural key with value shape classes (N,S,B,U,A,O) per node endpoint (aspect `PathCacheStructuralKeyValueShapeEnrichment` TESTED) increasing discrimination across heterogeneous property value distributions while preserving equivalence for literal value differences.
+  - Tightened collision benchmark guard to ≥92% unique (added aspect `PathCacheStructuralKeyCollisionTightened` BENCHED) and updated benchmark to fail below threshold, reflecting improved key space spread after value shape enrichment.
 
 ## 8. ROLLING PLAN (30 / 14 / 7 Day)
 

@@ -32,6 +32,11 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Benchmark modules (variance envelopes)
+pub const benchmarks = struct {
+    // Pagination ordered variance benchmark (exposed for variance runner)
+    pub const pagination = @import("benchmarks/pagination_variance.zig");
+};
 // Time-series module (initial in-memory scaffold)
 pub const timeseries = @import("timeseries/timeseries.zig");
 // Re-export storage submodules needed across server modules (CSR adjacency)

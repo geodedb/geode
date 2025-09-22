@@ -7,6 +7,7 @@ const std = @import("std");
 //
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheLookup; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheEviction; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheEviction; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheMetricsExport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheMetricsExport; OWNER=planner; UPDATED=2025-09-21
 
 pub const Entry = struct {
     key_hash: u64,
@@ -99,6 +100,35 @@ pub const PathCache = struct {
     pub fn statsSnapshot(self: *PathCache) Stats {
         return self.stats;
     }
+
+    /// Export metrics as JSON line for future protocol integration (skeleton)
+    pub fn writeMetricsJson(self: *PathCache, w: anytype) !void {
+        const st = self.stats;
+        // Manual JSON serialization (avoid complex format placeholders for portability)
+        try w.writeAll("{\"hits\":");
+        try std.fmt.format(w, "{}", .{st.hits});
+        try w.writeAll(",\"misses\":");
+        try std.fmt.format(w, "{}", .{st.misses});
+        try w.writeAll(",\"evictions\":");
+        try std.fmt.format(w, "{}", .{st.evictions});
+        try w.writeAll(",\"hit_ratio\":");
+        // Format ratio with 4 decimal places manually
+        const ratio = st.hit_ratio();
+        const scaled: u64 = @intFromFloat(ratio * 10000.0);
+        const int_part = scaled / 10000;
+        const frac_part = scaled % 10000; // zero-pad to 4
+        try std.fmt.format(w, "{}.", .{int_part});
+        var frac_buf: [4]u8 = undefined;
+        var tmp = frac_part;
+        // Write zero-padded 4 digits
+        var i: usize = 4;
+        while (i > 0) : (i -= 1) {
+            frac_buf[i - 1] = @as(u8, '0') + @as(u8, @intCast(tmp % 10));
+            tmp /= 10;
+        }
+        try w.writeAll(frac_buf[0..]);
+        try w.writeByte('}');
+    }
 };
 
 test "TestCANARY_REQ_GQL_021_PathCacheEviction" {
@@ -116,4 +146,24 @@ test "TestCANARY_REQ_GQL_021_PathCacheEviction" {
     const st = cache.statsSnapshot();
     try std.testing.expect(st.hits >= 2); // a, b
     try std.testing.expect(st.evictions >= 1);
+}
+
+test "TestCANARY_REQ_GQL_021_PathCacheMetricsExport" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var cache = try PathCache.init(gpa.allocator(), 2);
+    defer cache.deinit();
+    cache.put("a", "1");
+    cache.put("b", "2");
+    // hit
+    try std.testing.expect(cache.get("a") != null);
+    // miss
+    try std.testing.expect(cache.get("c") == null);
+    var raw: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&raw);
+    try cache.writeMetricsJson(fbs.writer());
+    const s = raw[0..fbs.pos];
+    try std.testing.expect(std.mem.indexOf(u8, s, "hits") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "misses") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "hit_ratio") != null);
 }

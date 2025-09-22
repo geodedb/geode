@@ -1,16 +1,18 @@
 # Geode Implementation Reality Report
 
-_Generated from CANARY evidence analysis - 2025-09-21_
+_Generated from CANARY evidence analysis - 2025-09-21 (post ordered pagination variance + structural key degree bucket enrichment sync)_
 
 ## Executive Summary
 
-Based on comprehensive CANARY scan (status.json):
+Latest CANARY scan (`status.json`) after integrating ordered pagination planning variance guard and structural key degree bucket enrichment:
 
-- **193 aspects (features/aspects rows)** tracked with evidence
-- **107 TESTED** (55%) – functional tests present
-- **85 BENCHED** (44%) – performance / variance envelopes present
-- **0 STUB**, **0 IMPL (unpromoted)** – full coverage (TESTED or BENCHED = 100%)
-- **32 variance envelopes** (all passing CV + p95/mean thresholds)
+- **294 aspects** (tracked feature/aspect evidence rows)
+- **152 TESTED** (51.7%) – functional tests present
+- **142 BENCHED** (48.3%) – performance / variance / jitter envelopes present
+- **0 STUB**, **0 IMPL (unpromoted)** – 100% of aspects promoted to TESTED or BENCHED
+- **55 variance envelopes** (all passing CV & p95/mean thresholds; no suppressed failures)
+
+Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 variance envelopes. Growth drivers: pagination planning stability guard, additional traversal/path envelopes, CDC adaptive jitter thresholds, structural key enrichment.
 
 ## Implementation Status by Component
 
@@ -82,6 +84,7 @@ Based on comprehensive CANARY scan (status.json):
   - PathExpandAllocVarianceEnvelope (allocation jitter guard)
   - PathMultiBranchDeterminismVarianceEnvelope (Graph Analytics class)
   - Existing breadth / pruning / memory envelopes retained
+  - Structural key degree bucket enrichment (`PathCacheStructuralKeyDegreeBucketEnrichment`) – improves path cache discrimination; TESTED + BENCHED
 - **Reality**: Still no full MATCH pattern semantics (OPTIONAL, label filters, property predicates) – core traversal operator layer stabilizing.
 
 #### WAL & Storage
@@ -104,9 +107,12 @@ Based on comprehensive CANARY scan (status.json):
 
 #### Pagination (US001 Policy)
 
-- **Status**: TESTED – legality enforcement & policy toggle
-- **Evidence**: Reject unordered LIMIT/OFFSET; override toggle test
-- **Gaps**: Ordered pagination performance / variance not yet benchmarked
+- **Status**: TESTED + BENCHED (ordered planning variance envelope added)
+- **Evidence**:
+  - Legality enforcement for LIMIT/OFFSET without ORDER (US001) + override toggle test
+  - New `PaginationOrderedVarianceEnvelope` benchmark (planning phase jitter) emitting schema v1 & v2 JSON lines
+- **Guardrails**: CV ≤ 0.22; p95/mean ≤ 2.55 (current observed well below thresholds)
+- **Remaining Gaps**: Streaming result pagination variance (execution phase) not yet instrumented
 
 ## Performance Benchmark Coverage
 
@@ -133,8 +139,9 @@ Based on comprehensive CANARY scan (status.json):
 
 - Transaction isolation levels
 - Concurrent query execution
-- Storage I/O operations
-- Network protocol overhead
+- Storage I/O operations (per-op latency & tail variance)
+- Network protocol overhead (deeper protocol encode/decode + QUIC path)
+- Pagination result streaming (execution phase) variance
 
 ## Test Coverage Analysis
 
@@ -199,11 +206,11 @@ Based on comprehensive CANARY scan (status.json):
 
 ## Conclusion
 
-The CANARY analysis indicates Geode is approximately **~60–65% functionally implemented** toward stated full-scope ambitions:
+The CANARY analysis indicates Geode is approximately **~65–68% functionally implemented** toward stated full-scope ambitions (increase reflects pagination + traversal + CDC guardrail expansion):
 
-- **193 tracked aspects** (100% with at least TESTED evidence)
-- **85 performance / variance benchmarks** guarding stability
-- **32 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path
+- **294 tracked aspects** (100% with at least TESTED evidence)
+- **142 performance / variance benchmarks** guarding stability
+- **55 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination
 - Foundations in query execution, transactions, CDC, schema constraints, and path traversal are stabilizing; distributed & optimizer layers remain nascent.
 
 Areas needing work but with emerging foundations:

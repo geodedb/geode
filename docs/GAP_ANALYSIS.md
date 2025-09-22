@@ -10,15 +10,16 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 
 ## 1. Evidence Summary
 
-| Metric                       | Count |
-| ---------------------------- | ----- |
-| Total aspects (rows)         | 197   |
-| BENCHED                      | 87    |
-| TESTED (non‑BENCHED)         | 110   |
-| STUB                         | 0     |
-| IMPL (unpromoted)            | 0     |
-| Coverage (TESTED or BENCHED) | 100%  |
-| Stale (>60d)                 | 0     |
+| Metric               | Count |
+| -------------------- | ----- |
+| Total aspects (rows) | 201   |
+| BENCHED              | 90    |
+| TESTED (non‑BENCHED) | 111   |
+
+| STUB | 0 |
+| IMPL (unpromoted) | 0 |
+| Coverage (TESTED or BENCHED) | 100% |
+| Stale (>60d) | 0 |
 
 Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
 
@@ -40,16 +41,16 @@ Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED)
 
 ## 3. High-Priority Gaps (Top 8)
 
-| #   | Gap                                                                         | Impact                                    | Required Evidence to Close                                                                                               | Target Status                     |
-| --- | --------------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
-| 1   | Path quantifiers, tie-break, label & property predicates (OPTIONAL pending) | Query correctness on complex patterns     | Tests for bounded variable-length expand, UA005/UA006 tie-break, label+property predicate scan; add OPTIONAL MATCH tests | PARTIAL→TESTED (pending OPTIONAL) |
-| 2   | Aggregation breadth (COUNT DISTINCT, AVG, HAVING)                           | Conformance breadth (§14)                 | Implement ops + tests & variance bench for hash agg spill                                                                | BENCHED                           |
-| 3   | Raft log replication & commit index advancement                             | Durability & HA claims                    | Implement appendEntries flow + tests (success, term mismatch)                                                            | TESTED                            |
-| 4   | Storage ARIES refinement (physiological redo optimizations)                 | Recovery performance                      | Bench redo scan vs optimized path; add variance guard                                                                    | BENCHED                           |
-| 5   | MVCC phantom prevention robustness (range locks / predicate indexing)       | Isolation correctness (§17)               | Add targeted phantom test matrix & benchmark overhead                                                                    | TESTED/BENCHED                    |
-| 6   | Flagger completeness (impl-defined / dependent items)                       | Conformance transparency (§24)            | Enumerate & test flag outputs for all impl-defined behaviors                                                             | TESTED                            |
-| 7   | Cost model phase stability (planner)                                        | Future optimization reliability           | Implement PlannerCostModelPhaseVarianceEnvelope bench                                                                    | BENCHED                           |
-| 8   | Path cache implementation + lookup variance / structural key                | Performance & repeated pattern efficiency | Implement cache + tests + PathCacheLookupVarianceEnvelope + structural key + hit/miss bench                              | BENCHED                           |
+| #   | Gap                                                                         | Impact                                    | Required Evidence to Close                                                                                                                                                                                    | Target Status                     |
+| --- | --------------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| 1   | Path quantifiers, tie-break, label & property predicates (OPTIONAL pending) | Query correctness on complex patterns     | Tests for bounded variable-length expand, UA005/UA006 tie-break, label+property predicate scan; add OPTIONAL MATCH tests                                                                                      | PARTIAL→TESTED (pending OPTIONAL) |
+| 2   | Aggregation breadth (COUNT DISTINCT, AVG, HAVING)                           | Conformance breadth (§14)                 | Implement ops + tests & variance bench for hash agg spill                                                                                                                                                     | BENCHED                           |
+| 3   | Raft log replication & commit index advancement                             | Durability & HA claims                    | Implement appendEntries flow + tests (success, term mismatch)                                                                                                                                                 | TESTED                            |
+| 4   | Storage ARIES refinement (physiological redo optimizations)                 | Recovery performance                      | Bench redo scan vs optimized path; add variance guard                                                                                                                                                         | BENCHED                           |
+| 5   | MVCC phantom prevention robustness (range locks / predicate indexing)       | Isolation correctness (§17)               | Add targeted phantom test matrix & benchmark overhead                                                                                                                                                         | TESTED/BENCHED                    |
+| 6   | Flagger completeness (impl-defined / dependent items)                       | Conformance transparency (§24)            | Enumerate & test flag outputs for all impl-defined behaviors                                                                                                                                                  | TESTED                            |
+| 7   | Cost model phase stability (planner)                                        | Future optimization reliability           | Implement PlannerCostModelPhaseVarianceEnvelope bench                                                                                                                                                         | BENCHED                           |
+| 8   | Path cache implementation + lookup variance / structural key                | Performance & repeated pattern efficiency | Implement cache + tests + PathCacheLookupVarianceEnvelope + structural key + hit/miss bench + value shape + selectivity enrichment + degree bucket placeholder + tightened collision threshold (>=92% unique) | BENCHED                           |
 
 ## 4. Implementation-Defined / Dependent Items (Current Catalog – INCOMPLETE)
 
@@ -64,32 +65,34 @@ Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED)
 
 Below is a concise representative subset (see `status.csv` for the full authoritative table). Rows reflect current BENCHED/TESTED aspects across critical domains.
 
-| Requirement | Feature                        | Aspect                                    | Status  | UPDATED    |
-| ----------- | ------------------------------ | ----------------------------------------- | ------- | ---------- |
-| REQ-GQL-005 | Binary Protocol Core           | Wire                                      | TESTED  | 2025-09-20 |
-| REQ-GQL-010 | Diagnostics Precedence         | Engine                                    | BENCHED | 2025-09-20 |
-| REQ-GQL-013 | Txn Conflict Matrix            | Engine                                    | BENCHED | 2025-09-20 |
-| REQ-GQL-016 | Path Expand Breadth            | Planner                                   | BENCHED | 2025-09-20 |
-| REQ-GQL-021 | Planner Rewrite Pass           | Planner                                   | BENCHED | 2025-09-20 |
-| REQ-GQL-021 | Query Planner                  | PlannerRewritePreValidationTiming         | TESTED  | 2025-09-21 |
-| REQ-GQL-021 | Query Planner                  | PlannerGroupValidationTiming              | TESTED  | 2025-09-21 |
-| REQ-GQL-028 | WAL Segment Recycle            | WALSegmentRecycleLatencyVarianceEnvelope  | BENCHED | 2025-09-21 |
-| REQ-GQL-028 | WAL Page Flush Queue Depth     | WALPageFlushQueueDepthVarianceEnvelope    | BENCHED | 2025-09-21 |
-| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillPersistence           | TESTED  | 2025-09-21 |
-| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalSpillMerge                  | TESTED  | 2025-09-21 |
-| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillEvictVarianceEnvelope | BENCHED | 2025-09-21 |
-| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillAccurateMerge         | TESTED  | 2025-09-21 |
-| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalEarlyState                  | TESTED  | 2025-09-21 |
-| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctMergeVarianceEnvelope      | BENCHED | 2025-09-21 |
-| REQ-GQL-021 | PathCache                      | PathCacheLookup                           | TESTED  | 2025-09-21 |
-| REQ-GQL-032 | Schema Constraints Performance | ConstraintPerf                            | BENCHED | 2025-09-20 |
-| REQ-GQL-042 | CDC Adaptive Flush             | AdaptiveFlush                             | BENCHED | 2025-09-20 |
-| REQ-GQL-046 | TDE Key Rotation Throughput    | Storage                                   | BENCHED | 2025-09-20 |
-| REQ-GQL-060 | Core Graph Builders            | ConcurrencySafeGraph                      | TESTED  | 2025-09-20 |
-| REQ-GQL-063 | Dijkstra                       | Dijkstra                                  | BENCHED | 2025-09-20 |
-| REQ-GQL-064 | Biconnected Components         | BiconnectedComponents                     | BENCHED | 2025-09-20 |
-| REQ-GQL-065 | Kruskal                        | Kruskal                                   | BENCHED | 2025-09-21 |
-| REQ-GQL-067 | PageRank                       | PageRankVarianceEnvelope                  | BENCHED | 2025-09-20 |
+| Requirement | Feature                        | Aspect                                      | Status  | UPDATED    |
+| ----------- | ------------------------------ | ------------------------------------------- | ------- | ---------- |
+| REQ-GQL-005 | Binary Protocol Core           | Wire                                        | TESTED  | 2025-09-20 |
+| REQ-GQL-010 | Diagnostics Precedence         | Engine                                      | BENCHED | 2025-09-20 |
+| REQ-GQL-013 | Txn Conflict Matrix            | Engine                                      | BENCHED | 2025-09-20 |
+| REQ-GQL-016 | Path Expand Breadth            | Planner                                     | BENCHED | 2025-09-20 |
+| REQ-GQL-021 | Planner Rewrite Pass           | Planner                                     | BENCHED | 2025-09-20 |
+| REQ-GQL-021 | Query Planner                  | PlannerRewritePreValidationTiming           | TESTED  | 2025-09-21 |
+| REQ-GQL-021 | Query Planner                  | PlannerGroupValidationTiming                | TESTED  | 2025-09-21 |
+| REQ-GQL-021 | PathCache                      | PathCacheStructuralKeySelectivityEnrichment | TESTED  | 2025-09-21 |
+| REQ-GQL-004 | Pagination                     | PaginationOrderedVarianceEnvelope           | BENCHED | 2025-09-21 |
+| REQ-GQL-028 | WAL Segment Recycle            | WALSegmentRecycleLatencyVarianceEnvelope    | BENCHED | 2025-09-21 |
+| REQ-GQL-028 | WAL Page Flush Queue Depth     | WALPageFlushQueueDepthVarianceEnvelope      | BENCHED | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillPersistence             | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalSpillMerge                    | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillEvictVarianceEnvelope   | BENCHED | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctSpillAccurateMerge           | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDecimalEarlyState                    | TESTED  | 2025-09-21 |
+| REQ-GQL-012 | GROUP BY/Aggregation           | HashAggDistinctMergeVarianceEnvelope        | BENCHED | 2025-09-21 |
+| REQ-GQL-021 | PathCache                      | PathCacheLookup                             | TESTED  | 2025-09-21 |
+| REQ-GQL-032 | Schema Constraints Performance | ConstraintPerf                              | BENCHED | 2025-09-20 |
+| REQ-GQL-042 | CDC Adaptive Flush             | AdaptiveFlush                               | BENCHED | 2025-09-20 |
+| REQ-GQL-046 | TDE Key Rotation Throughput    | Storage                                     | BENCHED | 2025-09-20 |
+| REQ-GQL-060 | Core Graph Builders            | ConcurrencySafeGraph                        | TESTED  | 2025-09-20 |
+| REQ-GQL-063 | Dijkstra                       | Dijkstra                                    | BENCHED | 2025-09-20 |
+| REQ-GQL-064 | Biconnected Components         | BiconnectedComponents                       | BENCHED | 2025-09-20 |
+| REQ-GQL-065 | Kruskal                        | Kruskal                                     | BENCHED | 2025-09-21 |
+| REQ-GQL-067 | PageRank                       | PageRankVarianceEnvelope                    | BENCHED | 2025-09-20 |
 
 ## 6. Closing Plan (Rolling)
 
@@ -133,8 +136,9 @@ All previously identified STUB gaps have been closed (each aspect now at least T
 
 ## 10. Summary Statistics (Derived from status.csv)
 
-- Total aspect rows (status.csv): 197
-- BENCHED: 87
+-- Total aspect rows (status.csv): 199
+-- BENCHED: 89
+
 - TESTED (non-BENCHED): 110
 - STUB / IMPL remaining: 0
 - Effective coverage: 100%
