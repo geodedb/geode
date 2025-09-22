@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-22T20:00:29.205601852Z",
+  "generated_at": "2025-09-22T20:14:53.426917381Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -2432,7 +2432,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_phantom_anomaly.zig"
+            "src/txn/manager.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2448,7 +2448,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "tests/canary_txn_phantom_anomaly.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2462,14 +2462,14 @@
         {
           "feature": "MVCC Phantom Prevention",
           "aspect": "RangeTracker",
-          "status": "TESTED",
+          "status": "BENCHED",
           "files": [
             "tests/canary_txn_phantom_range.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
-          "benches": [],
           "owner": "txn",
           "updated": "2025-09-22"
         },
@@ -2493,14 +2493,14 @@
         {
           "feature": "MVCC Phantom Prevention",
           "aspect": "RangeTracker",
-          "status": "BENCHED",
+          "status": "TESTED",
           "files": [
             "tests/canary_txn_phantom_range.zig"
           ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
           ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-22"
         }
@@ -2627,7 +2627,7 @@
           "aspect": "PlanCostModelFactors",
           "status": "BENCHED",
           "files": [
-            "src/planner/cost_model.zig"
+            "tests/canary_planner_cost_model.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
@@ -2643,7 +2643,7 @@
           "aspect": "PlanCostModelFactors",
           "status": "BENCHED",
           "files": [
-            "tests/canary_planner_cost_model.zig"
+            "src/planner/cost_model.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
@@ -2691,7 +2691,7 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "src/planner/enumerator.zig"
+            "tests/canary_planner_enumerator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
@@ -2707,7 +2707,7 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "tests/canary_planner_enumerator.zig"
+            "src/planner/enumerator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
@@ -3024,20 +3024,6 @@
         {
           "feature": "WAL Compaction",
           "aspect": "CorruptPageRecoveryLatency",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_recovery_corrupt_latency.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
-          ],
-          "owner": "storage",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "WAL Compaction",
-          "aspect": "CorruptPageRecoveryLatency",
           "status": "TESTED",
           "files": [
             "tests/canary_recovery_corrupt_latency.zig"
@@ -3046,6 +3032,20 @@
             "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
           ],
           "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "WAL Compaction",
+          "aspect": "CorruptPageRecoveryLatency",
+          "status": "BENCHED",
+          "files": [
+            "tests/canary_recovery_corrupt_latency.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
+          ],
           "owner": "storage",
           "updated": "2025-09-22"
         },
@@ -4592,20 +4592,6 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -4618,6 +4604,20 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -5256,7 +5256,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "src/graph/containers/count_min_sketch.zig"
+            "tests/benchmark_count_min_sketch_container.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -5272,7 +5272,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
+            "src/graph/containers/count_min_sketch.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -5547,6 +5547,18 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "AdaptiveEstimatorBias",
+          "status": "IMPL",
+          "files": [
+            "src/planner/cost_seed.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
           "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md",
@@ -5561,12 +5573,15 @@
         },
         {
           "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
-          "status": "IMPL",
+          "aspect": "AdaptiveEstimatorBiasClampWarning",
+          "status": "TESTED",
           "files": [
-            "src/planner/cost_seed.zig"
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_bias_clamp_warning.zig"
           ],
-          "tests": [],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning"
+          ],
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
@@ -5581,6 +5596,21 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBiasPersistenceV2",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_bias_persistence_v2.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2"
           ],
           "benches": [],
           "owner": "planner",
@@ -5666,6 +5696,20 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "EstimatorPrimitives",
+          "status": "TESTED",
+          "files": [
+            "tests/cost_model_seed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "EstimatorPrimitives",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_cost_model_seed_variance.zig",
@@ -5678,20 +5722,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
           ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "EstimatorPrimitives",
-          "status": "TESTED",
-          "files": [
-            "tests/cost_model_seed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
-          ],
-          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -5738,6 +5768,21 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "ExplainJSONDynamicAlpha",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_explain_v4.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha"
           ],
           "benches": [],
           "owner": "planner",
@@ -5925,7 +5970,7 @@
     "by_status": {
       "BENCHED": 182,
       "IMPL": 1,
-      "TESTED": 206
+      "TESTED": 209
     },
     "by_aspect": {
       "API": 7,
@@ -5936,7 +5981,9 @@
       "AdaptiveDiffPerfThresholdEnv": 2,
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
       "AdaptiveEstimatorBias": 2,
+      "AdaptiveEstimatorBiasClampWarning": 1,
       "AdaptiveEstimatorBiasPersistence": 1,
+      "AdaptiveEstimatorBiasPersistenceV2": 1,
       "AdaptiveEstimatorBiasVarianceEnvelope": 1,
       "AdaptiveEstimatorDynamicAlpha": 1,
       "AdaptiveFlush": 1,
@@ -6020,6 +6067,7 @@
       "ExplainJSON": 1,
       "ExplainJSONBiasFactors": 1,
       "ExplainJSONDetailed": 1,
+      "ExplainJSONDynamicAlpha": 1,
       "ExplainProtocolBasic": 1,
       "ExplainProtocolCalibrated": 1,
       "FailureInjection": 1,

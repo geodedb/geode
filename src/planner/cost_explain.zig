@@ -189,3 +189,127 @@ pub fn explainChainWithBias(allocator: std.mem.Allocator, ops: []const seed.OpDe
     try w.writeAll("]}");
     return buf.toOwnedSlice(allocator);
 }
+
+/// Unified explain schema v4 combining base, bias, dynamic alpha, CV stats and classification labels.
+/// JSON structure:
+/// {"schema":"cost_explain.v4","ops":[{idx,kind,est_rows,bias,alpha,cv,cv_class,cost}...],
+///   "totals":{est_rows,cost},
+///   "bias_snapshot":[...percent...],
+///   "alpha_snapshot":[...float2dp...],
+///   "cv_snapshot":[...float3dp...],
+///   "cv_class_snapshot":["stable"|"moderate"|"volatile"...]
+/// }
+pub fn explainChainUnifiedV4(allocator: std.mem.Allocator, ops: []const seed.OpDescriptor, bias_reg: *seed.AdaptiveBiasRegistry) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    var w = buf.writer(allocator);
+    try w.writeAll("{\"schema\":\"cost_explain.v4\",\"ops\":[");
+    const cfg = seed.EstimatorConfig{};
+    var prev_est: ?seed.CardinalityEstimate = null;
+    var total_cost: f64 = 0;
+    var total_est_rows: f64 = 0;
+    var i: usize = 0;
+    while (i < ops.len) : (i += 1) {
+        const op = ops[i];
+        const child_slice: []const seed.CardinalityEstimate = if (prev_est) |pe| &[_]seed.CardinalityEstimate{pe} else &[_]seed.CardinalityEstimate{};
+        const base = seed.estimate(op, child_slice, cfg);
+        const biased_rows = bias_reg.apply(op.kind, base.rows);
+        const op_cost_s = seed.cost(op, .{ .rows = biased_rows, .confidence = base.confidence }, cfg);
+        const op_cost = op_cost_s.total();
+        if (i == 0) total_est_rows = biased_rows;
+        total_cost += op_cost;
+        if (i != 0) try w.writeByte(',');
+        try w.writeAll("{\"idx\":");
+        try w.print("{}", .{i});
+        try w.writeAll(",\"kind\":\"");
+        try w.writeAll(@tagName(op.kind));
+        try w.writeAll("\",\"est_rows\":");
+        try w.print("{d}", .{@as(i64, @intFromFloat(@floor(biased_rows)))});
+        try w.writeAll(",\"bias\":");
+        const b = bias_reg.getBias(op.kind);
+        const b_int: i64 = @intFromFloat(@floor(b * 100.0 + 0.5));
+        try w.print("{d}", .{b_int});
+        try w.writeAll(",\"alpha\":");
+        const a = bias_reg.getAlpha(op.kind);
+        try w.print("{d:.2}", .{a});
+        try w.writeAll(",\"cv\":");
+        const cv = bias_reg.last_cv[@intFromEnum(op.kind)];
+        try w.print("{d:.3}", .{cv});
+        try w.writeAll(",\"cv_class\":\"");
+        const cls_idx = bias_reg.last_cv_class[@intFromEnum(op.kind)];
+        const cls_name = switch (cls_idx) {
+            0 => "stable",
+            2 => "volatile",
+            else => "moderate",
+        };
+        try w.writeAll(cls_name);
+        try w.writeAll("\",\"cost\":");
+        try w.print("{d}", .{@as(i64, @intFromFloat(@floor(op_cost)))});
+        try w.writeAll("}");
+        prev_est = .{ .rows = biased_rows, .confidence = base.confidence };
+    }
+    try w.writeAll("],\"totals\":{");
+    try w.writeAll("\"est_rows\":");
+    try w.print("{d}", .{@as(i64, @intFromFloat(@floor(total_est_rows)))});
+    try w.writeAll(",\"cost\":");
+    try w.print("{d}", .{@as(i64, @intFromFloat(@floor(total_cost)))});
+    try w.writeAll("},\"bias_snapshot\":[");
+    var k: usize = 0;
+    while (k < @typeInfo(seed.LogicalOpKind).Enum.fields.len) : (k += 1) {
+        if (k != 0) try w.writeByte(',');
+        const kind_tag: seed.LogicalOpKind = @enumFromInt(k);
+        const bb = bias_reg.getBias(kind_tag);
+        const bb_int: i64 = @intFromFloat(@floor(bb * 100.0 + 0.5));
+        try w.print("{d}", .{bb_int});
+    }
+    try w.writeAll("],\"bias_clamp_warnings\":[");
+    var first_warn = true;
+    var widx: usize = 0;
+    while (widx < @typeInfo(seed.LogicalOpKind).Enum.fields.len) : (widx += 1) {
+        const kind_tag: seed.LogicalOpKind = @enumFromInt(widx);
+        if (bias_reg.low_clamp_warning[widx]) {
+            if (!first_warn) try w.writeByte(',') else first_warn = false;
+            try w.writeAll("\"LOW_CLAMP(");
+            try w.writeAll(@tagName(kind_tag));
+            try w.writeAll(")\"");
+        }
+        if (bias_reg.high_clamp_warning[widx]) {
+            if (!first_warn) try w.writeByte(',') else first_warn = false;
+            try w.writeAll("\"HIGH_CLAMP(");
+            try w.writeAll(@tagName(kind_tag));
+            try w.writeAll(")\"");
+        }
+    }
+    try w.writeAll("]}");
+    try w.writeAll("],\"alpha_snapshot\":[");
+    k = 0;
+    while (k < @typeInfo(seed.LogicalOpKind).Enum.fields.len) : (k += 1) {
+        if (k != 0) try w.writeByte(',');
+        const kind_tag: seed.LogicalOpKind = @enumFromInt(k);
+        const aa = bias_reg.getAlpha(kind_tag);
+        try w.print("{d:.2}", .{aa});
+    }
+    try w.writeAll("],\"cv_snapshot\":[");
+    k = 0;
+    while (k < @typeInfo(seed.LogicalOpKind).Enum.fields.len) : (k += 1) {
+        if (k != 0) try w.writeByte(',');
+        const cvv = bias_reg.last_cv[k];
+        try w.print("{d:.3}", .{cvv});
+    }
+    try w.writeAll("],\"cv_class_snapshot\":[");
+    k = 0;
+    while (k < @typeInfo(seed.LogicalOpKind).Enum.fields.len) : (k += 1) {
+        if (k != 0) try w.writeByte(',');
+        const cls_idx2 = bias_reg.last_cv_class[k];
+        const cls_name2 = switch (cls_idx2) {
+            0 => "stable",
+            2 => "volatile",
+            else => "moderate",
+        };
+        try w.writeAll("\"");
+        try w.writeAll(cls_name2);
+        try w.writeAll("\"");
+    }
+    try w.writeAll("]}");
+    return buf.toOwnedSlice(allocator);
+}

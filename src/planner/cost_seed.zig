@@ -52,12 +52,23 @@ pub const AdaptiveBiasRegistry = struct {
     // Exponential moving averages for ratio mean and squared mean for variance estimation.
     ratio_mean: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
     ratio_sq_mean: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // Last computed coefficient of variation per kind (for explain transparency)
+    last_cv: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{0.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // Last CV classification label index (0=stable,1=moderate,2=volatile)
+    last_cv_class: [@typeInfo(LogicalOpKind).Enum.fields.len]u8 = [_]u8{0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
     // Configuration bounds for alpha adaptation (could be exposed later).
     alpha_min: f64 = 0.10,
     alpha_max: f64 = 0.50,
     adapt_rate: f64 = 0.05, // incremental step when adjusting alpha
     variance_stable_threshold: f64 = 0.12, // CV below -> increase alpha
     variance_unstable_threshold: f64 = 0.30, // CV above -> decrease alpha
+    // Clamp saturation tracking (consecutive updates that land at min or max clamp bound)
+    low_clamp_streak: [@typeInfo(LogicalOpKind).Enum.fields.len]u16 = [_]u16{0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    high_clamp_streak: [@typeInfo(LogicalOpKind).Enum.fields.len]u16 = [_]u16{0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // Active warning flags once streak >= threshold (remain set until streak resets)
+    low_clamp_warning: [@typeInfo(LogicalOpKind).Enum.fields.len]bool = [_]bool{false} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    high_clamp_warning: [@typeInfo(LogicalOpKind).Enum.fields.len]bool = [_]bool{false} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    clamp_warning_threshold: u16 = 5,
 
     pub fn apply(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, raw_rows: f64) f64 {
         const idx = @intFromEnum(kind);
@@ -107,32 +118,76 @@ pub const AdaptiveBiasRegistry = struct {
         const stddev = std.math.sqrt(variance);
         const cv = if (m_next <= 0.0000001) 0 else stddev / m_next;
         var a = self.dyn_alpha[idx];
+        var class: u8 = 1; // moderate default
         if (cv < self.variance_stable_threshold) {
             // More stable -> increase alpha
             a += self.adapt_rate;
+            class = 0;
         } else if (cv > self.variance_unstable_threshold) {
             // Volatile -> decrease alpha
             a -= self.adapt_rate;
+            class = 2;
         }
         if (a < self.alpha_min) a = self.alpha_min;
         if (a > self.alpha_max) a = self.alpha_max;
         self.dyn_alpha[idx] = a;
+        self.last_cv[idx] = cv;
+        self.last_cv_class[idx] = class;
         // Apply bias update using dynamic alpha
         const prev_bias = self.biases[idx];
-        var next_bias = a * ratio + (1.0 - a) * prev_bias;
-        if (next_bias < 0.05) next_bias = 0.05;
-        if (next_bias > 20.0) next_bias = 20.0;
+        const unclamped = a * ratio + (1.0 - a) * prev_bias;
+        var next_bias = unclamped;
+        var low_clamped = false;
+        var high_clamped = false;
+        if (next_bias < 0.05) {
+            next_bias = 0.05;
+            low_clamped = true;
+        }
+        if (next_bias > 20.0) {
+            next_bias = 20.0;
+            high_clamped = true;
+        }
         self.biases[idx] = next_bias;
+
+        // Saturation tracking logic
+        if (low_clamped and !high_clamped) {
+            self.low_clamp_streak[idx] += 1;
+            self.high_clamp_streak[idx] = 0;
+            if (self.low_clamp_streak[idx] >= self.clamp_warning_threshold) self.low_clamp_warning[idx] = true;
+        } else if (high_clamped and !low_clamped) {
+            self.high_clamp_streak[idx] += 1;
+            self.low_clamp_streak[idx] = 0;
+            if (self.high_clamp_streak[idx] >= self.clamp_warning_threshold) self.high_clamp_warning[idx] = true;
+        } else {
+            // bias inside bounds → reset streak counters and clear warnings
+            self.low_clamp_streak[idx] = 0;
+            self.high_clamp_streak[idx] = 0;
+            self.low_clamp_warning[idx] = false;
+            self.high_clamp_warning[idx] = false;
+        }
     }
 
     /// Serialize registry biases to writer in a stable binary format:
-    /// [u32 magic 'ABIA'][u16 version=1][u16 count][f64 * count]
+    /// v1: [u32 magic 'ABIA'][u16 version=1][u16 count][f64 * count]
+    /// v2: [u32 magic 'ABIA'][u16 version=2][u16 count]
+    ///      [f64 * count biases][f64 * count dyn_alpha][f64 * count ratio_mean][f64 * count ratio_sq_mean]
+    ///      [f64 * count last_cv][u8 * count last_cv_class]
     pub fn serialize(self: *const AdaptiveBiasRegistry, w: anytype) !void {
         try w.writeAll("ABIA");
-        try w.writeInt(u16, 1, .little);
+        try w.writeInt(u16, 2, .little);
         const count: u16 = @intCast(self.biases.len);
         try w.writeInt(u16, count, .little);
         for (self.biases) |b| try w.writeInt(f64, b, .little);
+        // v2 extras
+        for (self.dyn_alpha) |a| try w.writeInt(f64, a, .little);
+        for (self.ratio_mean) |m| try w.writeInt(f64, m, .little);
+        for (self.ratio_sq_mean) |m2| try w.writeInt(f64, m2, .little);
+        for (self.last_cv) |cv| try w.writeInt(f64, cv, .little);
+        // last_cv_class as raw bytes
+        var i: usize = 0;
+        while (i < self.last_cv_class.len) : (i += 1) {
+            try w.writeByte(self.last_cv_class[i]);
+        }
     }
 
     pub const DeserializeError = error{ BadMagic, UnsupportedVersion, Truncated };
@@ -142,13 +197,42 @@ pub const AdaptiveBiasRegistry = struct {
         if (try r.readAll(&magic) != magic.len) return DeserializeError.Truncated;
         if (!std.mem.eql(u8, &magic, "ABIA")) return DeserializeError.BadMagic;
         const ver = try r.readInt(u16, .little) catch return DeserializeError.Truncated;
-        if (ver != 1) return DeserializeError.UnsupportedVersion;
+        if (ver != 1 and ver != 2) return DeserializeError.UnsupportedVersion;
         const count = try r.readInt(u16, .little) catch return DeserializeError.Truncated;
         if (count != self.biases.len) return DeserializeError.UnsupportedVersion; // size mismatch unrecognized
         var i: usize = 0;
         while (i < self.biases.len) : (i += 1) {
             const v = try r.readInt(f64, .little) catch return DeserializeError.Truncated;
             self.biases[i] = v;
+        }
+        if (ver == 2) {
+            // dyn_alpha
+            i = 0;
+            while (i < self.dyn_alpha.len) : (i += 1) {
+                self.dyn_alpha[i] = try r.readInt(f64, .little) catch return DeserializeError.Truncated;
+            }
+            // ratio_mean
+            i = 0;
+            while (i < self.ratio_mean.len) : (i += 1) {
+                self.ratio_mean[i] = try r.readInt(f64, .little) catch return DeserializeError.Truncated;
+            }
+            // ratio_sq_mean
+            i = 0;
+            while (i < self.ratio_sq_mean.len) : (i += 1) {
+                self.ratio_sq_mean[i] = try r.readInt(f64, .little) catch return DeserializeError.Truncated;
+            }
+            // last_cv
+            i = 0;
+            while (i < self.last_cv.len) : (i += 1) {
+                self.last_cv[i] = try r.readInt(f64, .little) catch return DeserializeError.Truncated;
+            }
+            // last_cv_class
+            i = 0;
+            while (i < self.last_cv_class.len) : (i += 1) {
+                var b: [1]u8 = undefined;
+                if ((try r.readAll(&b)) != 1) return DeserializeError.Truncated;
+                self.last_cv_class[i] = b[0];
+            }
         }
     }
 

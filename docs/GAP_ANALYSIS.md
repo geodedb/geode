@@ -1,7 +1,10 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-22)
 
-<!-- STATUS_JSON_SHA256: 75050b258477e5701a5b15104f641bad0cca919648403cf7787df8a37a7ca632 -->
+<!-- STATUS_JSON_SHA256: 0ce6638086e74ab14c3c6e034ecd38e5f5145f755e05cf8d0790642bb854437e -->
 
+## CANARY Evidence (Scanner Lines)
+
+```text
 // CANARY: REQ=REQ-GQL-024; FEATURE="Conformance Profile Ledger"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance Freshness Guard"; ASPECT=GovernanceScript; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceScript; OWNER=tooling; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Freshness + Single H1"; ASPECT=NextFreshnessGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_NextFreshnessAndSingleH1; OWNER=tooling; UPDATED=2025-09-22
@@ -23,6 +26,10 @@
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasPersistence; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=PlannerAdaptiveBiasApplication; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorDynamicAlpha; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorDynamicAlpha; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDynamicAlpha; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasPersistenceV2; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampWarning; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning; OWNER=planner; UPDATED=2025-09-22
+```
 
 This authoritative ledger is generated from `status.json` emitted by:
 
