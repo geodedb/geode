@@ -51,9 +51,9 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
         }
     }
 
-    var buf = std.ArrayList(u8).init(allocator);
-    errdefer buf.deinit();
-    const writer = buf.writer();
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
     try writer.print("c{d}|", .{q.match.chains.len});
     for (q.match.chains, 0..) |chain, ci| {
         if (ci != 0) try writer.writeAll("||");
@@ -96,7 +96,7 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writer.writeByte(degreeBucketClass(rdeg));
         }
     }
-    return buf.toOwnedSlice();
+    return buf.toOwnedSlice(allocator);
 }
 
 fn writeSortedPropKeys(writer: anytype, props: ?[]planner_root.ast.Property) !void {
@@ -107,7 +107,7 @@ fn writeSortedPropKeys(writer: anytype, props: ?[]planner_root.ast.Property) !vo
     const arr = props.?;
     var tmp = try al.alloc([]const u8, arr.len);
     for (arr, 0..) |p, i| tmp[i] = p.key;
-    std.sort.sort([]const u8, tmp, {}, struct {
+    std.sort.pdq([]const u8, tmp, {}, struct {
         fn lessThan(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.lessThan(u8, a, b);
         }
@@ -123,18 +123,17 @@ fn writeValueShape(writer: anytype, props: ?[]planner_root.ast.Property) !void {
     // Collect shape classes into fixed bool set
     var have = [6]bool{ false, false, false, false, false, false }; // N,S,B,U,A,O
     for (props.?) |p| {
-        if (p.value) |expr_ptr| {
-            const expr = expr_ptr.*;
-            const cls_index = switch (expr) {
-                .Int, .Decimal => 0, // N
-                .String => 1, // S
-                .Bool => 2, // B
-                .Null => 3, // U
-                .Array => 4, // A
-                else => 5, // O (object / other / map / complex)
-            };
-            have[cls_index] = true;
-        }
+        // Property value is a non-optional pointer to an expression in current AST.
+        const expr = p.value.*;
+        const cls_index: usize = switch (expr) {
+            .Int, .Decimal => 0, // N
+            .String => 1, // S
+            .Bool => 2, // B
+            .Null => 3, // U
+            .List => 4, // A (array/list)
+            else => 5, // O (object / other / map / complex)
+        };
+        have[cls_index] = true;
     }
     const codes = [_]u8{ 'N', 'S', 'B', 'U', 'A', 'O' };
     var first = true;
@@ -182,7 +181,7 @@ fn writeSortedLabels(writer: anytype, labels: [][]const u8) !void {
     const al = arena_allocator.allocator();
     var tmp = try al.alloc([]const u8, labels.len);
     for (labels, 0..) |lab, i| tmp[i] = lab;
-    std.sort.sort([]const u8, tmp, {}, struct {
+    std.sort.pdq([]const u8, tmp, {}, struct {
         fn lessThan(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.lessThan(u8, a, b);
         }

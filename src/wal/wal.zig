@@ -148,6 +148,7 @@ pub const Wal = struct {
         if (self.file) |*f| f.close();
         self.buf.deinit(self.ally);
         if (self.page_lsn_index) |*m| m.deinit();
+        if (self.base_path.len > 0) self.ally.free(self.base_path);
     }
 
     pub fn skipRatio(self: *const Wal) f64 {

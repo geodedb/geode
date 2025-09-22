@@ -227,6 +227,8 @@ pub fn build(b: *std.Build) void {
     // Security TDE hierarchy module
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
+    // Provide page manager dependency for WAL (needed for internal @import("storage_page_manager"))
+    wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
     geoded_exe.root_module.addImport("wal", wal_mod);
     geoded_exe.root_module.addImport("tde_hierarchy", tde_hierarchy_mod);
     const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
@@ -290,6 +292,28 @@ pub fn build(b: *std.Build) void {
     const bench_run = b.addRunArtifact(bench_exe);
     const bench_step = b.step("bench", "Run micro benchmarks (placeholder)");
     bench_step.dependOn(&bench_run.step);
+
+    // Adaptive bias clamp variance benchmark integrated as a standalone executable but also invoked during `zig build test`.
+    const bias_clamp_variance_bench = b.addExecutable(.{ .name = "bench_bias_clamp_variance", .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_bias_clamp_variance.zig"), .target = target, .optimize = optimize }) });
+    bias_clamp_variance_bench.root_module.addImport("geode", root_mod);
+    b.installArtifact(bias_clamp_variance_bench);
+    const run_bias_clamp_variance_bench = b.addRunArtifact(bias_clamp_variance_bench);
+    test_step.dependOn(&run_bias_clamp_variance_bench.step);
+
+    // PathCache degree bucket utilization variance benchmark (S-015)
+    const pathcache_degree_util_bench = b.addExecutable(.{ .name = "bench_pathcache_degree_util", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_path_cache_degree_bucket_utilization.zig"), .target = target, .optimize = optimize }) });
+    pathcache_degree_util_bench.root_module.addImport("geode", root_mod);
+    b.installArtifact(pathcache_degree_util_bench);
+    const run_pathcache_degree_util_bench = b.addRunArtifact(pathcache_degree_util_bench);
+    test_step.dependOn(&run_pathcache_degree_util_bench.step);
+
+    // Redo optimization delta variance benchmark (S-016)
+    const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
+    redo_opt_delta_bench.root_module.addImport("wal", wal_mod);
+    redo_opt_delta_bench.root_module.addImport("storage_page_manager", storage_page_manager_shared);
+    b.installArtifact(redo_opt_delta_bench);
+    const run_redo_opt_delta_bench = b.addRunArtifact(redo_opt_delta_bench);
+    test_step.dependOn(&run_redo_opt_delta_bench.step);
 
     const doccheck_exe = b.addExecutable(.{
         .name = "doccheck",
@@ -388,6 +412,8 @@ pub fn build(b: *std.Build) void {
     });
     const wal_scan_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     wal_scan_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
+    // Also add page manager import for the wal_compact tool variant of WAL module
+    wal_scan_mod.addImport("storage_page_manager", storage_page_manager_shared);
     wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
     wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     b.installArtifact(wal_compact_exe);

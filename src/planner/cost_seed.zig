@@ -46,16 +46,18 @@ pub const EstimatorConfig = struct {
 // to subsequent estimates of same op kind. Clamped to [0.05, 20.0] to avoid runaway.
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=IMPL; OWNER=planner; UPDATED=2025-09-22
 pub const AdaptiveBiasRegistry = struct {
-    biases: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // NOTE: Zig 0.15 reflection: direct .Enum.fields access not available; keep constant in sync with LogicalOpKind.
+    pub const KIND_COUNT: comptime_int = 8; // Scan, Expand, Filter, Project, Aggregate, Sort, Limit, SetOp
+    biases: [KIND_COUNT]f64 = [_]f64{1.0} ** KIND_COUNT,
     // Dynamic alpha adaptation state per kind:
-    dyn_alpha: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{0.2} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    dyn_alpha: [KIND_COUNT]f64 = [_]f64{0.2} ** KIND_COUNT,
     // Exponential moving averages for ratio mean and squared mean for variance estimation.
-    ratio_mean: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
-    ratio_sq_mean: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    ratio_mean: [KIND_COUNT]f64 = [_]f64{1.0} ** KIND_COUNT,
+    ratio_sq_mean: [KIND_COUNT]f64 = [_]f64{1.0} ** KIND_COUNT,
     // Last computed coefficient of variation per kind (for explain transparency)
-    last_cv: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{0.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    last_cv: [KIND_COUNT]f64 = [_]f64{0.0} ** KIND_COUNT,
     // Last CV classification label index (0=stable,1=moderate,2=volatile)
-    last_cv_class: [@typeInfo(LogicalOpKind).Enum.fields.len]u8 = [_]u8{0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    last_cv_class: [KIND_COUNT]u8 = [_]u8{0} ** KIND_COUNT,
     // Configuration bounds for alpha adaptation (could be exposed later).
     alpha_min: f64 = 0.10,
     alpha_max: f64 = 0.50,
@@ -63,11 +65,11 @@ pub const AdaptiveBiasRegistry = struct {
     variance_stable_threshold: f64 = 0.12, // CV below -> increase alpha
     variance_unstable_threshold: f64 = 0.30, // CV above -> decrease alpha
     // Clamp saturation tracking (consecutive updates that land at min or max clamp bound)
-    low_clamp_streak: [@typeInfo(LogicalOpKind).Enum.fields.len]u16 = [_]u16{0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
-    high_clamp_streak: [@typeInfo(LogicalOpKind).Enum.fields.len]u16 = [_]u16{0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    low_clamp_streak: [KIND_COUNT]u16 = [_]u16{0} ** KIND_COUNT,
+    high_clamp_streak: [KIND_COUNT]u16 = [_]u16{0} ** KIND_COUNT,
     // Active warning flags once streak >= threshold (remain set until streak resets)
-    low_clamp_warning: [@typeInfo(LogicalOpKind).Enum.fields.len]bool = [_]bool{false} ** @typeInfo(LogicalOpKind).Enum.fields.len,
-    high_clamp_warning: [@typeInfo(LogicalOpKind).Enum.fields.len]bool = [_]bool{false} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    low_clamp_warning: [KIND_COUNT]bool = [_]bool{false} ** KIND_COUNT,
+    high_clamp_warning: [KIND_COUNT]bool = [_]bool{false} ** KIND_COUNT,
     clamp_warning_threshold: u16 = 5,
 
     pub fn apply(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, raw_rows: f64) f64 {

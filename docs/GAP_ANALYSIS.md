@@ -1,6 +1,6 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-22)
 
-<!-- STATUS_JSON_SHA256: 0ce6638086e74ab14c3c6e034ecd38e5f5145f755e05cf8d0790642bb854437e -->
+<!-- STATUS_JSON_SHA256: 121dae16c42a31a240e7081d008f05a502c126a341a799354296cd027aad39f6 -->
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -29,6 +29,7 @@
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDynamicAlpha; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasPersistenceV2; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampWarning; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 ```
 
 This authoritative ledger is generated from `status.json` emitted by:

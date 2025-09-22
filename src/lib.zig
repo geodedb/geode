@@ -28,6 +28,8 @@ pub const conformance = @import("conformance.zig");
 // Re-export selected runtime helpers so binaries can import via the geode package
 pub const exec = @import("exec.zig");
 pub const planner = @import("planner.zig");
+// Expose structural key utilities for benchmarks (PathCache related)
+pub const planner_structural_key = @import("planner/structural_key.zig");
 // Expose planner pipeline orchestration (synthetic phases + selection integration)
 pub const planner_pipeline = @import("planner/pipeline.zig");
 pub const temporal = @import("temporal.zig");

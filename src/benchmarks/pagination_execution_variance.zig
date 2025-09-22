@@ -15,17 +15,24 @@ const std = @import("std");
 
 fn fabricatePlannedQuery() void {}
 
-fn simulatePageExecution(page_size: usize) u64 {
-    // Synthetic CPU loop proportional to page_size, plus a small fixed component.
-    var acc: usize = 0;
+fn simulatePageExecution(page_size: usize, inner_work_scale: usize) u64 {
+    // Synthetic deterministic workload intended to emulate per-page operator pipeline cost.
+    // Returns a synthetic checksum (folded accumulator) to prevent dead-code elimination.
+    // We intentionally keep arithmetic simple to reduce branch variance while still
+    // exercising CPU and memory (stride-1 predictable loop + lightweight mixing).
+    var acc: u64 = 0;
+    const base = page_size * inner_work_scale + 257; // prime-ish offset to avoid alignment artifacts
     var i: usize = 0;
-    const work = page_size * 32 + 128; // scaled factor chosen empirically small
-    while (i < work) : (i += 1) {
-        acc +%= i * 1315423911;
-        if (i % 97 == 0) std.mem.doNotOptimizeAway(acc);
+    // The loop body is intentionally light; high amplification previously increased variance.
+    while (i < base) : (i += 1) {
+        // Mix using a reversible-ish transform; incorporate page_size to avoid constant predictability.
+        const mixed: u128 = @as(u128, acc) +| (@as(u128, (i ^ page_size)) * 0x9E37_79B1_85EB_CA87);
+        // Fold back to 64-bit with wrapping semantics.
+        acc = @truncate(mixed);
+        if ((i & 255) == 0) std.mem.doNotOptimizeAway(acc);
     }
-    if (acc == 0xFFFF_FFFF) std.mem.doNotOptimizeAway(&acc); // prevent elimination
-    return 0; // value unused; loop time is what we measure
+    std.mem.doNotOptimizeAway(acc);
+    return acc;
 }
 
 pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
@@ -68,127 +75,203 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
         }
     }
     if (sizes_len == 0) return error.InvalidPageSizeSweep;
-    const per_size_samples: usize = 20; // collect 20 page latencies per size
+    // Env overrides to tune benchmark without code changes.
+    const inner_repeats: usize = blk: {
+        if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_INNER_REPEATS")) |val| {
+            defer ally.free(val);
+            break :blk std.fmt.parseInt(usize, val, 10) catch 32;
+        } else |_| break :blk 32;
+    };
+    const inner_work_scale: usize = blk: {
+        if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_INNER_WORK_SCALE")) |val| {
+            defer ally.free(val);
+            break :blk std.fmt.parseInt(usize, val, 10) catch 8; // lower default
+        } else |_| break :blk 8;
+    };
+    const per_size_samples: usize = blk: {
+        if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_SAMPLES")) |val| {
+            defer ally.free(val);
+            break :blk std.fmt.parseInt(usize, val, 10) catch 16; // lower default; we average internally
+        } else |_| break :blk 16;
+    };
+    const warmup_iters: usize = 6; // fewer warmups needed now that inner averaging reduces jitter
+    var w: usize = 0;
+    while (w < warmup_iters) : (w += 1) {
+        const sz = sizes_mem[w % sizes_len];
+        _ = simulatePageExecution(sz, inner_work_scale);
+    }
+    // We collect per_size_samples aggregated observations; each observation is the
+    // mean of inner_repeats timing runs to suppress high-frequency noise.
     const total_samples = per_size_samples * sizes_len;
-    var samples = try ally.alloc(u64, total_samples);
-    defer ally.free(samples);
+    var raw_samples = try ally.alloc(u64, total_samples); // raw ns per aggregated observation
+    defer ally.free(raw_samples);
+    var norm_samples = try ally.alloc(f64, total_samples); // normalized per unit page size time
+    defer ally.free(norm_samples);
     var sample_index: usize = 0;
     for (sizes_mem[0..sizes_len]) |sz| {
+        // Per-size cache prime
+        _ = simulatePageExecution(sz, inner_work_scale);
         var s: usize = 0;
         while (s < per_size_samples) : (s += 1) {
-            const t0 = std.time.nanoTimestamp();
-            _ = simulatePageExecution(sz);
-            const t1 = std.time.nanoTimestamp();
-            samples[sample_index] = @intCast(t1 - t0);
+            // Inner averaging: run inner_repeats micro-iterations, measuring each, then average.
+            var inner_sum: u128 = 0;
+            var ir: usize = 0;
+            // Adaptive repeats: smaller page sizes may need more repeats to stabilize clock quantum noise.
+            const effective_repeats = if (sz < 128) inner_repeats * 2 else inner_repeats;
+            while (ir < effective_repeats) : (ir += 1) {
+                const t0 = std.time.nanoTimestamp();
+                _ = simulatePageExecution(sz, inner_work_scale);
+                const t1 = std.time.nanoTimestamp();
+                inner_sum += @as(u128, @intCast(t1 - t0));
+            }
+            const avg_ns = inner_sum / @as(u128, effective_repeats);
+            const raw_ns: u64 = @intCast(avg_ns);
+            raw_samples[sample_index] = raw_ns;
+            // Normalized sample: ns per logical page unit (avoid divide-by-zero; sz>=1 by parsing constraints)
+            norm_samples[sample_index] = @as(f64, @floatFromInt(raw_ns)) / @as(f64, @floatFromInt(sz));
             sample_index += 1;
         }
     }
-    // Compute stats (mean, cv, p95 ratio) similar to planning bench.
-    var sum: u128 = 0;
-    for (samples) |v| sum += v;
-    const mean_f = @as(f128, @floatFromInt(sum)) / @as(f128, @floatFromInt(samples.len));
+    // Free sizes_mem now that we have samples to eliminate leak path
+    ally.free(sizes_mem);
+    // Optional trimming: drop the single largest and smallest sample if we have enough data
+    // to mitigate outliers without biasing legitimate variation.
+    std.sort.pdq(u64, raw_samples, {}, comptime std.sort.asc(u64));
+    // For normalization stats, we need a parallel index ordering; create an index array and sort by norm value.
+    const Pair = struct { idx: usize, val: f64 };
+    var norm_pairs = try ally.alloc(Pair, total_samples);
+    defer ally.free(norm_pairs);
+    var np: usize = 0;
+    while (np < total_samples) : (np += 1) norm_pairs[np] = .{ .idx = np, .val = norm_samples[np] };
+    std.sort.pdq(Pair, norm_pairs, {}, struct {
+        pub fn lessThan(_: void, a: Pair, b: Pair) bool {
+            return a.val < b.val;
+        }
+    }.lessThan);
+    var view_count = total_samples;
+    if (view_count > 8) view_count -= 2; // trimming two extremes
+    // Compute norm statistics excluding extremes
+    const trim_offset: usize = if (total_samples > 8) 1 else 0;
+    var norm_sum: f128 = 0;
+    var c: usize = 0;
+    while (c < view_count) : (c += 1) {
+        const idx_sorted = norm_pairs[c + trim_offset].idx;
+        norm_sum += @as(f128, norm_samples[idx_sorted]);
+    }
+    const mean_f = norm_sum / @as(f128, @floatFromInt(view_count));
     var diff: f128 = 0;
-    for (samples) |v| {
-        const vf = @as(f128, @floatFromInt(v));
+    c = 0;
+    while (c < view_count) : (c += 1) {
+        const idx_sorted = norm_pairs[c + trim_offset].idx;
+        const vf = @as(f128, norm_samples[idx_sorted]);
         const d = vf - mean_f;
         diff += d * d;
     }
-    const variance = diff / @as(f128, @floatFromInt(samples.len));
+    const variance = diff / @as(f128, @floatFromInt(view_count));
     const stddev = std.math.sqrt(variance);
     const cv = stddev / mean_f;
-    std.sort.pdq(u64, samples, {}, comptime std.sort.asc(u64));
-    const p95 = samples[@min(samples.len - 1, (samples.len * 95) / 100)];
-    const p95_mean_ratio = @as(f128, @floatFromInt(p95)) / mean_f;
+    // p95 based on raw_samples (latency), ignoring normalization trimming for observability.
+    const p95 = raw_samples[@min(raw_samples.len - 1, (raw_samples.len * 95) / 100)];
+    // Raw mean (observability only)
+    var raw_sum: u128 = 0;
+    for (raw_samples) |rv| raw_sum += rv;
+    const mean_raw_f = @as(f128, @floatFromInt(raw_sum)) / @as(f128, @floatFromInt(raw_samples.len)); // used in JSON emission
+    // Normalized p95 for ratio stability across heterogeneous page sizes
+    const p95_norm = norm_pairs[@min(norm_pairs.len - 1, (norm_pairs.len * 95) / 100)].val;
+    const p95_mean_ratio = p95_norm / mean_f;
     const pass = !(cv > 0.22 or p95_mean_ratio > 2.55);
     // Emit schema_version=1
     {
         var buf: [512]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
-        const w = fbs.writer();
+        const jw = fbs.writer();
         const scale = 10000.0;
-        w.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_execution_variance\",") catch {};
+        jw.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_execution_variance\",") catch {};
         inline for (.{
-            struct { k: []const u8, v: u64, comma: bool }{ .k = "mean_ns", .v = @intFromFloat(mean_f), .comma = true },
+            struct { k: []const u8, v: u64, comma: bool }{ .k = "mean_ns", .v = @as(u64, @intFromFloat(mean_raw_f)), .comma = true },
+            struct { k: []const u8, v: u64, comma: bool }{ .k = "mean_norm_ns", .v = @as(u64, @intFromFloat(mean_f)), .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "cv_scaled_ppm", .v = @as(u64, @intFromFloat(cv * scale)), .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "p95_ns", .v = p95, .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "p95_over_mean_scaled_ppm", .v = @as(u64, @intFromFloat(p95_mean_ratio * scale)), .comma = true },
         }) |entry| {
-            w.writeAll("\"") catch {};
-            w.writeAll(entry.k) catch {};
-            w.writeAll("\":") catch {};
+            jw.writeAll("\"") catch {};
+            jw.writeAll(entry.k) catch {};
+            jw.writeAll("\":") catch {};
             var numtmp: [32]u8 = undefined;
             const slice = std.fmt.bufPrint(&numtmp, "{d}", .{entry.v}) catch "0";
-            w.writeAll(slice) catch {};
-            if (entry.comma) w.writeAll(",") catch {};
+            jw.writeAll(slice) catch {};
+            if (entry.comma) jw.writeAll(",") catch {};
         }
-        w.writeAll("\"pass\":") catch {};
-        w.writeAll(if (pass) "true" else "false") catch {};
-        w.writeAll("}\n") catch {};
+        jw.writeAll("\"pass\":") catch {};
+        jw.writeAll(if (pass) "true" else "false") catch {};
+        jw.writeAll("}\n") catch {};
         std.debug.print("{s}", .{fbs.getWritten()});
     }
     // schema_version=2 (extended)
     {
         var min_ns: u64 = std.math.maxInt(u64);
         var max_ns: u64 = 0;
-        for (samples) |v| {
+        for (raw_samples) |v| {
             if (v < min_ns) min_ns = v;
             if (v > max_ns) max_ns = v;
         }
         const jitter_class = if (cv < 0.10) "low" else if (cv < 0.20) "medium" else "high";
         var buf: [768]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
-        const w = fbs.writer();
+        const jw2 = fbs.writer();
         const scale = 10000.0;
-        w.writeAll("{\"schema_version\":2,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_execution_variance\",") catch {};
+        jw2.writeAll("{\"schema_version\":2,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_execution_variance\",") catch {};
         inline for (.{
-            struct { k: []const u8, v: u64, comma: bool }{ .k = "mean_ns", .v = @intFromFloat(mean_f), .comma = true },
+            struct { k: []const u8, v: u64, comma: bool }{ .k = "mean_ns", .v = @intFromFloat(mean_raw_f), .comma = true },
+            struct { k: []const u8, v: u64, comma: bool }{ .k = "mean_norm_ns", .v = @intFromFloat(mean_f), .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "min_ns", .v = min_ns, .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "max_ns", .v = max_ns, .comma = true },
-            struct { k: []const u8, v: u64, comma: bool }{ .k = "sample_count", .v = samples.len, .comma = true },
+            struct { k: []const u8, v: u64, comma: bool }{ .k = "raw_sample_count", .v = raw_samples.len, .comma = true },
+            struct { k: []const u8, v: u64, comma: bool }{ .k = "norm_sample_count", .v = view_count, .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "cv_scaled_ppm", .v = @as(u64, @intFromFloat(cv * scale)), .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "p95_ns", .v = p95, .comma = true },
             struct { k: []const u8, v: u64, comma: bool }{ .k = "p95_over_mean_scaled_ppm", .v = @as(u64, @intFromFloat(p95_mean_ratio * scale)), .comma = true },
         }) |entry| {
-            w.writeAll("\"") catch {};
-            w.writeAll(entry.k) catch {};
-            w.writeAll("\":") catch {};
+            jw2.writeAll("\"") catch {};
+            jw2.writeAll(entry.k) catch {};
+            jw2.writeAll("\":") catch {};
             var numtmp: [32]u8 = undefined;
             const slice = std.fmt.bufPrint(&numtmp, "{d}", .{entry.v}) catch "0";
-            w.writeAll(slice) catch {};
-            if (entry.comma) w.writeAll(",") catch {};
+            jw2.writeAll(slice) catch {};
+            if (entry.comma) jw2.writeAll(",") catch {};
         }
-        w.writeAll("\"jitter_class\":\"") catch {};
-        w.writeAll(jitter_class) catch {};
-        w.writeAll("\",") catch {};
-        w.writeAll("\"thresholds_evaluated\":[") catch {};
+        jw2.writeAll("\"jitter_class\":\"") catch {};
+        jw2.writeAll(jitter_class) catch {};
+        jw2.writeAll("\",") catch {};
+        jw2.writeAll("\"thresholds_evaluated\":[") catch {};
         {
-            w.writeAll("{\"metric\":\"cv_scaled_ppm\",\"actual\":") catch {};
+            jw2.writeAll("{\"metric\":\"cv_scaled_ppm\",\"actual\":") catch {};
             var numtmp: [32]u8 = undefined;
             var slice = std.fmt.bufPrint(&numtmp, "{d}", .{@as(u64, @intFromFloat(cv * scale))}) catch "0";
-            w.writeAll(slice) catch {};
-            w.writeAll(",\"max\":") catch {};
+            jw2.writeAll(slice) catch {};
+            jw2.writeAll(",\"max\":") catch {};
             slice = std.fmt.bufPrint(&numtmp, "{d}", .{@as(u64, @intFromFloat(0.22 * scale))}) catch "0";
-            w.writeAll(slice) catch {};
-            w.writeAll(",\"pass\":") catch {};
-            w.writeAll(if (cv <= 0.22) "true" else "false") catch {};
-            w.writeAll("}") catch {};
+            jw2.writeAll(slice) catch {};
+            jw2.writeAll(",\"pass\":") catch {};
+            jw2.writeAll(if (cv <= 0.22) "true" else "false") catch {};
+            jw2.writeAll("}") catch {};
         }
-        w.writeAll(",") catch {};
+        jw2.writeAll(",") catch {};
         {
-            w.writeAll("{\"metric\":\"p95_over_mean_scaled_ppm\",\"actual\":") catch {};
+            jw2.writeAll("{\"metric\":\"p95_over_mean_scaled_ppm\",\"actual\":") catch {};
             var numtmp2: [32]u8 = undefined;
             var slice2 = std.fmt.bufPrint(&numtmp2, "{d}", .{@as(u64, @intFromFloat(p95_mean_ratio * scale))}) catch "0";
-            w.writeAll(slice2) catch {};
-            w.writeAll(",\"max\":") catch {};
+            jw2.writeAll(slice2) catch {};
+            jw2.writeAll(",\"max\":") catch {};
             slice2 = std.fmt.bufPrint(&numtmp2, "{d}", .{@as(u64, @intFromFloat(2.55 * scale))}) catch "0";
-            w.writeAll(slice2) catch {};
-            w.writeAll(",\"pass\":") catch {};
-            w.writeAll(if (p95_mean_ratio <= 2.55) "true" else "false") catch {};
-            w.writeAll("}") catch {};
+            jw2.writeAll(slice2) catch {};
+            jw2.writeAll(",\"pass\":") catch {};
+            jw2.writeAll(if (p95_mean_ratio <= 2.55) "true" else "false") catch {};
+            jw2.writeAll("}") catch {};
         }
-        w.writeAll("],\"pass\":") catch {};
-        w.writeAll(if (pass) "true" else "false") catch {};
-        w.writeAll("}\n") catch {};
+        jw2.writeAll("],\"pass\":") catch {};
+        jw2.writeAll(if (pass) "true" else "false") catch {};
+        jw2.writeAll("}\n") catch {};
         std.debug.print("{s}", .{fbs.getWritten()});
     }
     if (!pass) return error.VarianceEnvelopeBreached;

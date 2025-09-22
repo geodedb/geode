@@ -1,6 +1,7 @@
 const std = @import("std");
-const structural_key = @import("../src/planner/structural_key.zig");
-const planner_root = @import("../src/planner.zig");
+const geode = @import("geode");
+const structural_key = @import("geode").planner_structural_key; // assume exported alias; fallback below if not present
+const planner_root = @import("geode"); // planner AST assumed exposed via geode root
 
 // Benchmark structural key degree bucket enrichment utilization variance.
 // Now uses real degree buckets derived from node name occurrence counts in pattern (L,M,H buckets).
@@ -14,7 +15,7 @@ fn makeQuery(pattern_variant: usize) planner_root.ast.Query {
     return .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
 }
 
-test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope" {
+pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
@@ -65,4 +66,12 @@ test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelo
         "VARIANCE_OK PathCacheDegreeBucketUtilizationVarianceEnvelope mean={d:.2} cv={d:.4} p95_ratio={d:.2} samples={d}\n",
         .{ mean, cv, p95_ratio, samples.len },
     );
+}
+
+test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope" {
+    try runPathCacheDegreeBucketUtilizationVarianceEnvelope();
+}
+
+pub fn main() !void {
+    try runPathCacheDegreeBucketUtilizationVarianceEnvelope();
 }
