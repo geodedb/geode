@@ -1,9 +1,11 @@
 const std = @import("std");
 const mvcc_adv = @import("mvcc_adv");
+const range_tracker = @import("range_tracker");
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_TxnCommit; OWNER=engine; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SSIPhantomPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=engine; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=PredicateRangeDetection; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_023_PhantomDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-025; FEATURE="Transactions/MVCC"; ASPECT=WriteSkewDetection; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_025_WriteSkewDetection; BENCH=BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
 
 pub const TxnId = u64;
 
@@ -89,6 +91,8 @@ pub const Manager = struct {
     predicates: std.AutoHashMap(TxnId, std.ArrayList([]u8)) = undefined,
     // Global committed & uncommitted writes (key + owning txn + commit ts (0 while active))
     writes: std.ArrayListUnmanaged(struct { key: []u8, txn_id: TxnId, commit_ts: Timestamp }) = .{},
+    // Explicit range tracker (optional until phantom prevention enabled)
+    rtracker: ?range_tracker.RangeTracker = null,
 
     pub fn init(self: *Manager, ally: std.mem.Allocator) void {
         self.* = .{
@@ -102,11 +106,13 @@ pub const Manager = struct {
             .phantom_enabled = false,
             .predicates = std.AutoHashMap(TxnId, std.ArrayList([]u8)).init(ally),
             .writes = .{},
+            .rtracker = null,
         };
     }
 
     pub fn deinit(self: *Manager) void {
         if (self.advanced) |*adv| adv.deinit();
+        if (self.rtracker) |*rt| rt.deinit();
         // Clean up lock lists and keys
         var lock_iter = self.locks.iterator();
         while (lock_iter.next()) |entry| {
@@ -149,6 +155,7 @@ pub const Manager = struct {
 
     pub fn enablePhantomPrevention(self: *Manager) void {
         self.phantom_enabled = true;
+        if (self.rtracker == null) self.rtracker = range_tracker.RangeTracker.init(self.allocator);
     }
 
     pub fn begin(self: *Manager) Txn {
@@ -229,6 +236,19 @@ pub const Manager = struct {
                             txn.state = .Aborted;
                             return error.SerializationFailure; // treat phantom as serialization failure
                         }
+                    }
+                }
+            }
+            // Range-based phantom detection (if tracker present)
+            if (self.rtracker) |*rt| {
+                // Scan writes for any key inside registered ranges for this txn
+                for (self.writes.items) |w| {
+                    if (w.txn_id == txn.id) continue;
+                    if (w.commit_ts == 0) continue;
+                    if (w.commit_ts <= txn.start_ts) continue;
+                    if (rt.keyInRanges(txn.id, w.key)) {
+                        txn.state = .Aborted;
+                        return error.SerializationFailure;
                     }
                 }
             }
@@ -467,6 +487,13 @@ pub const Manager = struct {
         for (entry.value_ptr.items) |p| if (std.mem.eql(u8, p, prefix)) return;
         const dup = try self.allocator.dupe(u8, prefix);
         try entry.value_ptr.append(self.allocator, dup);
+    }
+
+    // Register an explicit key range [low, high] for phantom detection.
+    // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-22
+    pub fn rangeRead(self: *Manager, txn: *Txn, low: []const u8, high: []const u8) !void {
+        if (!self.phantom_enabled) return;
+        if (self.rtracker) |*rt| try rt.register(txn.id, low, high);
     }
 
     pub fn releaseRead(self: *Manager, key: []const u8, txn: *Txn) void {

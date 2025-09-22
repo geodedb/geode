@@ -1,10 +1,16 @@
 const std = @import("std");
+// NOTE: Use root planner module via relative import. This file is only compiled
+// through a module whose root is src/planner, so the parent reference is stable.
+// Tests that compile this file as its own root must import it through the same
+// module tree to avoid Zig's "import of file outside module path" error.
 const planner_root = @import("../planner.zig");
 const path_cache_mod = @import("path_cache.zig");
 const phase_timing_mod = @import("phase_timing.zig");
 const adaptive_replan_mod = @import("adaptive_replan.zig");
 const rewrite_hooks = @import("rewrite.zig");
 const structural_key = @import("structural_key.zig");
+const enumerator_mod = @import("enumerator.zig");
+const cost_model = @import("cost_model.zig");
 
 // High-level planner pipeline orchestration integrating PathCache, PhaseTiming, AdaptiveReplan.
 // This provides a deterministic synthetic pipeline used for integration tests & variance bench.
@@ -206,6 +212,79 @@ pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerO
     return .{ .plan = plan, .timings = pt.snapshot() };
 }
 
+// Integrate cost-based enumerator selection into pipeline: build a synthetic logical plan tree
+// from the query structure (currently uses number of return items + pattern chains) and invoke
+// PlanEnumerator.selectBestUnmanaged. Returns the best candidate plus enumeration stats.
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanSelectionPipelineAdoption; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption; OWNER=planner; UPDATED=2025-09-22
+pub const BestPlanResult = struct {
+    best: ?enumerator_mod.CandidatePlan,
+    total_candidates: usize,
+    pruned: usize,
+};
+
+pub fn buildLogicalTree(q: planner_root.ast.Query, alloc: std.mem.Allocator) !enumerator_mod.LogicalPlan {
+    // Derive leaf count: at least 1; use number of return items or chains * hops length fallback
+    var leaves: usize = q.ret.items.len;
+    if (leaves == 0) leaves = q.match.chains.len;
+    if (leaves == 0) leaves = 1;
+    // Allocate an array of scan leaves
+    const leaf_nodes = try alloc.alloc(enumerator_mod.LogicalPlan, leaves);
+    for (leaf_nodes) |*ln| ln.* = .{ .op = .scan, .children = &.{} };
+    // Build a simple left-deep join tree
+    var current: enumerator_mod.LogicalPlan = leaf_nodes[0];
+    var i: usize = 1;
+    while (i < leaves) : (i += 1) {
+        var children_buf = try alloc.alloc(enumerator_mod.LogicalPlan, 2);
+        children_buf[0] = current;
+        children_buf[1] = leaf_nodes[i];
+        current = .{ .op = .join, .children = children_buf };
+    }
+    return current;
+}
+
+pub fn planQuerySelectBest(
+    allocator: std.mem.Allocator,
+    q: planner_root.ast.Query,
+    enum_cfg: enumerator_mod.EnumeratorConfig,
+) !BestPlanResult {
+    // Ensure core legality (ORDER/LIMIT etc.) still validated
+    _ = try planner_root.planQuery(q, .{});
+    const tree = try buildLogicalTree(q, allocator);
+    // Enumerate all candidates (unmanaged) then apply refined cost model for final selection
+    var pe = enumerator_mod.PlanEnumerator.init(allocator, enum_cfg);
+    var buf = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
+    defer buf.deinit(allocator);
+    try pe.enumerateUnmanaged(tree, allocator, &buf);
+    if (buf.items.len == 0) return .{ .best = null, .total_candidates = 0, .pruned = pe.stats.pruned };
+    // Apply refined cost model across candidates
+    const factors: cost_model.CostFactors = .{};
+    // Perform a synthetic calibration pass to adjust relative operator weights.
+    var calibration = @import("cost_calibration.zig").Calibration.init(allocator);
+    @import("cost_calibration.zig").simulateSamples(&calibration) catch {};
+    defer calibration.deinit();
+    var best_cp: ?enumerator_mod.CandidatePlan = null;
+    var best_cost: f64 = std.math.inf(f64);
+    for (buf.items) |cp| {
+        const refined = cost_model.estimateWithCalibration(cp.plan, factors, &calibration);
+        if (refined < best_cost) {
+            best_cost = refined;
+            best_cp = cp; // keep original candidate (struct copy)
+        }
+    }
+    // Overwrite selected candidate.cost with refined cost for visibility
+    if (best_cp) |*sel| sel.cost = best_cost;
+    return .{ .best = best_cp, .total_candidates = buf.items.len, .pruned = pe.stats.pruned };
+}
+
+// Expose a canonical minimal empty query for tests/benchmarks so they don't need to import planner_root directly.
+pub fn defaultEmptyQuery() planner_root.ast.Query {
+    return .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+}
+
+// Selection adoption & variance envelope tests moved to external file
+// tests/canary_planner_pipeline_selection.zig to avoid module path conflicts.
+// (See CANARY aspects PlanSelectionPipelineAdoption / PlanSelectionPipelineVarianceEnvelope.)
+
 test "TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration" {
     var left_expr = planner_root.ast.Expr{ .Ident = "a" };
     var right_expr = planner_root.ast.Expr{ .Int = 1 };
@@ -318,6 +397,28 @@ test "TestCANARY_REQ_GQL_021_PathCachePlannerHook" {
     try plannerPathCacheInsert(gpa.allocator(), &cache, q1, "v");
     const got = try plannerPathCacheLookup(gpa.allocator(), &cache, q2);
     try std.testing.expect(got != null);
+}
+
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelCalibrationRanking; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking; OWNER=planner; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking" {
+    const factors: cost_model.CostFactors = .{};
+    // Lightweight synthetic plans built inline (no enumeration):
+    const scan_leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &.{} };
+    const project = enumerator_mod.LogicalPlan{ .op = .project, .children = &.{scan_leaf} };
+    const scan2 = enumerator_mod.LogicalPlan{ .op = .scan, .children = &.{} };
+    const join_node = enumerator_mod.LogicalPlan{ .op = .join, .children = &.{ scan_leaf, scan2 } };
+    const sort_node = enumerator_mod.LogicalPlan{ .op = .sort, .children = &.{join_node} };
+    const baseA = cost_model.estimatePlanCost(project, factors);
+    const baseB = cost_model.estimatePlanCost(sort_node, factors);
+    try std.testing.expect(baseB > baseA);
+    var cal = @import("cost_calibration.zig").Calibration.init(std.testing.allocator);
+    defer cal.deinit();
+    try @import("cost_calibration.zig").simulateSamples(&cal);
+    const adjA = cost_model.estimateWithCalibration(project, factors, &cal);
+    const adjB = cost_model.estimateWithCalibration(sort_node, factors, &cal);
+    const delta_base = baseB - baseA;
+    const delta_adj = adjB - adjA;
+    try std.testing.expect(delta_adj >= delta_base);
 }
 
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence" {

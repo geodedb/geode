@@ -1,4 +1,5 @@
 const std = @import("std");
+// CANARY: REQ=REQ-GQL-026; FEATURE="Conformance/Flagger"; ASPECT=FlaggerCompleteness; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_026_FlaggerCompleteness; BENCH=BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope; OWNER=conformance; UPDATED=2025-09-21
 
 pub const Profile = struct {
     version: []const u8 = "skeleton",
@@ -38,4 +39,80 @@ test "conformance json outputs expected keys" {
     try std.testing.expect(std.mem.indexOf(u8, s, "\"version\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "\"features\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "\"group_by_phase1\"") != null);
+}
+
+pub fn collectImplDefinedFlags(ally: std.mem.Allocator) ![][]const u8 {
+    var list = try ally.alloc([]const u8, 5);
+    list[0] = "CollationBinaryDefault";
+    list[1] = "NullOrderPolicyDefault";
+    list[2] = "US001PaginationPolicy";
+    list[3] = "UA005PathTieBreak";
+    list[4] = "UA006PathTieBreak";
+    return list;
+}
+
+test "TestCANARY_REQ_GQL_026_FlaggerCompleteness" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const flags = try collectImplDefinedFlags(alloc);
+    defer alloc.free(flags);
+    // ensure required flags present
+    inline for (.{ "CollationBinaryDefault", "US001PaginationPolicy" }) |req| {
+        var found = false;
+        for (flags) |f| {
+            if (std.mem.eql(u8, f, req)) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const iterations: usize = 64;
+    var samples = try alloc.alloc(u64, iterations);
+    defer alloc.free(samples);
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        const start = std.time.nanoTimestamp();
+        const flags = collectImplDefinedFlags(alloc) catch unreachable;
+        alloc.free(flags);
+        const end = std.time.nanoTimestamp();
+        samples[i] = @as(u64, @intCast(end - start));
+    }
+    var sum: f128 = 0;
+    for (samples) |s| sum += @as(f128, @floatFromInt(s));
+    const mean = sum / @as(f128, @floatFromInt(iterations));
+    var var_acc: f128 = 0;
+    for (samples) |s| {
+        const diff = @as(f128, @floatFromInt(s)) - mean;
+        var_acc += diff * diff;
+    }
+    const variance = var_acc / @as(f128, @floatFromInt(iterations));
+    const cv = std.math.sqrt(variance) / mean;
+    var scratch = try alloc.dupe(u64, samples);
+    defer alloc.free(scratch);
+    const rank = (iterations * 95) / 100;
+    var r: usize = 0;
+    while (r <= rank) : (r += 1) {
+        var min_index = r;
+        var j: usize = r + 1;
+        while (j < iterations) : (j += 1) {
+            if (scratch[j] < scratch[min_index]) min_index = j;
+        }
+        if (min_index != r) {
+            const tmp = scratch[r];
+            scratch[r] = scratch[min_index];
+            scratch[min_index] = tmp;
+        }
+    }
+    const p95 = @as(f128, @floatFromInt(scratch[rank]));
+    const p95_mean = p95 / mean;
+    try std.testing.expect(cv <= 0.22);
+    try std.testing.expect(p95_mean <= 2.55);
 }

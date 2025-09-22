@@ -5,7 +5,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Pruning Stats Perf"; ASPECT=PathPruningStatsPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathPruningStatsPerf; OWNER=planner; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Memory Perf"; ASPECT=PathExpandMemPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandMemPerf; OWNER=planner; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerSubPhaseHooks; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks; OWNER=planner; UPDATED=2025-09-21
-const ast = @import("gql/ast.zig");
+pub const ast = @import("gql/ast.zig");
 const mem = std.mem;
 const temporal = @import("temporal.zig");
 const printer = @import("gql/print.zig");

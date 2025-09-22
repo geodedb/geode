@@ -33,6 +33,10 @@ pub const PathCache = struct {
     ring_index: usize = 0,
     count: usize = 0,
     stats: Stats = .{},
+    // Distribution tracking: counts per hash modulo bucket_count (power-of-two chosen by caller)
+    // This is an optional feature; when bucket_count is zero, distribution disabled.
+    bucket_count: usize = 0,
+    bucket_hits: []u64 = &[_]u64{},
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !PathCache {
         if (capacity == 0) return error.InvalidCapacity;
@@ -41,9 +45,18 @@ pub const PathCache = struct {
         return PathCache{ .allocator = allocator, .capacity = capacity, .entries = buf };
     }
 
+    pub fn enableDistribution(self: *PathCache, bucket_count: usize) !void {
+        if (bucket_count == 0 or (bucket_count & (bucket_count - 1)) != 0) return error.InvalidBucketCount; // must be power of two
+        if (self.bucket_count != 0) self.allocator.free(self.bucket_hits);
+        self.bucket_hits = try self.allocator.alloc(u64, bucket_count);
+        @memset(self.bucket_hits, 0);
+        self.bucket_count = bucket_count;
+    }
+
     pub fn deinit(self: *PathCache) void {
         // Shallow deallocation: keys/values are caller-owned slices.
         self.allocator.free(self.entries);
+        if (self.bucket_count != 0) self.allocator.free(self.bucket_hits);
         self.* = undefined;
     }
 
@@ -59,6 +72,10 @@ pub const PathCache = struct {
 
     pub fn put(self: *PathCache, key: []const u8, value: []const u8) void {
         const h = hashKey(key);
+        if (self.bucket_count != 0) {
+            const idx = h & (self.bucket_count - 1);
+            self.bucket_hits[idx] +%= 1;
+        }
         // Check for existing (linear scan acceptable for small capacity in skeleton).
         var i: usize = 0;
         while (i < self.count) : (i += 1) {
@@ -84,6 +101,11 @@ pub const PathCache = struct {
 
     pub fn get(self: *PathCache, key: []const u8) ?[]const u8 {
         const h = hashKey(key);
+        if (self.bucket_count != 0) {
+            const idx = h & (self.bucket_count - 1);
+            // Optional read distribution could also be tracked separately; omitted for simplicity.
+            self.bucket_hits[idx] +%= 1;
+        }
         var i: usize = 0;
         while (i < self.count) : (i += 1) {
             const idx = (self.ring_index + self.capacity - self.count + i) % self.capacity;
@@ -128,6 +150,30 @@ pub const PathCache = struct {
         }
         try w.writeAll(frac_buf[0..]);
         try w.writeByte('}');
+    }
+
+    // Compute Shannon entropy (bits) over bucket_hits; returns 0 if disabled or no events.
+    pub fn entropyBits(self: *PathCache) f64 {
+        if (self.bucket_count == 0) return 0;
+        var total: u128 = 0;
+        for (self.bucket_hits) |c| total += c;
+        if (total == 0) return 0;
+        var ent: f64 = 0.0;
+        const total_f = @as(f64, @floatFromInt(total));
+        for (self.bucket_hits) |c| {
+            if (c == 0) continue;
+            const p = @as(f64, @floatFromInt(c)) / total_f;
+            ent -= p * std.math.log2(p);
+        }
+        return ent; // already in bits
+    }
+
+    // Normalized entropy in [0,1] by dividing by log2(bucket_count).
+    pub fn normalizedEntropy(self: *PathCache) f64 {
+        if (self.bucket_count == 0) return 0;
+        const max_bits = std.math.log2(@as(f64, @floatFromInt(self.bucket_count)));
+        if (max_bits == 0) return 0;
+        return self.entropyBits() / max_bits;
     }
 };
 

@@ -1,4 +1,4 @@
-# NEXT — Execution Plan (Unified CANARY Slice Format) — Generated 2025-09-21
+# NEXT — Execution Plan (Unified CANARY Slice Format) — Generated 2025-09-22
 
 ## 0. WHY (Strategic Intent)
 
@@ -76,10 +76,10 @@ OUT (Future Release):
 
 From latest scan (see `status.json`) plus newly added execution pagination, degree bucket utilization, planner pre/group validation, pagination prefetch, projection prune variance benches, real degree bucket discrimination test, physiological redo optimization variance, MVCC phantom prevention predicate range detection (REQ-GQL-023), cost-based plan enumeration (REQ-GQL-024), variable-length path property predicate execution (REQ-GQL-017 new aspect), write skew detection (REQ-GQL-025), redo optimization delta variance (REQ-GQL-022 new aspect), and flagger completeness (REQ-GQL-026):
 
-- BENCHED aspects: 158 (added PlanEnumerationVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, RedoOptimizationDeltaVariance, FlaggerGenerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PlanEnumerationCostPrune)
-- TESTED (non-BENCHED): 161 (added PlanEnumerationEngine, PathVariableLengthPropertyPredicate, WriteSkewDetection, FlaggerCompleteness, PlanSelectionIntegration, plus PhantomDetection earlier)
+- BENCHED aspects: 165 (added PlanCostModelCalibrationVarianceEnvelope this update along with prior PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, PlanEnumerationVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, RedoOptimizationDeltaVariance, FlaggerGenerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PlanCostModelVarianceEnvelope, PlanJoinReorderVarianceEnvelope)
+- TESTED (non-BENCHED): 168 (added PlanCostModelCalibration, PlanCostModelCalibrationRanking; plus PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, PlanEnumerationEngine, PathVariableLengthPropertyPredicate, WriteSkewDetection, FlaggerCompleteness, PlanSelectionPipelineAdoption, PlanCostModelFactors, PlanJoinReorderDiversity, PhantomDetection)
 - STUB/IMPL: 0
-- Variance Guards Landed: 62 (all passing thresholds)
+- Variance Guards Landed: 65 (all passing thresholds; new guard: PlanCostModelCalibrationVarianceEnvelope)
 
 Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, WALPageFlushQueueDepthVarianceEnvelope, PlannerRewritePass, PlannerCardinalityEstimate, PlannerCostModelPhaseVarianceEnvelope, PlannerPreValidationVarianceEnvelope, PlannerGroupValidationVarianceEnvelope, PlannerProjectionPruneVarianceEnvelope, PaginationOrderedVarianceEnvelope, PaginationExecutionVarianceEnvelope, PaginationPrefetchVarianceEnvelope, PhysiologicalRedoVarianceEnvelope, RedoOptimizationDeltaVariance, PlanEnumerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, FlaggerGenerationVarianceEnvelope, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic, PathCacheHitMissVarianceEnvelope, PathCacheStructuralKeyCollisionEnvelope, PathCacheStructuralKeyCollisionTightened, PathCacheDegreeBucketUtilizationVarianceEnvelope.
 

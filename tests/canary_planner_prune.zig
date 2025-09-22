@@ -11,7 +11,8 @@ fn buildDeepTree(depth: usize, leaf: enumerator_mod.LogicalPlan) enumerator_mod.
 }
 
 test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
     const root = buildDeepTree(4, leaf); // depth 4 tree
@@ -43,13 +44,16 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
     const root = buildDeepTree(5, leaf);
     const iterations: usize = 64;
-    var samples_prune = try alloc.alloc(u64, iterations); defer alloc.free(samples_prune);
-    var samples_full = try alloc.alloc(u64, iterations); defer alloc.free(samples_full);
+    var samples_prune = try alloc.alloc(u64, iterations);
+    defer alloc.free(samples_prune);
+    var samples_full = try alloc.alloc(u64, iterations);
+    defer alloc.free(samples_full);
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var ep = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 2048, .enable_prune = true, .prune_factor = 1.3 });
@@ -64,7 +68,8 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
         try ef.enumerateUnmanaged(root, alloc, &lf);
         const end_f = std.time.nanoTimestamp();
         samples_full[i] = @as(u64, @intCast(end_f - start_f));
-        lp.deinit(alloc); lf.deinit(alloc);
+        lp.deinit(alloc);
+        lf.deinit(alloc);
     }
     // stats helper (top-level definitions below)
     const sp = stats(samples_prune);
@@ -78,9 +83,14 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
 const Stats = struct { mean: f128, cv: f128, p95_mean: f128 };
 
 fn stats(a: []const u64) Stats {
-    var s: f128 = 0; for (a) |v| s += @as(f128, @floatFromInt(v));
+    var s: f128 = 0;
+    for (a) |v| s += @as(f128, @floatFromInt(v));
     const mean = s / @as(f128, @floatFromInt(a.len));
-    var var_acc: f128 = 0; for (a) |v| { const d = @as(f128,@floatFromInt(v)) - mean; var_acc += d*d; }
+    var var_acc: f128 = 0;
+    for (a) |v| {
+        const d = @as(f128, @floatFromInt(v)) - mean;
+        var_acc += d * d;
+    }
     const variance = var_acc / @as(f128, @floatFromInt(a.len));
     var scratch = std.heap.page_allocator.dupe(u64, a) catch unreachable;
     defer std.heap.page_allocator.free(scratch);
@@ -99,5 +109,5 @@ fn stats(a: []const u64) Stats {
         }
     }
     const p95 = @as(f128, @floatFromInt(scratch[rank]));
-    return .{ .mean = mean, .cv = std.math.sqrt(variance)/mean, .p95_mean = p95 / mean };
+    return .{ .mean = mean, .cv = std.math.sqrt(variance) / mean, .p95_mean = p95 / mean };
 }

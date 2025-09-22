@@ -132,6 +132,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&mvcc_adv_tests.step);
     const txn_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     txn_mod_for_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    const range_tracker_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/txn/range_tracker.zig"), .target = target, .optimize = optimize });
+    txn_mod_for_tests.addImport("range_tracker", range_tracker_mod_for_tests);
     const mvcc_adv_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mvcc_adv_integration.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_integration_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     mvcc_adv_integration_tests.root_module.addImport("txn", txn_mod_for_tests);
@@ -142,13 +144,21 @@ pub fn build(b: *std.Build) void {
     // MVCC phantom detection tests & bench
     const txn_mod_for_phantom_tests = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     txn_mod_for_phantom_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    txn_mod_for_phantom_tests.addImport("range_tracker", range_tracker_mod_for_tests);
     const phantom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_anomaly.zig"), .target = target, .optimize = optimize }) });
+    // Range-based phantom detection tests
+    const txn_mod_for_phantom_range_tests = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
+    txn_mod_for_phantom_range_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    txn_mod_for_phantom_range_tests.addImport("range_tracker", range_tracker_mod_for_tests);
+    const phantom_range_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_range.zig"), .target = target, .optimize = optimize }) });
+    phantom_range_tests.root_module.addImport("txn", txn_mod_for_phantom_range_tests);
     const planner_enumerator_mod = b.createModule(.{ .root_source_file = b.path("src/planner/enumerator.zig"), .target = target, .optimize = optimize });
     const planner_enumerator_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_enumerator.zig"), .target = target, .optimize = optimize }) });
     planner_enumerator_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     const path_varlen_predicate_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_path_varlen_predicate.zig"), .target = target, .optimize = optimize }) });
     const txn_manager_mod_for_write_skew = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     txn_manager_mod_for_write_skew.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    txn_manager_mod_for_write_skew.addImport("range_tracker", range_tracker_mod_for_tests);
     const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
@@ -157,14 +167,20 @@ pub fn build(b: *std.Build) void {
     // Planner enumeration pruning tests
     const planner_prune_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_prune.zig"), .target = target, .optimize = optimize }) });
     planner_prune_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    const planner_pipeline_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_pipeline_selection.zig"), .target = target, .optimize = optimize }) });
+    // Import shared geode root for planner + pipeline access
+    planner_pipeline_selection_tests.root_module.addImport("geode", root_mod);
+    planner_pipeline_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
     test_step.dependOn(&phantom_tests.step);
+    test_step.dependOn(&phantom_range_tests.step);
     test_step.dependOn(&planner_enumerator_tests.step);
     test_step.dependOn(&path_varlen_predicate_tests.step);
     test_step.dependOn(&write_skew_tests.step);
     test_step.dependOn(&redo_delta_tests.step);
     test_step.dependOn(&planner_plan_selection_tests.step);
     test_step.dependOn(&planner_prune_tests.step);
+    test_step.dependOn(&planner_pipeline_selection_tests.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
@@ -195,6 +211,8 @@ pub fn build(b: *std.Build) void {
     const mvcc_adv_mod = b.createModule(.{ .root_source_file = b.path("src/txn/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     txn_mod.addImport("mvcc_adv", mvcc_adv_mod);
+    const range_tracker_mod = b.createModule(.{ .root_source_file = b.path("src/txn/range_tracker.zig"), .target = target, .optimize = optimize });
+    txn_mod.addImport("range_tracker", range_tracker_mod);
     geoded_exe.root_module.addImport("txn", txn_mod);
     geoded_exe.root_module.addImport("mvcc_adv", mvcc_adv_mod);
     root_mod.addImport("mvcc_adv", mvcc_adv_mod);
@@ -538,5 +556,4 @@ pub fn build(b: *std.Build) void {
     });
     const run_zig_client_tests = b.addRunArtifact(zig_client_tests);
     test_clients_step.dependOn(&run_zig_client_tests.step);
-
 }

@@ -1,18 +1,18 @@
 # Geode Implementation Reality Report
 
-_Generated from CANARY evidence analysis - 2025-09-21 (post ordered pagination variance + structural key degree bucket enrichment sync)_
+_Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors & variance envelope sync)_
 
 ## Executive Summary
 
-Latest CANARY scan (`status.json`) baseline (pre-refresh) plus newly added execution pagination, degree bucket utilization, planner pre/group validation, pagination prefetch variance benches, projection prune variance, real degree bucket discrimination test, and physiological redo optimization variance (pending next scan):
+Latest CANARY scan (`status.json`) updated with PathCache entropy metrics and adaptive replan refinement:
 
-- **303 aspects** (tracked feature/aspect evidence rows)
-- **154 TESTED** (50.8%) – functional tests present (added PathCacheDegreeBucketDiscrimination)
-- **149 BENCHED** (49.2%) – performance / variance / jitter envelopes present (added PhysiologicalRedoVarianceEnvelope)
-- **0 STUB**, **0 IMPL (unpromoted)** – 100% of aspects promoted to TESTED or BENCHED
-- **62 variance envelopes** (all passing CV & p95/mean thresholds; no suppressed failures)
+- **315 aspects** (tracked feature/aspect evidence rows)
+- **168 TESTED** (~53.3%) – functional tests present (added PlanCostModelCalibration, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, PathCacheDegreeBucketDiscrimination, PlanSelectionPipelineAdoption, PlanCostModelFactors, PlanJoinReorderDiversity)
+- **147 BENCHED** (~46.7%) – performance / variance / jitter envelopes (added PlanCostModelCalibrationVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, PhysiologicalRedoVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PlanCostModelVarianceEnvelope, PlanJoinReorderVarianceEnvelope)
+- **0 STUB**, **0 IMPL (unpromoted)** – 100% promoted
+- **64 variance envelopes** (all passing CV & p95/mean thresholds; new: PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
 
-Delta vs prior snapshot: +110 aspects (+56%), +47 TESTED, +64 BENCHED, +30 variance envelopes. Growth drivers: pagination planning & execution stability guards, pagination prefetch tail latency variance guard, additional traversal/path envelopes, CDC adaptive jitter thresholds, structural key enrichment (degree bucket utilization), real degree bucket discrimination, planner sub-phase (pre/group validation, projection prune) variance instrumentation, physiological redo optimization variance.
+Delta vs prior snapshot: +6 net aspects (+4 TESTED, +2 BENCHED) – growth driven by PathCache entropy metrics, adaptive replan refinement, and cost model calibration (ranking + variance guard) improving optimizer fidelity.
 
 ## Implementation Status by Component
 

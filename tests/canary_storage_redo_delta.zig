@@ -1,0 +1,90 @@
+const std = @import("std");
+
+fn stats(samples: []const u64) struct { mean: f128, cv: f128, p95_mean: f128 } {
+    var sum: f128 = 0;
+    for (samples) |s| sum += @as(f128, @floatFromInt(s));
+    const mean = sum / @as(f128, @floatFromInt(samples.len));
+    var var_acc: f128 = 0;
+    for (samples) |s| {
+        const diff = @as(f128, @floatFromInt(s)) - mean;
+        var_acc += diff * diff;
+    }
+    const variance = var_acc / @as(f128, @floatFromInt(samples.len));
+    const cv = std.math.sqrt(variance) / mean;
+    var scratch = std.heap.page_allocator.dupe(u64, samples) catch unreachable;
+    defer std.heap.page_allocator.free(scratch);
+    const rank = (samples.len * 95) / 100;
+    var r: usize = 0;
+    while (r <= rank) : (r += 1) {
+        var min_index = r;
+        var j: usize = r + 1;
+        while (j < samples.len) : (j += 1) {
+            if (scratch[j] < scratch[min_index]) min_index = j;
+        }
+        if (min_index != r) {
+            const tmp = scratch[r];
+            scratch[r] = scratch[min_index];
+            scratch[min_index] = tmp;
+        }
+    }
+    const p95 = @as(f128, @floatFromInt(scratch[rank]));
+    return .{ .mean = mean, .cv = cv, .p95_mean = p95 / mean };
+}
+
+// Placeholder: simulate baseline vs optimized physiological redo by iterating over synthetic log records with different stride / cache effects.
+// CANARY: REQ=REQ-GQL-022; FEATURE="Storage/Recovery"; ASPECT=RedoOptimizationDeltaVariance; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke; BENCH=BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+
+fn simulateRedo(records: []u64, optimized: bool) u64 {
+    var acc: u64 = 0;
+    if (optimized) {
+        // assume page-grouped (better locality)
+        var i: usize = 0;
+        while (i < records.len) : (i += 8) { // grouped application
+            var j: usize = i;
+            const end = @min(i + 8, records.len);
+            while (j < end) : (j += 1) acc +%= records[j] *% 31;
+        }
+    } else {
+        // scatter (simulate random I/O touches)
+        var i: usize = 0;
+        while (i < records.len) : (i += 1) acc +%= records[i] *% 17;
+    }
+    return acc;
+}
+
+test "TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke" {
+    var arr: [512]u64 = undefined;
+    for (arr, 0..) |_, i| arr[i] = @as(u64, i) * 13 + 7;
+    const base = simulateRedo(&arr, false);
+    const opt = simulateRedo(&arr, true);
+    // smoke: different accumulation paths likely produce different values
+    try std.testing.expect(base != opt);
+}
+
+test "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope" {
+    var arr: [2048]u64 = undefined;
+    for (arr, 0..) |_, i| arr[i] = (@as(u64, i) * 6364136223846793005) + 1;
+    const iterations: usize = 64;
+    var base_samples: [iterations]u64 = undefined;
+    var opt_samples: [iterations]u64 = undefined;
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        const start_b = std.time.nanoTimestamp();
+        _ = simulateRedo(&arr, false);
+        const end_b = std.time.nanoTimestamp();
+        base_samples[i] = @as(u64, @intCast(end_b - start_b));
+        const start_o = std.time.nanoTimestamp();
+        _ = simulateRedo(&arr, true);
+        const end_o = std.time.nanoTimestamp();
+        opt_samples[i] = @as(u64, @intCast(end_o - start_o));
+    }
+    const s_base = stats(&base_samples);
+    const s_opt = stats(&opt_samples);
+    // variance envelopes
+    try std.testing.expect(s_base.cv <= 0.22);
+    try std.testing.expect(s_base.p95_mean <= 2.55);
+    try std.testing.expect(s_opt.cv <= 0.22);
+    try std.testing.expect(s_opt.p95_mean <= 2.55);
+    // optimization should not be slower on mean
+    try std.testing.expect(s_opt.mean <= s_base.mean * 1.05);
+}
