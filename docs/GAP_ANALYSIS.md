@@ -12,13 +12,13 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 
 | Metric               | Count |
 | -------------------- | ----- |
-| Total aspects (rows) | 350   |
-| BENCHED              | 175   |
-| TESTED (non‑BENCHED) | 173   |
+| Total aspects (rows) | 359   |
+| BENCHED              | 179   |
+| TESTED (non‑BENCHED) | 180   |
 
 | STUB | 0 |
 | IMPL (unpromoted) | 0 |
-| Coverage (TESTED or BENCHED) | 99.1% |
+| Coverage (TESTED or BENCHED) | 100% |
 | Stale (>60d) | 0 |
 
 Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
@@ -179,11 +179,11 @@ Focus shifts to:
 
 ## 10. Summary Statistics (Derived from status.csv)
 
--- Total aspect rows (status.csv): 350
--- BENCHED: 175
+-- Total aspect rows (status.csv): 359
+-- BENCHED: 179
 
-- TESTED (non-BENCHED): 173
-  IMPL remaining (new strategic): 0 (strategic gaps promoted; QUICMultiplexing TESTED, variance bench added)
-  Effective coverage: 99.1%
+- TESTED (non-BENCHED): 180
+  IMPL remaining: 0 (all promoted)
+  Effective coverage: 100.0%
 
 Regenerate to refresh: `./bin/canaryscan --root . --out status.json --csv status.csv` then `./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`.

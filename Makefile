@@ -196,7 +196,12 @@ cert-gen: build
 
 # CANARY scanner targets
 canary:
-	go build -o ./bin/canaryscan ./tools/canaryscan
+	@echo "Building canaryscan tool..."
+	@if [ -d tools/canaryscan ]; then \
+		cd tools/canaryscan && go build -o ../../bin/canaryscan . ; \
+	else \
+		echo "tools/canaryscan directory not found" && exit 1; \
+	fi
 	./bin/canaryscan --root . --out status.json --csv status.csv
 
 canary-verify: canary
@@ -205,6 +210,33 @@ canary-verify: canary
 # Combined governance check (freshness + canary verify) producing JSON summary
 governance-check:
 	$(ZIG) run scripts/governance_ci.zig
+
+# Generate evidence badge (SVG) from status.csv (run canary first if needed)
+governance-badge: canary
+	@mkdir -p badges
+	$(ZIG) run scripts/generate_badges.zig -- --status status.csv --out badges/evidence.svg
+	@echo "Generated badges/evidence.svg"
+
+# Run variance envelope guard against README (requires status.csv)
+governance-variance-guard: canary
+	$(ZIG) run scripts/variance_envelope_guard.zig -- --status status.csv --readme README.md --min 70 --require-phrase
+	@echo "Variance envelope guard passed"
+
+# Append trend history line (optional analytics) after canary & badge generation
+governance-trend-append: canary governance-badge
+	$(ZIG) run scripts/governance_trend_append.zig
+
+# Badge staleness guard (ensures evidence.svg is fresh relative to status.json)
+governance-badge-staleness: canary governance-badge
+	$(ZIG) run scripts/badge_staleness_guard.zig -- --status status.json --badge badges/evidence.svg --max-days 2
+
+# Trend regression guard (stub)
+governance-trend-regression: canary governance-trend-append
+	$(ZIG) run scripts/trend_regression_guard.zig
+
+# Slice delta guard (stub)
+governance-slice-delta: canary
+	$(ZIG) run scripts/slice_delta_guard.zig
 
 # Format all code
 fmt:

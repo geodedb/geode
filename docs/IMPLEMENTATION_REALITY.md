@@ -4,16 +4,16 @@ Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors & 
 
 ## Executive Summary
 
-Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, and NEXT plan freshness automation:
+Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, NEXT plan freshness automation, and new strategic variance envelopes (cost model calibration, MV refresh latency, inverted index query latency):
 
-- **350 aspects** (tracked feature/aspect evidence rows)
-  350 aspects (tracked feature/aspect evidence rows)
-- **173 TESTED** (~49.4%) – functional tests present (notable recent: RangeTrackerPhantomPrevention, RangeTrackerPredicateReadConsistency, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, AdditionalPlannerPhaseTests)
-  173 TESTED (~49.4%)
-- **175 BENCHED** (~50.0%) – performance / variance / jitter envelopes (new: RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
-  175 BENCHED (~50.0%)
+- **359 aspects** (tracked feature/aspect evidence rows)
+  359 aspects (tracked feature/aspect evidence rows)
+- **180 TESTED** (~50.1%) – functional tests present (AdvancedCostModel, RefreshScheduler, InvertedIndexCore, RangeTrackerPhantomPrevention, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, planner phase timing tests)
+  180 TESTED (~50.1%)
+- **179 BENCHED** (~49.9%) – performance / variance / jitter envelopes (AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope, RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
+  179 BENCHED (~49.9%)
 - **0 STUB**, **0 IMPL (unpromoted)** – all governance guards (EvidenceDeltaGuard, RealityFreshnessGuard) now TESTED; strategic gaps (REQ-GQL-074..077) TESTED baseline; variance benches pending for promotion to BENCHED
-- **65+ variance envelopes** (all passing CV & p95/mean thresholds; added RangeTrackerOverheadVarianceEnvelope & CorruptPageRecoveryLatencyVarianceEnvelope; net +1 after consolidation of a deprecated pagination planning envelope)
+- **70+ variance envelopes** (all passing CV & p95/mean thresholds; added AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope; continued consolidation of legacy pagination envelope)
 
 Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassification reflects maturation of several functional features into performance‑guarded states plus addition of new recovery and MVCC guardrails. TESTED decrease is expected due to promotions into BENCHED status categories (mutually exclusive lifecycle states in evidence ledger).
 

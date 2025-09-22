@@ -1,6 +1,211 @@
-# Governance Automation Overview
+# Governance Automation & Evidence Integrity
 
-This document describes the automated governance steps enforced by `scripts/governance_ci.zig` and related tooling. All steps produce a machine-readable JSON summary (type `governance_summary`). A failing step causes the process to exit with code 2 (policy violation) or >2 for internal errors.
+This document consolidates all automation steps, guard scripts, and policies ensuring that Geode's documentation and implementation evidence (**CANARY** system) remain synchronized and drift-resistant.
+
+## Overview
+
+Governance automation validates:
+
+1. Evidence ledger freshness & counts (`status.csv` / `status.json`).
+2. Cross-document consistency (README, GAP_ANALYSIS, IMPLEMENTATION_REALITY, NEXT).
+3. Slice structure + requirement mapping (each slice enumerates exactly one REQ ID; every REQ used is declared).
+4. Variance envelope floor claims (README "Variance Guards Landed" qualifier) vs actual BENCHED variance envelopes.
+5. No silent removal of REQ IDs (delta guard).
+
+All critical checks are composed in `scripts/governance_ci.zig` and runnable via `make governance-check`.
+
+## Key Artifacts
+
+| File                                  | Purpose                                                                     |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `status.csv` / `status.json`          | Authoritative machine-extracted evidence ledger (TESTED / BENCHED aspects). |
+| `docs/GAP_ANALYSIS.md`                | Human-readable structured gap & evidence summary regenerated from scanner.  |
+| `docs/IMPLEMENTATION_REALITY.md`      | Narrative alignment with current evidence snapshot (date-guarded).          |
+| `docs/NEXT.md`                        | Forward plan (Generated date freshness guarded).                            |
+| `docs/VARIANCE_ENVELOPES.md`          | Canonical registry of all variance envelopes with thresholds & exceptions.  |
+| `docs/GOVERNANCE.md`                  | (This file) Consolidated governance policy & guard reference.               |
+| `scripts/generate_badges.zig`         | Produces SVG badge summarizing TOTAL / TESTED / BENCHED counts.             |
+| `scripts/variance_envelope_guard.zig` | Enforces README variance guard floor vs actual count.                       |
+| `scripts/governance_ci.zig`           | Orchestrates multi-step governance checks (JSON summary output).            |
+| `scripts/governance_trend_append.zig` | Appends current evidence metrics to `badges/history.jsonl` (time-series).   |
+| `scripts/badge_staleness_guard.zig`   | Ensures `badges/evidence.svg` is fresh relative to `status.json` timestamp. |
+
+## Governance Steps (Pipeline)
+
+| Step Name                 | Description                                                                      | Source / Implementation               |
+| ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------- |
+| `freshness`               | Verifies `docs/NEXT.md` Generated date is today's date.                          | `scripts/governance_ci.zig`           |
+| `canary`                  | Runs CANARY scanner: emits / validates `status.json` & `status.csv`.             | `bin/canaryscan`                      |
+| `variance_envelope_guard` | README claim for variance envelopes meets actual count & floor.                  | `scripts/variance_envelope_guard.zig` |
+| `doc_consistency`         | README & IMPLEMENTATION_REALITY counts match scanner summary.                    | `scripts/governance_ci.zig`           |
+| `gap_consistency`         | Ensures GAP_ANALYSIS tables reflect current counts.                              | `scripts/governance_ci.zig`           |
+| `next_slices`             | Structural validation of slice sections (WHY / WHAT / ACCEPTANCE).               | `scripts/governance_ci.zig`           |
+| `slice_req_crosscheck`    | Slice REQ IDs each map to exactly one requirement; must exist in ledger.         | `scripts/governance_ci.zig`           |
+| `evidence_delta`          | Detect removed requirement IDs vs previous snapshot (prevents silent deletions). | `scripts/governance_ci.zig`           |
+| `reality_freshness`       | IMPLEMENTATION_REALITY date matches current evidence snapshot date.              | `scripts/governance_ci.zig`           |
+| `badge_generation`        | Generates SVG evidence coverage badge (`badges/evidence.svg`).                   | `scripts/generate_badges.zig`         |
+| `trend_append`            | Appends latest counts into historical log `badges/history.jsonl`.                | `scripts/governance_trend_append.zig` |
+| `badge_staleness`         | Ensures evidence badge freshness vs `status.json` `generated_at`.                | `scripts/badge_staleness_guard.zig`   |
+
+## Variance Envelope Guard
+
+The README uses a qualitative floor expression (e.g., `Variance Guards Landed: 70+`). This guard prevents drift:
+
+Command:
+
+```bash
+zig run scripts/variance_envelope_guard.zig -- \
+  --status status.csv \
+  --readme README.md \
+  --min 70 \
+  --require-phrase
+```
+
+Exit codes:
+
+| Code | Meaning                                                        |
+| ---- | -------------------------------------------------------------- |
+| 0    | Policy satisfied                                               |
+| 2    | Policy violation (count below floor OR phrase mismatch/absent) |
+| 1    | Usage / internal error                                         |
+
+JSON output example:
+
+```json
+{
+  "type": "variance_envelope_guard",
+  "count": 73,
+  "min": 70,
+  "ok": true,
+  "readme_phrase_found": true,
+  "readme_ok": true,
+  "status": "success"
+}
+```
+
+README phrase parsing rules:
+
+1. Search for literal `Variance Guards Landed`.
+2. Accept syntax: `Variance Guards Landed: <N>` or `Variance Guards Landed: <N>+` (colon may be followed by spaces or a dash).
+3. `N+` form: actual count must be `>= N`.
+4. Plain `N` form: actual count must equal `N`.
+
+Counting algorithm: number of CSV rows whose `aspect` column contains `VarianceEnvelope`. Distinct line entries are counted (multiple aspects referencing the same base feature still count individually—intent is transparency of all enforced performance guards).
+
+## Badge Generation
+
+An SVG summarizing evidence coverage (TOTAL / TESTED / BENCHED) can be produced for embedding:
+
+```bash
+zig run scripts/generate_badges.zig -- --status status.csv --out badges/evidence.svg
+```
+
+Color thresholds (coverage = (TESTED+BENCHED)/TOTAL):
+
+| Coverage | Color                 |
+| -------- | --------------------- |
+| >=99.9%  | `#4c1` (bright green) |
+| >=95%    | `#97CA00`             |
+| >=85%    | `#dfb317`             |
+| >=70%    | `#fe7d37`             |
+| <70%     | `#e05d44` (red)       |
+
+Embed in README (once generated):
+
+```markdown
+![Evidence Coverage](badges/evidence.svg)
+```
+
+CI may choose to (a) commit the generated SVG or (b) regenerate on demand during docs build. For deterministic pipelines, committing is acceptable because the badge is a derivative of authoritative scanner output.
+
+## Adding New Evidence
+
+1. Implement feature / performance guard.
+2. Add CANARY lines to source or tests with correct metadata (REQ ID, FEATURE, ASPECT, STATUS, TEST/BENCH names, UPDATED=today).
+3. Run `make governance-check` to ensure no regressions.
+4. If adding a variance envelope, also append it to logical grouping in `docs/VARIANCE_ENVELOPES.md` (alphabetical within group preferred) and re-run guards.
+
+## Failure Triage
+
+| Failure                                        | Common Causes                              | Remediation                                                        |
+| ---------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------ |
+| `variance_envelope_guard: ... readme_ok=false` | README number too low/high; phrase missing | Adjust README claim or update aspect lines / CANARY entries        |
+| `evidence_delta`                               | Requirement ID removed or renamed          | Reintroduce ID or document intentional removal with migration note |
+| `freshness`                                    | Generated date stale                       | Regenerate `docs/NEXT.md` or update date if content still valid    |
+| `reality_freshness`                            | IMPLEMENTATION_REALITY date drift          | Re-run reality synthesis tool generating updated report            |
+| `doc_consistency`                              | Counts mismatch                            | Run scanner, update README counts, avoid manual edits without scan |
+
+## Make Targets
+
+| Target                            | Action                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| `make governance-check`           | Run combined governance pipeline (all integrated steps).                       |
+| `make governance-badge`           | Generate evidence badge SVG only.                                              |
+| `make governance-variance-guard`  | Run variance envelope guard with repo defaults.                                |
+| `make governance-trend-append`    | Append a new trend line to `badges/history.jsonl` (idempotent for same stamp). |
+| `make governance-badge-staleness` | Enforce freshness of `badges/evidence.svg` vs `status.json` (optional gate).   |
+
+Notes:
+
+- `trend_append` is already part of the combined pipeline; standalone target useful for ad‑hoc replays.
+- `badge_staleness_guard` is currently an optional CI gate (not yet integrated into combined pipeline to allow staggered adoption).
+
+## Policy Summary
+
+| Policy                   | Statement                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| Evidence Completeness    | 0 STUB / 0 IMPL residuals allowed (all aspects promoted).                             |
+| Freshness                | All UPDATED dates < 60 days old under `--strict`.                                     |
+| Variance Guard Floor     | README floor (N+) must be satisfied by live count.                                    |
+| Single-Purpose Promotion | Each PR should promote at most one aspect per requirement to prevent hidden bundling. |
+| Determinism Thresholds   | Default CV ≤ 0.22 & p95/mean ≤ 2.55 (exceptions documented in VARIANCE_ENVELOPES).    |
+
+## Extensibility
+
+Future extensions may add:
+
+- `trend_regression_guard` — verifies rolling mean stays within historical confidence bands.
+- `slice_delta_guard` — enforces net slice count change annotation in PR description.
+- `badge_integrity_hash` — embeds a hash of `status.json` counts in the SVG (tamper detection) with a validator guard.
+
+Recently added (now implemented):
+
+- `badge_staleness_guard` — implemented as `scripts/badge_staleness_guard.zig` & `make governance-badge-staleness`.
+
+## JSON Output (Governance Combined)
+
+`governance_ci.zig` prints a summary line similar to:
+
+```json
+{
+  "type": "governance_summary",
+  "status": "success",
+  "steps": [
+    { "name": "freshness", "ok": true },
+    { "name": "canary", "ok": true },
+    { "name": "variance_envelope_guard", "ok": true },
+    { "name": "doc_consistency", "ok": true },
+    { "name": "gap_consistency", "ok": true },
+    { "name": "next_slices", "ok": true },
+    { "name": "slice_req_crosscheck", "ok": true },
+    { "name": "evidence_delta", "ok": true },
+    { "name": "reality_freshness", "ok": true },
+    { "name": "badge_generation", "ok": true },
+    { "name": "badge_staleness", "ok": true },
+    { "name": "trend_append", "ok": true }
+  ]
+}
+```
+
+Consumers (CI, dashboards) SHOULD treat absence of a step as unknown (not failure) to allow incremental adoption.
+
+---
+
+Maintainers: keep this file minimal, normative, and synchronized with any added guard script flags. All non-trivial guard behavior changes must update this reference to avoid implicit policy shifts.
+
+## Governance Automation (Detailed Reference)
+
+This section expands operational specifics of the governance steps enforced by `scripts/governance_ci.zig`. All steps output a JSON summary (`governance_summary`). A failing step returns exit code 2 (policy violation) or >2 for internal errors.
 
 ## Steps
 
