@@ -47,6 +47,17 @@ pub const EstimatorConfig = struct {
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=IMPL; OWNER=planner; UPDATED=2025-09-22
 pub const AdaptiveBiasRegistry = struct {
     biases: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // Dynamic alpha adaptation state per kind:
+    dyn_alpha: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{0.2} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // Exponential moving averages for ratio mean and squared mean for variance estimation.
+    ratio_mean: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    ratio_sq_mean: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+    // Configuration bounds for alpha adaptation (could be exposed later).
+    alpha_min: f64 = 0.10,
+    alpha_max: f64 = 0.50,
+    adapt_rate: f64 = 0.05, // incremental step when adjusting alpha
+    variance_stable_threshold: f64 = 0.12, // CV below -> increase alpha
+    variance_unstable_threshold: f64 = 0.30, // CV above -> decrease alpha
 
     pub fn apply(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, raw_rows: f64) f64 {
         const idx = @intFromEnum(kind);
@@ -55,6 +66,10 @@ pub const AdaptiveBiasRegistry = struct {
 
     pub fn getBias(self: *const AdaptiveBiasRegistry, kind: LogicalOpKind) f64 {
         return self.biases[@intFromEnum(kind)];
+    }
+
+    pub fn getAlpha(self: *const AdaptiveBiasRegistry, kind: LogicalOpKind) f64 {
+        return self.dyn_alpha[@intFromEnum(kind)];
     }
 
     pub fn update(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, estimated_rows: f64, actual_rows: f64, alpha: f64) void {
@@ -67,12 +82,117 @@ pub const AdaptiveBiasRegistry = struct {
         if (next > 20.0) next = 20.0;
         self.biases[idx] = next;
     }
+
+    /// Adaptive update that also evolves per-kind alpha based on coefficient of variation of ratios.
+    /// Steps:
+    /// 1. Update running moments for ratio.
+    /// 2. Compute CV ~ sqrt(var)/mean.
+    /// 3. Adjust alpha toward bounds.
+    /// 4. Apply bias update using dynamic alpha.
+    pub fn updateAdaptive(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, estimated_rows: f64, actual_rows: f64) void {
+        if (estimated_rows <= 0 or actual_rows <= 0) return;
+        const idx = @intFromEnum(kind);
+        const ratio = actual_rows / estimated_rows;
+        // Moment update (EMA with fixed smoothing for statistics)
+        const stats_alpha = 0.2; // separate smoothing for variance stats
+        const m_prev = self.ratio_mean[idx];
+        const m_next = stats_alpha * ratio + (1.0 - stats_alpha) * m_prev;
+        self.ratio_mean[idx] = m_next;
+        const sq = ratio * ratio;
+        const sq_prev = self.ratio_sq_mean[idx];
+        const sq_next = stats_alpha * sq + (1.0 - stats_alpha) * sq_prev;
+        self.ratio_sq_mean[idx] = sq_next;
+        var variance = sq_next - m_next * m_next;
+        if (variance < 0) variance = 0; // numerical guard
+        const stddev = std.math.sqrt(variance);
+        const cv = if (m_next <= 0.0000001) 0 else stddev / m_next;
+        var a = self.dyn_alpha[idx];
+        if (cv < self.variance_stable_threshold) {
+            // More stable -> increase alpha
+            a += self.adapt_rate;
+        } else if (cv > self.variance_unstable_threshold) {
+            // Volatile -> decrease alpha
+            a -= self.adapt_rate;
+        }
+        if (a < self.alpha_min) a = self.alpha_min;
+        if (a > self.alpha_max) a = self.alpha_max;
+        self.dyn_alpha[idx] = a;
+        // Apply bias update using dynamic alpha
+        const prev_bias = self.biases[idx];
+        var next_bias = a * ratio + (1.0 - a) * prev_bias;
+        if (next_bias < 0.05) next_bias = 0.05;
+        if (next_bias > 20.0) next_bias = 20.0;
+        self.biases[idx] = next_bias;
+    }
+
+    /// Serialize registry biases to writer in a stable binary format:
+    /// [u32 magic 'ABIA'][u16 version=1][u16 count][f64 * count]
+    pub fn serialize(self: *const AdaptiveBiasRegistry, w: anytype) !void {
+        try w.writeAll("ABIA");
+        try w.writeInt(u16, 1, .little);
+        const count: u16 = @intCast(self.biases.len);
+        try w.writeInt(u16, count, .little);
+        for (self.biases) |b| try w.writeInt(f64, b, .little);
+    }
+
+    pub const DeserializeError = error{ BadMagic, UnsupportedVersion, Truncated };
+
+    pub fn deserialize(self: *AdaptiveBiasRegistry, r: anytype) !void {
+        var magic: [4]u8 = undefined;
+        if (try r.readAll(&magic) != magic.len) return DeserializeError.Truncated;
+        if (!std.mem.eql(u8, &magic, "ABIA")) return DeserializeError.BadMagic;
+        const ver = try r.readInt(u16, .little) catch return DeserializeError.Truncated;
+        if (ver != 1) return DeserializeError.UnsupportedVersion;
+        const count = try r.readInt(u16, .little) catch return DeserializeError.Truncated;
+        if (count != self.biases.len) return DeserializeError.UnsupportedVersion; // size mismatch unrecognized
+        var i: usize = 0;
+        while (i < self.biases.len) : (i += 1) {
+            const v = try r.readInt(f64, .little) catch return DeserializeError.Truncated;
+            self.biases[i] = v;
+        }
+    }
+
+    /// Emit JSON array string of biases (percent integers) into provided allocator.
+    pub fn toJson(self: *const AdaptiveBiasRegistry, allocator: std.mem.Allocator) ![]u8 {
+        var buf = std.ArrayList(u8).init(allocator);
+        errdefer buf.deinit();
+        try buf.append('[');
+        var i: usize = 0;
+        while (i < self.biases.len) : (i += 1) {
+            if (i != 0) try buf.append(',');
+            const b_int: i64 = @intFromFloat(@floor(self.biases[i] * 100.0 + 0.5));
+            var tmp: [32]u8 = undefined;
+            const s = try std.fmt.bufPrint(&tmp, "{d}", .{b_int});
+            try buf.appendSlice(s);
+        }
+        try buf.append(']');
+        return buf.toOwnedSlice();
+    }
 };
 
 pub fn estimateWithBias(reg: *AdaptiveBiasRegistry, op: OpDescriptor, children: []const CardinalityEstimate, cfg: EstimatorConfig) CardinalityEstimate {
     const base = estimate(op, children, cfg);
     const biased_rows = reg.apply(op.kind, base.rows);
     return .{ .rows = biased_rows, .confidence = base.confidence };
+}
+
+/// Estimate a linear chain of operators (each op depends on previous estimate) applying adaptive bias.
+/// Returns array of per-op CardinalityEstimate allocated from provided allocator. Caller owns memory.
+pub fn estimateChainWithBias(
+    allocator: std.mem.Allocator,
+    reg: *AdaptiveBiasRegistry,
+    ops: []const OpDescriptor,
+    cfg: EstimatorConfig,
+) ![]CardinalityEstimate {
+    var out = try allocator.alloc(CardinalityEstimate, ops.len);
+    var prev: ?CardinalityEstimate = null;
+    var i: usize = 0;
+    while (i < ops.len) : (i += 1) {
+        const child_slice: []const CardinalityEstimate = if (prev) |c| &[_]CardinalityEstimate{c} else &[_]CardinalityEstimate{};
+        out[i] = estimateWithBias(reg, ops[i], child_slice, cfg);
+        prev = out[i];
+    }
+    return out;
 }
 
 pub fn estimate(op: OpDescriptor, children: []const CardinalityEstimate, cfg: EstimatorConfig) CardinalityEstimate {
