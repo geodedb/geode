@@ -37,7 +37,43 @@ pub const EstimatorConfig = struct {
     filter_selectivity_floor: f64 = 0.05,
     agg_group_reduction: f64 = 0.25,
     sort_cpu_factor: f64 = 0.002, // per-row log2(rows) multiplier
+    adaptive_alpha: f64 = 0.2, // EMA smoothing factor for adaptive bias
 };
+
+// Adaptive bias factors (EMA per LogicalOpKind) allow runtime feedback calibration.
+// Each kind begins with neutral bias=1.0. After observing actual row counts, update
+// with: bias = alpha*(actual/estimate) + (1-alpha)*bias. Applied multiplicatively
+// to subsequent estimates of same op kind. Clamped to [0.05, 20.0] to avoid runaway.
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=IMPL; OWNER=planner; UPDATED=2025-09-22
+pub const AdaptiveBiasRegistry = struct {
+    biases: [@typeInfo(LogicalOpKind).Enum.fields.len]f64 = [_]f64{1.0} ** @typeInfo(LogicalOpKind).Enum.fields.len,
+
+    pub fn apply(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, raw_rows: f64) f64 {
+        const idx = @intFromEnum(kind);
+        return raw_rows * self.biases[idx];
+    }
+
+    pub fn getBias(self: *const AdaptiveBiasRegistry, kind: LogicalOpKind) f64 {
+        return self.biases[@intFromEnum(kind)];
+    }
+
+    pub fn update(self: *AdaptiveBiasRegistry, kind: LogicalOpKind, estimated_rows: f64, actual_rows: f64, alpha: f64) void {
+        if (estimated_rows <= 0 or actual_rows <= 0) return; // ignore nonsensical inputs
+        const ratio = actual_rows / estimated_rows;
+        const idx = @intFromEnum(kind);
+        const prev = self.biases[idx];
+        var next = alpha * ratio + (1.0 - alpha) * prev;
+        if (next < 0.05) next = 0.05;
+        if (next > 20.0) next = 20.0;
+        self.biases[idx] = next;
+    }
+};
+
+pub fn estimateWithBias(reg: *AdaptiveBiasRegistry, op: OpDescriptor, children: []const CardinalityEstimate, cfg: EstimatorConfig) CardinalityEstimate {
+    const base = estimate(op, children, cfg);
+    const biased_rows = reg.apply(op.kind, base.rows);
+    return .{ .rows = biased_rows, .confidence = base.confidence };
+}
 
 pub fn estimate(op: OpDescriptor, children: []const CardinalityEstimate, cfg: EstimatorConfig) CardinalityEstimate {
     switch (op.kind) {

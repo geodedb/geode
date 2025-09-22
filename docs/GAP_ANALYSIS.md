@@ -1,6 +1,6 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-22)
 
-<!-- STATUS_JSON_SHA256: cd5626980d5ec90952f45e9e77b35e44bb6ad4f1579b2473faef5d034f333260 -->
+<!-- STATUS_JSON_SHA256: bb03a3415d3375669f0ae83f22e2af208af013b7987c1a3fac34bcf46049fc78 -->
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Conformance Profile Ledger"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance Freshness Guard"; ASPECT=GovernanceScript; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceScript; OWNER=tooling; UPDATED=2025-09-22
@@ -16,6 +16,10 @@
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolBasic; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolCalibrated; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDetailed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=CalibrationEntries; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelCalibrationEntries; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONBiasFactors; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors; OWNER=planner; UPDATED=2025-09-22
 
 This authoritative ledger is generated from `status.json` emitted by:
 
