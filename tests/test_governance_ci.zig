@@ -24,10 +24,10 @@ test "TestCANARY_REQ_GQL_010_GovernanceCombinedCheck" {
     try std.testing.expectEqual(@as(u8, 0), term.Exited);
     const slice = buf[0..n];
     try std.testing.expect(std.mem.indexOf(u8, slice, "\"status\":\"success\"") != null);
-    inline for (.{ "freshness", "canary", "doc_consistency", "gap_consistency", "next_slices" }) |step_name| {
+    inline for (.{ "freshness", "canary", "doc_consistency", "gap_consistency", "next_slices", "slice_req_crosscheck", "evidence_delta", "reality_freshness" }) |step_name| {
         try std.testing.expect(std.mem.indexOf(u8, slice, step_name) != null);
     }
-    inline for (.{ "doc_consistency", "gap_consistency", "next_slices" }) |step_name| {
+    inline for (.{ "doc_consistency", "gap_consistency", "next_slices", "slice_req_crosscheck", "evidence_delta", "reality_freshness" }) |step_name| {
         var pattern_buf: [64]u8 = undefined;
         const pat = std.fmt.bufPrint(&pattern_buf, "\"name\":\"{s}\",\"ok\":true", .{step_name}) catch return error.FormatFail;
         try std.testing.expect(std.mem.indexOf(u8, slice, pat) != null);

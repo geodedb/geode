@@ -12,9 +12,9 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 
 | Metric               | Count |
 | -------------------- | ----- |
-| Total aspects (rows) | 342   |
+| Total aspects (rows) | 344   |
 | BENCHED              | 175   |
-| TESTED (non‑BENCHED) | 167   |
+| TESTED (non‑BENCHED) | 169   |
 
 | STUB | 0 |
 | IMPL (unpromoted) | 0 |
@@ -168,7 +168,7 @@ All previously identified STUB gaps have been closed (each aspect now at least T
 
 ## 10. Summary Statistics (Derived from status.csv)
 
--- Total aspect rows (status.csv): 342
+-- Total aspect rows (status.csv): 344
 -- BENCHED: 175
 
 -- TESTED (non-BENCHED): 167

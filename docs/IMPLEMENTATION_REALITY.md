@@ -6,8 +6,8 @@ _Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors &
 
 Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, and NEXT plan freshness automation:
 
-- **342 aspects** (tracked feature/aspect evidence rows)
-- **167 TESTED** (~48.8%) – functional tests present (notable recent: RangeTrackerPhantomPrevention, RangeTrackerPredicateReadConsistency, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, AdditionalPlannerPhaseTests)
+- **344 aspects** (tracked feature/aspect evidence rows)
+- **169 TESTED** (~49.1%) – functional tests present (notable recent: RangeTrackerPhantomPrevention, RangeTrackerPredicateReadConsistency, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, AdditionalPlannerPhaseTests)
 - **175 BENCHED** (~51.5%) – performance / variance / jitter envelopes (new: RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
 - **0 STUB**, **0 IMPL (unpromoted)** – 100% promoted
 - **65 variance envelopes** (all passing CV & p95/mean thresholds; added RangeTrackerOverheadVarianceEnvelope & CorruptPageRecoveryLatencyVarianceEnvelope; net +1 after consolidation of a deprecated pagination planning envelope)
