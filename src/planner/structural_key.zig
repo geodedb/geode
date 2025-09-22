@@ -29,12 +29,30 @@ const planner_root = @import("../planner.zig");
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation; OWNER=planner; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyValueShapeEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeySelectivityEnrichment; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyDegreeBucketEnrichment; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeySelectivityEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyDegreeBucketEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; OWNER=planner; UPDATED=2025-09-21
 pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Query) ![]u8 {
+    // First pass: accumulate approximate degree counts per named node across all chains.
+    // Anonymous (null name) nodes are treated as unique per occurrence (degree=1 unless reused explicitly).
+    var degree_map = std.StringHashMap(usize).init(allocator);
+    defer degree_map.deinit();
+    for (q.match.chains) |chain| {
+        for (chain.hops) |hop| {
+            if (hop.left.name) |lname| {
+                const gop = try degree_map.getOrPut(lname);
+                if (!gop.found_existing) gop.value_ptr.* = 0;
+                gop.value_ptr.* += 1;
+            }
+            if (hop.right.name) |rname| {
+                const gop2 = try degree_map.getOrPut(rname);
+                if (!gop2.found_existing) gop2.value_ptr.* = 0;
+                gop2.value_ptr.* += 1;
+            }
+        }
+    }
+
     var buf = std.ArrayList(u8).init(allocator);
     errdefer buf.deinit();
-
     const writer = buf.writer();
     try writer.print("c{d}|", .{q.match.chains.len});
     for (q.match.chains, 0..) |chain, ci| {
@@ -49,11 +67,13 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writer.writeAll("]V[");
             try writeValueShape(writer, hop.left.props);
             try writer.writeByte(']');
-            // Selectivity class for left node based on property key count (Z=0, L=1, M=2-3, H=4+)
+            // Selectivity class for left node
             try writer.writeAll("S");
             try writer.writeByte(selectivityClass(hop.left.props));
-            // Degree bucket placeholder (U=unknown). Future: actual in/out degree classification.
-            try writer.writeAll("DBU");
+            // Degree bucket (derived from occurrence count in pattern). Anonymous nodes -> degree 1 (L)
+            const ldeg: usize = if (hop.left.name) |lname| degree_map.get(lname) orelse 1 else 1;
+            try writer.writeAll("DB");
+            try writer.writeByte(degreeBucketClass(ldeg));
             // Relationship direction + quantifier
             try writer.writeAll("D");
             try writer.writeByte(directionChar(hop.rel.dir));
@@ -71,7 +91,9 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writer.writeByte(']');
             try writer.writeAll("S");
             try writer.writeByte(selectivityClass(hop.right.props));
-            try writer.writeAll("DBU");
+            const rdeg: usize = if (hop.right.name) |rname| degree_map.get(rname) orelse 1 else 1;
+            try writer.writeAll("DB");
+            try writer.writeByte(degreeBucketClass(rdeg));
         }
     }
     return buf.toOwnedSlice();
@@ -145,6 +167,11 @@ fn directionChar(dir: planner_root.ast.RelDir) u8 {
 
 fn writeQuant(writer: anytype, q: ?u32) !void {
     if (q) |v| try writer.print("{d}", .{v}) else try writer.writeByte('*');
+}
+
+fn degreeBucketClass(deg: usize) u8 {
+    // Bucket mapping: 0 -> 'Z', 1 -> 'L', 2-3 -> 'M', 4+ -> 'H'
+    return if (deg == 0) 'Z' else if (deg == 1) 'L' else if (deg <= 3) 'M' else 'H';
 }
 
 fn writeSortedLabels(writer: anytype, labels: [][]const u8) !void {

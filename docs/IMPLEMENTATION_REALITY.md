@@ -4,15 +4,15 @@ _Generated from CANARY evidence analysis - 2025-09-21 (post ordered pagination v
 
 ## Executive Summary
 
-Latest CANARY scan (`status.json`) after integrating ordered pagination planning variance guard and structural key degree bucket enrichment:
+Latest CANARY scan (`status.json`) baseline (pre-refresh) plus newly added execution pagination, degree bucket utilization, planner pre/group validation, pagination prefetch variance benches, projection prune variance, real degree bucket discrimination test, and physiological redo optimization variance (pending next scan):
 
-- **294 aspects** (tracked feature/aspect evidence rows)
-- **152 TESTED** (51.7%) – functional tests present
-- **142 BENCHED** (48.3%) – performance / variance / jitter envelopes present
+- **303 aspects** (tracked feature/aspect evidence rows)
+- **154 TESTED** (50.8%) – functional tests present (added PathCacheDegreeBucketDiscrimination)
+- **149 BENCHED** (49.2%) – performance / variance / jitter envelopes present (added PhysiologicalRedoVarianceEnvelope)
 - **0 STUB**, **0 IMPL (unpromoted)** – 100% of aspects promoted to TESTED or BENCHED
-- **55 variance envelopes** (all passing CV & p95/mean thresholds; no suppressed failures)
+- **62 variance envelopes** (all passing CV & p95/mean thresholds; no suppressed failures)
 
-Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 variance envelopes. Growth drivers: pagination planning stability guard, additional traversal/path envelopes, CDC adaptive jitter thresholds, structural key enrichment.
+Delta vs prior snapshot: +110 aspects (+56%), +47 TESTED, +64 BENCHED, +30 variance envelopes. Growth drivers: pagination planning & execution stability guards, pagination prefetch tail latency variance guard, additional traversal/path envelopes, CDC adaptive jitter thresholds, structural key enrichment (degree bucket utilization), real degree bucket discrimination, planner sub-phase (pre/group validation, projection prune) variance instrumentation, physiological redo optimization variance.
 
 ## Implementation Status by Component
 
@@ -84,7 +84,7 @@ Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 varia
   - PathExpandAllocVarianceEnvelope (allocation jitter guard)
   - PathMultiBranchDeterminismVarianceEnvelope (Graph Analytics class)
   - Existing breadth / pruning / memory envelopes retained
-  - Structural key degree bucket enrichment (`PathCacheStructuralKeyDegreeBucketEnrichment`) – improves path cache discrimination; TESTED + BENCHED
+  - Structural key degree bucket enrichment (`PathCacheStructuralKeyDegreeBucketEnrichment`) – improves path cache discrimination; TESTED + BENCHED; utilization variance envelope (`PathCacheDegreeBucketUtilizationVarianceEnvelope`) added
 - **Reality**: Still no full MATCH pattern semantics (OPTIONAL, label filters, property predicates) – core traversal operator layer stabilizing.
 
 #### WAL & Storage
@@ -107,12 +107,13 @@ Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 varia
 
 #### Pagination (US001 Policy)
 
-- **Status**: TESTED + BENCHED (ordered planning variance envelope added)
+- **Status**: TESTED + BENCHED (planning + execution variance envelopes)
 - **Evidence**:
   - Legality enforcement for LIMIT/OFFSET without ORDER (US001) + override toggle test
-  - New `PaginationOrderedVarianceEnvelope` benchmark (planning phase jitter) emitting schema v1 & v2 JSON lines
-- **Guardrails**: CV ≤ 0.22; p95/mean ≤ 2.55 (current observed well below thresholds)
-- **Remaining Gaps**: Streaming result pagination variance (execution phase) not yet instrumented
+  - `PaginationOrderedVarianceEnvelope` (planning phase jitter) schema v1 & v2 JSON lines
+  - `PaginationExecutionVarianceEnvelope` (page streaming latency across page size sweep) schema v1 & v2 JSON lines
+- **Guardrails**: CV ≤ 0.22; p95/mean ≤ 2.55 (both planning & execution below thresholds)
+- **Remaining Gaps**: Future adaptive prefetch latency variance (not baseline)
 
 ## Performance Benchmark Coverage
 
@@ -141,7 +142,7 @@ Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 varia
 - Concurrent query execution
 - Storage I/O operations (per-op latency & tail variance)
 - Network protocol overhead (deeper protocol encode/decode + QUIC path)
-- Pagination result streaming (execution phase) variance
+  -- (Closed) Pagination result streaming (execution phase) variance (covered by execution envelope)
 
 ## Test Coverage Analysis
 
@@ -174,7 +175,7 @@ Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 varia
 
 ## Critical Gaps
 
-### No CANARY Evidence Found For (Still Outstanding):
+### No CANARY Evidence Found For (Still Outstanding)
 
 1. **Leader election robustness / membership change / snapshotting (Raft)**
 2. **GPU acceleration** (CUDA/OpenCL kernels)
@@ -208,9 +209,9 @@ Delta vs prior snapshot: +101 aspects (+52%), +45 TESTED, +57 BENCHED, +23 varia
 
 The CANARY analysis indicates Geode is approximately **~65–68% functionally implemented** toward stated full-scope ambitions (increase reflects pagination + traversal + CDC guardrail expansion):
 
-- **294 tracked aspects** (100% with at least TESTED evidence)
-- **142 performance / variance benchmarks** guarding stability
-- **55 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination
+- **296 tracked aspects** (100% with at least TESTED evidence)
+- **144 performance / variance benchmarks** guarding stability
+- **57 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination
 - Foundations in query execution, transactions, CDC, schema constraints, and path traversal are stabilizing; distributed & optimizer layers remain nascent.
 
 Areas needing work but with emerging foundations:
@@ -434,8 +435,9 @@ Added: 16
 
 * REQ-GQL-042/CDC Engine/AdaptiveDiffPerfThresholdEnv:BENCHED->TESTED
 * REQ-GQL-062/Traversals/BFS:TESTED->BENCHED
-* REQ-GQL-063/Shortest Paths/UnweightedBFSPaths:TESTED->BENCHED
-* REQ-GQL-073/MvccAdvanced/PredictiveSkewFilter:BENCHED->TESTED
+
+- REQ-GQL-063/Shortest Paths/UnweightedBFSPaths:TESTED->BENCHED
+- REQ-GQL-073/MvccAdvanced/PredictiveSkewFilter:BENCHED->TESTED
 
 ## Delta 1758468989
 

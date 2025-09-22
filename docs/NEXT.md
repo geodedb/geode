@@ -6,13 +6,13 @@ Sustain fully evidence-backed GQL conformance while hardening runtime determinis
 
 ## 1. WHAT (Objectives, Bounded)
 
-1. Land remaining variance guard candidates (queue depth, cost model phase) without increasing mean overhead >1%.
-2. Introduce PathCache skeleton with deterministic hashing & hit/miss metrics (BENCHED hot path).
-3. Add WAL page flush queue depth variance envelope (BENCHED) + regression guard on p95/mean < 2.4.
-4. Harden recovery corruption scenarios with targeted corrupt page fixture set (already TESTED—extend with latency bench if variance observed >0.20 CV).
-5. Planner adaptive replan trigger timing instrumentation (TESTED then BENCHED).
-6. Automate ImplementationReality deltas in CI to block undocumented status promotions.
-7. Keep STUB count at 0; any new feature enters directly as TESTED (minimum) with CANARY line.
+1. Extend variance guard coverage to remaining planner sub-phases (group validation granularity) without mean overhead >1% (queue depth + cost model + pagination planning already landed).
+2. Pagination execution (streaming page pull) variance envelope (execution-phase jitter) with thresholds (CV≤0.22, p95/mean≤2.55) – complement existing planning envelope.
+3. Structural key degree bucket utilization stats & variance bench (validate discrimination improvement & collision rate stability after DBU integration).
+4. Harden recovery corruption scenarios with targeted corrupt page fixture set (already TESTED—add latency bench if variance observed >0.20 CV).
+5. Planner adaptive replan trigger refinement (threshold autotune experiment BENCHED) plus p95 guard where CV-only.
+6. Automate ImplementationReality deltas in CI (landed) – extend to GAP_ANALYSIS self-check (fail on drift) & NEXT snapshot freshness.
+7. Maintain 0 STUB policy; all new aspects enter as TESTED (minimum) with CANARY; performance-sensitive enter directly with paired BENCH where feasible.
 
 ## 2. ACCEPTANCE (Machine-Checkable)
 
@@ -74,14 +74,14 @@ OUT (Future Release):
 
 ## 7. CURRENT EVIDENCE SNAPSHOT
 
-From latest scan (see `status.json`):
+From latest scan (see `status.json`) plus newly added execution pagination, degree bucket utilization, planner pre/group validation, pagination prefetch, projection prune variance benches, real degree bucket discrimination test, physiological redo optimization variance, and MVCC phantom prevention predicate range detection (REQ-GQL-023):
 
-- BENCHED aspects: 85
-- TESTED (non-BENCHED): 107
+- BENCHED aspects: 150 (added PhysiologicalRedoVarianceEnvelope + PhantomOverheadVarianceEnvelope)
+- TESTED (non-BENCHED): 155 (added PaginationPrefetchSimulation, PathCacheDegreeBucketDiscrimination, PhantomDetection)
 - STUB/IMPL: 0
-- Variance Guards Landed: 32 (all passing thresholds)
+- Variance Guards Landed: 62 (all passing thresholds)
 
-Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, PlannerRewritePass, PlannerCardinalityEstimate, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic, PathCacheHitMissVarianceEnvelope, PathCacheStructuralKeyCollisionEnvelope.
+Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, WALPageFlushQueueDepthVarianceEnvelope, PlannerRewritePass, PlannerCardinalityEstimate, PlannerCostModelPhaseVarianceEnvelope, PlannerPreValidationVarianceEnvelope, PlannerGroupValidationVarianceEnvelope, PlannerProjectionPruneVarianceEnvelope, PaginationOrderedVarianceEnvelope, PaginationExecutionVarianceEnvelope, PaginationPrefetchVarianceEnvelope, PhysiologicalRedoVarianceEnvelope, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic, PathCacheHitMissVarianceEnvelope, PathCacheStructuralKeyCollisionEnvelope, PathCacheStructuralKeyCollisionTightened, PathCacheDegreeBucketUtilizationVarianceEnvelope.
 
 Update 2025-09-21 (post-slice execution):
 
@@ -121,33 +121,73 @@ Update 2025-09-21 (post-slice execution):
   - Added collision rate benchmark `BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope` (aspect `PathCacheStructuralKeyCollisionEnvelope` BENCHED) requiring ≥90% unique keys (unique_ratio ≥0.90) across 1500 randomized structural patterns.
   - Enriched structural key with value shape classes (N,S,B,U,A,O) per node endpoint (aspect `PathCacheStructuralKeyValueShapeEnrichment` TESTED) increasing discrimination across heterogeneous property value distributions while preserving equivalence for literal value differences.
   - Tightened collision benchmark guard to ≥92% unique (added aspect `PathCacheStructuralKeyCollisionTightened` BENCHED) and updated benchmark to fail below threshold, reflecting improved key space spread after value shape enrichment.
+  - Added structural key degree bucket enrichment (aspect `PathCacheStructuralKeyDegreeBucketEnrichment` TESTED + BENCHED) establishing placeholder DBU category for future stats-based bucketing; follow-up slice will validate utilization and impact on collision ratio.
+  - Added ordered pagination planning variance envelope (`PaginationOrderedVarianceEnvelope`) enforcing CV≤0.22, p95/mean≤2.55 across planning timing phases (rewrite/cardinality/cost under an ORDER+LIMIT query shape).
+  - Added execution pagination variance envelope (`PaginationExecutionVarianceEnvelope`) covering streaming page latency across configurable page sizes.
+  - Added path cache degree bucket utilization variance envelope (`PathCacheDegreeBucketUtilizationVarianceEnvelope`) stabilizing structural key enrichment forward-path.
 
 ## 8. ROLLING PLAN (30 / 14 / 7 Day)
 
 ### 30 Day (Thematic)
 
-1. Integrate real planner sub-phase hooks (rewrite passes, group validation, cost heuristic) replacing synthetic spins.
-2. Extend variance envelopes with component p95/mean metrics where still CV-only (legacy benches).
+1. Granular planner sub-phase timing (group validation, projection pruning) variance with p95/mean guard (synthetic spins fully removed – refinement only).
+2. Pagination execution streaming variance (PULL pages) – ensure stable page delivery latency under varying page_size.
 3. Harden path quantifier execution & deterministic tie-break multi-branch (UA005/UA006 stress tests).
 
    - (Partially Done) Initial bounded quantifier + multi-branch tie-break tests and variance envelope landed.
 
-4. Aggregation breadth (COUNT DISTINCT + HAVING + AVG + variance envelopes: baseline distinct, high-card distinct, AVG, spill) — remaining: extended numeric numeric types, additional HAVING predicate mixes, decimal AVG overflow edge tests.
+4. Aggregation breadth (COUNT DISTINCT + HAVING + AVG + variance envelopes: baseline distinct, high-card distinct, AVG, spill) — remaining: extended numeric types, additional HAVING predicate mixes, decimal AVG overflow edge tests.
 
 5. Raft log replication minimal (AppendEntries success/failure) instrumentation & variance.
 
 ### 14 Day (Commitment)
 
-1. Replace synthetic planner pipeline spins for rewrite/cardinality with real structural hooks (if available) while maintaining variance thresholds.
-2. Add p95/mean augmentation to remaining planner-related benches lacking p95 guard.
+Planned upcoming optional slices (post degree bucket integration):
+
+- **Physiological Redo Optimization Variance**
+  - Implement baseline optimized redo scan path vs existing logical replay.
+  - Add CANARY tests: `TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness` and bench `BenchmarkCANARY_REQ_GQL_022_PhysiologicalRedoVarianceEnvelope` (targets CV≤0.18, p95/mean≤2.3 due to sequential I/O predictability).
+- **MVCC Phantom Prevention Stress**
+  - Add predicate range scan + concurrent insert pattern tests to detect phantom anomalies.
+  - Bench overhead `BenchmarkCANARY_REQ_GQL_023_MVCCPhantomPreventionOverheadEnvelope` (ensure mean overhead <5%, CV≤0.22, p95/mean≤2.55).
+- **Pagination Execution Streaming Variance (PULL)**
+  - Implement streaming page pull timing harness; test stable ordered vs unordered page emission ordering semantics.
+  - Bench `BenchmarkCANARY_REQ_GQL_024_PaginationStreamingVarianceEnvelope` with page_size sweep {32,64,128,256}.
+- **Adaptive Replan Threshold Autotune Tightening**
+  - Auto-adjust threshold based on recent variance; bench convergence stability.
+- **Path Quantifier Bounded Tie-Break Expansion**
+  - Multi-branch bounded quantifier stress tests for UA005/UA006 determinism under randomized insertion order.
+- **Degree Bucket Selectivity Feedback Loop (Follow-up)**
+  - Use observed degree buckets to refine selectivity class; bench collision reduction delta vs baseline.
+
+1. Pagination execution variance envelope (page streaming) with environment-tunable `GEODE_PAGINATION_BENCH_PAGE_SIZES` sweep.
+2. Add p95/mean augmentation to remaining planner-related benches lacking p95 guard (verify none outstanding after sweep; if all covered, demote slice).
 3. Implement remaining aggregation numeric breadth (extended integer/decimal types) and additional HAVING predicate mixes. (Completed: COUNT DISTINCT executor + canonical parser rewrite + HAVING filter test + AVG executor variance + spill & distinct variance envelopes.)
    | S-XXX | REQ-GQL-012 | CountDistinctVarianceEnvelope | BENCH | BenchmarkCANARY_REQ_GQL_012_CountDistinctVarianceEnvelope | Landed (CV≤0.22, p95/mean≤2.55) |
 
 ### 7 Day (Immediate Slices)
 
-1. (Done) Real rewrite hook timing split (PlannerRewritePreValidationTiming & PlannerGroupValidationTiming TESTED); sub-phase integration completed (synthetic spins removed) via `rewrite.zig` hooks.
-2. (Resolved) PlannerPipelineVarianceEnvelope already has p95 guard; no separate upgrade slice required (documented to avoid duplicate effort).
-3. Draft COUNT DISTINCT aggregation implementation skeleton with CANARY IMPL + test harness (promotion path to TESTED within 48h).
+1. (Done) Ordered pagination planning variance envelope (planning-phase jitter guard) – execution streaming variance pending.
+2. Structural key degree bucket utilization probe (collision differential & hit ratio impact) – add variance envelope if measurable effect.
+3. COUNT DISTINCT spill Phase-2: eviction + merge-on-read (HashAggSpillEvict / HashAggSpillEvictVarianceEnvelope).
+4. Planner group validation micro-phase timing guard (if measurable > noise floor) else document exclusion rationale.
+
+5. MVCC Phantom Prevention Stress (Range Scan vs Concurrent Insert)
+   - Add new REQ: REQ-GQL-023 (PhantomPreventionSI) tracking Snapshot Isolation phantom detection & prevention instrumentation.
+   - Tests to add:
+     - `TestCANARY_REQ_GQL_023_MVCCPhantomAbsenceBaseline` (repeatable read style range scan + concurrent inserts outside snapshot; expect NO phantom rows in committed result set across 25 iterations).
+     - `TestCANARY_REQ_GQL_023_MVCCPhantomDetectionHarness` (instrument harness that intentionally disables predicate index pruning to simulate phantom; validates harness can observe anomaly when guard off; guarded behind build flag `mvcc_phantom_harness`).
+     - `TestCANARY_REQ_GQL_023_MVCCPredicateLockGranularity` (ensures predicate/range lock (or gap tracking substitute) covers half-open interval [low, high) and blocks mid-range insert until scan commit/finish depending on SI semantics documented §8.x).
+   - Benchmarks:
+     - `BenchmarkCANARY_REQ_GQL_023_MVCCPhantomPreventionOverheadEnvelope` comparing range scan latency with and without predicate lock/gap tracking enabled (feature flag) over N=48 samples; thresholds: overhead ≤5% mean, CV≤0.22, p95/mean≤2.55.
+     - `BenchmarkCANARY_REQ_GQL_023_MVCCGapTrackerMemoryVarianceEnvelope` (Hot Path class) tracking memory consumed by gap tracker across 10k inserts spread over 1k keyspace; thresholds: CV≤0.18, p95/mean≤2.40.
+   - Acceptance:
+     - All tests pass under default (protection ON) and harness anomaly test only active with `-Dmvcc_phantom_harness`.
+     - Overhead envelope passes thresholds; failure prints `VARIANCE_FAIL PhantomPreventionOverhead` with metrics.
+     - New CANARY lines (Storage|Engine aspects) with UPDATED=today; BENCHED aspects include overhead + memory variance envelopes.
+   - ISO Anchor: §8 (transaction isolation) — paraphrase: SNAPSHOT isolation must present a consistent view preventing phantoms within a statement / explicit snapshot (document any implementation-defined gap lock strategy as I: PhantomGapLockingPolicy).
+   - Risks/Mitigations: Potential lock amplification → mitigate via interval merging (coalesce contiguous gaps); fallback eviction if >64 intervals.
+   - Owner: mvcc_adv (backup: storage)
 
 ## 9. UPCOMING SLICES (Canonical Form)
 
@@ -160,6 +200,8 @@ Update 2025-09-21 (post-slice execution):
 | S-005 | REQ-GQL-021 | PlannerAdaptiveReplanTrigger (TESTED)  | TEST  | TestCANARY_REQ_GQL_021_AdaptiveReplanTrigger                       | Deterministic replan threshold test             |
 | S-006 | REQ-GQL-021 | PlannerAdaptiveReplanVarianceEnvelope  | BENCH | BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope  | Trigger latency CV≤0.22                         |
 | S-007 | REQ-GQL-028 | CorruptRecoveryLatency (optional)      | BENCH | BenchmarkCANARY_REQ_GQL_028_CorruptRecoveryLatency                 | Only if CV>0.20 observed in probe               |
+| S-008 | REQ-GQL-004 | PaginationExecutionVarianceEnvelope    | BENCH | BenchmarkCANARY_REQ_GQL_004_PaginationExecutionVarianceEnvelope    | CV≤0.22 p95/mean≤2.55 across page sizes         |
+| S-009 | REQ-GQL-021 | PathCacheDegreeBucketUtilization       | BENCH | BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilization       | Collision ratio stable (≥92% unique)            |
 
 ## 10. VARIANCE ENVELOPE POLICY (Active)
 

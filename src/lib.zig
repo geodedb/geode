@@ -36,6 +36,8 @@ pub const diagnostics = @import("diagnostics.zig");
 pub const benchmarks = struct {
     // Pagination ordered variance benchmark (exposed for variance runner)
     pub const pagination = @import("benchmarks/pagination_variance.zig");
+    // Pagination execution (streaming page) variance benchmark
+    pub const pagination_execution = @import("benchmarks/pagination_execution_variance.zig");
 };
 // Time-series module (initial in-memory scaffold)
 pub const timeseries = @import("timeseries/timeseries.zig");

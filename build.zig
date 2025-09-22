@@ -88,7 +88,13 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("geode", root_mod);
     // Provide WAL module for recovery optimization benchmarks
     const wal_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    // Provide supporting modules required by wal for tests
+    const tde_hierarchy_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    wal_mod_for_tests.addImport("tde_hierarchy", tde_hierarchy_mod_for_tests);
+    wal_mod_for_tests.addImport("storage_page_manager", storage_page_manager_shared);
     custom_tests.root_module.addImport("wal", wal_mod_for_tests);
+    // Provide storage page manager to test redo optimization
+    custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     // Provide cdc_enhanced module to test aggregator for CDC variance benchmarks
     const cdc_enhanced_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("cdc_enhanced", cdc_enhanced_mod_for_tests);
@@ -108,6 +114,15 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_custom_tests.step);
 
+    // Attach physiological redo canary tests after test_step defined
+    const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
+    redo_canary_test.root_module.addImport("wal", wal_mod_for_tests);
+    redo_canary_test.root_module.addImport("storage_page_manager", storage_page_manager_shared);
+    // Provide tde_hierarchy for encryption import (even if disabled)
+    const tde_hierarchy_mod_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
+    test_step.dependOn(&redo_canary_test.step);
+
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
 
     // MVCC Advanced tests (expanded)
@@ -124,6 +139,12 @@ pub fn build(b: *std.Build) void {
     const mvcc_adv_bench_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_mvcc_repair_throughput.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_bench_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     test_step.dependOn(&mvcc_adv_bench_tests.step);
+    // MVCC phantom detection tests & bench
+    const txn_mod_for_phantom_tests = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
+    txn_mod_for_phantom_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    const phantom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_anomaly.zig"), .target = target, .optimize = optimize }) });
+    phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
+    test_step.dependOn(&phantom_tests.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);

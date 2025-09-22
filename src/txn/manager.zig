@@ -3,6 +3,7 @@ const mvcc_adv = @import("mvcc_adv");
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_TxnCommit; OWNER=engine; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SSIPhantomPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=engine; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=PredicateRangeDetection; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_023_PhantomDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
 
 pub const TxnId = u64;
 
@@ -83,6 +84,11 @@ pub const Manager = struct {
     conflict_matrix: ConflictMatrix = undefined, // write-write conflict detection
     allocator: std.mem.Allocator,
     advanced: ?mvcc_adv.Aggregator = null, // advanced MVCC instrumentation (optional)
+    phantom_enabled: bool = false,
+    // Predicated range reads tracked per txn (simple prefix-based predicates for demo)
+    predicates: std.AutoHashMap(TxnId, std.ArrayList([]u8)) = undefined,
+    // Global committed & uncommitted writes (key + owning txn + commit ts (0 while active))
+    writes: std.ArrayListUnmanaged(struct { key: []u8, txn_id: TxnId, commit_ts: Timestamp }) = .{},
 
     pub fn init(self: *Manager, ally: std.mem.Allocator) void {
         self.* = .{
@@ -93,6 +99,9 @@ pub const Manager = struct {
             .wait_for_graph = std.AutoHashMap(TxnId, std.ArrayList(TxnId)).init(ally),
             .conflict_matrix = ConflictMatrix.init(ally),
             .allocator = ally,
+            .phantom_enabled = false,
+            .predicates = std.AutoHashMap(TxnId, std.ArrayList([]u8)).init(ally),
+            .writes = .{},
         };
     }
 
@@ -115,6 +124,16 @@ pub const Manager = struct {
 
         self.conflict_matrix.deinit();
         self.active_txns.deinit();
+        // free predicate prefixes
+        var pit = self.predicates.iterator();
+        while (pit.next()) |entry| {
+            var list = entry.value_ptr;
+            for (list.items) |p| self.allocator.free(p);
+            list.deinit(self.allocator);
+        }
+        self.predicates.deinit();
+        for (self.writes.items) |w| self.allocator.free(w.key);
+        self.writes.deinit(self.allocator);
     }
 
     pub fn enableAdvanced(self: *Manager) !void {
@@ -126,6 +145,10 @@ pub const Manager = struct {
     pub fn enablePredictiveSkew(self: *Manager) !void {
         try self.enableAdvanced();
         if (self.advanced) |*adv| adv.enableSkew();
+    }
+
+    pub fn enablePhantomPrevention(self: *Manager) void {
+        self.phantom_enabled = true;
     }
 
     pub fn begin(self: *Manager) Txn {
@@ -179,9 +202,37 @@ pub const Manager = struct {
             return error.SerializationFailure;
         }
 
+        // Assign commit timestamp first (needed for phantom detection scanning window)
         txn.state = .Committed;
         txn.commit_ts = self.next_ts;
         self.next_ts += 1;
+
+        // Stamp commit_ts on this txn's writes
+        for (self.writes.items) |*w| {
+            if (w.txn_id == txn.id) {
+                w.commit_ts = txn.commit_ts;
+            }
+        }
+
+        // Phantom detection: if enabled, ensure no committed writes by other txns after our start inside any predicate prefix
+        if (self.phantom_enabled) {
+            if (self.predicates.get(txn.id)) |plist| {
+                for (plist.items) |prefix| {
+                    // scan writes
+                    for (self.writes.items) |w| {
+                        if (w.txn_id == txn.id) continue; // ignore own writes
+                        if (w.commit_ts == 0) continue; // not yet committed
+                        if (w.commit_ts <= txn.start_ts) continue; // pre-snapshot
+                        // simple prefix match
+                        if (std.mem.startsWith(u8, w.key, prefix)) {
+                            // rollback side-effects: mark aborted
+                            txn.state = .Aborted;
+                            return error.SerializationFailure; // treat phantom as serialization failure
+                        }
+                    }
+                }
+            }
+        }
 
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
@@ -335,6 +386,12 @@ pub const Manager = struct {
 
     pub fn recordWrite(self: *Manager, key: []const u8, txn: *Txn) void {
         if (self.advanced) |*adv| adv.noteWrite(txn.id, key, txn.start_ts) catch {};
+        // Track write for phantom detection (duplicate key copy)
+        const dup = self.allocator.dupe(u8, key) catch return;
+        self.writes.append(self.allocator, .{ .key = dup, .txn_id = txn.id, .commit_ts = 0 }) catch {
+            self.allocator.free(dup);
+            return;
+        };
     }
 
     fn addWaitFor(self: *Manager, waiter: TxnId, holder: TxnId) !void {
@@ -397,6 +454,19 @@ pub const Manager = struct {
 
     pub fn releaseWrite(self: *Manager, key: []const u8, txn: *Txn) void {
         self.releaseLock(key, txn.id);
+    }
+
+    // Record a predicate range read (prefix) for phantom detection under SSI
+    pub fn predicateRead(self: *Manager, txn: *Txn, prefix: []const u8) !void {
+        if (!self.phantom_enabled) return; // no-op if disabled
+        const entry = try self.predicates.getOrPut(txn.id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = std.ArrayList([]u8).initCapacity(self.allocator, 0) catch @panic("OOM");
+        }
+        // avoid duplicates
+        for (entry.value_ptr.items) |p| if (std.mem.eql(u8, p, prefix)) return;
+        const dup = try self.allocator.dupe(u8, prefix);
+        try entry.value_ptr.append(self.allocator, dup);
     }
 
     pub fn releaseRead(self: *Manager, key: []const u8, txn: *Txn) void {

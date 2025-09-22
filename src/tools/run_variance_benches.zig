@@ -456,4 +456,6 @@ pub fn main() !void {
     try runSyntheticRaftCommitVariance(ally);
     // Integrate ordered pagination variance envelope benchmark (CANARY: PaginationOrderedVarianceEnvelope)
     try geode.benchmarks.pagination.benchmarkPaginationOrderedVarianceEnvelope();
+    // Integrate execution pagination variance envelope benchmark (CANARY: PaginationExecutionVarianceEnvelope)
+    try geode.benchmarks.pagination_execution.benchmarkPaginationExecutionVarianceEnvelope();
 }

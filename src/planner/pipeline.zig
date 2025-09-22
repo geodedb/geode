@@ -8,7 +8,7 @@ const structural_key = @import("structural_key.zig");
 
 // High-level planner pipeline orchestration integrating PathCache, PhaseTiming, AdaptiveReplan.
 // This provides a deterministic synthetic pipeline used for integration tests & variance bench.
-// Phases: rewrite -> cardinality -> cost_eval (mirrors phase_timing.Phase enum)
+// Phases: rewrite -> cardinality -> projection_prune -> cost_eval (mirrors phase_timing.Phase enum)
 // PathCache: caches synthetic "pattern signature" derived from query hash.
 // AdaptiveReplan: observes expected vs actual row production after cardinality.
 //
@@ -108,6 +108,12 @@ pub fn runPipeline(
     timer.end(.cardinality);
     const sub_group_end = std.time.nanoTimestamp();
     const group_validation_ns: u64 = @intCast(sub_group_end - sub_group_start);
+
+    // Projection prune phase (synthetic) - simulate pruning unused projections.
+    timer.begin(.projection_prune);
+    var prune_spin: u64 = (signature_hash & 0x3FF) + 256;
+    while (prune_spin > 0) : (prune_spin -= 1) std.mem.doNotOptimizeAway(prune_spin);
+    timer.end(.projection_prune);
 
     // Cost evaluation phase
     timer.begin(.cost_eval);
@@ -225,7 +231,7 @@ test "TestCANARY_REQ_GQL_021_PlannerPhaseTimingIntegration" {
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 8);
     defer cache.deinit();
     const res = try runPipeline(gpa.allocator(), .{}, &cache, "RETURN 1 AS x");
-    try std.testing.expect(res.timings.rewrite_ns > 0 and res.timings.cardinality_ns > 0 and res.timings.cost_eval_ns > 0);
+    try std.testing.expect(res.timings.rewrite_ns > 0 and res.timings.cardinality_ns > 0 and res.timings.projection_prune_ns > 0 and res.timings.cost_eval_ns > 0);
 }
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerRewritePreValidationTiming; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerPreValidationTiming; OWNER=planner; UPDATED=2025-09-21
@@ -334,8 +340,8 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence" {
     // Build hop with properties on left node (ignored values)
     var prop_val1 = planner_root.ast.Expr{ .Int = 1 };
     var prop_val2 = planner_root.ast.Expr{ .Int = 999 };
-    var prop1 = planner_root.ast.Property{ .key = "p", .value = &prop_val1 };
-    var prop2 = planner_root.ast.Property{ .key = "p", .value = &prop_val2 };
+    const prop1 = planner_root.ast.Property{ .key = "p", .value = &prop_val1 };
+    const prop2 = planner_root.ast.Property{ .key = "p", .value = &prop_val2 };
     const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{prop1} };
     const left2 = planner_root.ast.NodePattern{ .name = "n2", .labels = &.{"L"}, .props = &.{prop2} };
     const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
@@ -412,7 +418,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     // Build three queries with 0,1,2,4 properties to exercise Z,L,M,H classes on left node.
-    var base: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    const base: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     // Helper to make prop expr
     var v1 = planner_root.ast.Expr{ .Int = 1 };
     var v2 = planner_root.ast.Expr{ .Int = 2 };
@@ -470,7 +476,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding" {
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    // Single hop pattern; ensure DBU appears twice (left/right) in key.
+    // Single hop pattern; ensure DB<bucket> appears twice (left/right) in key (L for single occurrence).
     var q: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const left = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = null };
     const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{"R"}, .props = null };
@@ -480,7 +486,164 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding" {
     q.match = .{ .chains = &.{chain} };
     const key = try structural_key.deriveStructuralKey(gpa.allocator(), q);
     defer gpa.allocator().free(key);
-    const first = std.mem.indexOf(u8, key, "DBU") orelse return error.NotFound;
-    const second = std.mem.indexOfPos(u8, key, first + 3, "DBU") orelse return error.NotFound;
+    const first = std.mem.indexOf(u8, key, "DBL") orelse return error.NotFound;
+    const second = std.mem.indexOfPos(u8, key, first + 3, "DB") orelse return error.NotFound; // second bucket may also be L
     try std.testing.expect(second > first);
+}
+
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheDegreeBucketDiscrimination; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination; OWNER=planner; UPDATED=2025-09-21
+test "TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    // Build two queries: one with a node appearing once (degree=1 -> L), another where same named node appears in three hops (degree=3 -> M).
+    // Query A: (a)-[]->(b)
+    var qa: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    const a1 = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"L"}, .props = null };
+    const b1 = planner_root.ast.NodePattern{ .name = "b", .labels = &.{"L"}, .props = null };
+    const rel_ab = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+    const hop_ab = planner_root.ast.Hop{ .left = a1, .rel = rel_ab, .right = b1 };
+    const chain_ab = planner_root.ast.Chain{ .name = null, .hops = &.{hop_ab} };
+    qa.match = .{ .chains = &.{chain_ab} };
+
+    // Query B: (x)-[]->(b1); (x)-[]->(b2); (x)-[]->(b3) in a single chain of sequential hops referencing same left name 'x'.
+    var qb = qa; // start with base structure
+    const xnode = a1; // name = x
+    const b2 = planner_root.ast.NodePattern{ .name = "b2", .labels = &.{"L"}, .props = null };
+    const b3 = planner_root.ast.NodePattern{ .name = "b3", .labels = &.{"L"}, .props = null };
+    const hop1 = planner_root.ast.Hop{ .left = xnode, .rel = rel_ab, .right = b1 };
+    const hop2 = planner_root.ast.Hop{ .left = xnode, .rel = rel_ab, .right = b2 };
+    const hop3 = planner_root.ast.Hop{ .left = xnode, .rel = rel_ab, .right = b3 };
+    const chain_multi = planner_root.ast.Chain{ .name = null, .hops = &.{ hop1, hop2, hop3 } };
+    qb.match = .{ .chains = &.{chain_multi} };
+
+    const keyA = try structural_key.deriveStructuralKey(gpa.allocator(), qa);
+    defer gpa.allocator().free(keyA);
+    const keyB = try structural_key.deriveStructuralKey(gpa.allocator(), qb);
+    defer gpa.allocator().free(keyB);
+    // Expect keyB to contain DBM for node x while keyA contains only DBL for x.
+    try std.testing.expect(std.mem.indexOf(u8, keyA, "DBL") != null);
+    try std.testing.expect(std.mem.indexOf(u8, keyB, "DBM") != null);
+    try std.testing.expect(!std.mem.eql(u8, keyA, keyB));
+}
+
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerProjectionPruneVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+test "BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 16);
+    defer cache.deinit();
+    const runs: usize = 64;
+    var samples = try gpa.allocator().alloc(u64, runs);
+    defer gpa.allocator().free(samples);
+    var i: usize = 0;
+    while (i < runs) : (i += 1) {
+        const q = switch (i & 3) {
+            0 => "RETURN 1 AS x",
+            1 => "MATCH (a)--(b) RETURN a",
+            2 => "MATCH (a)--(b)--(c) RETURN b",
+            else => "MATCH (x) RETURN x",
+        };
+        const res = try runPipeline(gpa.allocator(), .{}, &cache, q);
+        samples[i] = res.timings.projection_prune_ns;
+    }
+    // stats
+    var sum: f128 = 0;
+    for (samples) |v| sum += @as(f128, @floatFromInt(v));
+    const mean_f128 = sum / @as(f128, @floatFromInt(samples.len));
+    var var_acc: f128 = 0;
+    for (samples) |v| {
+        const diff = @as(f128, @floatFromInt(v)) - mean_f128;
+        var_acc += diff * diff;
+    }
+    const variance = if (samples.len > 1) var_acc / @as(f128, @floatFromInt(samples.len)) else 0;
+    const mean = @as(f64, @floatCast(mean_f128));
+    const stddev = @as(f64, @floatCast(@sqrt(variance)));
+    const cv = if (mean == 0) 0 else stddev / mean;
+    const tmp = try gpa.allocator().alloc(u64, samples.len);
+    defer gpa.allocator().free(tmp);
+    std.mem.copy(u64, tmp, samples);
+    std.sort.pdq(u64, tmp, {}, comptime std.sort.asc(u64));
+    const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
+    if (cv > 0.22 or (@as(f128, @floatFromInt(p95)) > @as(f128, @floatCast(mean)) * 2.55)) {
+        std.debug.print("VARIANCE_FAIL PlannerProjectionPruneVarianceEnvelope cv={:.4} p95={} mean={:.2}\n", .{ cv, p95, mean });
+        return error.VarianceExceeded;
+    }
+    std.debug.print("VARIANCE_OK PlannerProjectionPruneVarianceEnvelope cv={:.4} p95={} mean={:.2}\n", .{ cv, p95, mean });
+}
+
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheDegreeBucketUtilizationVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const ally = gpa.allocator();
+    const total_variants: usize = 96;
+    const repetitions_per_variant: usize = 6;
+    const total_samples = total_variants * repetitions_per_variant;
+    var samples = try ally.alloc(u64, total_samples);
+    defer ally.free(samples);
+    var idx: usize = 0;
+    var v: usize = 0;
+    while (v < total_variants) : (v += 1) {
+        // Fabricate a query whose repetition count influences degree distribution for named node 'x'
+        // Alternate between simple single-hop and multi-hop referencing same left node to exercise L vs M buckets.
+        var q: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
+        const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
+        if ((v & 1) == 0) {
+            const left = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"L"}, .props = null };
+            const right = planner_root.ast.NodePattern{ .name = "y", .labels = &.{"L"}, .props = null };
+            const hop = planner_root.ast.Hop{ .left = left, .rel = rel, .right = right };
+            const chain = planner_root.ast.Chain{ .name = null, .hops = &.{hop} };
+            q.match = .{ .chains = &.{chain} };
+        } else {
+            const left = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"L"}, .props = null };
+            const r1 = planner_root.ast.NodePattern{ .name = "y1", .labels = &.{"L"}, .props = null };
+            const r2 = planner_root.ast.NodePattern{ .name = "y2", .labels = &.{"L"}, .props = null };
+            const r3 = planner_root.ast.NodePattern{ .name = "y3", .labels = &.{"L"}, .props = null };
+            const h1 = planner_root.ast.Hop{ .left = left, .rel = rel, .right = r1 };
+            const h2 = planner_root.ast.Hop{ .left = left, .rel = rel, .right = r2 };
+            const h3 = planner_root.ast.Hop{ .left = left, .rel = rel, .right = r3 };
+            const chain = planner_root.ast.Chain{ .name = null, .hops = &.{ h1, h2, h3 } };
+            q.match = .{ .chains = &.{chain} };
+        }
+        var r: usize = 0;
+        while (r < repetitions_per_variant) : (r += 1) {
+            const t0 = std.time.nanoTimestamp();
+            const key = structural_key.deriveStructuralKey(ally, q) catch break;
+            // Scan for DB markers
+            var acc: usize = 0;
+            var pos: usize = 0;
+            while (pos + 1 < key.len) : (pos += 1) {
+                if (key[pos] == 'D' and key[pos + 1] == 'B') acc +%= 1;
+            }
+            if (acc == 0xFFFF) std.mem.doNotOptimizeAway(&acc);
+            ally.free(key);
+            const t1 = std.time.nanoTimestamp();
+            samples[idx] = @intCast(t1 - t0);
+            idx += 1;
+        }
+    }
+    // Stats
+    var sum: u128 = 0;
+    for (samples) |s| sum += s;
+    const mean = @as(f128, @floatFromInt(sum)) / @as(f128, @floatFromInt(samples.len));
+    var acc: f128 = 0;
+    for (samples) |s| {
+        const sf = @as(f128, @floatFromInt(s));
+        const d = sf - mean;
+        acc += d * d;
+    }
+    const variance = acc / @as(f128, @floatFromInt(samples.len));
+    const stddev = std.math.sqrt(variance);
+    const cv = stddev / mean;
+    const tmp = try ally.alloc(u64, samples.len);
+    defer ally.free(tmp);
+    std.mem.copy(u64, tmp, samples);
+    std.sort.pdq(u64, tmp, {}, comptime std.sort.asc(u64));
+    const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
+    const p95_ratio = @as(f128, @floatFromInt(p95)) / mean;
+    if (cv > 0.22 or p95_ratio > 2.55) return error.VarianceEnvelopeBreached;
+    std.debug.print(
+        "VARIANCE_OK PathCacheDegreeBucketUtilizationVarianceEnvelope mean={d:.2} cv={d:.4} p95_ratio={d:.2} samples={d}\n",
+        .{ mean, cv, p95_ratio, samples.len },
+    );
 }

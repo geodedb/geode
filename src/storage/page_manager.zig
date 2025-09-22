@@ -51,12 +51,12 @@ pub const Page = struct {
     fn slotOffset(i: u16) usize {
         return HeaderSize + @as(usize, i) * 4;
     }
-    fn writeSlot(self: *Page, idx: u16, off: u16, sz: u16) void {
+    pub fn writeSlot(self: *Page, idx: u16, off: u16, sz: u16) void {
         const base = slotOffset(idx);
         std.mem.writeInt(u16, self.buf[base .. base + 2][0..2], off, .little);
         std.mem.writeInt(u16, self.buf[base + 2 .. base + 4][0..2], sz, .little);
     }
-    fn readSlot(self: *const Page, idx: u16) struct { off: u16, sz: u16 } {
+    pub fn readSlot(self: *const Page, idx: u16) struct { off: u16, sz: u16 } {
         const base = slotOffset(idx);
         return .{ .off = std.mem.readInt(u16, self.buf[base .. base + 2][0..2], .little), .sz = std.mem.readInt(u16, self.buf[base + 2 .. base + 4][0..2], .little) };
     }
@@ -332,7 +332,7 @@ pub const PageManager = struct {
         try self.pages.append(self.allocator, mem);
         if (self.base_path) |p| try self.writePage(p, self.pages.items.len - 1);
     }
-    fn asPage(self: *PageManager, idx: usize) Page {
+    pub fn asPage(self: *PageManager, idx: usize) Page {
         return Page{ .buf = self.pages.items[idx] };
     }
 
