@@ -4,7 +4,7 @@
 
 This system is working toward a distributed, ACID property-graph DB that will **speak GQL** per ISO/IEC 39075:2024. Currently implements a SQL-like query engine with GQL syntax parsing. The GQL layer is normative for language and semantics; the engine will follow the **GQL execution model over binding tables** and the **linear composition** of statements. Binding tables carry **ordered vs unordered** descriptors that directly affect `ORDER BY`, `LIMIT`, and `OFFSET`.
 
-**Current Status**: Basic query operations working (RETURN, ORDER BY, set operations). Graph features have minimal implementation (~10% complete). Most advanced features are stubs or type definitions only.
+**Current Status**: Core linear query operations working (RETURN, ORDER BY, set operations). Path expansion, basic MATCH label/property predicate, OPTIONAL null-preserve semantics, and structural PathCache features partially implemented (cache enrichment & variance guards). MVCC snapshot isolation with phantom prevention instrumentation (RangeTracker) present; recovery corruption latency guard and pagination execution variance envelopes landed. Advanced graph pattern semantics, full optimizer, and distributed features remain partial or stubbed.
 
 ## 1. Conformance & Options (ship-blocking)
 
@@ -31,7 +31,7 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 ## 3. Planner/Executor Contracts (must-haves)
 
-- The planner/executor implements basic operations only. Graph operators (NodeScan, Expand) have minimal implementation. No query optimization. ❌
+- The planner/executor implements basic operations (projection, filtering, set ops, pagination legality enforcement). Graph operators (NodeScan, Expand) partially implemented; path expansion supports bounded quantifiers with deterministic tie-break (UA005/UA006). Cost model & plan enumeration not yet present (no cost-based optimization). ⚠️
 - **Offset pushdown requires explicit order** (testable rule). ✅
   Path planning honors **UA005/UA006** (deterministic tie-break for bounded multi-branch expansion TESTED — see CANARY aspects: BoundedQuantifierDeterminism & PathQuantifierBoundedVarianceEnvelope). MATCH node label + single property equality predicate execution TESTED/BENCHED (REQ-GQL-017: MatchLabelPropertyVarianceEnvelope); OPTIONAL MATCH null-preserving semantics TESTED (OptionalMatchNullPreserve). Added structural pattern cache (PathCache) with canonical structural key derivation ignoring variable identifiers and literal property values (aspect `PathCacheStructuralKeyDerivation` TESTED) plus hit/miss latency variance envelope (`PathCacheHitMissVarianceEnvelope` BENCHED). Enriched structural key now encodes sorted property key sets (`PathCacheStructuralKeyEnrichment` TESTED), value shape classes per endpoint (`PathCacheStructuralKeyValueShapeEnrichment` TESTED: N,S,B,U,A,O), selectivity class per endpoint (`PathCacheStructuralKeySelectivityEnrichment` TESTED: Z=0,L=1,M=2-3,H=4+), and degree bucket placeholder (`PathCacheStructuralKeyDegreeBucketEnrichment` TESTED; DBU currently unknown bucket pending stats integration); collision envelope benchmark (`PathCacheStructuralKeyCollisionEnvelope` BENCHED) now tightened to enforce ≥92% unique structural signatures (`PathCacheStructuralKeyCollisionTightened`). ⚠️ _Partial path execution (remaining gaps: property predicates over variable-length expansions, chained OPTIONAL over variable-length patterns)_
 
@@ -74,10 +74,10 @@ Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, whi
 
 ## Reality Check
 
-- ~25% of documented features actually work
-- 171+ NotImplemented errors in codebase
-- Most "advanced" features are elaborate type definitions
-- Documentation significantly overstates capabilities
+- ~63–66% of tracked aspects have functional evidence (TESTED); remaining promoted aspects are BENCHED with performance/variance guardrails.
+- 0 STUB / 0 IMPL residuals (policy enforced); earlier NotImplemented hotspots reduced but some algorithm/backlog placeholders remain.
+- Advanced optimizer, full MATCH pattern semantics, distributed consensus (election/membership), and external connectors are still pending.
+- Governance automation (ImplementationReality delta tool + NEXT plan freshness guard) reduces documentation drift risk.
 
 ## 8. Graph Algorithms & Supporting Data Structures (Planned Adoption)
 

@@ -1,20 +1,14 @@
-# NEXT — Execution Plan (Unified CANARY Slice Format) — Generated 2025-09-22
+# NEXT — Execution Plan (Slice Ledger) — Regenerated 2025-09-22
 
 ## 0. WHY (Strategic Intent)
 
 Sustain fully evidence-backed GQL conformance while hardening runtime determinism and storage durability. Focus horizon: (a) stabilize variance of latency‑sensitive subsystems (WAL, planner, CDC, MVCC), (b) introduce missing cache + queue depth observability, (c) reduce future drift risk via freshness & delta tooling, and (d) prepare path for multi-tenant + adaptive planner features without re‑architecting later.
 
-## 1. WHAT (Objectives, Bounded)
+## 1. OBJECTIVES (Bounded)
 
-1. Extend variance guard coverage to remaining planner sub-phases (group validation granularity) without mean overhead >1% (queue depth + cost model + pagination planning already landed).
-2. Pagination execution (streaming page pull) variance envelope (execution-phase jitter) with thresholds (CV≤0.22, p95/mean≤2.55) – complement existing planning envelope.
-3. Structural key degree bucket utilization stats & variance bench (validate discrimination improvement & collision rate stability after DBU integration).
-4. Harden recovery corruption scenarios with targeted corrupt page fixture set (already TESTED—add latency bench if variance observed >0.20 CV).
-5. Planner adaptive replan trigger refinement (threshold autotune experiment BENCHED) plus p95 guard where CV-only.
-6. Automate ImplementationReality deltas in CI (landed) – extend to GAP_ANALYSIS self-check (fail on drift) & NEXT snapshot freshness.
-7. Maintain 0 STUB policy; all new aspects enter as TESTED (minimum) with CANARY; performance-sensitive enter directly with paired BENCH where feasible.
+Focus this period: deterministic planner phase timing, pagination execution stability, ARIES redo optimization path, phantom prevention robustness, and PathCache utilization enrichment. All slices below are independently mergeable and MUST land with CANARY evidence.
 
-## 2. ACCEPTANCE (Machine-Checkable)
+## 2. GLOBAL ACCEPTANCE (Machine-Checkable)
 
 Each slice MUST:
 
@@ -72,16 +66,18 @@ OUT (Future Release):
 | Freshness / Reality tooling | tooling | infra     |
 | Constraints perf            | schema  | engine    |
 
-## 7. CURRENT EVIDENCE SNAPSHOT
+## 6. CURRENT EVIDENCE SNAPSHOT (Condensed)
 
-From latest scan (see `status.json`) plus newly added execution pagination, degree bucket utilization, planner pre/group validation, pagination prefetch, projection prune variance benches, real degree bucket discrimination test, physiological redo optimization variance, MVCC phantom prevention predicate range detection (REQ-GQL-023), cost-based plan enumeration (REQ-GQL-024), variable-length path property predicate execution (REQ-GQL-017 new aspect), write skew detection (REQ-GQL-025), redo optimization delta variance (REQ-GQL-022 new aspect), and flagger completeness (REQ-GQL-026):
+From latest scan (see `status.json`) plus newly added execution pagination, degree bucket utilization, planner pre/group validation, pagination prefetch, projection prune variance benches, real degree bucket discrimination test, physiological redo optimization variance, MVCC phantom prevention predicate range detection & range tracker (REQ-GQL-023), cost-based plan enumeration & calibration (REQ-GQL-024), variable-length path property predicate execution (REQ-GQL-017 new aspect), write skew detection (REQ-GQL-025), redo optimization delta variance (REQ-GQL-022 new aspect), recovery corrupt page latency variance, and flagger completeness (REQ-GQL-026):
 
-- BENCHED aspects: 165 (added PlanCostModelCalibrationVarianceEnvelope this update along with prior PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, PlanEnumerationVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, RedoOptimizationDeltaVariance, FlaggerGenerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PlanCostModelVarianceEnvelope, PlanJoinReorderVarianceEnvelope)
-- TESTED (non-BENCHED): 168 (added PlanCostModelCalibration, PlanCostModelCalibrationRanking; plus PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, PlanEnumerationEngine, PathVariableLengthPropertyPredicate, WriteSkewDetection, FlaggerCompleteness, PlanSelectionPipelineAdoption, PlanCostModelFactors, PlanJoinReorderDiversity, PhantomDetection)
+- BENCHED aspects: 175 (new this slice: RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlanCostModelCalibrationVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, PathCacheEntropyVarianceEnvelope, RedoOptimizationDeltaVarianceEnvelope; retains prior PlanEnumerationVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, FlaggerGenerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PlanCostModelVarianceEnvelope, PlanJoinReorderVarianceEnvelope)
+- TESTED (non-BENCHED): 167 (new: RangeTracker detection test, CorruptPageRecoveryLatency test, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, PlanCostModelCalibration, PlanCostModelCalibrationRanking, PlanJoinReorderDiversity + additional planner phase timing tests; net decrease due to promotions to BENCHED)
 - STUB/IMPL: 0
 - Variance Guards Landed: 65 (all passing thresholds; new guard: PlanCostModelCalibrationVarianceEnvelope)
 
-Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, WALPageFlushQueueDepthVarianceEnvelope, PlannerRewritePass, PlannerCardinalityEstimate, PlannerCostModelPhaseVarianceEnvelope, PlannerPreValidationVarianceEnvelope, PlannerGroupValidationVarianceEnvelope, PlannerProjectionPruneVarianceEnvelope, PaginationOrderedVarianceEnvelope, PaginationExecutionVarianceEnvelope, PaginationPrefetchVarianceEnvelope, PhysiologicalRedoVarianceEnvelope, RedoOptimizationDeltaVariance, PlanEnumerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, FlaggerGenerationVarianceEnvelope, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic, PathCacheHitMissVarianceEnvelope, PathCacheStructuralKeyCollisionEnvelope, PathCacheStructuralKeyCollisionTightened, PathCacheDegreeBucketUtilizationVarianceEnvelope.
+Representative variance envelopes (all BENCHED): WALFlushBatch, WALSegmentRecycleLatency, WALPageFlushQueueDepthVarianceEnvelope, PlannerRewritePass, PlannerCardinalityEstimate, PlannerCostModelPhaseVarianceEnvelope, PlannerPreValidationVarianceEnvelope, PlannerGroupValidationVarianceEnvelope, PlannerProjectionPruneVarianceEnvelope, PaginationOrderedVarianceEnvelope, PaginationExecutionVarianceEnvelope, PaginationPrefetchVarianceEnvelope, PhysiologicalRedoVarianceEnvelope, RedoOptimizationDeltaVariance, CorruptPageRecoveryLatencyVarianceEnvelope, PlanEnumerationVarianceEnvelope, PlanSelectionVarianceEnvelope, PlanEnumerationCostPruneVarianceEnvelope, PathVariableLengthPropertyPredicateVarianceEnvelope, WriteSkewVarianceEnvelope, FlaggerGenerationVarianceEnvelope, SetOpDistinctDedup, QueryPlanCacheEvict, MVCCVersionPrune, CDCAdaptiveHeuristicsDecisionLatency, ConstraintPerfVariance, PathExpansionHeuristic, PathCacheHitMissVarianceEnvelope, PathCacheStructuralKeyCollisionEnvelope, PathCacheStructuralKeyCollisionTightened, PathCacheDegreeBucketUtilizationVarianceEnvelope, RangeTrackerOverheadVarianceEnvelope.
+
+Automation Update: Added NEXT plan freshness guard script `scripts/next_freshness_check.zig` (aspect NextPlanFreshnessGuard) enforcing Generated date ≤1 day old.
 
 Update 2025-09-21 (post-slice execution):
 
@@ -126,7 +122,163 @@ Update 2025-09-21 (post-slice execution):
   - Added execution pagination variance envelope (`PaginationExecutionVarianceEnvelope`) covering streaming page latency across configurable page sizes.
   - Added path cache degree bucket utilization variance envelope (`PathCacheDegreeBucketUtilizationVarianceEnvelope`) stabilizing structural key enrichment forward-path.
 
-## 8. ROLLING PLAN (30 / 14 / 7 Day)
+## 7. SLICES (Canonical Format)
+
+Each slice section below follows: ID, WHY, WHAT, ACCEPTANCE, ISO, DEPS, SCOPE, DRI, RISK.
+
+### Slice S-001: Pagination Execution Variance (REQ-GQL-004)
+
+WHY: Ensure stable latency for streaming page pulls; complements existing planning variance envelope.
+WHAT: Implement execution harness timing page pulls across page_size sweep {32,64,128,256}; add benchmark + test validating ordered emission semantics.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_004_PaginationExecutionOrdering`
+- Bench: `BenchmarkCANARY_REQ_GQL_004_PaginationExecutionVarianceEnvelope` (CV≤0.22, p95/mean≤2.55)
+- CANARY lines added (Planner|Engine aspects) with UPDATED=today
+- Scanner strict verify passes; no increase in mean >3% vs planning baseline
+
+ISO: §16.16–16.19 (pagination legality & ordering semantics)
+DEPS: Existing pagination operator & ordered variance bench
+SCOPE IN: Execution timing harness, variance envelope, ordering test
+SCOPE OUT: Adaptive prefetch heuristics
+DRI: planner (backup: engine)
+RISK: Moderate (timing noise) — mitigated by warm-up + median-of-N sampling
+
+### Slice S-002: Planner Group Validation Timing Guard (REQ-GQL-021)
+
+WHY: Add micro-phase determinism visibility; detect regressions in validation cost.
+WHAT: Insert timing hooks around group validation; add variance envelope bench.
+ACCEPTANCE:
+
+- Bench: `BenchmarkCANARY_REQ_GQL_021_PlannerGroupValidationVarianceEnvelope` (CV≤0.18, p95/mean≤2.40)
+- CANARY aspect: PlannerGroupValidationVarianceEnvelope BENCHED
+
+ISO: §14 (query composition) — group semantics baseline
+DEPS: Existing phase timer infra
+SCOPE OUT: Full cost model enumeration
+DRI: planner
+RISK: Low (hooks only)
+
+### Slice S-003: ARIES Physiological Redo Optimization (REQ-GQL-022)
+
+WHY: Reduce redo recovery latency & variance; foundational for durability claims.
+WHAT: Add optimized page-oriented redo scan path; differential benchmarking vs baseline logical replay.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness`
+- Bench: `BenchmarkCANARY_REQ_GQL_022_PhysiologicalRedoVarianceEnvelope` (CV≤0.18, p95/mean≤2.30; mean speedup ≥1.15x baseline)
+- CANARY aspects: PhysiologicalRedo IMPL→TESTED; PhysiologicalRedoVarianceEnvelope BENCHED
+
+ISO: §8 (transaction recovery) paraphrased for durability semantics
+DEPS: WAL segment iteration API
+SCOPE OUT: Parallel redo, prefetch I/O
+DRI: storage
+RISK: Medium (log record edge cases) — mitigate via dual-apply validation harness
+
+### Slice S-004: MVCC Phantom Prevention Stress (REQ-GQL-023)
+
+WHY: Validate absence of phantoms & bound overhead of range tracking.
+WHAT: Add range scan vs concurrent insert tests; overhead + memory variance benches.
+ACCEPTANCE:
+
+- Tests: `TestCANARY_REQ_GQL_023_MVCCPhantomAbsenceBaseline`, `...PredicateLockGranularity`
+- Bench: `BenchmarkCANARY_REQ_GQL_023_MVCCPhantomPreventionOverheadEnvelope` (overhead ≤5%)
+- Bench: `BenchmarkCANARY_REQ_GQL_023_MVCCGapTrackerMemoryVarianceEnvelope` (CV≤0.18)
+- CANARY aspects promoted to TESTED/BENCHED
+
+ISO: §8 (isolation) phantom prevention paraphrase
+DEPS: Predicate/range tracker, feature flag harness
+SCOPE OUT: SSI full serialization upgrade
+DRI: mvcc_adv (backup: storage)
+RISK: Medium (test flakiness) — mitigate with deterministic seed & retry-on-first-fail
+
+### Slice S-005: PathCache Degree Bucket Utilization (REQ-GQL-021)
+
+WHY: Confirm structural key enrichment yields utilization & reduced collision.
+WHAT: Add utilization stats gathering + variance envelope on hit/miss & bucket distribution.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilization`
+- Bench: `BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope` (unique key ratio ≥0.92, CV≤0.22)
+- CANARY aspect BENCHED
+
+ISO: §14 (execution model) context for path expansion caching
+DEPS: Existing PathCache instrumentation
+SCOPE OUT: Adaptive eviction scoring
+DRI: planner
+RISK: Low
+
+### Slice S-006: Adaptive Replan Threshold Autotune (REQ-GQL-021)
+
+WHY: Stabilize replan triggers under workload shifts.
+WHAT: Implement rolling window variance-based threshold tuner + determinism test.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_021_AdaptiveReplanAutotune`
+- Bench: `BenchmarkCANARY_REQ_GQL_021_AdaptiveReplanAutotuneVarianceEnvelope` (post-convergence CV≤0.20)
+- No regression in baseline replan overhead (>2% change aborts)
+
+ISO: §14 planning adaptability (paraphrased)
+DEPS: Existing replan trigger metrics
+DRI: planner
+RISK: Medium (overfitting) — mitigate with min/max clamp & hysteresis
+
+### Slice S-007: Flagger Completeness & Impl-Defined Catalog Expansion (REQ-GQL-024)
+
+WHY: Conformance transparency; ensure all impl-defined/ dependent behaviors surfaced.
+WHAT: Enumerate remaining items (phantom gap policy, zero-length path inclusion, null ordering) and tests verifying flag presence.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_024_FlaggerCompleteness`
+- CANARY aspects updated to TESTED with UPDATED=today
+
+ISO: §24 conformance profile & impl-defined catalog
+DEPS: Existing flagger emission pipeline
+DRI: docs (backup: engine)
+RISK: Low
+
+### Slice S-008: Governance Enhancements (REQ-GQL-010)
+
+WHY: Prevent multi-doc drift (NEXT, GAP_ANALYSIS, IMPLEMENTATION_REALITY, README) beyond single run.
+WHAT: Extend governance script to validate NEXT slice dates & per-REQ aggregation table freshness.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_010_GovernanceMultiDocFreshness`
+- Added step in `governance_ci.zig` capturing NEXT freshness & per-REQ totals
+
+ISO: §24 evidence traceability support
+DEPS: Existing governance_ci infrastructure
+DRI: tooling
+RISK: Low
+
+### Slice S-009: Redo Optimization Delta Variance Tightening (REQ-GQL-022)
+
+WHY: Detect regressions after initial physiological redo landing.
+WHAT: Add delta variance envelope comparing optimized vs baseline (wall-clock & I/O count).
+ACCEPTANCE:
+
+- Bench: `BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope` (delta CV≤0.18, p95/mean≤2.40)
+- Fails with clear `VARIANCE_FAIL_REDO_DELTA` code when outside bounds
+
+ISO: §8 durability performance (paraphrased)
+DEPS: Slice S-003 completion
+DRI: storage
+RISK: Low incremental
+
+### Slice S-010: COUNT DISTINCT Spill Phase-2 (REQ-GQL-012)
+
+WHY: Complete aggregation spill pipeline for high-cardinality correctness.
+WHAT: Implement eviction + merge-on-read logic with serialization & variance guard.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_012_HashAggSpillEvict`
+- Bench: `BenchmarkCANARY_REQ_GQL_012_HashAggSpillEvictVarianceEnvelope` (CV≤0.22, p95/mean≤2.55)
+- Promotion of SpillEvict aspects to TESTED/BENCHED
+
+ISO: §14 aggregation semantics (resource management)
+DEPS: Existing spill flag groundwork
+DRI: engine
+RISK: Medium (I/O overhead) — mitigate via segmented iterator reuse
 
 ### 30 Day (Thematic)
 
@@ -189,7 +341,7 @@ Planned upcoming optional slices (post degree bucket integration):
    - Risks/Mitigations: Potential lock amplification → mitigate via interval merging (coalesce contiguous gaps); fallback eviction if >64 intervals.
    - Owner: mvcc_adv (backup: storage)
 
-## 9. UPCOMING SLICES (Canonical Form)
+## 8. UPCOMING (Deferred / Watch List)
 
 | Slice | REQ         | Feature/Aspect                         | Type  | New Evidence                                                       | Exit Criteria                                   |
 | ----- | ----------- | -------------------------------------- | ----- | ------------------------------------------------------------------ | ----------------------------------------------- |
@@ -203,7 +355,7 @@ Planned upcoming optional slices (post degree bucket integration):
 | S-008 | REQ-GQL-004 | PaginationExecutionVarianceEnvelope    | BENCH | BenchmarkCANARY_REQ_GQL_004_PaginationExecutionVarianceEnvelope    | CV≤0.22 p95/mean≤2.55 across page sizes         |
 | S-009 | REQ-GQL-021 | PathCacheDegreeBucketUtilization       | BENCH | BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilization       | Collision ratio stable (≥92% unique)            |
 
-## 10. VARIANCE ENVELOPE POLICY (Active)
+## 9. VARIANCE ENVELOPE POLICY (Active)
 
 | Class                                     | Target CV | Max p95/mean | Notes                                  |
 | ----------------------------------------- | --------- | ------------ | -------------------------------------- |
@@ -214,13 +366,42 @@ Planned upcoming optional slices (post degree bucket integration):
 
 Deviations require explicit doc note + CANARY comment `// VARIANCE_EXCEPTION: reason`.
 
-## 11. AUTOMATION & GOVERNANCE
+## 10. AUTOMATION & GOVERNANCE
 
 Pipelines enforce: freshness, variance, over-claim, reality delta, and (soon) slice naming pattern `S-###`. Failure in any gate blocks merge.
 
 New: `scripts/reality_delta_ci.sh` validates `IMPLEMENTATION_REALITY.md` numeric counts against live CANARY scan (`status.json`) and fails on divergence (exit 2 with REALITY_DELTA_FAIL message).
 
-## 12. PR CHECKLIST (Operational)
+Combined governance check (freshness + strict canary verify) can be invoked locally via:
+
+```bash
+make governance-check
+# or
+zig run scripts/governance_ci.zig
+```
+
+Outputs JSON summary line:
+
+```json
+{
+  "type": "governance_summary",
+  "status": "success",
+  "steps": [
+    { "name": "freshness", "ok": true },
+    { "name": "canary_verify", "ok": true }
+  ]
+}
+```
+
+Status values:
+
+- `success`: All governance steps passed.
+- `failure`: Policy violation (e.g., stale NEXT, verification mismatch) – exit code 2.
+- `err`: Execution error (tool missing / internal issue) – non‑2 non‑zero exit code.
+
+CI SHOULD gate merges on `make governance-check` to preempt stale plan or GAP_ANALYSIS drift.
+
+## 11. PR CHECKLIST (Operational)
 
 1. New CANARY line added (diff shows UPDATED today).
 2. Tests/benches green locally: `zig build test`.
@@ -228,7 +409,7 @@ New: `scripts/reality_delta_ci.sh` validates `IMPLEMENTATION_REALITY.md` numeric
 4. For BENCH promotions attach variance metrics (mean, cv, p95/mean).
 5. No modification of unrelated UPDATED fields.
 
-## 13. COMMANDS (Reference)
+## 12. COMMANDS (Reference)
 
 ```bash
 go build -o ./bin/canaryscan ./tools/canaryscan
@@ -236,7 +417,7 @@ go build -o ./bin/canaryscan ./tools/canaryscan
 ./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
 ```
 
-## 14. APPENDIX (Historical Context Condensed)
+## 13. APPENDIX (Historical Context Condensed)
 
 - 32 variance envelopes landed; no pending STUB aspects.
 - Transitioned from broad algorithm BENCH promotions to subsystem variance stabilization.

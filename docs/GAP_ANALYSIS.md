@@ -12,9 +12,9 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 
 | Metric               | Count |
 | -------------------- | ----- |
-| Total aspects (rows) | 305   |
-| BENCHED              | 150   |
-| TESTED (non‑BENCHED) | 155   |
+| Total aspects (rows) | 342   |
+| BENCHED              | 175   |
+| TESTED (non‑BENCHED) | 167   |
 
 | STUB | 0 |
 | IMPL (unpromoted) | 0 |
@@ -22,6 +22,37 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 | Stale (>60d) | 0 |
 
 Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
+
+## 1a. Conformance Profile (ISO/IEC 39075:2024)
+
+| Category     | Minimum Feature                     | Optional Features (Claimed)             | Extensions / Impl-Defined (Flagged)                               | Notes                                                                                     |
+| ------------ | ----------------------------------- | --------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Core Query   | RETURN, ORDER BY, basic expressions | UNION / INTERSECT / EXCEPT (GQ03–GQ07)  | US001 (unordered pagination policy), UA005/UA006 (path tie-break) | MATCH partial (patterns, OPTIONAL basic)                                                  |
+| Pagination   | ORDER + LIMIT legality enforcement  | OFFSET with stable order only           | US001                                                             | OFFSET without ORDER rejected (policy)                                                    |
+| Set Ops      | UNION DISTINCT / ALL                | INTERSECT / EXCEPT DISTINCT             |                                                                   | DISTINCT semantics per binding table equivalence                                          |
+| Paths        | Variable-length bounded expand      | Structural PathCache enrichments        | UA005/UA006 deterministic ordering                                | Full MATCH semantics (chained OPTIONAL, property predicates over variable-length) pending |
+| Transactions | Snapshot Isolation base             | Phantom prevention instrumentation      | I: PhantomGapLockingPolicy (doc)                                  | SSI upgrade path not complete                                                             |
+| Diagnostics  | ISO status precedence               | Multi-diagnostic folding                | CollationBinaryDefault, NullOrderPolicyDefault                    | Additional impl-defined items enumerated                                                  |
+| Storage      | WAL + basic recovery                | Variance envelopes for compaction/flush |                                                                   | ARIES physiological redo optimizations pending                                            |
+| Security     | Basic TDE key rotation              |                                         |                                                                   | KMS / envelope keys absent                                                                |
+| Distributed  | Raft append entries subset          |                                         |                                                                   | Elections, snapshots not implemented                                                      |
+
+## 1b. Per-Requirement Aggregation (High-Density REQs)
+
+| REQ         | Aspects (TESTED) | Aspects (BENCHED) | Total | Notes                                                      |
+| ----------- | ---------------- | ----------------- | ----- | ---------------------------------------------------------- |
+| REQ-GQL-004 | 1                | 1                 | 2     | Pagination legality + ordered planning variance            |
+| REQ-GQL-012 | 5                | 3                 | 8     | Aggregation spill, distinct, decimal, variance envelopes   |
+| REQ-GQL-021 | 6                | 12                | 18    | Planner phases, PathCache core + variance, adaptive replan |
+| REQ-GQL-028 | 1                | 3                 | 4     | WAL recycle, flush queue depth, latency variance           |
+| REQ-GQL-032 | 0                | 1                 | 1     | Constraint performance variance                            |
+| REQ-GQL-042 | 0                | 1                 | 1     | CDC adaptive flush                                         |
+| REQ-GQL-046 | 0                | 1                 | 1     | TDE key rotation throughput                                |
+| REQ-GQL-063 | 0                | 1                 | 1     | Dijkstra benchmark                                         |
+| REQ-GQL-065 | 0                | 1                 | 1     | Kruskal benchmark                                          |
+| REQ-GQL-067 | 0                | 1                 | 1     | PageRank variance envelope                                 |
+
+_Note_: Table reflects representative multi-aspect density; authoritative enumeration remains `status.csv`. Totals here are subset aggregates (not a full sum of 340) and are for planning focus only.
 
 ## 2. Conformance / Scope Snapshot (ISO/IEC 39075:2024)
 
@@ -137,10 +168,11 @@ All previously identified STUB gaps have been closed (each aspect now at least T
 
 ## 10. Summary Statistics (Derived from status.csv)
 
--- Total aspect rows (status.csv): 305
--- BENCHED: 150
+-- Total aspect rows (status.csv): 342
+-- BENCHED: 175
 
-- TESTED (non-BENCHED): 155
+-- TESTED (non-BENCHED): 167
+
 - STUB / IMPL remaining: 0
 - Effective coverage: 100%
 

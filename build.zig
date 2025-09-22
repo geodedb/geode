@@ -162,6 +162,9 @@ pub fn build(b: *std.Build) void {
     const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
+    const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
+    recovery_corrupt_latency_tests.root_module.addImport("wal", wal_mod_for_tests);
+    recovery_corrupt_latency_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
     planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     // Planner enumeration pruning tests
@@ -178,6 +181,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&path_varlen_predicate_tests.step);
     test_step.dependOn(&write_skew_tests.step);
     test_step.dependOn(&redo_delta_tests.step);
+    test_step.dependOn(&recovery_corrupt_latency_tests.step);
     test_step.dependOn(&planner_plan_selection_tests.step);
     test_step.dependOn(&planner_prune_tests.step);
     test_step.dependOn(&planner_pipeline_selection_tests.step);

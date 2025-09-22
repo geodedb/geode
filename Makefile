@@ -22,7 +22,7 @@ endif
 
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
-.PHONY: canary canary-verify
+.PHONY: canary canary-verify governance-check
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test
@@ -202,6 +202,10 @@ canary:
 canary-verify: canary
 	./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
 
+# Combined governance check (freshness + canary verify) producing JSON summary
+governance-check:
+	$(ZIG) run scripts/governance_ci.zig
+
 # Format all code
 fmt:
 	@echo "Formatting Zig code..."
@@ -223,7 +227,7 @@ clean:
 	$(MAKE) go-clean
 
 # Run build, test, fuzz, bench sequentially for CI
-ci: clean build test fuzz bench cross-compile-strict test-cross-clients
+ci: clean build test fuzz bench cross-compile-strict test-cross-clients governance-check
 	@echo "CI pipeline completed successfully"
 
 # Strict cross-compilation for CI (fails on any error)

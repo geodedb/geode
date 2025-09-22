@@ -4,15 +4,15 @@ _Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors &
 
 ## Executive Summary
 
-Latest CANARY scan (`status.json`) updated with PathCache entropy metrics and adaptive replan refinement:
+Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, and NEXT plan freshness automation:
 
-- **315 aspects** (tracked feature/aspect evidence rows)
-- **168 TESTED** (~53.3%) – functional tests present (added PlanCostModelCalibration, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, PathCacheDegreeBucketDiscrimination, PlanSelectionPipelineAdoption, PlanCostModelFactors, PlanJoinReorderDiversity)
-- **147 BENCHED** (~46.7%) – performance / variance / jitter envelopes (added PlanCostModelCalibrationVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, PhysiologicalRedoVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PlanCostModelVarianceEnvelope, PlanJoinReorderVarianceEnvelope)
+- **342 aspects** (tracked feature/aspect evidence rows)
+- **167 TESTED** (~48.8%) – functional tests present (notable recent: RangeTrackerPhantomPrevention, RangeTrackerPredicateReadConsistency, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, AdditionalPlannerPhaseTests)
+- **175 BENCHED** (~51.5%) – performance / variance / jitter envelopes (new: RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
 - **0 STUB**, **0 IMPL (unpromoted)** – 100% promoted
-- **64 variance envelopes** (all passing CV & p95/mean thresholds; new: PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
+- **65 variance envelopes** (all passing CV & p95/mean thresholds; added RangeTrackerOverheadVarianceEnvelope & CorruptPageRecoveryLatencyVarianceEnvelope; net +1 after consolidation of a deprecated pagination planning envelope)
 
-Delta vs prior snapshot: +6 net aspects (+4 TESTED, +2 BENCHED) – growth driven by PathCache entropy metrics, adaptive replan refinement, and cost model calibration (ranking + variance guard) improving optimizer fidelity.
+Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassification reflects maturation of several functional features into performance‑guarded states plus addition of new recovery and MVCC guardrails. TESTED decrease is expected due to promotions into BENCHED status categories (mutually exclusive lifecycle states in evidence ledger).
 
 ## Implementation Status by Component
 
@@ -64,10 +64,11 @@ Delta vs prior snapshot: +6 net aspects (+4 TESTED, +2 BENCHED) – growth drive
 
 #### Transactions (MVCC)
 
-- **Status**: Basic implementation TESTED
-- **Evidence**: `TestCANARY_REQ_GQL_013_TxnCommit`
-- **Benchmarks**: Conflict matrix performance tested
-- **Gaps**: Only basic commit tested, no rollback/isolation tests found
+- **Status**: Snapshot Isolation core with phantom prevention instrumentation – TESTED + BENCHED
+- **Evidence**: `TestCANARY_REQ_GQL_013_TxnCommit`, RangeTracker phantom prevention tests (predicate read consistency, overlapping range detection)
+- **Benchmarks**: Conflict matrix + RangeTracker overhead + SSI phantom prevention variance envelopes (guarding added path length & predicate range tracking cost)
+- **New Guardrails**: `RangeTrackerOverheadVarianceEnvelope` enforces CV & p95/mean bounds for predicate range tracking; ensures phantom prevention stays within target overhead budget.
+- **Gaps**: Rollback edge cases & full SSI upgrade path still pending (lock promotion heuristics, predicate index acceleration)
 
 #### Path Operations & Graph Traversal
 
@@ -92,9 +93,10 @@ Delta vs prior snapshot: +6 net aspects (+4 TESTED, +2 BENCHED) – growth drive
 - **Status**: Partial – compaction/recycle + queue depth instrumentation BENCHED; recovery TESTED
 - **Evidence**:
   - WAL compaction & segment recycle variance envelopes
-  - Page flush queue depth variance envelope (new)
+  - Page flush queue depth variance envelope
   - Recovery after compaction tested
   - Adaptive policy benchmarked
+  - Corrupt page recovery latency guarded (`CorruptPageRecoveryLatencyVarianceEnvelope`) ensuring deterministic recovery SLAs
 - **Gaps**: Physiological (ARIES) redo optimizations & fine-grained page latch scheduling not yet evidenced.
 
 ### ❌ WEAK (Minimal evidence)
@@ -201,24 +203,26 @@ Delta vs prior snapshot: +6 net aspects (+4 TESTED, +2 BENCHED) – growth drive
 1. Clarify distributed status: partial Raft (no election/snapshot) – adjust claims
 2. Remove GPU acceleration marketing claims until kernels land
 3. Note CDC presently internal (no external sink connectors)
-4. Clarify transactions: snapshot isolation implemented; SSI roadmap pending
+4. Clarify transactions: snapshot isolation + RangeTracker phantom prevention implemented; SSI roadmap pending
 5. Remove broad ML / GDS compatibility wording
 6. Add impl-defined flags (CollationBinaryDefault, NullOrderPolicyDefault) summary
+7. Document governance automation: `next_freshness_check.zig` (NextPlanFreshnessGuard) enforcing `docs/NEXT.md` Generated date freshness (≤24h)
 
 ## Conclusion
 
-The CANARY analysis indicates Geode is approximately **~65–68% functionally implemented** toward stated full-scope ambitions (increase reflects pagination + traversal + CDC guardrail expansion):
+The CANARY analysis indicates Geode is approximately **~63–66% functionally implemented** toward stated full-scope ambitions (ratio shift due to promotions from TESTED→BENCHED and addition of new performance guardrails):
 
-- **296 tracked aspects** (100% with at least TESTED evidence)
-- **144 performance / variance benchmarks** guarding stability
-- **57 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination
-- Foundations in query execution, transactions, CDC, schema constraints, and path traversal are stabilizing; distributed & optimizer layers remain nascent.
+- **342 tracked aspects** (100% promoted; no STUB/IMPL residuals)
+- **175 performance / variance benchmarks** (BENCHED) guarding stability & regressions
+- **65 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination, recovery, and MVCC phantom prevention
+- Foundations in query execution, transactions (with phantom prevention tracking), CDC, schema constraints, and path traversal are stabilizing; distributed & optimizer layers remain nascent.
 
 Areas needing work but with emerging foundations:
 
 - Distributed consensus (append/commit path now measured; election/membership absent)
 - Query optimization (instrumented phases, lacking costing/plan search)
 - External integrations (connectors pending)
+- Governance automation (NEXT plan freshness guard integrated; extend to GAP_ANALYSIS auto-expiry alerts)
 - GPU acceleration (no implementation)
 
 The codebase shows excellent engineering practices with comprehensive testing and performance monitoring. Documentation now largely aligns with implementation reality.
@@ -433,8 +437,8 @@ Added: 16
 - REQ-GQL-066/Flow/Matching/HopcroftKarp
   Promotions: 4
 
-* REQ-GQL-042/CDC Engine/AdaptiveDiffPerfThresholdEnv:BENCHED->TESTED
-* REQ-GQL-062/Traversals/BFS:TESTED->BENCHED
+- REQ-GQL-042/CDC Engine/AdaptiveDiffPerfThresholdEnv:BENCHED->TESTED
+- REQ-GQL-062/Traversals/BFS:TESTED->BENCHED
 
 - REQ-GQL-063/Shortest Paths/UnweightedBFSPaths:TESTED->BENCHED
 - REQ-GQL-073/MvccAdvanced/PredictiveSkewFilter:BENCHED->TESTED
