@@ -92,6 +92,102 @@ CANARY: REQ=REQ-GQL-060; FEATURE="Core Graph Builders"; ASPECT=DirectedWeightedB
 CANARY: REQ=REQ-GQL-060; FEATURE="Core Graph Builders"; ASPECT=ConcurrencySafeGraph; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_060_ConcurrencySafe; BENCH=BenchmarkCANARY_REQ_GQL_060_ConcurrencySafe; OWNER=graph; UPDATED=2025-09-20
 ```
 
+## 10. Strategic High-Priority Requirements (New IDs 074–077)
+
+These four requirements were elevated to top strategic priority (Network Transport, Query Optimizer, Materialized Views, Full-Text Search). They are intentionally scoped to minimal, evidenceable skeletons that unblock downstream work while avoiding over-claiming. Each shall surface experimental flagger codes and land with both functional test(s) and (where specified) variance benchmarks guarding foundational performance characteristics.
+
+### REQ-GQL-074 — QUIC Multiplexing Transport
+
+Problem: Current TCP/stdio transports introduce head-of-line blocking and lack multiplexed stream semantics required for future distributed replication and low-latency interactive workloads.
+
+Scope (Initial Skeleton):
+
+- QUIC listener shim (single process, single certificate path) behind build/runtime flag.
+- Stream multiplexer abstraction (logical session → stream id mapping).
+- Frame encode/decode integration with existing protocol structs (no semantic change).
+- Latency probe harness measuring encode_ns / decode_ns / rtt_ns (JSON lines) for governance variance bench.
+- Flagger emission: `TransportQUICExperimental` when enabled.
+
+Out of Scope (Future): congestion control tuning, session resumption, TLS cert rotation, zero-copy buffers, Raft integration.
+
+Acceptance:
+
+1. Test `TestCANARY_REQ_GQL_074_QUICMultiplexingBasic` establishes QUIC session, sends HELLO + RUN_GQL echo query, validates ordered BINDINGS response.
+2. Benchmark `BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope` (N≥48 samples) enforces CV≤0.22, p95/mean≤2.55 for encode, decode, rtt metrics.
+3. CANARY aspects: QUICMultiplexing (IMPL→TESTED), QuicFrameLatencyVarianceEnvelope (BENCHED) with UPDATED date freshness.
+4. README updated enumerating experimental QUIC support; failure to provide flagger code causes governance failure.
+
+Evidence Plan: Functional test + latency variance envelope JSON; scanner promotion from IMPL→TESTED/BENCHED on merge.
+
+### REQ-GQL-075 — Advanced Cost Model (Enumeration Seed)
+
+Problem: Absence of a cost model prevents principled plan selection, blocking future join order optimization and physical operator choice.
+
+Scope (Seed):
+
+- Factor registry (row_count, selectivity_factor, cpu_cost, io_cost) with calibration harness.
+- Enumeration stub (2-way join reorder alternative) returning baseline + swapped order for evidence.
+- Calibration snapshot persistence (JSON) and drift report (non-failing unless >15% per-factor drift) for observability.
+- Variance bench guarding calibration runtime stability.
+- Flagger emission: `CostModelExperimental`.
+
+Out of Scope: histogram stats, n-way join search, dynamic re-optimization, complex cardinality estimation algorithms.
+
+Acceptance:
+
+1. Test `TestCANARY_REQ_GQL_075_AdvancedCostModelFactors` asserts non-zero factor capture & presence of at least two alternative plans.
+2. Benchmark `BenchmarkCANARY_REQ_GQL_075_CostModelCalibrationVarianceEnvelope` (CV≤0.20, p95/mean≤2.50) across calibration runs.
+3. CANARY aspects: AdvancedCostModel (IMPL→TESTED), CostModelCalibrationVarianceEnvelope (BENCHED), JoinEnumerationSeed (IMPL pending promotion).
+4. Drift report emitted when factor weight delta >15% (stdout JSON line) — informational unless threshold exceeded for two consecutive runs (future escalation slice).
+
+Evidence Plan: Factor snapshot, functional test, variance bench metrics; join enumeration seed promotion in later slice once >2-way joins present.
+
+### REQ-GQL-076 — Materialized View Refresh Scheduler
+
+Problem: Recomputing derived projections (aggregations/pattern subsets) inline leads to latency spikes; need scheduled refresh foundation for later incremental maintenance & query rewrite.
+
+Scope (Phase 1):
+
+- In-memory MV catalog and registration API (pattern + projection list).
+- Interval-based refresh loop with jitter smoothing & monotonic last_refresh timestamp.
+- REFRESH command stub for manual trigger.
+- Variance bench for refresh runtime stability on trivial view.
+- Flagger emission: `MaterializedViewsExperimental`.
+
+Out of Scope: incremental delta maintenance, persistence, automatic query rewrite, dependency graphs.
+
+Acceptance:
+
+1. Test `TestCANARY_REQ_GQL_076_RefreshSchedulerBasic` registers view, triggers manual refresh, asserts timestamp monotonicity.
+2. Benchmark `BenchmarkCANARY_REQ_GQL_076_RefreshSchedulerVarianceEnvelope` (CV≤0.22, p95/mean≤2.55) with N≥40 trivial refresh cycles.
+3. CANARY aspects: RefreshScheduler (IMPL→TESTED), RefreshSchedulerVarianceEnvelope (BENCHED).
+4. README experimental disclaimer present; governance doc_consistency unaffected (counts auto-aligned).
+
+Evidence Plan: Functional test + variance metrics JSON lines.
+
+### REQ-GQL-077 — Inverted Index Core (Full-Text Search Skeleton)
+
+Problem: Lack of text search access path limits query expressiveness for content-centric graph workloads (labels/properties with unstructured text).
+
+Scope (Phase 1):
+
+- Whitespace + lowercase tokenizer.
+- In-memory postings builder mapping term→list(node_id).
+- Build API (bulk ingestion) + simple term query executor returning deterministic ordered node ids.
+- Variance bench for build & single-term query latency.
+- Flagger emission: `FullTextSearchExperimental`.
+
+Out of Scope: persistent storage, ranking (BM25), phrase queries/positions, stemming, incremental updates, concurrency controls.
+
+Acceptance:
+
+1. Test `TestCANARY_REQ_GQL_077_InvertedIndexCoreBasic` indexes 5 docs and searches two terms; asserts deterministic result ordering and correct doc id sets.
+2. Benchmark `BenchmarkCANARY_REQ_GQL_077_InvertedIndexBuildQueryVarianceEnvelope` (build/query CV≤0.22, p95/mean≤2.55) across N≥40 samples.
+3. CANARY aspects: InvertedIndexCore (IMPL→TESTED), InvertedIndexVarianceEnvelope (BENCHED).
+4. README lists experimental status; GAP_ANALYSIS row updated upon promotion.
+
+Evidence Plan: Functional test + variance metrics; future slice may add positional postings & ranking.
+
 ### 8.2 DOT Codec
 
 - Canonical marshal (stable attribute ordering)

@@ -126,6 +126,80 @@ Update 2025-09-21 (post-slice execution):
 
 Each slice section below follows: ID, WHY, WHAT, ACCEPTANCE, ISO, DEPS, SCOPE, DRI, RISK.
 
+### Slice S-000: QUIC Multiplexed Transport (REQ-GQL-074)
+
+WHY: Establish low-latency, multiplexed session transport (QUIC) to reduce head-of-line blocking and enable future distributed features (Raft over QUIC, multi-tenant isolation) while measuring encode/decode latency variance.
+WHAT: Implement minimal QUIC listener shim (feature-flagged), frame mux/demux, connection pool abstraction, and latency probe harness capturing per-frame encode/decode + round-trip metrics; add stub fallback to TCP when disabled.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_074_QUICMultiplexingBasic` (establish, send HELLO, RUN_GQL echo, close) – ensures deterministic frame sequencing.
+- Bench: `BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope` (CV≤0.22, p95/mean≤2.55) over N≥48 samples; collects encode_ns, decode_ns, rtt_ns.
+- CANARY aspects added: QUICMultiplexing (IMPL→TESTED), QuicFrameLatencyVarianceEnvelope (BENCHED).
+- Flagger emits `TransportQUICExperimental` when enabled; README updated with experimental notice.
+- Governance passes (`zig run scripts/governance_ci.zig`).
+
+ISO: §14 execution environment (transport not normative) – aligns with diagnostics & framing semantics; no language semantics change.
+DEPS: Existing binary protocol framing; optional dependency on system QUIC library (stubbed internal implementation only in this slice).
+SCOPE IN: Listener shim, mux/demux abstraction, latency harness, flagger hook.
+SCOPE OUT: Congestion control tuning, TLS cert rotation automation, distributed consensus integration.
+DRI: wire (backup: networking).
+RISK: Medium (timing noise, potential flakiness) – mitigate with warm-up & median-of-window sampling.
+
+### Slice S-000A: Cost Model Phase & Advanced Enumeration Seed (REQ-GQL-075)
+
+WHY: Provide foundation for cost-based optimization (CBO) by introducing calibrated cardinality & cost factor aggregation plus enumeration skeleton necessary for future join reordering and access path selection.
+WHAT: Add `cost_model.zig` with factor registry (row_count, sel_factor, cpu_cost, io_cost), introduce enumeration driver stub producing logical alternatives (baseline + swapped join order for 2-way joins), instrument calibration harness persisting factor snapshots (JSON) for variance comparison.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_075_AdvancedCostModelFactors` (ensures factors recorded and non-zero for sample query set).
+- Bench: `BenchmarkCANARY_REQ_GQL_075_CostModelCalibrationVarianceEnvelope` (CV≤0.20, p95/mean≤2.50 for calibration time); failure code `VARIANCE_FAIL_COST_CAL`.
+- CANARY aspects: AdvancedCostModel (IMPL→TESTED), CostModelCalibrationVarianceEnvelope (BENCHED), JoinEnumerationSeed (IMPL) – enumeration still IMPL until promotion slice.
+- Stores calibration snapshot under `benchmarks/cost_model/last.json` (git-ignored) and delta compares to previous run emitting drift report (non-blocking unless >15% delta on any factor weight).
+
+ISO: §14 (optimization not normative) – internal implementation-defined behavior; factors flagged via Flagger `CostModelExperimental`.
+DEPS: Planner rewrite + phase timers.
+SCOPE IN: Factor registry, enumeration seed (2-way), variance bench, snapshot delta.
+SCOPE OUT: Full n-way join enumeration, histogram stats, selectivity estimation algorithms.
+DRI: planner.
+RISK: Low-Medium (overfitting to micro workload) – mitigate by using diverse sample queries & bounding factor drift.
+
+### Slice S-000B: Materialized View Refresh Scheduler (REQ-GQL-076)
+
+WHY: Enable foundational incremental view maintenance path and refresh cadence scheduling for future analytical acceleration and derived graph projections (pattern caches, aggregation rollups).
+WHAT: Introduce MV catalog (in-memory), view definition registration (pattern + projection list), on-demand REFRESH command stub, and scheduled refresh loop (interval-based) with execution timing variance guard.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_076_RefreshSchedulerBasic` (register, refresh, detect updated timestamp monotonicity).
+- Bench: `BenchmarkCANARY_REQ_GQL_076_RefreshSchedulerVarianceEnvelope` (CV≤0.22, p95/mean≤2.55 for refresh execution over N≥40 samples of trivial view).
+- CANARY aspects: RefreshScheduler (IMPL→TESTED), RefreshSchedulerVarianceEnvelope (BENCHED).
+- Flagger emits `MaterializedViewsExperimental` when any MV registered.
+- README updated with experimental note & no persistence guarantee disclaimer.
+
+ISO: §14 linear composition semantics preserved; MV layer is implementation-defined optimization.
+DEPS: Executor projection + plan reuse stubs.
+SCOPE IN: In-memory MV catalog, interval scheduler, refresh execution wrapper, variance bench.
+SCOPE OUT: Incremental delta maintenance, dependency graph, persistence, query rewrite to use MVs.
+DRI: engine.
+RISK: Low (scoped to in-memory scheduling) – mitigate with small code surface & feature flag guard.
+
+### Slice S-000C: Inverted Index Core (Full-Text Search Skeleton) (REQ-GQL-077)
+
+WHY: Provide search-oriented access path scaffold (tokenization + postings) enabling future text predicates and ranking integration without coupling to primary storage layout.
+WHAT: Implement minimal tokenizer (whitespace + lowercase), postings builder (in-memory), index build & simple term query executor returning node ids; add variance bench for build & query latency across sample documents; integrate flagger `FullTextSearchExperimental`.
+ACCEPTANCE:
+
+- Test: `TestCANARY_REQ_GQL_077_InvertedIndexCoreBasic` (index 5 docs, query yields expected doc id set; deterministic ordering).
+- Bench: `BenchmarkCANARY_REQ_GQL_077_InvertedIndexBuildQueryVarianceEnvelope` (build/query CV≤0.22, p95/mean≤2.55; prints metrics on failure with `VARIANCE_FAIL_FTS`).
+- CANARY aspects added: InvertedIndexCore (IMPL→TESTED), InvertedIndexVarianceEnvelope (BENCHED).
+- README & GAP_ANALYSIS updated to list feature under experimental once promoted.
+
+ISO: Not normative (implementation-defined optimization / access path) – must not alter query semantics; only adds optional predicate path in future.
+DEPS: None (standalone module + test harness).
+SCOPE IN: Tokenizer, postings structure, build & query API, variance bench.
+SCOPE OUT: Ranking (BM25), phrase queries, positional postings, persistence, concurrency.
+DRI: engine.
+RISK: Low (in-memory only) – mitigate with bounded test corpus and deterministic token ordering.
+
 ### Slice S-001: Pagination Execution Variance (REQ-GQL-004)
 
 WHY: Ensure stable latency for streaming page pulls; complements existing planning variance envelope.

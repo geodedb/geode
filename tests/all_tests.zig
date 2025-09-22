@@ -65,6 +65,10 @@ const _path_quantifier_tiebreak_stress = @import("test_path_quantifier_tiebreak_
 const _benchmark_wal_redo_optimized_variance = @import("benchmark_wal_redo_optimized_variance.zig");
 const _benchmark_path_multibranch_variance = @import("benchmark_path_multibranch_variance.zig");
 const _benchmark_raft_commit_advancement_variance = @import("benchmark_raft_commit_advancement_variance.zig");
+const _benchmark_quic_frame_latency_variance = @import("benchmark_quic_frame_latency_variance.zig");
+const _benchmark_advanced_cost_model_calibration_variance = @import("benchmark_advanced_cost_model_calibration_variance.zig");
+const _benchmark_mv_refresh_jitter_variance = @import("benchmark_mv_refresh_jitter_variance.zig");
+const _benchmark_inverted_index_lookup_variance = @import("benchmark_inverted_index_lookup_variance.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

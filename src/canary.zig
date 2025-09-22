@@ -20,6 +20,15 @@
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Backfill Latency"; ASPECT=API; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-016; FEATURE="Weighted Path Cost"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathWeightedCost; OWNER=planner; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-028; FEATURE="Recovery After Compaction"; ASPECT=Storage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_RecoveryAfterCompaction; OWNER=storage; UPDATED=2025-09-20
+// NOTE: Original provisional IDs 070–073 conflicted with existing REQUIREMENTS.md (String Search, GreyCardinal, HyperledgerGraphMVCC, MvccAdvanced)
+// Re-seated strategic gap IDs to 074–077 to avoid collision.
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICMultiplexing; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICMultiplexing; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Query Optimizer"; ASPECT=AdvancedCostModel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdvancedCostModel; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Query Optimizer"; ASPECT=AdvancedCostModelCalibrationVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-076; FEATURE="Materialized Views"; ASPECT=RefreshScheduler; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_076_RefreshScheduler; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-076; FEATURE="Materialized Views"; ASPECT=MvRefreshLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_076_MvRefreshLatencyVarianceEnvelope; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-077; FEATURE="Full-Text Search"; ASPECT=InvertedIndexCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_077_InvertedIndexCore; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-077; FEATURE="Full-Text Search"; ASPECT=InvertedIndexQueryLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_077_InvertedIndexQueryLatencyVarianceEnvelope; OWNER=engine; UPDATED=2025-09-22
 
 pub fn placeholder() void {
     // This file intentionally left with a no-op function so Zig build includes it.

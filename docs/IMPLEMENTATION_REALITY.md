@@ -1,16 +1,19 @@
 # Geode Implementation Reality Report
 
-_Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors & variance envelope sync)_
+Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors & variance envelope sync; updated strategic gap IDs 074–077)
 
 ## Executive Summary
 
 Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, and NEXT plan freshness automation:
 
-- **344 aspects** (tracked feature/aspect evidence rows)
-- **169 TESTED** (~49.1%) – functional tests present (notable recent: RangeTrackerPhantomPrevention, RangeTrackerPredicateReadConsistency, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, AdditionalPlannerPhaseTests)
-- **175 BENCHED** (~51.5%) – performance / variance / jitter envelopes (new: RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
-- **0 STUB**, **0 IMPL (unpromoted)** – 100% promoted
-- **65 variance envelopes** (all passing CV & p95/mean thresholds; added RangeTrackerOverheadVarianceEnvelope & CorruptPageRecoveryLatencyVarianceEnvelope; net +1 after consolidation of a deprecated pagination planning envelope)
+- **350 aspects** (tracked feature/aspect evidence rows)
+  350 aspects (tracked feature/aspect evidence rows)
+- **173 TESTED** (~49.4%) – functional tests present (notable recent: RangeTrackerPhantomPrevention, RangeTrackerPredicateReadConsistency, PlanCostModelCalibrationRanking, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, AdditionalPlannerPhaseTests)
+  173 TESTED (~49.4%)
+- **175 BENCHED** (~50.0%) – performance / variance / jitter envelopes (new: RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlanSelectionPipelineVarianceEnvelope, PathCacheEntropyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
+  175 BENCHED (~50.0%)
+- **0 STUB**, **0 IMPL (unpromoted)** – all governance guards (EvidenceDeltaGuard, RealityFreshnessGuard) now TESTED; strategic gaps (REQ-GQL-074..077) TESTED baseline; variance benches pending for promotion to BENCHED
+- **65+ variance envelopes** (all passing CV & p95/mean thresholds; added RangeTrackerOverheadVarianceEnvelope & CorruptPageRecoveryLatencyVarianceEnvelope; net +1 after consolidation of a deprecated pagination planning envelope)
 
 Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassification reflects maturation of several functional features into performance‑guarded states plus addition of new recovery and MVCC guardrails. TESTED decrease is expected due to promotions into BENCHED status categories (mutually exclusive lifecycle states in evidence ledger).
 
@@ -182,7 +185,7 @@ Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassi
 1. **Leader election robustness / membership change / snapshotting (Raft)**
 2. **GPU acceleration** (CUDA/OpenCL kernels)
 3. **Graph ML / advanced analytics (PageRank, centrality, community)**
-4. **QUIC transport implementation (currently stub)**
+4. **QUIC transport implementation (basic multiplexing TESTED; frame latency variance bench added)**
 5. **Materialized views maintenance**
 6. **Full-text search indexing/query**
 7. **Multi-graph / namespace isolation**
@@ -198,7 +201,7 @@ Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassi
 4. Add MVCC phantom / predicate read consistency tests (toward SSI)
 5. Begin cost-based optimizer skeleton with phase tests (rewrite/cardinality integration)
 
-### Documentation Updates Needed
+### Documentation Updates Needed (Strategic Gap ID Realignment)
 
 1. Clarify distributed status: partial Raft (no election/snapshot) – adjust claims
 2. Remove GPU acceleration marketing claims until kernels land
@@ -207,6 +210,7 @@ Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassi
 5. Remove broad ML / GDS compatibility wording
 6. Add impl-defined flags (CollationBinaryDefault, NullOrderPolicyDefault) summary
 7. Document governance automation: `next_freshness_check.zig` (NextPlanFreshnessGuard) enforcing `docs/NEXT.md` Generated date freshness (≤24h)
+8. Strategic requirement IDs: REQ-GQL-074 (QUICMultiplexing), 075 (AdvancedCostModel), 076 (RefreshScheduler), 077 (InvertedIndexCore) – landed as TESTED baseline; forthcoming benches will transition to BENCHED aspects.
 
 ## Conclusion
 
