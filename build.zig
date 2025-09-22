@@ -143,8 +143,28 @@ pub fn build(b: *std.Build) void {
     const txn_mod_for_phantom_tests = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     txn_mod_for_phantom_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     const phantom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_anomaly.zig"), .target = target, .optimize = optimize }) });
+    const planner_enumerator_mod = b.createModule(.{ .root_source_file = b.path("src/planner/enumerator.zig"), .target = target, .optimize = optimize });
+    const planner_enumerator_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_enumerator.zig"), .target = target, .optimize = optimize }) });
+    planner_enumerator_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    const path_varlen_predicate_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_path_varlen_predicate.zig"), .target = target, .optimize = optimize }) });
+    const txn_manager_mod_for_write_skew = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
+    txn_manager_mod_for_write_skew.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
+    const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
+    write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
+    const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
+    const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
+    planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    // Planner enumeration pruning tests
+    const planner_prune_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_prune.zig"), .target = target, .optimize = optimize }) });
+    planner_prune_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
     test_step.dependOn(&phantom_tests.step);
+    test_step.dependOn(&planner_enumerator_tests.step);
+    test_step.dependOn(&path_varlen_predicate_tests.step);
+    test_step.dependOn(&write_skew_tests.step);
+    test_step.dependOn(&redo_delta_tests.step);
+    test_step.dependOn(&planner_plan_selection_tests.step);
+    test_step.dependOn(&planner_prune_tests.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
@@ -518,4 +538,5 @@ pub fn build(b: *std.Build) void {
     });
     const run_zig_client_tests = b.addRunArtifact(zig_client_tests);
     test_clients_step.dependOn(&run_zig_client_tests.step);
+
 }
