@@ -22,7 +22,7 @@ endif
 
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
-.PHONY: canary canary-verify governance-check
+.PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test
@@ -92,6 +92,11 @@ help:
 	@echo "  make fmt         - Format all code"
 	@echo "  make clean       - Clean build artifacts"
 	@echo "  make ci          - Run CI pipeline (build, test, fuzz, bench)"
+	@echo "  make update-status-hash - Sync GAP_ANALYSIS hash marker with current status.json"
+	@echo "  make governance-delta     - Show added/removed REQ IDs between status_prev.json and status.json"
+	@echo "  make governance-dry-run   - Non-failing governance-check wrapper (always exit 0)"
+	@echo "  make governance-freshness-prewarn - Nightly freshness pre-warning (50d threshold)"
+	@echo "  make governance-aggregate - Aggregate nightly governance signals into one JSON"
 
 build:
 	$(ZIG) build $(ZIG_FLAGS)
@@ -158,6 +163,49 @@ fuzz:
 
 bench:
 	$(ZIG) build bench $(ZIG_FLAGS)
+
+governance-check: build
+	@if [ -x scripts/governance-check.sh ]; then \
+		scripts/governance-check.sh || exit 2; \
+	else \
+		echo "scripts/governance-check.sh missing or not executable"; exit 2; \
+	fi
+
+# Convenience target: recompute sha256 of status.json and update marker in GAP_ANALYSIS.md
+update-status-hash:
+	@if [ -x scripts/update-status-hash.sh ]; then \
+		scripts/update-status-hash.sh; \
+	else \
+		echo "scripts/update-status-hash.sh missing or not executable"; exit 2; \
+	fi
+
+governance-delta:
+	@if [ -x scripts/governance-delta.sh ]; then \
+		scripts/governance-delta.sh; \
+	else \
+		echo "scripts/governance-delta.sh missing or not executable"; exit 2; \
+	fi
+
+governance-dry-run:
+	@if [ -x scripts/governance-dry-run.sh ]; then \
+		scripts/governance-dry-run.sh; \
+	else \
+		echo "scripts/governance-dry-run.sh missing or not executable"; exit 2; \
+	fi
+
+governance-freshness-prewarn:
+	@if [ -x scripts/nightly_freshness_guard.sh ]; then \
+		THRESHOLD_DAYS=50 scripts/nightly_freshness_guard.sh; \
+	else \
+		echo "scripts/nightly_freshness_guard.sh missing or not executable"; exit 2; \
+	fi
+
+governance-aggregate:
+	@if [ -x scripts/nightly_governance_aggregate.sh ]; then \
+		scripts/nightly_governance_aggregate.sh; \
+	else \
+		echo "scripts/nightly_governance_aggregate.sh missing or not executable"; exit 2; \
+	fi
 
 tools:
 	$(ZIG) build tools $(ZIG_FLAGS)

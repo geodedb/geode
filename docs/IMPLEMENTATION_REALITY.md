@@ -1,6 +1,10 @@
 # Geode Implementation Reality Report
 
+// CANARY: REQ=REQ-GQL-024; FEATURE="Implementation Reality Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
+
 Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors & variance envelope sync; updated strategic gap IDs 074–077)
+
+// NOTE: Future slice planning content moved to `NEXT.md` to avoid redundancy. This file remains a snapshot of current implemented reality only.
 
 ## Executive Summary
 
@@ -16,6 +20,10 @@ Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTr
 - **70+ variance envelopes** (all passing CV & p95/mean thresholds; added AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope; continued consolidation of legacy pagination envelope)
 
 Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassification reflects maturation of several functional features into performance‑guarded states plus addition of new recovery and MVCC guardrails. TESTED decrease is expected due to promotions into BENCHED status categories (mutually exclusive lifecycle states in evidence ledger).
+
+### Priority Pivot (2025-09-22)
+
+Governance automation (freshness, hash integrity, delta detection) is now considered baseline hygiene and will not consume active roadmap slices unless a regression appears. Near-term emphasis shifts to FEATURE DELIVERY (planner adaptivity, MVCC stress envelopes, QUIC multiplexing, spill pipeline completeness, inverted index, cost model enumeration). The former governance slice `S-020` has been relocated to a maintenance section in `NEXT.md` to elevate visibility of feature-centric work.
 
 ## Implementation Status by Component
 

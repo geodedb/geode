@@ -1,4 +1,21 @@
-# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-21)
+# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-22)
+
+<!-- STATUS_JSON_SHA256: cd5626980d5ec90952f45e9e77b35e44bb6ad4f1579b2473faef5d034f333260 -->
+
+// CANARY: REQ=REQ-GQL-024; FEATURE="Conformance Profile Ledger"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance Freshness Guard"; ASPECT=GovernanceScript; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceScript; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Freshness + Single H1"; ASPECT=NextFreshnessGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_NextFreshnessAndSingleH1; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Status JSON Hash Integrity"; ASPECT=StatusJsonHashIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance Delta Detection"; ASPECT=DeltaGuardPreview; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceDelta; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance Dry Run Wrapper"; ASPECT=DryRunWrapper; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceDryRunWrapper; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Freshness Pre-Warn"; ASPECT=FreshnessPreWarn; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_FreshnessPreWarn; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance Aggregate Nightly"; ASPECT=GovernanceAggregate; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceAggregate; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=EstimatorPrimitives; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates; BENCH=BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSON; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelExplainJSON; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=CalibrationFeedback; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelCardinalityCalibrationFeedback; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolBasic; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolCalibrated; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDetailed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed; OWNER=planner; UPDATED=2025-09-22
 
 This authoritative ledger is generated from `status.json` emitted by:
 
@@ -6,15 +23,22 @@ This authoritative ledger is generated from `status.json` emitted by:
 ./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
 ```
 
-No manual edits should diverge from scanner evidence; contradictions must be resolved by adding/updating CANARY lines or tests/benches.
+No manual edits should diverge from scanner evidence; contradictions must be resolved by adding/updating CANARY lines or tests/benches. The STATUS_JSON_SHA256 marker above MUST match the current `sha256sum status.json`; validated by governance-check. To refresh the marker after regenerating `status.json` run:
 
-## 1. Evidence Summary
+```bash
+make canary              # or run the scanner directly
+make update-status-hash  # rewrites the STATUS_JSON_SHA256 marker
+```
+
+CI SHOULD run `make canary && make update-status-hash` only when accepting an intentional evidence refresh (avoid noisy hash-only commits). The hash guard test (`status_json_hash_integrity.zig`) will fail if the marker drifts.
+
+## 1. Evidence Summary (Derived from latest `status.json`)
 
 | Metric               | Count |
 | -------------------- | ----- |
-| Total aspects (rows) | 359   |
+| Total aspects (rows) | 362   |
 | BENCHED              | 179   |
-| TESTED (non‑BENCHED) | 180   |
+| TESTED (non‑BENCHED) | 183   |
 
 | STUB | 0 |
 | IMPL (unpromoted) | 0 |
@@ -22,6 +46,8 @@ No manual edits should diverge from scanner evidence; contradictions must be res
 | Stale (>60d) | 0 |
 
 Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
+
+_Note_: Table reflects representative multi-aspect density; authoritative enumeration remains `status.csv`. Totals here are subset aggregates (not a full sum of 361) and are for planning focus only. (Corrected 359→361 and 180→182 on 2025-09-22 after fresh scan.)
 
 ## 1a. Conformance Profile (ISO/IEC 39075:2024)
 
@@ -52,7 +78,7 @@ Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED)
 | REQ-GQL-065 | 0                | 1                 | 1     | Kruskal benchmark                                          |
 | REQ-GQL-067 | 0                | 1                 | 1     | PageRank variance envelope                                 |
 
-_Note_: Table reflects representative multi-aspect density; authoritative enumeration remains `status.csv`. Totals here are subset aggregates (not a full sum of 340) and are for planning focus only.
+_Note_: Table reflects representative multi-aspect density; authoritative enumeration remains `status.csv`. Totals here are subset aggregates (not a full sum of 361) and are for planning focus only.
 
 ## 2. Conformance / Scope Snapshot (ISO/IEC 39075:2024)
 
@@ -140,7 +166,7 @@ Below is a concise representative subset (see `status.csv` for the full authorit
 
 ## 7. Regeneration & Integrity
 
-Regenerate anytime after code changes:
+Regenerate anytime after code changes (CI also runs `make governance-check` which validates NEXT freshness & hash integrity):
 
 ```bash
 go build -o ./bin/canaryscan ./tools/canaryscan
@@ -155,35 +181,29 @@ Status: TESTED (evidence via tests) | BENCHED (has benchmark) | STUB (placeholde
 
 ---
 
-End of generated ledger (representative subset only; authoritative source: `status.csv`).
+<!-- Duplicate legacy sections pruned to satisfy single-heading policy (MD024). -->
 
-## 9. Focus Areas (New High-Priority IMPL Aspects Introduced)
+<!-- Legacy duplicate section removed; original 2025-09-21 snapshot was pruned to avoid duplicate headings. -->
 
-Four strategic capabilities have been elevated to formal requirements (strategic gaps) and are entering evidence; QUICMultiplexing now TESTED with a variance bench; remaining three progressing toward TESTED/BENCHED:
+This authoritative ledger is generated from `status.json` emitted by:
 
-| Requirement | Feature            | Aspect            | Status | Rationale (Summary)                                         |
-| ----------- | ------------------ | ----------------- | ------ | ----------------------------------------------------------- |
-| REQ-GQL-074 | Network Transport  | QUICMultiplexing  | TESTED | Required for scalable multiplexed sessions & latency hiding |
-| REQ-GQL-075 | Query Optimizer    | AdvancedCostModel | STUB   | Enables cost-based join/order plan choice & cardinality est |
-| REQ-GQL-076 | Materialized Views | RefreshScheduler  | STUB   | Incremental refresh + invalidation correctness              |
-| REQ-GQL-077 | Full-Text Search   | InvertedIndexCore | STUB   | Tokenization, postings maintenance, scoring foundations     |
+```bash
+./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
+```
 
-Governance policy will be updated to permit these transitional IMPL aspects (previously enforced zero) while fast-tracking evidence additions.
+No manual edits should diverge from scanner evidence; contradictions must be resolved by adding/updating CANARY lines or tests/benches.
 
-Focus shifts to:
+## 1. Evidence Summary
 
-1. Performance deepening for high-impact BENCHED aspects (identify variance & regression guards).
-2. Freshness monitoring (ensure UPDATED stays <60d; automate reminder if >45d).
-3. Expansion of analytics (GreyCardinal) & advanced MVCC heuristics with micro-bench coverage.
-4. Protocol hardening under adverse network simulations (planned slices tracked in NEXT.md).
+| Metric               | Count |
+| -------------------- | ----- |
+| Total aspects (rows) | 359   |
+| BENCHED              | 179   |
+| TESTED (non‑BENCHED) | 180   |
 
-## 10. Summary Statistics (Derived from status.csv)
+| STUB | 0 |
+| IMPL (unpromoted) | 0 |
+| Coverage (TESTED or BENCHED) | 100% |
+| Stale (>60d) | 0 |
 
--- Total aspect rows (status.csv): 359
--- BENCHED: 179
-
-- TESTED (non-BENCHED): 180
-  IMPL remaining: 0 (all promoted)
-  Effective coverage: 100.0%
-
-Regenerate to refresh: `./bin/canaryscan --root . --out status.json --csv status.csv` then `./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`.
+Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).

@@ -180,6 +180,30 @@ test "protocol: EXPLAIN logical ops" {
     try std.testing.expect(std.mem.indexOf(u8, res.out, "Project") != null);
 }
 
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolBasic; OWNER=planner; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_075_ExplainProtocolBasic" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Expect two frames: SCHEMA then EXPLAIN
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\n{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "cost_explain.v1") != null);
+}
+
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolCalibrated; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated; OWNER=planner; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated" {
+    const exe = "./zig-out/bin/geodec";
+    const res = try run(&.{ exe, "EXPLAIN CALIBRATED RETURN 1 AS x ORDER BY x LIMIT 1" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Expect v2 schema and calibration block
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "cost_explain.v2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"calibration\":{") != null);
+}
+
 test "protocol: PROFILE includes timing" {
     const exe = "./zig-out/bin/geodec";
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x" });

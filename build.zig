@@ -196,6 +196,9 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("geode", root_mod);
     geoded_exe.root_module.addImport("gql", gql_mod);
     geoded_exe.root_module.addImport("protocol", protocol_mod);
+    // Planner cost model modules (enumeration seed, explain) with distinct aliases
+    const planner_cost_explain_mod = b.createModule(.{ .root_source_file = b.path("src/planner/cost_explain.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("planner_cost_explain", planner_cost_explain_mod);
     const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("sentinel", sentinel_mod);
     geoded_exe.root_module.addOptions("build_options", build_opts);

@@ -15,6 +15,8 @@ const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("tools/cert_gen.zig");
 const mvcc = @import("server/txn/mvcc.zig");
+// Cost model modules (planner)
+const cost_explain = @import("planner_cost_explain");
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
@@ -2004,8 +2006,31 @@ fn processMessage(
         .RUN_GQL => |rq| {
             state.resetResult();
             var text = rq.text;
-            if (std.mem.startsWith(u8, text, "PROFILE ")) text = text[8..];
-            if (std.mem.startsWith(u8, text, "EXPLAIN ")) text = text[8..];
+            // Detect EXPLAIN / EXPLAIN CALIBRATED / PROFILE prefixes; track modes then strip
+            var explain_mode = false;
+            var explain_calibrated = false;
+            var profile_mode = false;
+            if (std.mem.startsWith(u8, text, "EXPLAIN CALIBRATED ")) {
+                explain_mode = true;
+                explain_calibrated = true;
+                text = text["EXPLAIN CALIBRATED ".len..];
+            } else if (std.mem.eql(u8, text, "EXPLAIN CALIBRATED")) {
+                explain_mode = true;
+                explain_calibrated = true;
+                text = "";
+            } else if (std.mem.startsWith(u8, text, "EXPLAIN ")) {
+                explain_mode = true;
+                text = text["EXPLAIN ".len..];
+            } else if (std.mem.eql(u8, text, "EXPLAIN")) {
+                explain_mode = true;
+                text = "";
+            } else if (std.mem.startsWith(u8, text, "PROFILE ")) {
+                profile_mode = true;
+                text = text["PROFILE ".len..];
+            } else if (std.mem.eql(u8, text, "PROFILE")) {
+                profile_mode = true;
+                text = "";
+            }
             var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = !g_order_keys_expr, .forbid_orderby_calls = !g_order_keys_expr }) catch return try gpa.dupe(u8, "");
             defer if (parse_res == .Ok) parse_res.Ok.deinit();
             switch (parse_res) {
@@ -2052,7 +2077,9 @@ fn processMessage(
                             var oks: [][]const u8 = &.{};
                             var cols: []const protocol.SchemaCol = &.{};
                             var run_code: diagnostics.Code = .IllegalOrderKey;
-                            const rows = evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, null, &run_code, null) catch &.{};
+                            var timings: StageTimings = .{};
+                            const need_timings = profile_mode or explain_calibrated;
+                            const rows = evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, if (need_timings) &timings else null, &run_code, null) catch &.{};
                             state.last_columns = cols;
                             state.last_ordered = ord;
                             state.last_order_keys = oks;
@@ -2060,7 +2087,126 @@ fn processMessage(
                             state.page_items = @constCast(rows);
                             state.page_index = 0;
                             state.active_result = true;
-                            return protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(ord, q.ret.distinct)) catch try gpa.dupe(u8, "");
+                            const flags = computeBaseFlags(ord, q.ret.distinct);
+                            const schema_line = protocol.buildSchemaLine(gpa, state.last_columns, &.{}, flags) catch return try gpa.dupe(u8, "");
+                            if (!explain_mode and !profile_mode) return schema_line;
+                            // Build explain chain when requested (emit EXPLAIN frame immediately, THEN return bindings via PULL normally)
+                            if (explain_mode) {
+                                // Build linear op chain approximation using cost model seed descriptors.
+                                var ops_buf: [8]cost_explain.seed.OpDescriptor = undefined;
+                                var opn: usize = 0;
+                                ops_buf[opn] = .{ .kind = .Scan };
+                                opn += 1;
+                                ops_buf[opn] = .{ .kind = .Project };
+                                opn += 1;
+                                if (q.ret.distinct) {
+                                    ops_buf[opn] = .{ .kind = .Aggregate };
+                                    opn += 1;
+                                }
+                                if (ord) {
+                                    ops_buf[opn] = .{ .kind = .Sort };
+                                    opn += 1;
+                                }
+                                if (q.offset != null) {
+                                    ops_buf[opn] = .{ .kind = .Filter, .selectivity = 0.5 };
+                                    opn += 1;
+                                }
+                                if (q.limit != null) {
+                                    ops_buf[opn] = .{ .kind = .Limit };
+                                    opn += 1;
+                                }
+                                const ops = ops_buf[0..opn];
+                                var actual_rows_fixed: [8]f64 = undefined;
+                                var actual_slice: ?[]const f64 = null;
+                                if (explain_calibrated and need_timings) {
+                                    var ai: usize = 0;
+                                    actual_rows_fixed[ai] = @floatFromInt(timings.project_rows_in);
+                                    ai += 1; // scan input
+                                    actual_rows_fixed[ai] = @floatFromInt(timings.project_rows_out);
+                                    ai += 1; // project
+                                    if (q.ret.distinct) {
+                                        actual_rows_fixed[ai] = @floatFromInt(timings.distinct_rows_out);
+                                        ai += 1;
+                                    }
+                                    if (ord) {
+                                        actual_rows_fixed[ai] = @floatFromInt(timings.sort_rows_out);
+                                        ai += 1;
+                                    }
+                                    if (q.offset != null) {
+                                        actual_rows_fixed[ai] = @floatFromInt(timings.offset_rows_out);
+                                        ai += 1;
+                                    }
+                                    if (q.limit != null) {
+                                        actual_rows_fixed[ai] = @floatFromInt(timings.limit_rows_out);
+                                        ai += 1;
+                                    }
+                                    actual_slice = actual_rows_fixed[0..ai];
+                                }
+                                const explain_json = if (explain_calibrated and actual_slice != null) cost_explain.explainChainWithCalibration(gpa, ops, actual_slice, null) catch null else cost_explain.explainChain(gpa, ops) catch null;
+                                if (explain_json) |ej| {
+                                    defer gpa.free(ej);
+                                    const explain_line = protocol.buildExplainLine(gpa, ej, flags) catch null;
+                                    if (explain_line) |el| {
+                                        // Concatenate schema + explain into single response (client will expect both before PULL)
+                                        var comb = std.ArrayList(u8).initCapacity(gpa, 0) catch return schema_line;
+                                        defer comb.deinit(gpa);
+                                        comb.appendSlice(gpa, schema_line) catch {};
+                                        comb.appendSlice(gpa, el) catch {};
+                                        gpa.free(el);
+                                        return comb.toOwnedSlice(gpa) catch schema_line; // if OOM fallback returns schema only
+                                    }
+                                }
+                                return schema_line;
+                            }
+                            if (profile_mode) {
+                                // Reuse existing PROFILE emission path: build profile line now.
+                                var prof_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch return schema_line;
+                                defer prof_buf.deinit(gpa);
+                                var wprof = prof_buf.writer(gpa);
+                                wprof.writeAll("{") catch {};
+                                wprof.writeAll("\"profile_version\":2,\"ops\":[") catch {};
+                                var printed_global: usize = 0;
+                                const emit = struct {
+                                    fn op(w: anytype, printed: *usize, name: []const u8, rows_in: usize, rows_out: usize, time_ns: i128, bytes_out: usize, bytes_alloc: usize) void {
+                                        if (printed.* > 0) w.writeAll(",") catch {};
+                                        w.writeAll("{\"op\":\"") catch {};
+                                        w.writeAll(name) catch {};
+                                        w.writeAll("\",\"rows_in\":") catch {};
+                                        w.print("{d}", .{rows_in}) catch {};
+                                        w.writeAll(",\"rows_out\":") catch {};
+                                        w.print("{d}", .{rows_out}) catch {};
+                                        w.writeAll(",\"time_ns\":") catch {};
+                                        w.print("{d}", .{time_ns}) catch {};
+                                        w.writeAll(",\"bytes_out\":") catch {};
+                                        w.print("{d}", .{bytes_out}) catch {};
+                                        w.writeAll(",\"bytes_alloc\":") catch {};
+                                        w.print("{d}", .{bytes_alloc}) catch {};
+                                        w.writeAll("}") catch {};
+                                        printed.* += 1;
+                                    }
+                                };
+                                if (timings.project_ns != 0) emit.op(wprof, &printed_global, "Project", timings.project_rows_in, timings.project_rows_out, timings.project_ns, timings.project_bytes_out, timings.project_bytes_alloc);
+                                if (timings.distinct_ns != 0) emit.op(wprof, &printed_global, "Distinct", timings.distinct_rows_in, timings.distinct_rows_out, timings.distinct_ns, timings.distinct_bytes_out, timings.distinct_bytes_alloc);
+                                if (timings.sort_ns != 0) emit.op(wprof, &printed_global, "Sort", timings.sort_rows_in, timings.sort_rows_out, timings.sort_ns, timings.sort_bytes_out, timings.sort_bytes_alloc);
+                                if (timings.offset_ns != 0) emit.op(wprof, &printed_global, "Offset", timings.offset_rows_in, timings.offset_rows_out, timings.offset_ns, timings.offset_bytes_out, timings.offset_bytes_alloc);
+                                if (timings.limit_ns != 0) emit.op(wprof, &printed_global, "Limit", timings.limit_rows_in, timings.limit_rows_out, timings.limit_ns, timings.limit_bytes_out, timings.limit_bytes_alloc);
+                                wprof.writeAll("],\"totals\":{}}") catch {}; // ignoring error intentionally for minimal profile JSON
+                                wprof.writeAll("}") catch {};
+                                const prof_json = prof_buf.toOwnedSlice(gpa) catch return schema_line;
+                                if (protocol.buildProfileLine(gpa, prof_json, flags)) |profile_line| {
+                                    gpa.free(prof_json);
+                                    var comb2 = std.ArrayList(u8).initCapacity(gpa, 0) catch return schema_line;
+                                    defer comb2.deinit(gpa);
+                                    comb2.appendSlice(gpa, schema_line) catch {};
+                                    comb2.appendSlice(gpa, profile_line) catch {};
+                                    gpa.free(profile_line);
+                                    return comb2.toOwnedSlice(gpa) catch schema_line;
+                                } else |_| {
+                                    gpa.free(prof_json);
+                                    return schema_line;
+                                }
+                            }
+                            return schema_line;
                         },
                         else => return try gpa.dupe(u8, ""),
                     }
