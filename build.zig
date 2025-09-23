@@ -138,6 +138,14 @@ pub fn build(b: *std.Build) void {
     wal_compaction_pipeline_mod_tests.addImport("wal", wal_mod_for_tests);
     custom_tests.root_module.addImport("storage/wal_compaction_pipeline.zig", wal_compaction_pipeline_mod_tests);
 
+    // Selectivity estimator module (frequency sampler + adaptive feedback)
+    const selectivity_estimator_mod_tests = b.createModule(.{ .root_source_file = b.path("src/optimizer/selectivity_estimator.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("optimizer/selectivity_estimator.zig", selectivity_estimator_mod_tests);
+
+    // Interactive REPL module (launch prompt skeleton)
+    const repl_mod_tests = b.createModule(.{ .root_source_file = b.path("src/client/repl.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("client/repl.zig", repl_mod_tests);
+
     // Add transport/quic module for QUIC canary tests
     const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     const vendor_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });

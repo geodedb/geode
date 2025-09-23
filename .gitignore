@@ -20,6 +20,7 @@ auth
 .direnv/
 .zig-cache/
 zig-out/
+status_new*
 
 # build folders
 bin/

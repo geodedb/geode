@@ -18,9 +18,9 @@ Purpose: Maintain a minimal, actionable slice backlog strictly limited to forwar
 | S-103 | REQ-GQL-081 | Monitoring Prometheus Export        | Expose metrics externally     | Endpoint/core metrics TESTED; variance envelope BENCHED (cv<=0.22 p95<=2.55) | TEST/BEN | ops       |
 | S-104 | REQ-GQL-082 | Backup/Restore Primitives           | Ensure recoverability         | Full & incremental backup tests; restore integrity checksum match            | DONE     | storage   |
 | S-105 | REQ-GQL-083 | WAL Compaction Pipeline             | Manage log growth             | Checkpoint selection + compaction job test + variance bench (CV≤0.21)        | DONE     | storage   |
-| S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | TEST/BEN | optimizer |
-| S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | TEST     | ops       |
-| S-108 | REQ-GQL-086 | Interactive REPL Core               | Developer usability           | Launch, multiline, history, meta, txn indicator tests (all STUB→TESTED)      | TEST     | client    |
+| S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | DONE     | optimizer |
+| S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | DONE     | ops       |
+| S-108 | REQ-GQL-086 | Interactive REPL Launch Prompt      | Developer usability           | Launch prompt emits `geode>` exactly once (ReplLaunchPrompt TESTED)          | DONE     | client    |
 | S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | BENCH    | planner   |
 | S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | BENCH    | planner   |
 | S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | TEST     | tooling   |
@@ -50,6 +50,8 @@ The following slice has been moved out of the feature-priority backlog. Governan
 
 ### Recent Slice Landing (Informational)
 
+// S-112 (REQ-GQL-086 Interactive REPL MultilineBuffering) — Multiline accumulation with semicolon and blank line flush implemented; aspect promoted to TESTED (2025-09-23).
+
 ### Completed Slices (Removed from Active Backlog)
 
 - S-101 (REQ-GQL-078 Cluster Coordinator Core) — LeaderStub, ShardMapStub, RaftInterfaceValidation all TESTED (2025-09-23).
@@ -66,3 +68,14 @@ The following slice has been moved out of the feature-priority backlog. Governan
   - Enhancement (median + summary): aggregator now also emits `median_cv`, `median_p95_mean_ratio`, and a concise `summary_reason` field (`all_criteria_met` or first failing criterion) to simplify dashboard filtering and streak evaluation.
   - Enhancement (extended medians + txt mode): added `median_trim_cv`, `median_outlier_ratio`, and optional human-readable text output via `FED_LATENCY_FORMAT=txt` (single-line summary). JSON path unchanged.
   - New tool: `fed_latency_streak` (STATUS=IMPL) computes current/longest promotion_ready streak from aggregator JSONL history and eligibility (default ≥3) with txt/JSON dual output; includes CANARY marker `LatencyAggregateStreak`.
+
+### Upcoming REPL Aspect Micro-Slices (Post S-108)
+
+To honor the one-aspect-per-slice rule, remaining InteractiveRepl aspects will land as separate future slices:
+
+- S-113: HistoryPersistence -> TESTED
+- S-114: MetaCommandsBasic -> TESTED
+- S-115: TxnPromptIndicator -> TESTED
+- S-116: CtrlCCancelBuffer -> TESTED
+
+Each slice acceptance: implement feature + single CANARY test (no bundling).

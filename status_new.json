@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-23T19:01:05.725692564Z",
+  "generated_at": "2025-09-23T19:37:18.971250327Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -2945,10 +2945,13 @@
           "status": "TESTED",
           "files": [
             "src/distributed/federation.zig",
-            "src/distributed/federation_root.zig"
+            "src/distributed/federation_flag.zig",
+            "tests/e2e_federation_mismatch_flag.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission"
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagConsumption",
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission",
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
           ],
           "benches": [],
           "owner": "federation",
@@ -2960,13 +2963,10 @@
           "status": "TESTED",
           "files": [
             "src/distributed/federation.zig",
-            "src/distributed/federation_flag.zig",
-            "tests/e2e_federation_mismatch_flag.zig"
+            "src/distributed/federation_root.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagConsumption",
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission",
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission"
           ],
           "benches": [],
           "owner": "federation",
@@ -4981,6 +4981,20 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -4993,20 +5007,6 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -5146,6 +5146,20 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -5156,20 +5170,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -5306,7 +5306,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -5322,7 +5322,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -5835,20 +5835,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -5859,6 +5845,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -6265,18 +6265,6 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "AdaptiveEstimatorBias",
-          "status": "IMPL",
-          "files": [
-            "src/planner/cost_seed.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
           "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md",
@@ -6285,6 +6273,18 @@
           "tests": [
             "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
           ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "IMPL",
+          "files": [
+            "src/planner/cost_seed.zig"
+          ],
+          "tests": [],
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
@@ -6875,7 +6875,7 @@
         {
           "feature": "BackupRestore",
           "aspect": "FullBackup",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6884,12 +6884,12 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "BackupRestore",
           "aspect": "IncrementalBackup",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6898,12 +6898,12 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "BackupRestore",
           "aspect": "RestoreDriver",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6912,7 +6912,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6922,7 +6922,21 @@
         {
           "feature": "WalCompaction",
           "aspect": "ArchivalHook",
-          "status": "STUB",
+          "status": "TESTED",
+          "files": [
+            "src/storage/wal_compaction_pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_ArchivalHook"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "ArchivalHook",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6931,12 +6945,26 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "WalCompaction",
           "aspect": "CheckpointSelection",
-          "status": "STUB",
+          "status": "TESTED",
+          "files": [
+            "src/storage/wal_compaction_pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_CheckpointSelection"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "CheckpointSelection",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6945,12 +6973,26 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "WalCompaction",
           "aspect": "CompactionJob",
-          "status": "STUB",
+          "status": "TESTED",
+          "files": [
+            "src/storage/wal_compaction_pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_CompactionJob"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "CompactionJob",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6959,7 +7001,22 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "CompactionVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "tests/benchmark_wal_compaction_pipeline_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6969,7 +7026,7 @@
         {
           "feature": "SelectivityEstimator",
           "aspect": "AdaptiveFeedbackHook",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6978,12 +7035,26 @@
           ],
           "benches": [],
           "owner": "optimizer",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "SelectivityEstimator",
+          "aspect": "AdaptiveFeedbackHook",
+          "status": "TESTED",
+          "files": [
+            "src/optimizer/selectivity_estimator.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook"
+          ],
+          "benches": [],
+          "owner": "optimizer",
+          "updated": "2025-09-23"
         },
         {
           "feature": "SelectivityEstimator",
           "aspect": "EstimatorApi",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6992,12 +7063,55 @@
           ],
           "benches": [],
           "owner": "optimizer",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "SelectivityEstimator",
+          "aspect": "EstimatorApi",
+          "status": "TESTED",
+          "files": [
+            "src/optimizer/selectivity_estimator.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_084_EstimatorApi"
+          ],
+          "benches": [],
+          "owner": "optimizer",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "SelectivityEstimator",
+          "aspect": "EstimatorVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "tests/benchmark_selectivity_estimator_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope"
+          ],
+          "owner": "optimizer",
+          "updated": "2025-09-23"
         },
         {
           "feature": "SelectivityEstimator",
           "aspect": "FrequencySampler",
-          "status": "STUB",
+          "status": "TESTED",
+          "files": [
+            "src/optimizer/selectivity_estimator.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_084_FrequencySampler"
+          ],
+          "benches": [],
+          "owner": "optimizer",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "SelectivityEstimator",
+          "aspect": "FrequencySampler",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -7006,7 +7120,7 @@
           ],
           "benches": [],
           "owner": "optimizer",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -7369,10 +7483,10 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 195,
+      "BENCHED": 197,
       "IMPL": 7,
-      "STUB": 24,
-      "TESTED": 262
+      "STUB": 15,
+      "TESTED": 277
     },
     "by_aspect": {
       "API": 7,
@@ -7389,7 +7503,7 @@
       "AdaptiveEstimatorBiasPersistenceV2": 1,
       "AdaptiveEstimatorBiasVarianceEnvelope": 1,
       "AdaptiveEstimatorDynamicAlpha": 1,
-      "AdaptiveFeedbackHook": 1,
+      "AdaptiveFeedbackHook": 2,
       "AdaptiveFlush": 1,
       "AdaptiveJitterThresholds": 1,
       "AdaptiveReplanAutotuneConvergence": 1,
@@ -7402,7 +7516,7 @@
       "AppendEntriesSuccess": 1,
       "AppendEntriesTermMismatch": 1,
       "AppendEntriesVarianceEnvelope": 1,
-      "ArchivalHook": 1,
+      "ArchivalHook": 2,
       "AvgVarianceEnvelope": 1,
       "BFS": 2,
       "Backpressure": 1,
@@ -7429,14 +7543,15 @@
       "CalibrationEntries": 1,
       "CalibrationFeedback": 1,
       "CascadePerf": 2,
-      "CheckpointSelection": 1,
+      "CheckpointSelection": 2,
       "ChecksumValidation": 1,
       "CliParityStatusCommand": 1,
       "ClientLoggingParity": 1,
       "ClosenessCentrality": 1,
       "ClosenessVarianceEnvelope": 1,
       "CommitAdvancementVarianceEnvelope": 1,
-      "CompactionJob": 1,
+      "CompactionJob": 2,
+      "CompactionVarianceEnvelope": 1,
       "Component": 2,
       "ConcurrencySafeGraph": 1,
       "ConflictRepairHeuristics": 1,
@@ -7481,8 +7596,9 @@
       "EnforcementHook": 1,
       "Engine": 21,
       "EquivalenceDeterminism": 1,
-      "EstimatorApi": 1,
+      "EstimatorApi": 2,
       "EstimatorPrimitives": 2,
+      "EstimatorVarianceEnvelope": 1,
       "EventCapture": 1,
       "EvidenceDeltaGuard": 1,
       "Execution": 1,
@@ -7501,7 +7617,7 @@
       "FederationRouterUnsupported": 1,
       "FixpointDriver": 1,
       "FlaggerCompleteness": 1,
-      "FrequencySampler": 1,
+      "FrequencySampler": 2,
       "FreshnessGuardTest": 1,
       "FreshnessPreWarn": 1,
       "FullBackup": 1,

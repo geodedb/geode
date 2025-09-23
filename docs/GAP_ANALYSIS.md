@@ -1,6 +1,6 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-23)
 
-<!-- STATUS_JSON_SHA256: adeb4b1cdab7597e44d09ee7b4e4fabdf3f1dfcfb90b6fd10ae5469685200c3a -->
+<!-- STATUS_JSON_SHA256: 447bf6705329814cc41d1e18ea4fd5d7372021af37c6c884b7f3d0b418f842c1 -->
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -50,15 +50,16 @@
 // CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope; OWNER=storage; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope; OWNER=optimizer; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogLevelCliParsing; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogLevelCliParsing; OWNER=ops; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogEmitterFiltering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogEmitterFiltering; OWNER=ops; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogJSONFormat; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogJSONFormat; OWNER=ops; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=ClientLoggingParity; STATUS=STUB; TEST=TestCANARY_REQ_GQL_085_ClientLoggingParity; OWNER=ops; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=ClientLoggingParity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_ClientLoggingParity; OWNER=ops; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-22
