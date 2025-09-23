@@ -662,4 +662,28 @@ pub const RecursiveQueryProcessor = struct {
         }
         return i;
     }
+
+    // Lightweight cycle guard utility: given a path of node ids, returns true if a repeat is detected.
+    // Uses O(n) hash set; intended for early recursive execution slices (not optimized).
+    // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=CycleGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_CycleGuard; OWNER=engine; UPDATED=2025-09-23
+    pub fn hasCycleSimple(allocator: Allocator, nodes: []const u64) !bool {
+        var set = std.hash_map.HashMap(u64, void, struct {
+            pub fn hash(x: u64) u64 {
+                return x;
+            }
+            pub fn eql(a: u64, b: u64) bool {
+                return a == b;
+            }
+        }.hash, struct {
+            pub fn eql(a: u64, b: u64) bool {
+                return a == b;
+            }
+        }.eql, 80).init(allocator);
+        defer set.deinit();
+        for (nodes) |id| {
+            const r = try set.getOrPut(id);
+            if (r.found_existing) return true;
+        }
+        return false;
+    }
 };

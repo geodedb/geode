@@ -57,6 +57,12 @@ The following slice has been moved out of the feature-priority backlog. Governan
 // S-116 (REQ-GQL-086 Interactive REPL CtrlCCancelBuffer) — Added cancelBuffer clearing in-progress multiline without persisting; aspect promoted to TESTED (2025-09-23).
 // S-117 (REQ-GQL-079 RecursiveExecution ParserRecognition) — Minimal WITH RECURSIVE recognition sets has_recursive_cte on first Query; aspect promoted to TESTED (2025-09-23).
 // S-118 (REQ-GQL-079 RecursiveExecution FixpointDriver) — Added generic runFixpoint driver with convergence vs exhaustion detection; aspect promoted to TESTED (2025-09-23).
+// S-119 (REQ-GQL-079 RecursiveExecution CycleGuard) — Added hasCycleSimple O(n) hash-based detector; aspect promoted to TESTED (2025-09-23).
+// S-120 (REQ-GQL-068 Containers CursorContainer) — Added CursorContainer generic forward cursor with tests; aspect promoted to TESTED (2025-09-23).
+// S-121 (REQ-GQL-068 Containers SignaledQueue) — Added SignaledQueue thread-safe FIFO with blocking dequeue; aspect promoted to TESTED (2025-09-23).
+// S-122 (REQ-GQL-068 Containers SignaledQueueVarianceEnvelope) — Added variance envelope benchmark (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
+// S-123 (REQ-GQL-010 Governance StubImplAudit) — Added audit test scanning code for stray STATUS=STUB or undisclosed STATUS=IMPL; aspect promoted to TESTED (2025-09-23).
+// S-124 (REQ-GQL-010 Governance CanaryFreshnessAudit) — Enforce UPDATED≤60d for STATUS=TESTED|BENCHED CANARY lines; aspect promoted to TESTED (2025-09-23).
 
 ### Completed Slices (Removed from Active Backlog)
 

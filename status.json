@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-23T20:34:43.564808149Z",
+  "generated_at": "2025-09-23T23:29:12.677000149Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -465,6 +465,20 @@
         },
         {
           "feature": "Governance",
+          "aspect": "CanaryFreshnessAudit",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_governance_canary_freshness.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_010_CanaryFreshnessAudit"
+          ],
+          "benches": [],
+          "owner": "tooling",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "Governance",
           "aspect": "EvidenceDeltaGuard",
           "status": "TESTED",
           "files": [
@@ -634,6 +648,20 @@
           "benches": [],
           "owner": "tooling",
           "updated": "2025-09-22"
+        },
+        {
+          "feature": "Governance",
+          "aspect": "StubImplAudit",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_governance_stub_impl_audit.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_010_GovernanceStubImplAudit"
+          ],
+          "benches": [],
+          "owner": "tooling",
+          "updated": "2025-09-23"
         },
         {
           "feature": "Governance",
@@ -2477,7 +2505,7 @@
           "aspect": "PhysiologicalRedoOptimization",
           "status": "BENCHED",
           "files": [
-            "tests/canary_physiological_redo.zig"
+            "src/storage/redo_opt.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness"
@@ -2493,7 +2521,7 @@
           "aspect": "PhysiologicalRedoOptimization",
           "status": "BENCHED",
           "files": [
-            "src/storage/redo_opt.zig"
+            "tests/canary_physiological_redo.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness"
@@ -2546,7 +2574,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "tests/canary_txn_phantom_anomaly.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2562,7 +2590,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_phantom_anomaly.zig"
+            "src/txn/manager.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2572,6 +2600,23 @@
           ],
           "owner": "txn",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "RangeTracker",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/manager.zig",
+            "src/txn/range_tracker.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-22"
         },
         {
           "feature": "MVCC Phantom Prevention",
@@ -2598,23 +2643,6 @@
             "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
           ],
           "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "MVCC Phantom Prevention",
-          "aspect": "RangeTracker",
-          "status": "BENCHED",
-          "files": [
-            "src/txn/manager.zig",
-            "src/txn/range_tracker.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
-          ],
           "owner": "txn",
           "updated": "2025-09-22"
         }
@@ -2945,10 +2973,13 @@
           "status": "TESTED",
           "files": [
             "src/distributed/federation.zig",
-            "src/distributed/federation_root.zig"
+            "src/distributed/federation_flag.zig",
+            "tests/e2e_federation_mismatch_flag.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission"
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagConsumption",
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission",
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
           ],
           "benches": [],
           "owner": "federation",
@@ -2960,13 +2991,10 @@
           "status": "TESTED",
           "files": [
             "src/distributed/federation.zig",
-            "src/distributed/federation_flag.zig",
-            "tests/e2e_federation_mismatch_flag.zig"
+            "src/distributed/federation_root.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagConsumption",
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission",
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission"
           ],
           "benches": [],
           "owner": "federation",
@@ -3271,20 +3299,6 @@
         {
           "feature": "WAL Compaction",
           "aspect": "CorruptPageRecoveryLatency",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_recovery_corrupt_latency.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "WAL Compaction",
-          "aspect": "CorruptPageRecoveryLatency",
           "status": "BENCHED",
           "files": [
             "tests/canary_recovery_corrupt_latency.zig"
@@ -3293,6 +3307,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
           ],
+          "owner": "storage",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "WAL Compaction",
+          "aspect": "CorruptPageRecoveryLatency",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_recovery_corrupt_latency.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
+          ],
+          "benches": [],
           "owner": "storage",
           "updated": "2025-09-22"
         },
@@ -3903,20 +3931,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
-          ],
-          "benches": [],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_cdc_adaptive_diff_perf.zig"
@@ -3925,6 +3939,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
           ],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
+          ],
+          "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -4981,6 +5009,20 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -4993,20 +5035,6 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -5557,6 +5585,20 @@
         },
         {
           "feature": "Containers",
+          "aspect": "CursorContainer",
+          "status": "TESTED",
+          "files": [
+            "src/containers/cursor_container.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_Cursor"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "Containers",
           "aspect": "LFUCache",
           "status": "BENCHED",
           "files": [
@@ -5586,6 +5628,34 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Containers",
+          "aspect": "SignaledQueue",
+          "status": "TESTED",
+          "files": [
+            "src/containers/signaled_queue.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_068_SignaledQueue"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "Containers",
+          "aspect": "SignaledQueueVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_signaled_queue_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_068_SignaledQueueVarianceEnvelope"
+          ],
+          "owner": "graph",
+          "updated": "2025-09-23"
         },
         {
           "feature": "Containers",
@@ -6265,18 +6335,6 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "AdaptiveEstimatorBias",
-          "status": "IMPL",
-          "files": [
-            "src/planner/cost_seed.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
           "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md",
@@ -6285,6 +6343,18 @@
           "tests": [
             "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
           ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "IMPL",
+          "files": [
+            "src/planner/cost_seed.zig"
+          ],
+          "tests": [],
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
@@ -6430,20 +6500,6 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "EstimatorPrimitives",
-          "status": "TESTED",
-          "files": [
-            "tests/cost_model_seed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "EstimatorPrimitives",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_cost_model_seed_variance.zig",
@@ -6456,6 +6512,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "EstimatorPrimitives",
+          "status": "TESTED",
+          "files": [
+            "tests/cost_model_seed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -6719,16 +6789,17 @@
         {
           "feature": "RecursiveExecution",
           "aspect": "CycleGuard",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
-            "docs/GAP_ANALYSIS.md"
+            "docs/GAP_ANALYSIS.md",
+            "src/planner/recursive.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_079_CycleGuard"
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "RecursiveExecution",
@@ -6740,20 +6811,6 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_079_FixpointDriver"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "RecursiveExecution",
-          "aspect": "ParserRecognition",
-          "status": "STUB",
-          "files": [
-            "src/gql/ast.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_079_ParserRecognition"
           ],
           "benches": [],
           "owner": "engine",
@@ -6779,6 +6836,20 @@
           "status": "TESTED",
           "files": [
             "src/gql/parser.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_079_ParserRecognition"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "RecursiveExecution",
+          "aspect": "ParserRecognition",
+          "status": "STUB",
+          "files": [
+            "src/gql/ast.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_079_ParserRecognition"
@@ -6953,7 +7024,7 @@
           "aspect": "ArchivalHook",
           "status": "TESTED",
           "files": [
-            "docs/GAP_ANALYSIS.md"
+            "src/storage/wal_compaction_pipeline.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_083_ArchivalHook"
@@ -6967,7 +7038,7 @@
           "aspect": "ArchivalHook",
           "status": "TESTED",
           "files": [
-            "src/storage/wal_compaction_pipeline.zig"
+            "docs/GAP_ANALYSIS.md"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_083_ArchivalHook"
@@ -6981,7 +7052,7 @@
           "aspect": "CheckpointSelection",
           "status": "TESTED",
           "files": [
-            "docs/GAP_ANALYSIS.md"
+            "src/storage/wal_compaction_pipeline.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_083_CheckpointSelection"
@@ -6995,7 +7066,7 @@
           "aspect": "CheckpointSelection",
           "status": "TESTED",
           "files": [
-            "src/storage/wal_compaction_pipeline.zig"
+            "docs/GAP_ANALYSIS.md"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_083_CheckpointSelection"
@@ -7009,7 +7080,7 @@
           "aspect": "CompactionJob",
           "status": "TESTED",
           "files": [
-            "src/storage/wal_compaction_pipeline.zig"
+            "docs/GAP_ANALYSIS.md"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_083_CompactionJob"
@@ -7023,7 +7094,7 @@
           "aspect": "CompactionJob",
           "status": "TESTED",
           "files": [
-            "docs/GAP_ANALYSIS.md"
+            "src/storage/wal_compaction_pipeline.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_083_CompactionJob"
@@ -7057,7 +7128,7 @@
           "aspect": "AdaptiveFeedbackHook",
           "status": "TESTED",
           "files": [
-            "docs/GAP_ANALYSIS.md"
+            "src/optimizer/selectivity_estimator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook"
@@ -7071,7 +7142,7 @@
           "aspect": "AdaptiveFeedbackHook",
           "status": "TESTED",
           "files": [
-            "src/optimizer/selectivity_estimator.zig"
+            "docs/GAP_ANALYSIS.md"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook"
@@ -7128,7 +7199,7 @@
           "aspect": "FrequencySampler",
           "status": "TESTED",
           "files": [
-            "src/optimizer/selectivity_estimator.zig"
+            "docs/GAP_ANALYSIS.md"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_084_FrequencySampler"
@@ -7142,7 +7213,7 @@
           "aspect": "FrequencySampler",
           "status": "TESTED",
           "files": [
-            "docs/GAP_ANALYSIS.md"
+            "src/optimizer/selectivity_estimator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_084_FrequencySampler"
@@ -7518,10 +7589,10 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 197,
+      "BENCHED": 198,
       "IMPL": 7,
-      "STUB": 7,
-      "TESTED": 287
+      "STUB": 6,
+      "TESTED": 292
     },
     "by_aspect": {
       "API": 7,
@@ -7577,6 +7648,7 @@
       "CDCWatermarkAdvanceVarianceEnvelope": 1,
       "CalibrationEntries": 1,
       "CalibrationFeedback": 1,
+      "CanaryFreshnessAudit": 1,
       "CascadePerf": 2,
       "CheckpointSelection": 2,
       "ChecksumValidation": 1,
@@ -7600,6 +7672,7 @@
       "CountDistinctVarianceEnvelope": 1,
       "CountMinSketch": 2,
       "CtrlCCancelBuffer": 1,
+      "CursorContainer": 1,
       "CycleDetectDirected": 1,
       "CycleDetectUndirected": 1,
       "CycleGuard": 1,
@@ -7881,6 +7954,8 @@
       "Scaffold": 1,
       "SetOpDistinctDedupVarianceEnvelope": 1,
       "ShardMapStub": 1,
+      "SignaledQueue": 1,
+      "SignaledQueueVarianceEnvelope": 1,
       "SkipList": 1,
       "SliceDeltaGuardStub": 1,
       "SliceReqCrosscheckGuard": 1,
@@ -7888,6 +7963,7 @@
       "StatusFreshnessGuard": 1,
       "StatusJsonHashIntegrity": 1,
       "Storage": 9,
+      "StubImplAudit": 1,
       "TDERotationVarianceEnvelope": 1,
       "TarjanSCC": 1,
       "Telemetry": 1,
