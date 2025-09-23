@@ -1,7 +1,7 @@
 const std = @import("std");
 const net = std.net;
 const json = std.json;
-const quic = @import("../src/transport/quic.zig");
+const quic = @import("transport/quic");
 
 // Client configuration
 pub const Config = struct {
@@ -135,13 +135,7 @@ pub const Iterator = struct {
     }
 
     fn fetchNextPage(self: *Iterator) !void {
-        const pull_msg = .{
-            .type = "PULL",
-            .request_id = self.request_id,
-            .page_size = self.client.config.page_size,
-        };
-
-        try self.client.sendMessage(pull_msg);
+        try self.client.sendPull(self.request_id, self.client.config.page_size);
         const response = try self.client.receiveMessage();
 
         // Parse response and update current_page
@@ -190,11 +184,81 @@ pub const Client = struct {
         }
     }
 
+    fn writeLine(self: *Self, bytes: []const u8) !void {
+        if (self.quic_stream) |qs| {
+            try qs.writeAll(bytes);
+            try qs.writeAll("\n");
+            return;
+        }
+        if (self.stream) |stream| {
+            _ = try stream.write(bytes);
+            _ = try stream.write("\n");
+            return;
+        }
+        return error.NotConnected;
+    }
+
+    fn jsonString(self: *Self, s: []const u8) ![]u8 {
+        return try std.json.Stringify.valueAlloc(self.allocator, s, .{});
+    }
+
+    fn sendHello(self: *Self) !void {
+        const client_name = try self.jsonString(self.config.client_name);
+        defer self.allocator.free(client_name);
+        const client_ver = try self.jsonString(self.config.client_version);
+        defer self.allocator.free(client_ver);
+        const wanted = try self.jsonString("minimum");
+        defer self.allocator.free(wanted);
+        const payload = try std.fmt.allocPrint(self.allocator,
+            "{{\"type\":\"HELLO\",\"client_name\":{s},\"client_ver\":{s},\"wanted_conformance\":{s}}}",
+            .{ client_name, client_ver, wanted },
+        );
+        defer self.allocator.free(payload);
+        try self.writeLine(payload);
+    }
+
+    fn sendRunGql(self: *Self, request_id: []const u8, gql: []const u8, params_null: bool) !void {
+        const req = try self.jsonString(request_id);
+        defer self.allocator.free(req);
+        const text = try self.jsonString(gql);
+        defer self.allocator.free(text);
+        const payload = if (params_null)
+            try std.fmt.allocPrint(self.allocator,
+                "{{\"type\":\"RUN_GQL\",\"request_id\":{s},\"text\":{s},\"params\":null}}",
+                .{ req, text },
+            )
+        else
+            try std.fmt.allocPrint(self.allocator,
+                "{{\"type\":\"RUN_GQL\",\"request_id\":{s},\"text\":{s}}}",
+                .{ req, text },
+            );
+        defer self.allocator.free(payload);
+        try self.writeLine(payload);
+    }
+
+    fn sendPull(self: *Self, request_id: []const u8, page_size: u32) !void {
+        const req = try self.jsonString(request_id);
+        defer self.allocator.free(req);
+        const payload = try std.fmt.allocPrint(self.allocator,
+            "{{\"type\":\"PULL\",\"request_id\":{s},\"page_size\":{d}}}",
+            .{ req, page_size },
+        );
+        defer self.allocator.free(payload);
+        try self.writeLine(payload);
+    }
+
+    fn sendSimple(self: *Self, ty: []const u8) !void {
+        const t = try self.jsonString(ty);
+        defer self.allocator.free(t);
+        const payload = try std.fmt.allocPrint(self.allocator, "{{\"type\":{s}}}", .{t});
+        defer self.allocator.free(payload);
+        try self.writeLine(payload);
+    }
+
     pub fn connect(self: *Self) !void {
         if (self.config.use_quic) {
             const qc = quic.QuicClient.init(self.allocator);
             self.quic_client = qc;
-            // Try QUIC; if fails, fallback to TCP
             quic.QuicClient.connect(&self.quic_client.?, self.config.host, self.config.port) catch {
                 self.quic_client.?.deinit();
                 self.quic_client = null;
@@ -207,14 +271,7 @@ pub const Client = struct {
             try self.connectTCP();
         }
 
-        const hello = .{
-            .type = "HELLO",
-            .client_name = self.config.client_name,
-            .client_ver = self.config.client_version,
-            .wanted_conformance = "minimum",
-        };
-
-        try self.sendMessage(hello);
+        try self.sendHello();
         _ = try self.receiveMessage();
     }
 
@@ -238,23 +295,6 @@ pub const Client = struct {
         }
     }
 
-    fn sendMessage(self: *Self, message: anytype) !void {
-        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
-        defer buffer.deinit(self.allocator);
-
-        try std.json.stringify(message, .{}, buffer.writer());
-        try buffer.append(self.allocator, '\n');
-
-        if (self.quic_stream) |qs| {
-            try qs.writeAll(buffer.items);
-            return;
-        }
-        if (self.stream) |stream| {
-            _ = try stream.write(buffer.items);
-            return;
-        }
-        return error.NotConnected;
-    }
 
     fn receiveMessage(self: *Self) !json.Value {
         var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
@@ -266,14 +306,14 @@ pub const Client = struct {
                 const n = try qs.read(&byte);
                 if (n == 0) continue; // non-blocking retry
                 if (byte[0] == '\n') break;
-                try buffer.append(byte[0]);
+                try buffer.append(self.allocator, byte[0]);
             }
         } else if (self.stream) |stream| {
             while (true) {
                 var byte: [1]u8 = undefined;
                 _ = try stream.read(&byte);
                 if (byte[0] == '\n') break;
-                try buffer.append(byte[0]);
+                try buffer.append(self.allocator, byte[0]);
             }
         } else {
             return error.NotConnected;
@@ -287,7 +327,7 @@ pub const Client = struct {
     pub fn beginTransaction(self: *Self) !void {
         if (self.in_transaction) return error.AlreadyInTransaction;
 
-        try self.sendMessage(.{ .type = "BEGIN" });
+        try self.sendSimple("BEGIN");
         _ = try self.receiveMessage();
         self.in_transaction = true;
     }
@@ -295,7 +335,7 @@ pub const Client = struct {
     pub fn commit(self: *Self) !void {
         if (!self.in_transaction) return error.NotInTransaction;
 
-        try self.sendMessage(.{ .type = "COMMIT" });
+        try self.sendSimple("COMMIT");
         _ = try self.receiveMessage();
         self.in_transaction = false;
     }
@@ -303,7 +343,7 @@ pub const Client = struct {
     pub fn rollback(self: *Self) !void {
         if (!self.in_transaction) return error.NotInTransaction;
 
-        try self.sendMessage(.{ .type = "ROLLBACK" });
+        try self.sendSimple("ROLLBACK");
         _ = try self.receiveMessage();
         self.in_transaction = false;
     }
@@ -312,14 +352,7 @@ pub const Client = struct {
     pub fn query(self: *Self, gql: []const u8, params: ?std.StringHashMap(Value)) !Iterator {
         const request_id = try self.generateRequestId();
 
-        const run_msg = .{
-            .type = "RUN_GQL",
-            .request_id = request_id,
-            .text = gql,
-            .params = params,
-        };
-
-        try self.sendMessage(run_msg);
+        try self.sendRunGql(request_id, gql, params == null);
         const response = try self.receiveMessage();
 
         // Parse schema from response
@@ -349,13 +382,16 @@ pub const Client = struct {
 
     // Authentication methods
     pub fn login(self: *Self, username: []const u8, password: []const u8) !void {
-        const login_msg = .{
-            .type = "AUTH_LOGIN",
-            .username = username,
-            .password = password,
-        };
-
-        try self.sendMessage(login_msg);
+        const username_json = try self.jsonString(username);
+        defer self.allocator.free(username_json);
+        const password_json = try self.jsonString(password);
+        defer self.allocator.free(password_json);
+        const payload = try std.fmt.allocPrint(self.allocator,
+            "{{\"type\":\"AUTH_LOGIN\",\"username\":{s},\"password\":{s}}}",
+            .{ username_json, password_json },
+        );
+        defer self.allocator.free(payload);
+        try self.writeLine(payload);
         const response = try self.receiveMessage();
 
         // Extract and store session token
@@ -367,10 +403,15 @@ pub const Client = struct {
     pub fn logout(self: *Self) !void {
         if (self.session_token == null) return;
 
-        try self.sendMessage(.{
-            .type = "AUTH_LOGOUT",
-            .token = self.session_token,
-        });
+        const tok = self.session_token.?;
+        const token_json = try self.jsonString(tok);
+        defer self.allocator.free(token_json);
+        const payload = try std.fmt.allocPrint(self.allocator,
+            "{{\"type\":\"AUTH_LOGOUT\",\"token\":{s}}}",
+            .{ token_json },
+        );
+        defer self.allocator.free(payload);
+        try self.writeLine(payload);
         _ = try self.receiveMessage();
 
         self.allocator.free(self.session_token.?);
@@ -408,9 +449,9 @@ pub const Client = struct {
         try gql.appendSlice("CREATE (n");
         for (labels, 0..) |label, i| {
             if (i == 0) {
-                try gql.append(':');
+                try gql.append(self.allocator, ':');
             } else {
-                try gql.append('&');
+                try gql.append(self.allocator, '&');
             }
             try gql.appendSlice(label);
         }
@@ -426,7 +467,7 @@ pub const Client = struct {
                 try gql.appendSlice(": ");
                 try self.appendValue(&gql, entry.value_ptr.*);
             }
-            try gql.append('}');
+            try gql.append(self.allocator, '}');
         }
 
         try gql.appendSlice(") RETURN n");
@@ -468,7 +509,7 @@ pub const Client = struct {
                 try gql.appendSlice(": ");
                 try self.appendValue(&gql, entry.value_ptr.*);
             }
-            try gql.append('}');
+            try gql.append(self.allocator, '}');
         }
 
         try gql.appendSlice("]->(b) RETURN e");
@@ -554,16 +595,15 @@ pub const Client = struct {
 
     // Helper functions
     fn appendValue(self: *Self, list: *std.ArrayList(u8), value: Value) !void {
-        _ = self;
         switch (value) {
             .null => try list.appendSlice("null"),
             .bool => |b| try list.writer().print("{}", .{b}),
             .int => |i| try list.writer().print("{}", .{i}),
             .float => |f| try list.writer().print("{d}", .{f}),
             .string => |s| {
-                try list.append('"');
+                try list.append(self.allocator, '"');
                 try list.appendSlice(s);
-                try list.append('"');
+                try list.append(self.allocator, '"');
             },
             .decimal => |d| {
                 try list.appendSlice("DECIMAL('");

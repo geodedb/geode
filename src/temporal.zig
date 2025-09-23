@@ -407,7 +407,6 @@ test "formatDateTime normalizes +HH to +HH:00" {
     var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
     defer buf.deinit(std.testing.allocator);
     try formatDateTime(buf.writer(std.testing.allocator), dt, .{});
-    std.debug.print("format +05 -> {s}\n", .{buf.items});
     try std.testing.expect(std.mem.indexOf(u8, buf.items, "+05:00") != null);
 }
 
@@ -416,7 +415,6 @@ test "formatDateTime preserves -HH:MM" {
     var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
     defer buf.deinit(std.testing.allocator);
     try formatDateTime(buf.writer(std.testing.allocator), dt, .{});
-    std.debug.print("format -05:30 -> {s}\n", .{buf.items});
     try std.testing.expect(std.mem.indexOf(u8, buf.items, "-05:30") != null);
 }
 

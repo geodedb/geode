@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const quic_transport = @import("../transport/quic.zig");
+const quic_transport = @import("transport/quic");
 const logger = @import("log/logger.zig");
 
 fn getStdOut() std.fs.File {

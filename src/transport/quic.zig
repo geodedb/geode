@@ -533,7 +533,7 @@ pub const QuicClientStream = struct {
 
     pub fn deinit(self: *QuicClientStream) void {
         if (self.quic_stream_id) |sid| {
-            quic_lib.closeStreamSimple(self.quic_connection.?, sid) catch {};
+            quic_lib.closeStream(self.quic_connection.?, sid, 0) catch {};
         }
         self.allocator.destroy(self);
     }
