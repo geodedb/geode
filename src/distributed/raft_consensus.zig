@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const net = std.net;
+
 const log = std.log.scoped(.raft);
 
 // Forward declarations and types
@@ -36,7 +36,8 @@ pub const SchemaChange = struct {
 pub const ConfigChange = struct {
     change_type: enum { add_server, remove_server, update_server },
     server_id: u64,
-    server_address: ?net.Address,
+    server_endpoint: ?[]const u8,
+    server_port: ?u16 = null,
 };
 
 pub const SnapshotPointer = struct {
@@ -57,7 +58,8 @@ pub const LogEntry = struct {
 
 pub const Peer = struct {
     id: u64,
-    address: net.Address,
+    endpoint: []const u8,
+    port: u16,
     alive: bool,
     last_contact: i64,
     rpc_client: ?*RpcClient,
@@ -76,39 +78,63 @@ pub const Statistics = struct {
 };
 
 // RPC client for peer communication
+const quic = @import("transport/quic");
 pub const RpcClient = struct {
     allocator: Allocator,
-    peer_address: net.Address,
-    connection: ?net.Stream,
+    host: []const u8,
+    port: u16,
+    client: ?quic.QuicClient = null,
+    stream: ?*quic.QuicClientStream = null,
+
+    pub fn deinit(self: *RpcClient) void {
+        if (self.stream) |s| s.deinit();
+        if (self.client) |*c| c.deinit();
+        self.stream = null;
+        self.client = null;
+    }
 
     pub fn sendMessage(self: *RpcClient, msg: Message) !void {
-        _ = self;
-        _ = msg;
-        // RPC implementation would go here
+        if (self.client == null) {
+            var qc = quic.QuicClient.init(self.allocator);
+            try qc.connect(self.host, self.port);
+            self.client = qc;
+            self.stream = try self.client.?.getStream();
+        }
+        const payload = try std.json.stringifyAlloc(self.allocator, msg, .{});
+        defer self.allocator.free(payload);
+        try self.stream.?.writeAll(payload);
+        try self.stream.?.writeAll("\n");
     }
 };
 
 // Transport abstraction for network communication
 pub const Transport = struct {
     allocator: Allocator,
-    socket: ?net.Server,
+    server: ?quic.QuicTransport = null,
 
     pub fn init(allocator: Allocator) Transport {
-        return .{
-            .allocator = allocator,
-            .socket = null,
-        };
+        return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Transport) void {
-        if (self.socket) |*s| s.deinit();
+        if (self.server) |*s| s.deinit();
+        self.server = null;
     }
 
-    pub fn send(self: *Transport, address: net.Address, data: []const u8) !void {
-        _ = self;
-        _ = address;
-        _ = data;
-        // Actual network implementation would go here
+    pub fn listen(self: *Transport, address: []const u8, port: u16) !void {
+        const qt = try quic.QuicTransport.init(self.allocator, .{ .address = address, .port = port });
+        self.server = qt;
+        try self.server.?.listen();
+    }
+
+    pub fn send(self: *Transport, peer: Peer, data: []const u8) !void {
+        var qc = quic.QuicClient.init(self.allocator);
+        defer qc.deinit();
+        try qc.connect(peer.endpoint, peer.port);
+        const s = try qc.getStream();
+        defer s.deinit();
+        try s.writeAll(data);
+        try s.writeAll("\n");
     }
 };
 
@@ -813,15 +839,12 @@ pub const RaftNode = struct {
         if (!peer.alive) return;
 
         if (self.transport) |transport| {
-            // TODO: Implement proper serialization
-            const dummy_data = "message";
-
-            transport.send(peer.address, dummy_data) catch |err| {
+            const payload = try std.json.stringifyAlloc(self.allocator, msg, .{});
+            defer self.allocator.free(payload);
+            transport.send(peer, payload) catch |err| {
                 log.warn("Failed to send message to peer {}: {}", .{ peer.id, err });
-                // Don't mark peer as dead immediately, could be transient
             };
         } else if (peer.rpc_client) |client| {
-            // Use RPC client if available
             try client.sendMessage(msg);
         }
     }
@@ -935,9 +958,9 @@ test "raft initialization" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 2, .address = try net.Address.parseIp("127.0.0.1", 8002), .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 3, .address = try net.Address.parseIp("127.0.0.1", 8003), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 2, .endpoint = "127.0.0.1", .port = 8002, .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 3, .endpoint = "127.0.0.1", .port = 8003, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);
@@ -956,7 +979,7 @@ test "raft single node becomes leader" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);
@@ -976,7 +999,7 @@ test "raft propose command as leader" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);
@@ -1000,8 +1023,8 @@ test "raft request vote logic" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 2, .address = try net.Address.parseIp("127.0.0.1", 8002), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 2, .endpoint = "127.0.0.1", .port = 8002, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);
@@ -1029,8 +1052,8 @@ test "raft append entries as follower" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 2, .address = try net.Address.parseIp("127.0.0.1", 8002), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 2, .endpoint = "127.0.0.1", .port = 8002, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);
@@ -1070,7 +1093,7 @@ test "raft deduplication of client requests" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);
@@ -1095,7 +1118,7 @@ test "raft statistics tracking" {
     const allocator = testing.allocator;
 
     var peers = [_]Peer{
-        .{ .id = 1, .address = try net.Address.parseIp("127.0.0.1", 8001), .alive = true, .last_contact = 0, .rpc_client = null },
+        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
     };
 
     var node = try RaftNode.init(allocator, 1, &peers, 150);

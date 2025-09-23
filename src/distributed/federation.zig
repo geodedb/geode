@@ -113,9 +113,11 @@ pub const ConnectionPool = struct {
 };
 
 /// Connection to a remote node
+const quic = @import("transport/quic");
 pub const Connection = struct {
     allocator: std.mem.Allocator,
-    socket: ?std.net.Stream,
+    client: ?quic.QuicClient = null,
+    stream: ?*quic.QuicClientStream = null,
     last_used: i64,
 
     pub fn init(allocator: std.mem.Allocator) !Connection {
@@ -127,21 +129,29 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
-        if (self.socket) |sock| {
-            sock.close();
-        }
+        if (self.stream) |s| s.deinit();
+        if (self.client) |*c| c.deinit();
+        self.stream = null;
+        self.client = null;
     }
 
     pub fn connect(self: *Connection, endpoint: []const u8) !void {
-        // Parse endpoint and establish connection
-        _ = endpoint;
-        // Implementation would establish actual network connection
+        // endpoint like "host:port"
+        const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;
+        const host = endpoint[0..colon];
+        const port = std.fmt.parseInt(u16, endpoint[colon+1..], 10) catch return error.InvalidEndpoint;
+        var qc = quic.QuicClient.init(self.allocator);
+        try qc.connect(host, port);
+        self.client = qc;
+        self.stream = try self.client.?.getStream();
     }
 
     pub fn sendQuery(self: *Connection, query: FederatedQuery) !void {
-        // Send query to remote node
-        _ = query;
-        // Implementation would serialize and send query
+        const payload = try std.json.stringifyAlloc(self.allocator, query, .{});
+        defer self.allocator.free(payload);
+        if (self.stream == null) return error.NotConnected;
+        try self.stream.?.writeAll(payload);
+        try self.stream.?.writeAll("\n");
     }
 
     pub fn receiveResults(self: *Connection, allocator: std.mem.Allocator) !QueryResults {

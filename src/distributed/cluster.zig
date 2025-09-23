@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const net = std.net;
+const quic = @import("../transport/quic.zig");
 const RaftNode = @import("raft_consensus.zig").RaftNode;
 const protocol = @import("../protocol.zig");
 const storage = @import("../storage/interface.zig");
@@ -46,7 +46,7 @@ pub const ClusterCoordinator = struct {
 
     pub const NodeInfo = struct {
         id: u64,
-        address: net.Address,
+        endpoint: []const u8,
         state: NodeState,
         role: NodeRole,
         capacity: NodeCapacity,
@@ -98,12 +98,12 @@ pub const ClusterCoordinator = struct {
 
     pub const NetworkTransport = struct {
         allocator: Allocator,
-        listener: ?net.Server,
+        quic_server: ?quic.QuicTransport,
         connections: std.AutoHashMap(u64, Connection),
         message_queue: MessageQueue,
 
         pub const Connection = struct {
-            stream: net.Stream,
+            stream: *quic.QuicStream,
             node_id: u64,
             last_activity: i64,
             pending_requests: std.ArrayList(PendingRequest),
