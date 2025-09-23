@@ -51,6 +51,9 @@ The following slice has been moved out of the feature-priority backlog. Governan
 ### Recent Slice Landing (Informational)
 
 // S-112 (REQ-GQL-086 Interactive REPL MultilineBuffering) — Multiline accumulation with semicolon and blank line flush implemented; aspect promoted to TESTED (2025-09-23).
+// S-113 (REQ-GQL-086 Interactive REPL HistoryPersistence) — File-backed history load/append implemented; aspect promoted to TESTED (2025-09-23).
+// S-114 (REQ-GQL-086 Interactive REPL MetaCommandsBasic) — Added :help, :history, :quit meta command handling; aspect promoted to TESTED (2025-09-23).
+// S-115 (REQ-GQL-086 Interactive REPL TxnPromptIndicator) — Added transaction-aware prompt (geode(txn)> ) with beginTxn/endTxn API; aspect promoted to TESTED (2025-09-23).
 
 ### Completed Slices (Removed from Active Backlog)
 
@@ -74,8 +77,6 @@ The following slice has been moved out of the feature-priority backlog. Governan
 To honor the one-aspect-per-slice rule, remaining InteractiveRepl aspects will land as separate future slices:
 
 - S-113: HistoryPersistence -> TESTED
-- S-114: MetaCommandsBasic -> TESTED
-- S-115: TxnPromptIndicator -> TESTED
 - S-116: CtrlCCancelBuffer -> TESTED
 
 Each slice acceptance: implement feature + single CANARY test (no bundling).

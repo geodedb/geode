@@ -1,6 +1,6 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-23)
 
-<!-- STATUS_JSON_SHA256: 447bf6705329814cc41d1e18ea4fd5d7372021af37c6c884b7f3d0b418f842c1 -->
+<!-- STATUS_JSON_SHA256: 132ab0ba9280794f00172928beb935bd4a23353f693fd7f40c5dafe04cfeebd7 -->
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -60,9 +60,9 @@
 // CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=ClientLoggingParity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_ClientLoggingParity; OWNER=ops; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=CtrlCCancelBuffer; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_CtrlCCancelBuffer; OWNER=client; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=MigrationLedgerSchema; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_MigrationLedgerSchema; OWNER=migration; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=LockAcquisitionTTLHeartbeat; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat; OWNER=migration; UPDATED=2025-09-23

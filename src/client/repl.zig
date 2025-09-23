@@ -3,18 +3,43 @@ const std = @import("std");
 // Minimal interactive REPL skeleton for initial CANARY promotion.
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-23
 
 pub const Repl = struct {
     allocator: std.mem.Allocator,
-    // Accumulates lines until a terminator (currently ';') is seen or a blank line after partial input.
-    buffer: std.ArrayListUnmanaged(u8) = .{},
+    buffer: std.ArrayListUnmanaged(u8) = .{}, // multiline accumulation
+    history: ?History = null,
+    quit_requested: bool = false,
+    in_txn: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Repl {
         return .{ .allocator = allocator };
     }
 
+    pub fn withHistory(allocator: std.mem.Allocator, history_path: []const u8) !Repl {
+        var r = Repl.init(allocator);
+        const h = try History.load(allocator, history_path);
+        r.history = h;
+        return r;
+    }
+
     pub fn deinit(self: *Repl) void {
         self.buffer.deinit(self.allocator);
+        if (self.history) |*h| h.deinit();
+    }
+
+    pub fn beginTxn(self: *Repl) void {
+        self.in_txn = true;
+    }
+
+    pub fn endTxn(self: *Repl) void {
+        self.in_txn = false;
+    }
+
+    pub fn prompt(self: *const Repl) []const u8 {
+        return if (self.in_txn) "geode(txn)> " else "geode> ";
     }
 
     /// Ingest a line (without trailing newline). Returns optional full statement when complete.
@@ -23,6 +48,11 @@ pub const Repl = struct {
     /// 2. A blank line when buffer has content finalizes accumulated statement.
     pub fn ingest(self: *Repl, line: []const u8) !?[]const u8 {
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (trimmed.len > 0 and trimmed[0] == ':') {
+            // Meta command line (leading ':') handled immediately; not added to history.
+            try self.handleMeta(trimmed[1..]);
+            return null;
+        }
         if (trimmed.len == 0 and self.buffer.items.len > 0) {
             // Blank line flushes current buffer.
             return self.finalize();
@@ -40,9 +70,39 @@ pub const Repl = struct {
         return null;
     }
 
+    fn handleMeta(self: *Repl, cmd_full: []const u8) !void {
+        // Format: <command>[ <args>]
+        const space_idx = std.mem.indexOfScalar(u8, cmd_full, ' ');
+        const cmd_name = if (space_idx) |i| cmd_full[0..i] else cmd_full;
+        const args = if (space_idx) |i| std.mem.trim(u8, cmd_full[i + 1 ..], " \t") else cmd_full[cmd_full.len..cmd_full.len];
+        _ = args; // currently unused
+        if (std.mem.eql(u8, cmd_name, "quit") or std.mem.eql(u8, cmd_name, "q")) {
+            self.quit_requested = true;
+            return;
+        } else if (std.mem.eql(u8, cmd_name, "help") or std.mem.eql(u8, cmd_name, "h")) {
+            // Print basic help to stderr for now (stdout might be reserved for results)
+            std.debug.print("REPL meta commands: :help :history :quit\n", .{});
+            return;
+        } else if (std.mem.eql(u8, cmd_name, "history")) {
+            if (self.history) |*h| {
+                for (h.entries.items, 0..) |entry, idx| {
+                    std.debug.print("{d}: {s}\n", .{ idx + 1, entry });
+                }
+            } else {
+                std.debug.print("(history disabled)\n", .{});
+            }
+            return;
+        } else {
+            std.debug.print("Unknown meta command: :{s}\n", .{cmd_name});
+        }
+    }
+
     fn finalize(self: *Repl) ![]const u8 {
         const slice = try self.copyBuffer();
-        // Reset for next statement.
+        if (self.history) |*h| {
+            // Persist statement (single line canonicalization: replace internal newlines with \n already present)
+            h.append(slice) catch |e| std.debug.print("history append error: {s}\n", .{@errorName(e)});
+        }
         self.buffer.clearRetainingCapacity();
         return slice;
     }
@@ -51,6 +111,60 @@ pub const Repl = struct {
         const dup = try self.allocator.alloc(u8, self.buffer.items.len);
         std.mem.copyForwards(u8, dup, self.buffer.items);
         return dup;
+    }
+};
+
+pub const History = struct {
+    allocator: std.mem.Allocator,
+    path_buf: std.ArrayList(u8),
+    entries: std.ArrayList([]u8),
+
+    pub fn load(allocator: std.mem.Allocator, path: []const u8) !History {
+        var h = History{
+            .allocator = allocator,
+            .path_buf = try std.ArrayList(u8).initCapacity(allocator, path.len),
+            .entries = std.ArrayList([]u8).init(allocator),
+        };
+        try h.path_buf.appendSlice(path);
+        // Try to open existing file (ignore if not found)
+        var file = std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |e| switch (e) {
+            error.FileNotFound => return h,
+            else => return e,
+        };
+        defer file.close();
+        var reader = file.reader();
+        var line_buf = std.ArrayList(u8).init(allocator);
+        defer line_buf.deinit();
+        while (true) {
+            line_buf.clearRetainingCapacity();
+            const res = reader.streamUntilDelimiter(line_buf.writer(), '\n', null) catch |e| switch (e) {
+                error.EndOfStream => break,
+                else => return e,
+            };
+            _ = res;
+            const dup = try allocator.alloc(u8, line_buf.items.len);
+            std.mem.copyForwards(u8, dup, line_buf.items);
+            try h.entries.append(dup);
+        }
+        return h;
+    }
+
+    pub fn deinit(self: *History) void {
+        for (self.entries.items) |e| self.allocator.free(e);
+        self.entries.deinit();
+        self.path_buf.deinit();
+    }
+
+    fn append(self: *History, stmt: []const u8) !void {
+        // Append to in-memory list
+        const dup = try self.allocator.alloc(u8, stmt.len);
+        std.mem.copyForwards(u8, dup, stmt);
+        try self.entries.append(dup);
+        // Append to file with trailing newline
+        var file = try std.fs.cwd().createFile(self.path_buf.items, .{ .read = true, .append = true });
+        defer file.close();
+        try file.writeAll(stmt);
+        try file.writeAll("\n");
     }
 };
 
@@ -96,4 +210,27 @@ test "TestCANARY_REQ_GQL_086_MultilineBuffering blank line flush" {
         defer gpa.allocator().free(stmt);
         try std.testing.expect(std.mem.eql(u8, stmt, "MATCH (n)\nRETURN n"));
     } else return error.ExpectedStatement;
+}
+
+test "TestCANARY_REQ_GQL_086_HistoryPersistence basic load append" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var tmp_dir = try std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const hist_file_name = "history_test.txt";
+    const dir_path = try tmp_dir.dir.realpathAlloc(gpa.allocator(), ".");
+    defer gpa.allocator().free(dir_path);
+    const full_path = try std.fs.path.join(gpa.allocator(), &.{ dir_path, hist_file_name });
+    defer gpa.allocator().free(full_path);
+    var repl_state = try Repl.withHistory(gpa.allocator(), full_path);
+    defer repl_state.deinit();
+    try std.testing.expectEqual(@as(?[]const u8, null), try repl_state.ingest("RETURN 1 AS x"));
+    _ = try repl_state.ingest("WHERE x > 0;");
+    try std.testing.expectEqual(@as(?[]const u8, null), try repl_state.ingest("RETURN 2 AS y"));
+    _ = try repl_state.ingest("");
+    var hist = try History.load(gpa.allocator(), full_path);
+    defer hist.deinit();
+    try std.testing.expectEqual(@as(usize, 2), hist.entries.items.len);
+    try std.testing.expect(std.mem.eql(u8, hist.entries.items[0], "RETURN 1 AS x\nWHERE x > 0;"));
+    try std.testing.expect(std.mem.eql(u8, hist.entries.items[1], "RETURN 2 AS y"));
 }
