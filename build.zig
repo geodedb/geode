@@ -345,6 +345,8 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("tde_hierarchy", tde_hierarchy_mod);
     const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("distributed", distributed_mod);
+    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
+    geoded_exe.root_module.addImport("federation_flag", federation_flag_mod);
 
     const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("tracking_alloc", util_tracking_mod);

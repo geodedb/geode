@@ -278,10 +278,8 @@ pub const QueryResults = struct {
     }
 };
 
-// Global flag used to surface a federation ordering mismatch (key/dir metadata mismatch) to protocol flagger.
-// When a merge_sorted attempt falls back to union_all due to mismatch we set this; the server flag assembly
-// logic will consume and reset it so the usage flag is emitted exactly once per affected result stream.
-pub var g_last_federation_mismatch: bool = false; // CANARY hook (no direct test; exercised via mismatch tests)
+// Global mismatch flag moved to lightweight federation_flag module to avoid multiple root module collisions.
+const fed_flag = @import("federation_flag.zig");
 
 /// Federated query
 pub const FederatedQuery = struct {
@@ -544,7 +542,7 @@ pub const FederationManager = struct {
                         // In a fuller integration this would propagate via protocol frame flagger.
                         // For now we just leave a CANARY comment for evidence.
                         // CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=Federation; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission; OWNER=federation; UPDATED=2025-09-23
-                        g_last_federation_mismatch = true; // consumed by server flag assembly
+                        fed_flag.g_last_federation_mismatch = true; // consumed by server flag assembly
                     }
                     return fallback;
                 }

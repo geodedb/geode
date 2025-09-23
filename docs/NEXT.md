@@ -56,6 +56,6 @@ The following slice has been moved out of the feature-priority backlog. Governan
 
 ### Recent Slice Landing (Informational)
 
-- Federation ordering mismatch flag now emitted as `U:FederationOrderMismatch` (consumed once per affected merge fallback).
+- Federation ordering mismatch flag now emitted as `U:FederationOrderMismatch` (single consumption) via lightweight `federation_flag` module decoupled from full federation engine to avoid module root collisions.
 - Null ordering variance envelope benchmark added: `BenchmarkCANARY_REQ_GQL_052_FederationNullMergeVarianceEnvelope` (high NULL density).
 - Pagination streaming scaffold (S-018) landed with CANARY test (no functional streaming yet) — next step will add incremental emission and latency variance envelope.

@@ -199,7 +199,7 @@ Ordering Merge:
 
 - Ordered k-way merge implemented when all contributors set `ordered:true` and share identical `order_keys` sequence (and now optional `order_dirs` direction flags). Implementation (v0.15.x) performs a multi-key, direction-aware (ASC/DESC per key) stable global merge using a binary min-heap O(N log k); tie-breaking proceeds to later keys then implicit row source order (deterministic). Missing: mixed collations, NULLS FIRST/LAST override flags (future). Metadata (`ordered`, `order_keys`, `order_dirs`) preserved.
 - Fallback: If any contributor mismatches on `order_keys` length/content OR (when present) `order_dirs` sequence, coordinator downgrades to unordered concatenation (`union_all` strategy); returned `ordered` flag is `false` and ordering metadata is not propagated (test: direction mismatch fallback).
-- Flag Emission: Direction or key mismatch fallback also emits usage flag `U:FederationOrderMismatch` (planned protocol surfacing; interim CANARY present in federation merge code path).
+- Flag Emission: Direction or key mismatch fallback emits usage flag `U:FederationOrderMismatch` (single-frame consumption via `federation_flag` module; emitted exactly once per affected result stream).
   Nulls Ordering: Federated ordering now carries a uniform `nulls_first` boolean (default true). Comparator respects this across all order keys (future per-key policy). Tests: FederationNullsOrdering (NULLS FIRST and NULLS LAST). Implementation-defined default surfaced via existing collation/null policy flags; future explicit query clause `NULLS FIRST/LAST` will set this field. Variance envelope benchmark added (FederationNullMergeVarianceEnvelope) guarding high NULL density performance.
 
 Remaining Enhancements:

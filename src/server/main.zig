@@ -485,7 +485,12 @@ fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
     // Federation mismatch (ordering metadata disagreement) usage flag (single-frame emission if set)
     // Federation order mismatch flag emission (usage flag) - single consumption
     // Direct federation flag consumption
-    // (Temporarily disabled federation mismatch flag emission due to module boundary collision; reinstatement planned with refactor)
+    // Federation mismatch flag emission via wrapper module (single consumption)
+    const fedwrap = @import("federation_flag");
+    if (fedwrap.consumeMismatchFlag() and n < flags_buf_base.len) {
+        flags_buf_base[n] = "U:FederationOrderMismatch";
+        n += 1;
+    }
     // Append impl-defined codes (e.g., ZeroLengthPathExcluded)
     if (g_impl_defined_inited and g_impl_defined_codes.len > 0) {
         var i: usize = 0;
