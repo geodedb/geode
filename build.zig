@@ -589,6 +589,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(fed_latency_aggregate_exe);
     tools_step.dependOn(&fed_latency_aggregate_exe.step);
 
+    // Federation latency JSON schema validation tool
+    const fed_latency_validate_exe = b.addExecutable(.{
+        .name = "fed_latency_validate",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_validate.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(fed_latency_validate_exe);
+    tools_step.dependOn(&fed_latency_validate_exe.step);
+
     // Federation latency streak analysis tool
     const fed_latency_streak_exe = b.addExecutable(.{
         .name = "fed_latency_streak",
@@ -596,6 +604,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(fed_latency_streak_exe);
     tools_step.dependOn(&fed_latency_streak_exe.step);
+
+    // Federation latency governance summary tool
+    const fed_latency_governance_exe = b.addExecutable(.{
+        .name = "fed_latency_governance",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_governance.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(fed_latency_governance_exe);
+    tools_step.dependOn(&fed_latency_governance_exe.step);
 
     // Variance benchmark runner tool (aggregates benchmarks that don't surface via test harness)
     const run_variance_benches_exe = b.addExecutable(.{

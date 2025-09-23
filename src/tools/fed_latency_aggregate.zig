@@ -12,6 +12,8 @@ const std = @import("std");
 //   FED_LATENCY_BENCH_PATH  (optional)   : override path to benchmark executable.
 // Output: single JSON line summarizing runs.
 // CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateMultiRun; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateRobustStats; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateArchive; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
 
 const RunMetrics = struct {
     mean_ns: f128 = 0,
@@ -33,6 +35,39 @@ fn median(vals: []f128) f128 {
     } else {
         return (vals[mid - 1] + vals[mid]) / 2.0;
     }
+}
+
+fn quartiles(sorted: []const f128) struct { q1: f128, q3: f128 } {
+    if (sorted.len == 0) return .{ .q1 = 0, .q3 = 0 };
+    // Assume input already sorted ascending.
+    const mid = sorted.len / 2;
+    const lower = sorted[0..mid];
+    const upper = if (sorted.len % 2 == 0) sorted[mid..] else sorted[mid + 1 ..];
+    var q1: f128 = 0;
+    var q3: f128 = 0;
+    if (lower.len > 0) {
+        if (lower.len % 2 == 1) q1 = lower[lower.len / 2] else q1 = (lower[lower.len / 2 - 1] + lower[lower.len / 2]) / 2.0;
+    }
+    if (upper.len > 0) {
+        if (upper.len % 2 == 1) q3 = upper[upper.len / 2] else q3 = (upper[upper.len / 2 - 1] + upper[upper.len / 2]) / 2.0;
+    }
+    return .{ .q1 = q1, .q3 = q3 };
+}
+
+fn mad(sorted: []const f128, median_val: f128, ally: std.mem.Allocator) f128 {
+    if (sorted.len == 0) return 0;
+    var deviations = ally.alloc(f128, sorted.len) catch return 0;
+    defer ally.free(deviations);
+    var i: usize = 0;
+    while (i < sorted.len) : (i += 1) {
+        const d = sorted[i] - median_val;
+        deviations[i] = if (d < 0) -d else d;
+    }
+    // median of absolute deviations
+    std.sort.block(f128, deviations, {}, comptime std.sort.asc(f128));
+    const mid = deviations.len / 2;
+    if (deviations.len % 2 == 1) return deviations[mid];
+    return (deviations[mid - 1] + deviations[mid]) / 2.0;
 }
 
 fn parseF128(field: []const u8, json: []const u8) ?f128 {
@@ -218,6 +253,13 @@ pub fn main() !void {
     const median_trim_cv = median(trim_cvs_copy);
     const median_outlier_ratio = median(outlier_rs_copy);
 
+    // Robust stats (quartiles & MAD) for cv distribution.
+    // cvs_copy was sorted inside median(); we re-sort to ensure ordering after potential modifications.
+    std.sort.block(f128, cvs_copy, {}, comptime std.sort.asc(f128));
+    const qs = quartiles(cvs_copy);
+    const cv_iqr = qs.q3 - qs.q1;
+    const cv_mad = mad(cvs_copy, median_cv, ally);
+
     var buf: [2048]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const w = fbs.writer();
@@ -260,7 +302,7 @@ pub fn main() !void {
         const max_frac = @mod(s_max, 1000);
         const med_int = @divTrunc(s_med, 1000);
         const med_frac = @mod(s_med, 1000);
-        try w.print("FED_AGG runs={d} avg_cv={d}.{d:0>3} max_cv={d}.{d:0>3} med_cv={d}.{d:0>3} pass={s} reason={s}\n", .{
+        try w.print("FED_AGG runs={d} avg_cv={d}.{d:0>3} max_cv={d}.{d:0>3} med_cv={d}.{d:0>3} iqr_cv={d} mad_cv={d} pass={s} reason={s}\n", .{
             runs,
             avg_int,
             avg_frac,
@@ -268,6 +310,8 @@ pub fn main() !void {
             max_frac,
             med_int,
             med_frac,
+            cv_iqr,
+            cv_mad,
             if (all_promotion) "yes" else "no",
             if (all_promotion) "ok" else summary_reason,
         });
@@ -290,6 +334,10 @@ pub fn main() !void {
     try w.print("\"median_p95_mean_ratio\":{d},", .{median_p95});
     try w.print("\"median_trim_cv\":{d},", .{median_trim_cv});
     try w.print("\"median_outlier_ratio\":{d},", .{median_outlier_ratio});
+    try w.print("\"cv_q1\":{d},", .{qs.q1});
+    try w.print("\"cv_q3\":{d},", .{qs.q3});
+    try w.print("\"cv_iqr\":{d},", .{cv_iqr});
+    try w.print("\"cv_mad\":{d},", .{cv_mad});
     try w.print("\"max_cv\":{d},", .{max_cv});
     try w.print("\"max_trim_cv\":{d},", .{max_trim_cv});
     try w.print("\"max_p95_mean_ratio\":{d},", .{max_p95_ratio});
@@ -330,6 +378,61 @@ pub fn main() !void {
     try w.writeAll("}\n");
     const line_out = fbs.getWritten();
     _ = try std.posix.write(std.posix.STDOUT_FILENO, line_out);
+
+    // Optional archival append & rotation.
+    if (std.posix.getenv("FED_LATENCY_ARCHIVE_PATH")) |ap| {
+        var need_rotate = false;
+        var max_lines: usize = 1000;
+        if (std.posix.getenv("FED_LATENCY_ARCHIVE_MAX_LINES")) |ml| {
+            if (std.fmt.parseInt(usize, ml, 10)) |parsed| {
+                if (parsed > 0) max_lines = parsed;
+            } else |_| {}
+        }
+        // Open (create if missing) for append.
+        var file = std.fs.cwd().createFile(ap, .{ .truncate = false, .read = true, .mode = 0o666 }) catch |e| switch (e) {
+            error.PathAlreadyExists => std.fs.cwd().openFile(ap, .{ .mode = .read_write }) catch return, // open existing
+            else => return,
+        };
+        defer file.close();
+        // Count lines quickly (stop after max_lines).
+        var count: usize = 0;
+        {
+            var arch_buf: [8192]u8 = undefined;
+            var r = file.reader(&arch_buf);
+            while (true) {
+                var b: [1]u8 = undefined;
+                const n = r.read(&b) catch break;
+                if (n == 0) break;
+                if (b[0] == '\n') {
+                    count += 1;
+                    if (count >= max_lines) {
+                        need_rotate = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // Seek end for append (Zig 0.15 uses seekTo or seekFromEnd?). We'll re-open for append-only simplicity.
+        if (need_rotate) {
+            // Simple rotation: rename current -> current.1 (overwrite if exists) and create new.
+            var tmp_name_buf: [1024]u8 = undefined;
+            if (ap.len + 2 < tmp_name_buf.len) {
+                std.mem.copyForwards(u8, tmp_name_buf[0..ap.len], ap);
+                tmp_name_buf[ap.len] = '.';
+                tmp_name_buf[ap.len + 1] = '1';
+                const rot_name = tmp_name_buf[0 .. ap.len + 2];
+                // Best effort remove existing .1
+                _ = std.fs.cwd().deleteFile(rot_name) catch {};
+                _ = std.fs.cwd().rename(ap, rot_name) catch {};
+                // Recreate fresh file
+                file.close();
+                file = std.fs.cwd().createFile(ap, .{ .truncate = true, .read = true, .mode = 0o666 }) catch return;
+            }
+        }
+        // Append line.
+        _ = try file.seekFromEnd(0);
+        _ = try file.writeAll(line_out);
+    }
 
     if (!all_promotion) {
         if (std.posix.getenv("FED_LATENCY_AGG_REQUIRE")) |v| {
