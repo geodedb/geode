@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-23T00:32:40.298331577Z",
+  "generated_at": "2025-09-23T19:28:43.939572581Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -44,6 +44,20 @@
     {
       "id": "REQ-GQL-004",
       "features": [
+        {
+          "feature": "Pagination",
+          "aspect": "PaginationExecutionStreaming",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_pagination_execution_streaming.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_004_PaginationExecutionStreaming"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-23"
+        },
         {
           "feature": "Pagination",
           "aspect": "PaginationExecutionVarianceEnvelope",
@@ -129,6 +143,20 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "PaginationExecutionStreaming",
+          "aspect": "Scaffold",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -721,7 +749,7 @@
           ],
           "benches": [],
           "owner": "tooling",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "NEXT Backlog Accuracy",
@@ -1830,6 +1858,20 @@
         },
         {
           "feature": "PathCache",
+          "aspect": "PathCacheDegreeUtilization",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_path_cache_degree_utilization.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeUtilization"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "PathCache",
           "aspect": "PathCacheEntropyStats",
           "status": "TESTED",
           "files": [
@@ -2435,7 +2477,7 @@
           "aspect": "PhysiologicalRedoOptimization",
           "status": "BENCHED",
           "files": [
-            "src/storage/redo_opt.zig"
+            "tests/canary_physiological_redo.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness"
@@ -2451,7 +2493,7 @@
           "aspect": "PhysiologicalRedoOptimization",
           "status": "BENCHED",
           "files": [
-            "tests/canary_physiological_redo.zig"
+            "src/storage/redo_opt.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness"
@@ -2504,7 +2546,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_phantom_anomaly.zig"
+            "src/txn/manager.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2520,7 +2562,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "tests/canary_txn_phantom_anomaly.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2530,6 +2572,23 @@
           ],
           "owner": "txn",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "RangeTracker",
+          "status": "BENCHED",
+          "files": [
+            "src/txn/manager.zig",
+            "src/txn/range_tracker.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-22"
         },
         {
           "feature": "MVCC Phantom Prevention",
@@ -2553,23 +2612,6 @@
             "tests/canary_txn_phantom_range.zig"
           ],
           "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "MVCC Phantom Prevention",
-          "aspect": "RangeTracker",
-          "status": "BENCHED",
-          "files": [
-            "src/txn/manager.zig",
-            "src/txn/range_tracker.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
-          ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
@@ -2708,7 +2750,7 @@
             "BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope"
           ],
           "owner": "planner",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "Cost Based Optimizer",
@@ -2763,7 +2805,7 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "src/planner/enumerator.zig"
+            "tests/canary_planner_enumerator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
@@ -2779,7 +2821,7 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "tests/canary_planner_enumerator.zig"
+            "src/planner/enumerator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
@@ -2896,6 +2938,139 @@
           ],
           "owner": "planner",
           "updated": "2025-09-22"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig",
+            "src/distributed/federation_root.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig",
+            "src/distributed/federation_flag.zig",
+            "tests/e2e_federation_mismatch_flag.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagConsumption",
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission",
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyAggregateArchive",
+          "status": "IMPL",
+          "files": [
+            "src/tools/fed_latency_aggregate.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyAggregateGovernanceSummary",
+          "status": "IMPL",
+          "files": [
+            "src/tools/fed_latency_governance.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyAggregateMultiRun",
+          "status": "IMPL",
+          "files": [
+            "src/tools/fed_latency_aggregate.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyAggregateRobustStats",
+          "status": "IMPL",
+          "files": [
+            "src/tools/fed_latency_aggregate.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyAggregateSchemaValidation",
+          "status": "IMPL",
+          "files": [
+            "src/tools/fed_latency_validate.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyAggregateStreak",
+          "status": "IMPL",
+          "files": [
+            "src/tools/fed_latency_streak.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "LatencyVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmark_federation_mismatch_latency.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope"
+          ],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationMismatchFlag",
+          "aspect": "MismatchFalsePositiveGuard",
+          "status": "BENCHED",
+          "files": [
+            "benchmark_federation_mismatch_frequency.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard"
+          ],
+          "owner": "federation",
+          "updated": "2025-09-23"
         },
         {
           "feature": "Implementation Reality Accuracy",
@@ -3728,20 +3903,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
-          ],
-          "benches": [],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_cdc_adaptive_diff_perf.zig"
@@ -3750,6 +3911,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
           ],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
+          ],
+          "benches": [],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -4559,6 +4734,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "GPU Operator Kernels",
+          "aspect": "Bench",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_gpu_operator_kernel_foundations.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_051_GPUOperatorKernelFoundations"
+          ],
+          "owner": "accel",
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -4592,6 +4781,134 @@
           "benches": [],
           "owner": "dist",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "FederationNullsOrdering",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationNullsOrdering"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationNullsOrdering",
+          "aspect": "FederationNullMergeVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_federation_merge_nulls_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_052_FederationNullMergeVarianceEnvelope"
+          ],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationOrderedMerge",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationOrderedMerge"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationOrderedMultiKeyDirMerge",
+          "aspect": "BenchmarkScaling",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_federation_merge_scaling.zig"
+          ],
+          "tests": [
+            "BenchmarkCANARY_REQ_GQL_052_FederationOrderedMergeScaling"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_052_FederationOrderedMergeScaling"
+          ],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationOrderedMultiKeyDirMerge",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMerge"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationOrderedMultiKeyDirMerge",
+          "aspect": "FederationMergeVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_federation_merge_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMergeVarianceEnvelope"
+          ],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationOrderedMultiKeyMerge",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyMerge"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationResultLineMemoryLifecycle",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationResultLineDeinit"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "FederationResultLineOrdering",
+          "aspect": "Federation",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/federation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_052_FederationResultLineOrdering"
+          ],
+          "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -4664,20 +4981,6 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -4690,6 +4993,20 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -5518,20 +5835,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -5542,6 +5845,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -5585,13 +5902,300 @@
       "features": [
         {
           "feature": "Network Transport",
+          "aspect": "QUICAccept",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICAccept"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICBasicE2E",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_basic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICBasicE2E"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICClientConnect",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICClientConnect"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICConnectionMigration",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_quic_tls.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICConnectionMigration"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICConnectionParams",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICConnectionParams"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICConnectionRecovery",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICConnectionRecovery"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICCore",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICCore"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICErrorHandling",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICErrorHandling"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICFlowControl",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_quic_tls.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICFlowControl"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICHandshake",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_quic_tls.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICHandshake"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICIdleTimeout",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_quic_tls.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICIdleTimeout"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICListener",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICListener"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICMultiplexedStreams",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICMultiplexedStreams"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
           "aspect": "QUICMultiplexing",
           "status": "TESTED",
           "files": [
-            "src/canary.zig"
+            "src/canary.zig",
+            "tests/canary_quic.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_074_QUICMultiplexing"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICPerformanceMetrics",
+          "status": "BENCHED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_074_QUICPerformanceMetrics"
+          ],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICProtocol",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_basic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICProtocol"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICStream",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICStream"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICStreamOpen",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICStreamOpen"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICTLS",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_quic_tls.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICTLS"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICTLSComprehensive",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICTLSComprehensive"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICTLSConfig",
+          "status": "TESTED",
+          "files": [
+            "tests/e2e_quic_tls_comprehensive.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICTLSConfig"
           ],
           "benches": [],
           "owner": "wire",
@@ -5610,24 +6214,54 @@
           ],
           "owner": "wire",
           "updated": "2025-09-22"
+        },
+        {
+          "feature": "RaftFrame/TransportEnvelope",
+          "aspect": "NetworkTransport",
+          "status": "TESTED",
+          "files": [
+            "tests/test_quic_raft_smoke.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_RaftFrameSmoke"
+          ],
+          "benches": [],
+          "owner": "cluster",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "RaftFrameEntriesArray",
+          "aspect": "NetworkTransport",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_RaftFrameEntries"
+          ],
+          "benches": [],
+          "owner": "cluster",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "RaftFrameSnapshotInstall",
+          "aspect": "NetworkTransport",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall"
+          ],
+          "benches": [],
+          "owner": "cluster",
+          "updated": "2025-09-23"
         }
       ]
     },
     {
       "id": "REQ-GQL-075",
       "features": [
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
-          "status": "IMPL",
-          "files": [
-            "src/planner/cost_seed.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "AdaptiveEstimatorBias",
@@ -5639,6 +6273,18 @@
           "tests": [
             "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
           ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "IMPL",
+          "files": [
+            "src/planner/cost_seed.zig"
+          ],
+          "tests": [],
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
@@ -5784,6 +6430,20 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "EstimatorPrimitives",
+          "status": "TESTED",
+          "files": [
+            "tests/cost_model_seed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "EstimatorPrimitives",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_cost_model_seed_variance.zig",
@@ -5796,20 +6456,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
           ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "EstimatorPrimitives",
-          "status": "TESTED",
-          "files": [
-            "tests/cost_model_seed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
-          ],
-          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -6026,7 +6672,7 @@
         {
           "feature": "ClusterCoordinator",
           "aspect": "LeaderStub",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6035,12 +6681,12 @@
           ],
           "benches": [],
           "owner": "dist",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "ClusterCoordinator",
           "aspect": "RaftInterfaceValidation",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6049,12 +6695,12 @@
           ],
           "benches": [],
           "owner": "dist",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "ClusterCoordinator",
           "aspect": "ShardMapStub",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6063,7 +6709,7 @@
           ],
           "benches": [],
           "owner": "dist",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6120,7 +6766,7 @@
         {
           "feature": "RlsAbac",
           "aspect": "EnforcementHook",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6129,12 +6775,12 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "RlsAbac",
           "aspect": "PolicyCache",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6143,12 +6789,12 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "RlsAbac",
           "aspect": "PolicyCatalog",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6157,7 +6803,7 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6167,7 +6813,7 @@
         {
           "feature": "Monitoring",
           "aspect": "CoreMetricsSet",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6176,21 +6822,7 @@
           ],
           "benches": [],
           "owner": "ops",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Monitoring",
-          "aspect": "MetricsRegistry",
-          "status": "STUB",
-          "files": [
-            "docs/GAP_ANALYSIS.md"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_081_MetricsRegistry"
-          ],
-          "benches": [],
-          "owner": "ops",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "Monitoring",
@@ -6208,8 +6840,23 @@
         },
         {
           "feature": "Monitoring",
+          "aspect": "MetricsRegistryVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_monitoring_metrics_variance.zig",
+            "docs/GAP_ANALYSIS.md"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope"
+          ],
+          "owner": "ops",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "Monitoring",
           "aspect": "PrometheusEndpoint",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6218,7 +6865,7 @@
           ],
           "benches": [],
           "owner": "ops",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6228,7 +6875,7 @@
         {
           "feature": "BackupRestore",
           "aspect": "FullBackup",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6237,12 +6884,12 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "BackupRestore",
           "aspect": "IncrementalBackup",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6251,12 +6898,12 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         },
         {
           "feature": "BackupRestore",
           "aspect": "RestoreDriver",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6265,7 +6912,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6275,7 +6922,7 @@
         {
           "feature": "WalCompaction",
           "aspect": "ArchivalHook",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6284,12 +6931,26 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "ArchivalHook",
+          "status": "TESTED",
+          "files": [
+            "src/storage/wal_compaction_pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_ArchivalHook"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-23"
         },
         {
           "feature": "WalCompaction",
           "aspect": "CheckpointSelection",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6298,12 +6959,40 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "CheckpointSelection",
+          "status": "TESTED",
+          "files": [
+            "src/storage/wal_compaction_pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_CheckpointSelection"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-23"
         },
         {
           "feature": "WalCompaction",
           "aspect": "CompactionJob",
-          "status": "STUB",
+          "status": "TESTED",
+          "files": [
+            "src/storage/wal_compaction_pipeline.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_CompactionJob"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "CompactionJob",
+          "status": "TESTED",
           "files": [
             "docs/GAP_ANALYSIS.md"
           ],
@@ -6312,7 +7001,22 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-22"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "WalCompaction",
+          "aspect": "CompactionVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "tests/benchmark_wal_compaction_pipeline_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-23"
         }
       ]
     },
@@ -6722,10 +7426,10 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 185,
-      "IMPL": 1,
-      "STUB": 33,
-      "TESTED": 223
+      "BENCHED": 196,
+      "IMPL": 7,
+      "STUB": 18,
+      "TESTED": 271
     },
     "by_aspect": {
       "API": 7,
@@ -6755,7 +7459,7 @@
       "AppendEntriesSuccess": 1,
       "AppendEntriesTermMismatch": 1,
       "AppendEntriesVarianceEnvelope": 1,
-      "ArchivalHook": 1,
+      "ArchivalHook": 2,
       "AvgVarianceEnvelope": 1,
       "BFS": 2,
       "Backpressure": 1,
@@ -6764,6 +7468,8 @@
       "BadgeGeneration": 1,
       "BadgeStalenessGuard": 1,
       "BadgeStalenessGuardIntegrated": 1,
+      "Bench": 1,
+      "BenchmarkScaling": 1,
       "BetweennessCentrality": 1,
       "BetweennessVarianceEnvelope": 1,
       "BiconnectedComponents": 1,
@@ -6780,14 +7486,15 @@
       "CalibrationEntries": 1,
       "CalibrationFeedback": 1,
       "CascadePerf": 2,
-      "CheckpointSelection": 1,
+      "CheckpointSelection": 2,
       "ChecksumValidation": 1,
       "CliParityStatusCommand": 1,
       "ClientLoggingParity": 1,
       "ClosenessCentrality": 1,
       "ClosenessVarianceEnvelope": 1,
       "CommitAdvancementVarianceEnvelope": 1,
-      "CompactionJob": 1,
+      "CompactionJob": 2,
+      "CompactionVarianceEnvelope": 1,
       "Component": 2,
       "ConcurrencySafeGraph": 1,
       "ConflictRepairHeuristics": 1,
@@ -6845,6 +7552,9 @@
       "ExplainProtocolCalibrated": 1,
       "FailureInjection": 1,
       "FalsePositiveReduction": 1,
+      "Federation": 8,
+      "FederationMergeVarianceEnvelope": 1,
+      "FederationNullMergeVarianceEnvelope": 1,
       "FederationRouter": 1,
       "FederationRouterUnsupported": 1,
       "FixpointDriver": 1,
@@ -6901,6 +7611,13 @@
       "Kruskal": 1,
       "LFUCache": 1,
       "LRUCache": 1,
+      "LatencyAggregateArchive": 1,
+      "LatencyAggregateGovernanceSummary": 1,
+      "LatencyAggregateMultiRun": 1,
+      "LatencyAggregateRobustStats": 1,
+      "LatencyAggregateSchemaValidation": 1,
+      "LatencyAggregateStreak": 1,
+      "LatencyVarianceEnvelope": 1,
       "LeaderStub": 1,
       "LockAcquisitionTTLHeartbeat": 1,
       "LogEmitterFiltering": 1,
@@ -6910,13 +7627,16 @@
       "MVCCVersionPruneVarianceEnvelope": 1,
       "MatchLabelPropertyVarianceEnvelope": 1,
       "MetaCommandsBasic": 1,
-      "MetricsRegistry": 2,
+      "MetricsRegistry": 1,
+      "MetricsRegistryVarianceEnvelope": 1,
       "MigrationLedgerSchema": 1,
+      "MismatchFalsePositiveGuard": 1,
       "MixedAggregateVarianceEnvelope": 1,
       "MixedAggregationBreadth": 1,
       "MixedWorkload": 1,
       "MultilineBuffering": 1,
       "MvRefreshLatencyVarianceEnvelope": 1,
+      "NetworkTransport": 3,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
       "NextSliceStructureGuard": 1,
@@ -6927,6 +7647,7 @@
       "OrderingPerf": 1,
       "PageRank": 1,
       "PageRankVarianceEnvelope": 1,
+      "PaginationExecutionStreaming": 1,
       "PaginationExecutionVarianceEnvelope": 1,
       "PaginationOrderedVarianceEnvelope": 1,
       "PaginationPrefetchSimulation": 1,
@@ -6937,6 +7658,7 @@
       "PathCacheCore": 1,
       "PathCacheDegreeBucketDiscrimination": 1,
       "PathCacheDegreeBucketUtilizationVarianceEnvelope": 1,
+      "PathCacheDegreeUtilization": 1,
       "PathCacheEntropyStats": 1,
       "PathCacheEntropyVarianceEnvelope": 1,
       "PathCacheEviction": 1,
@@ -7019,7 +7741,27 @@
       "Prim": 1,
       "PrometheusEndpoint": 1,
       "PropertyAccessHotPathVarianceEnvelope": 1,
+      "QUICAccept": 1,
+      "QUICBasicE2E": 1,
+      "QUICClientConnect": 1,
+      "QUICConnectionMigration": 1,
+      "QUICConnectionParams": 1,
+      "QUICConnectionRecovery": 1,
+      "QUICCore": 1,
+      "QUICErrorHandling": 1,
+      "QUICFlowControl": 1,
+      "QUICHandshake": 1,
+      "QUICIdleTimeout": 1,
+      "QUICListener": 1,
+      "QUICMultiplexedStreams": 1,
       "QUICMultiplexing": 1,
+      "QUICPerformanceMetrics": 1,
+      "QUICProtocol": 1,
+      "QUICStream": 1,
+      "QUICStreamOpen": 1,
+      "QUICTLS": 1,
+      "QUICTLSComprehensive": 1,
+      "QUICTLSConfig": 1,
       "QuantifierTieBreakStress": 1,
       "QueryPlanCacheEvictVarianceEnvelope": 1,
       "QueueDepthInstrumentation": 1,
@@ -7043,6 +7785,7 @@
       "RewriteHookPipelineIntegration": 1,
       "SSIPhantomPrevention": 2,
       "SSIPhantomPreventionVariance": 1,
+      "Scaffold": 1,
       "SetOpDistinctDedupVarianceEnvelope": 1,
       "ShardMapStub": 1,
       "SkipList": 1,

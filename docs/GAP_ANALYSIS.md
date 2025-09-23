@@ -1,6 +1,6 @@
-# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-22)
+# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-23)
 
-<!-- STATUS_JSON_SHA256: bda48434ae157a3c9651ccd47e7b2f1a574aac209fb0f30542b94678c96d402d -->
+<!-- STATUS_JSON_SHA256: adeb4b1cdab7597e44d09ee7b4e4fabdf3f1dfcfb90b6fd10ae5469685200c3a -->
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -30,25 +30,26 @@
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasPersistenceV2; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampWarning; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=LeaderStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_LeaderStub; OWNER=dist; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=ShardMapStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_ShardMapStub; OWNER=dist; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=RaftInterfaceValidation; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_RaftInterfaceValidation; OWNER=dist; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=LeaderStub; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_078_LeaderStub; OWNER=dist; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=ShardMapStub; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_078_ShardMapStub; OWNER=dist; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=RaftInterfaceValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_078_RaftInterfaceValidation; OWNER=dist; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=FixpointDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_FixpointDriver; OWNER=engine; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=CycleGuard; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_CycleGuard; OWNER=engine; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCatalog; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCatalog; OWNER=security; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=EnforcementHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_EnforcementHook; OWNER=security; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCache; OWNER=security; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistry; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_MetricsRegistry; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCatalog; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_PolicyCatalog; OWNER=security; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=EnforcementHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_EnforcementHook; OWNER=security; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCache; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_PolicyCache; OWNER=security; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_MetricsRegistry; OWNER=ops; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=RestoreDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_RestoreDriver; OWNER=storage; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CheckpointSelection; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_CheckpointSelection; OWNER=storage; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistryVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope; OWNER=ops; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=RestoreDriver; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_RestoreDriver; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CheckpointSelection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CheckpointSelection; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope; OWNER=storage; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-22
@@ -93,20 +94,23 @@ CI SHOULD run `make canary && make update-status-hash` only when accepting an in
 
 ## 1. Evidence Summary (Derived from latest `status.json`)
 
-| Metric               | Count |
-| -------------------- | ----- |
-| Total aspects (rows) | 362   |
-| BENCHED              | 179   |
-| TESTED (non‑BENCHED) | 183   |
+The previously published summary (2025-09-22) claimed 0 `STUB` and 0 `IMPL`. The latest scan (raw `status.json`) shows non‑zero counts; documentation is therefore downgraded per Truth & Reconciliation (§3 of unified prompt).
 
-| STUB | 0 |
-| IMPL (unpromoted) | 0 |
-| Coverage (TESTED or BENCHED) | 100% |
-| Stale (>60d) | 0 |
+| Metric                       | Count |
+| ---------------------------- | ----- |
+| Total aspects (rows)         | 442   |
+| BENCHED                      | 185   |
+| TESTED (non‑BENCHED)         | 223   |
+| STUB                         | 33    |
+| IMPL (unpromoted)            | 1     |
+| Coverage (TESTED or BENCHED) | 92.5% |
+| Stale (>60d)                 | 0     |
 
-Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).
+Discrepancy note: Prior ledger asserted 100% coverage; actual coverage ( (185+223)/442 ) reflects remaining STUB/IMPL work. This correction prevents over‑claim and aligns with CANARY evidence.
 
-_Note_: Table reflects representative multi-aspect density; authoritative enumeration remains `status.csv`. Totals here are subset aggregates (not a full sum of 361) and are for planning focus only. (Corrected 359→361 and 180→182 on 2025-09-22 after fresh scan.)
+Promotion lattice (policy reminder): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. Auto‑promotion DOES NOT erase raw `STUB` / `IMPL` lines without evidence; these remain actionable.
+
+Next actions (see `NEXT.md` slices) target elimination of residual `STUB`/`IMPL` lines, prioritizing security, distributed, and storage durability surfaces.
 
 ## 1a. Conformance Profile (ISO/IEC 39075:2024)
 
@@ -126,12 +130,12 @@ _Note_: Table reflects representative multi-aspect density; authoritative enumer
 
 | REQ         | Aspects (TESTED) | Aspects (BENCHED) | Total | Notes                                                      |
 | ----------- | ---------------- | ----------------- | ----- | ---------------------------------------------------------- |
-| REQ-GQL-004 | 1                | 1                 | 2     | Pagination legality + ordered planning variance            |
-| REQ-GQL-012 | 5                | 3                 | 8     | Aggregation spill, distinct, decimal, variance envelopes   |
-| REQ-GQL-021 | 6                | 12                | 18    | Planner phases, PathCache core + variance, adaptive replan |
-| REQ-GQL-028 | 1                | 3                 | 4     | WAL recycle, flush queue depth, latency variance           |
+| REQ-GQL-004 | 2                | 3                 | 5     | Updated counts include prefetch & policy aspects           |
+| REQ-GQL-012 | 17               | 11                | 28    | Expanded agg breadth (COUNT DISTINCT, AVG, spill variants) |
+| REQ-GQL-021 | 11               | 16                | 27    | Planner + PathCache entropy & autotune additions           |
+| REQ-GQL-028 | 0                | 0                 | 0     | (Reclassified under storage improvements; see STUB table)  |
 | REQ-GQL-032 | 0                | 1                 | 1     | Constraint performance variance                            |
-| REQ-GQL-042 | 0                | 1                 | 1     | CDC adaptive flush                                         |
+| REQ-GQL-042 | 2                | 1                 | 3     | CDC API + lifecycle + ingest bench                         |
 | REQ-GQL-046 | 0                | 1                 | 1     | TDE key rotation throughput                                |
 | REQ-GQL-063 | 0                | 1                 | 1     | Dijkstra benchmark                                         |
 | REQ-GQL-065 | 0                | 1                 | 1     | Kruskal benchmark                                          |
@@ -155,19 +159,20 @@ _Note_: Table reflects representative multi-aspect density; authoritative enumer
 | Security (TDE)                                         | LIMITED        | Key hierarchy + rotation bench; no KMS / envelope keys; no auditing of key use.                                                                                                                                                                                                                                                                                                                                           |
 | Advanced Graph Analytics (Centrality, Flows, Matching) | MIXED          | Several benches (PageRank, Betweenness, etc.); others still STUB-level in algorithm sources though benches exist for higher-level wrappers.                                                                                                                                                                                                                                                                               |
 
-## 3. High-Priority Gaps (Top 8)
+## 3. High-Priority Gaps (Updated – Derived from STUB/IMPL Evidence)
 
-| #   | Gap                                                                         | Impact                                    | Required Evidence to Close                                                                                                               | Target Status                     |
-| --- | --------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| 1   | Path quantifiers, tie-break, label & property predicates (OPTIONAL pending) | Query correctness on complex patterns     | Tests for bounded variable-length expand, UA005/UA006 tie-break, label+property predicate scan; add OPTIONAL MATCH tests                 | PARTIAL→TESTED (pending OPTIONAL) |
-| 2   | Aggregation breadth (COUNT DISTINCT, AVG, HAVING)                           | Conformance breadth (§14)                 | Implement ops + tests & variance bench for hash agg spill                                                                                | BENCHED                           |
-| 3   | Raft log replication & commit index advancement                             | Durability & HA claims                    | Implement appendEntries flow + tests (success, term mismatch)                                                                            | TESTED                            |
-| 4   | Storage ARIES refinement (physiological redo optimizations)                 | Recovery performance                      | Bench redo scan vs optimized path; add variance guard                                                                                    | BENCHED                           |
-| 5   | MVCC phantom prevention robustness (range locks / predicate indexing)       | Isolation correctness (§17)               | Add targeted phantom test matrix & benchmark overhead                                                                                    | TESTED/BENCHED                    |
-| 6   | Flagger completeness (impl-defined / dependent items)                       | Conformance transparency (§24)            | Enumerate & test flag outputs for all impl-defined behaviors                                                                             | TESTED                            |
-| 7   | Pagination execution streaming variance                                     | Stable user-visible pagination latency    | Implement PULL page streaming variance bench (page_size sweep) with thresholds (CV≤0.22, p95/mean≤2.55)                                  | BENCHED                           |
-| 8   | Cost model phase stability (planner)                                        | Future optimization reliability           | Implement PlannerCostModelPhaseVarianceEnvelope bench (landed for planning; extend to sub-phases)                                        | BENCHED                           |
-| 9   | Path cache implementation + structural key enrichment completeness          | Performance & repeated pattern efficiency | Cache + lookup + enriched key (value shape, selectivity, degree bucket) + collision tightened (≥92% unique); add utilization stats bench | BENCHED                           |
+| #   | Gap                                                          | Impact                         | Required Evidence to Close                                     | Target Status       |
+| --- | ------------------------------------------------------------ | ------------------------------ | -------------------------------------------------------------- | ------------------- |
+| 1   | Remaining STUB aspects (33)                                  | Evidence coverage gap          | Convert each STUB to TESTED via minimal positive test or bench | STUB→TESTED/BENCHED |
+| 2   | Single IMPL aspect (cost model factors)                      | Unverified implementation risk | Add targeted test + variance bench then promote                | IMPL→BENCHED        |
+| 3   | Distributed coordinator stubs (REQ-GQL-078)                  | HA roadmap credibility         | Implement leader stub behaviors & shard map; add tests         | STUB→TESTED         |
+| 4   | Security RLS/ABAC policy catalog & enforcement (REQ-GQL-080) | Access control correctness     | Implement policy evaluation path + caching tests               | STUB→TESTED         |
+| 5   | Monitoring Prometheus endpoint & core metrics (REQ-GQL-081)  | Operability / SLO tracking     | Implement export; verify metrics count & naming                | STUB→TESTED         |
+| 6   | Backup/Restore primitives (REQ-GQL-082)                      | Disaster recovery claims       | Implement full + incremental snapshot test                     | STUB→TESTED         |
+| 7   | WAL compaction pipeline (REQ-GQL-083)                        | Storage footprint control      | Implement checkpoint selection + compaction job bench          | STUB→BENCHED        |
+| 8   | Selectivity estimator framework (REQ-GQL-084)                | Planner cost accuracy          | Implement frequency sampler + adaptive feedback test/bench     | STUB→BENCHED        |
+| 9   | Structured logging client parity (REQ-GQL-085)               | DX consistency                 | Implement client log formatting test                           | STUB→TESTED         |
+| 10  | Interactive REPL features (REQ-GQL-086)                      | Usability                      | Implement buffering, history, meta commands tests              | STUB→TESTED         |
 
 ## 4. Implementation-Defined / Dependent Items (Current Catalog – INCOMPLETE)
 
@@ -211,17 +216,19 @@ Below is a concise representative subset (see `status.csv` for the full authorit
 | REQ-GQL-065 | Kruskal                        | Kruskal                                     | BENCHED | 2025-09-21 |
 | REQ-GQL-067 | PageRank                       | PageRankVarianceEnvelope                    | BENCHED | 2025-09-20 |
 
-## 6. Closing Plan (Rolling)
+## 6. Closing Plan (Rolling – Adjusted to Eliminate STUB/IMPL)
 
-| Slice | Focus                                  | Exit Criteria                                                          | Owner   | Planned Evidence                                                   |
-| ----- | -------------------------------------- | ---------------------------------------------------------------------- | ------- | ------------------------------------------------------------------ |
-| S1    | Path Quantifiers & Tie-break Hardening | Tests for bounded variable expand; deterministic ordering multi-branch | planner | New tests + bench (PathExpansionHeuristicVarianceEnvelope already) |
-| S2    | Aggregation Completeness               | COUNT DISTINCT, AVG, HAVING tests; spill guard bench                   | engine  | New groupby tests + HashAggVarianceEnvelope                        |
-| S3    | Raft Replication Minimum Viable        | AppendEntries success/failure tests; leader commit advancement         | dist    | RaftReplicationTests + term mismatch test                          |
-| S4    | Cost Model Phase Stability             | Introduce PlannerCostModelPhaseVarianceEnvelope                        | planner | New variance bench added                                           |
-| S5    | Path Cache Implementation              | Functional cache hits/misses + lookup variance bench                   | engine  | PathCache tests + PathCacheLookupVarianceEnvelope                  |
-| S6    | ARIES Redo Optimization                | Redo scan optimized vs baseline; variance bench                        | storage | RedoOptimizedBench + time delta assertion                          |
-| S7    | Flagger Completeness                   | All impl-defined items enumerated & tests verify presence              | docs    | FlaggerOutputTests                                                 |
+| Slice | Focus                               | Exit Criteria                               | Owner     | Planned Evidence                                    |
+| ----- | ----------------------------------- | ------------------------------------------- | --------- | --------------------------------------------------- |
+| S1    | Eliminate Remaining STUBs (Batch 1) | 10 STUB aspects promoted (tests added)      | various   | Each new test named per policy                      |
+| S2    | Eliminate Remaining STUBs (Batch 2) | Next 10 STUB aspects promoted               | various   | Tests / benches as applicable                       |
+| S3    | Distributed Coordinator Core        | REQ-GQL-078 stubs implemented + tests       | dist      | LeaderStub/ShardMap/RaftIface tests                 |
+| S4    | RLS/ABAC Enforcement                | Policy catalog, enforcement hook tests      | security  | Policy evaluation + cache hit test                  |
+| S5    | Backup/Restore Primitives           | Full + incremental + restore tests          | storage   | Snapshot size + restore integrity                   |
+| S6    | WAL Compaction Pipeline             | Checkpoint selection + compaction bench     | storage   | Throughput & space variance bench                   |
+| S7    | Selectivity Estimator Framework     | Frequency sampler + adaptive feedback bench | optimizer | Variance envelope + accuracy test                   |
+| S8    | IMPL Cost Model Factors Test        | Add test + bench; promote single IMPL       | planner   | TestCANARY_REQ_GQL_024_PlanCostModelFactors + bench |
+| S9    | Interactive REPL Core               | REPL launch + multiline + history tests     | client    | Repl tests verifying prompts & cancels              |
 
 ## 7. Regeneration & Integrity
 

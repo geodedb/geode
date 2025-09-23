@@ -1,7 +1,7 @@
 const std = @import("std");
-const wal = @import("../wal/wal.zig");
-const catalog = @import("catalog.zig");
-const page_manager = @import("page_manager.zig");
+const wal = @import("wal");
+const catalog = @import("storage_catalog");
+const page_manager = @import("storage_page_manager");
 
 /// Backup configuration
 pub const BackupConfig = struct {
@@ -569,17 +569,4 @@ fn decompressData(data: []const u8, compression: CompressionType, allocator: std
     return allocator.dupe(u8, data);
 }
 
-test "backup: full backup creation" {
-    // Test would require mock WAL and page managers
-    // Placeholder for actual test implementation
-}
-
-test "backup: incremental backup chain" {
-    // Test would require mock WAL and page managers
-    // Placeholder for actual test implementation
-}
-
-test "backup: point-in-time recovery" {
-    // Test would require mock WAL and page managers
-    // Placeholder for actual test implementation
-}
+// (Legacy placeholder tests removed; real CANARY tests live in tests/canary_backup_restore.zig)

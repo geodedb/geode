@@ -6,17 +6,6 @@ fn skipIfFeatureDisabled(cond: bool, feature_name: []const u8) void {
     if (!cond) std.debug.print("SKIP {s} (feature flag disabled)\n", .{feature_name});
 }
 
-// ClusterCoordinator stubs
-pub fn TestCANARY_REQ_GQL_078_LeaderStub() !void {
-    skipIfFeatureDisabled(bo.feature_cluster, "cluster");
-}
-pub fn TestCANARY_REQ_GQL_078_ShardMapStub() !void {
-    skipIfFeatureDisabled(bo.feature_cluster, "cluster");
-}
-pub fn TestCANARY_REQ_GQL_078_RaftInterfaceValidation() !void {
-    skipIfFeatureDisabled(bo.feature_cluster, "cluster");
-}
-
 // RecursiveExecution stubs
 pub fn TestCANARY_REQ_GQL_079_ParserRecognition() !void {
     skipIfFeatureDisabled(bo.feature_recursive, "recursive");
@@ -62,9 +51,43 @@ pub fn TestCANARY_REQ_GQL_081_MetricsRegistry() !void {
 }
 pub fn TestCANARY_REQ_GQL_081_PrometheusEndpoint() !void {
     skipIfFeatureDisabled(bo.feature_monitoring, "monitoring");
+    if (!bo.feature_monitoring) return;
+    const monitoring = @import("monitoring/registry.zig");
+    var g = monitoring.global();
+    // simulate activity
+    g.active_transactions.set(5);
+    g.wal_bytes_written.inc(2048);
+    g.pathcache_hits.inc(11);
+    g.pathcache_misses.inc(3);
+    g.query_latency_ms.observe(2);
+    g.query_latency_ms.observe(9);
+    g.query_latency_ms.observe(60);
+    var buf: [4096]u8 = undefined;
+    var fba = std.io.fixedBufferStream(&buf);
+    try g.exportPrometheus(fba.writer());
+    const out = fba.getWritten();
+    // Required lines (subset): bucket, count, active txns, wal bytes, hits/misses
+    if (std.mem.indexOf(u8, out, "geode_query_latency_ms_bucket") == null) return error.TestExpectedFound;
+    if (std.mem.indexOf(u8, out, "geode_query_latency_ms_count") == null) return error.TestExpectedFound;
+    if (std.mem.indexOf(u8, out, "geode_active_transactions 5") == null) return error.TestExpectedFound;
+    if (std.mem.indexOf(u8, out, "geode_wal_bytes_written 2048") == null) return error.TestExpectedFound;
+    if (std.mem.indexOf(u8, out, "geode_pathcache_hits 11") == null) return error.TestExpectedFound;
+    if (std.mem.indexOf(u8, out, "geode_pathcache_misses 3") == null) return error.TestExpectedFound;
 }
 pub fn TestCANARY_REQ_GQL_081_CoreMetricsSet() !void {
     skipIfFeatureDisabled(bo.feature_monitoring, "monitoring");
+    if (!bo.feature_monitoring) return;
+    const monitoring = @import("monitoring/registry.zig");
+    var g = monitoring.global();
+    // Ensure histogram buckets accumulate correctly in monotonic cumulative export
+    g.query_latency_ms.observe(1);
+    g.query_latency_ms.observe(5000);
+    var buf: [4096]u8 = undefined;
+    var fba = std.io.fixedBufferStream(&buf);
+    try g.exportPrometheus(fba.writer());
+    const out = fba.getWritten();
+    // Check presence of +Inf bucket cumulative line (should exist after two observations)
+    if (std.mem.indexOf(u8, out, "geode_query_latency_ms_bucket{le=\"+Inf\"}") == null) return error.TestExpectedFound;
 }
 
 // BackupRestore stubs

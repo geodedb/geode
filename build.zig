@@ -126,6 +126,17 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod_tests);
     custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
+    // Backup & restore module for tests (uses wal + page manager + catalog)
+    const storage_backup_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
+    storage_backup_mod_tests.addImport("wal", wal_mod_for_tests);
+    storage_backup_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
+    storage_backup_mod_tests.addImport("storage_catalog", storage_catalog_mod_tests);
+    custom_tests.root_module.addImport("storage_backup", storage_backup_mod_tests);
+
+    // WAL compaction pipeline module (checkpoint selection / compaction orchestration / archival hook)
+    const wal_compaction_pipeline_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/wal_compaction_pipeline.zig"), .target = target, .optimize = optimize });
+    wal_compaction_pipeline_mod_tests.addImport("wal", wal_mod_for_tests);
+    custom_tests.root_module.addImport("storage/wal_compaction_pipeline.zig", wal_compaction_pipeline_mod_tests);
 
     // Add transport/quic module for QUIC canary tests
     const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });

@@ -442,9 +442,9 @@ Out of Scope: log replication, membership changes, snapshotting, election timeou
 Acceptance (Promotion to TESTED): basic leader status query returns expected static leader id; shard map query returns single shard descriptor; Raft message validation rejects decreasing term numbers.
 
 ```text
-CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=LeaderStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_LeaderStub; BENCH=BenchmarkCANARY_REQ_GQL_078_LeaderStub; OWNER=dist; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=ShardMapStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_ShardMapStub; BENCH=BenchmarkCANARY_REQ_GQL_078_ShardMapStub; OWNER=dist; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=RaftInterfaceValidation; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_RaftInterfaceValidation; BENCH=BenchmarkCANARY_REQ_GQL_078_RaftInterfaceValidation; OWNER=dist; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=LeaderStub; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_078_LeaderStub; BENCH=BenchmarkCANARY_REQ_GQL_078_LeaderStub; OWNER=dist; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=ShardMapStub; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_078_ShardMapStub; BENCH=BenchmarkCANARY_REQ_GQL_078_ShardMapStub; OWNER=dist; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=RaftInterfaceValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_078_RaftInterfaceValidation; BENCH=BenchmarkCANARY_REQ_GQL_078_RaftInterfaceValidation; OWNER=dist; UPDATED=2025-09-23
 ```
 
 ### REQ-GQL-079 — Recursive CTE / Recursive Pattern Execution Engine
@@ -484,9 +484,9 @@ Out of Scope: attribute derivation functions, hierarchical roles, row‑level au
 Acceptance (TESTED): policy restricting label=Sensitive nodes excludes them for a role without permission; ABAC attribute key mismatch yields denial diagnostic; cache invalidation test confirms updated policy takes effect without restart.
 
 ```text
-CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCatalog; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCatalog; BENCH=BenchmarkCANARY_REQ_GQL_080_PolicyCatalog; OWNER=security; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=EnforcementHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_EnforcementHook; BENCH=BenchmarkCANARY_REQ_GQL_080_EnforcementHook; OWNER=security; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCache; BENCH=BenchmarkCANARY_REQ_GQL_080_PolicyCache; OWNER=security; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCatalog; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_PolicyCatalog; BENCH=BenchmarkCANARY_REQ_GQL_080_PolicyCatalog; OWNER=security; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=EnforcementHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_EnforcementHook; BENCH=BenchmarkCANARY_REQ_GQL_080_EnforcementHook; OWNER=security; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCache; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_PolicyCache; BENCH=BenchmarkCANARY_REQ_GQL_080_PolicyCache; OWNER=security; UPDATED=2025-09-23
 ```
 
 ### REQ-GQL-081 — Monitoring & Metrics Exporter (Prometheus Skeleton)
@@ -506,8 +506,9 @@ Acceptance (TESTED): metrics endpoint returns valid exposition text including at
 
 ```text
 CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_MetricsRegistry; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistry; OWNER=ops; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; BENCH=BenchmarkCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; BENCH=BenchmarkCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistryVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope; OWNER=ops; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; BENCH=BenchmarkCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; BENCH=BenchmarkCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-23
 ```
 
 ### REQ-GQL-082 — Backup & Restore (Full + Incremental)
@@ -526,9 +527,9 @@ Out of Scope: point‑in‑time recovery beyond last incremental boundary, encry
 Acceptance (TESTED): full backup + restore round‑trip preserves small dataset integrity (row count & sample property values); incremental after small mutation applies successfully; manifest checksum mismatch test yields diagnostic.
 
 ```text
-CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_FullBackup; BENCH=BenchmarkCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; BENCH=BenchmarkCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=RestoreDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_RestoreDriver; BENCH=BenchmarkCANARY_REQ_GQL_082_RestoreDriver; OWNER=storage; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_FullBackup; BENCH=BenchmarkCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; BENCH=BenchmarkCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=RestoreDriver; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_RestoreDriver; BENCH=BenchmarkCANARY_REQ_GQL_082_RestoreDriver; OWNER=storage; UPDATED=2025-09-23
 ```
 
 ### REQ-GQL-083 — WAL Compaction & Log Maintenance

@@ -74,6 +74,8 @@ const _benchmark_mv_refresh_jitter_variance = @import("benchmark_mv_refresh_jitt
 const _benchmark_inverted_index_lookup_variance = @import("benchmark_inverted_index_lookup_variance.zig");
 // Migration engine CANARY tests
 const _canary_migration_engine = @import("canary_migration_engine_stubs.zig");
+// Backup & restore CANARY tests
+const _canary_backup_restore = @import("canary_backup_restore.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

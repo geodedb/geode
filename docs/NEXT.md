@@ -1,4 +1,4 @@
-# NEXT — Concise Forward Backlog — Regenerated 2025-09-23
+# NEXT — Concise Forward Backlog — Regenerated 2025-09-23 (Post Monitoring Variance Bench Promotion)
 
 Purpose: Maintain a minimal, actionable slice backlog strictly limited to forward work. Historical landed content lives in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
 
@@ -11,25 +11,19 @@ Purpose: Maintain a minimal, actionable slice backlog strictly limited to forwar
 5. Bench failures emit `VARIANCE_FAIL_<TOKEN>`.
 6. Freshness: regenerated within 24h (governance check).
 
-## 2. Active Backlog (Actionable Only)
+## 2. Active Backlog (Actionable Only — Focus: Remove STUB/IMPL)
 
-| Slice | REQ         | Title                              | WHY (Short)                           | Acceptance (Abbrev)                              | Class    | Owner     |
-| ----- | ----------- | ---------------------------------- | ------------------------------------- | ------------------------------------------------ | -------- | --------- |
-| S-015 | REQ-GQL-021 | PathCache Degree Utilization       | Improve cache discrimination          | Test+Bench (unique≥0.92, CV≤0.22)                | BENCH    | planner   |
-| S-016 | REQ-GQL-022 | Redo Optimization Delta Tightening | Guard redo speedup stability          | Bench (speedup CV≤0.18, p95/mean≤1.35, mean≥1.0) | BENCH    | storage   |
-| S-017 | REQ-GQL-023 | MVCC Phantom Prevention Stress     | Ensure no phantoms; quantify overhead | Tests (absence); Benches (overhead≤5%, CV≤0.22)  | TEST/BEN | mvcc      |
-| S-018 | REQ-GQL-004 | Pagination Execution Streaming     | Stable page emission latency          | Bench (CV≤0.22)+ordering test                    | BENCH    | planner   |
-| S-019 | REQ-GQL-021 | Adaptive Replan Autotune           | Stabilize replan triggers             | Test+Bench (post-conv CV≤0.20)                   | TEST/BEN | planner   |
-| S-021 | REQ-GQL-024 | Flagger Completeness Expansion     | Surface impl-defined behaviors        | Test (all flags present)                         | TEST     | docs      |
-| S-022 | REQ-GQL-012 | COUNT DISTINCT Spill Evict/Merge   | Complete agg spill pipeline           | Test+Bench (CV≤0.22)                             | TEST/BEN | engine    |
-| S-023 | REQ-GQL-074 | QUIC Multiplexed Transport         | Reduce HOL blocking / future distrib  | Test+Bench (CV≤0.22)                             | TEST/BEN | wire      |
-| S-024 | REQ-GQL-075 | Cost Model Enumeration Seed        | Enable future CBO                     | Test+Bench (CV≤0.20)                             | TEST/BEN | planner   |
-| S-025 | REQ-GQL-076 | MV Refresh Scheduler               | Derived projection foundation         | Test+Bench (CV≤0.22)                             | TEST/BEN | engine    |
-| S-026 | REQ-GQL-077 | Inverted Index Core                | Future text predicate path            | Test+Bench (CV≤0.22)                             | TEST/BEN | engine    |
-| S-027 | REQ-GQL-078 | Multi-Leader Consensus Scaffold    | Sharded replication groundwork        | Test+Bench (CV≤0.22)                             | TEST/BEN | consensus |
-| S-028 | REQ-GQL-079 | GPU Operator Kernel Foundations    | Acceleration feasibility              | Test+Bench (GPU≤1.10x CPU mean, CV≤0.23)         | TEST/BEN | accel     |
-| S-029 | REQ-GQL-080 | Cross-Shard 2PC Executor           | Distributed atomic commit             | Tests+Bench (CV≤0.22)                            | TEST/BEN | txn       |
-| S-030 | REQ-GQL-081 | Multi-Key TDE Rotation Scheduling  | Rolling encryption maintenance        | Test+Bench (throughput≥0.90 baseline, CV≤0.22)   | TEST/BEN | security  |
+| Slice | REQ         | Title                               | WHY (Short)                   | Acceptance (Abbrev)                                                          | Class    | Owner     |
+| ----- | ----------- | ----------------------------------- | ----------------------------- | ---------------------------------------------------------------------------- | -------- | --------- |
+| S-103 | REQ-GQL-081 | Monitoring Prometheus Export        | Expose metrics externally     | Endpoint/core metrics TESTED; variance envelope BENCHED (cv<=0.22 p95<=2.55) | TEST/BEN | ops       |
+| S-104 | REQ-GQL-082 | Backup/Restore Primitives           | Ensure recoverability         | Full & incremental backup tests; restore integrity checksum match            | DONE     | storage   |
+| S-105 | REQ-GQL-083 | WAL Compaction Pipeline             | Manage log growth             | Checkpoint selection + compaction job test + variance bench (CV≤0.21)        | DONE     | storage   |
+| S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | TEST/BEN | optimizer |
+| S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | TEST     | ops       |
+| S-108 | REQ-GQL-086 | Interactive REPL Core               | Developer usability           | Launch, multiline, history, meta, txn indicator tests (all STUB→TESTED)      | TEST     | client    |
+| S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | BENCH    | planner   |
+| S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | BENCH    | planner   |
+| S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | TEST     | tooling   |
 
 ## 3. Variance Policy (Extract)
 
@@ -56,12 +50,17 @@ The following slice has been moved out of the feature-priority backlog. Governan
 
 ### Recent Slice Landing (Informational)
 
+### Completed Slices (Removed from Active Backlog)
+
+- S-101 (REQ-GQL-078 Cluster Coordinator Core) — LeaderStub, ShardMapStub, RaftInterfaceValidation all TESTED (2025-09-23).
+- S-102 (REQ-GQL-080 RLS/ABAC Enforcement) — PolicyCatalog, EnforcementHook, PolicyCache all TESTED (2025-09-23).
+
 - Federation ordering mismatch flag now emitted as `U:FederationOrderMismatch` (single consumption) via lightweight `federation_flag` module decoupled from full federation engine to avoid module root collisions.
 - Null ordering variance envelope benchmark added: `BenchmarkCANARY_REQ_GQL_052_FederationNullMergeVarianceEnvelope` (high NULL density).
 - Pagination streaming scaffold (S-018) landed with CANARY test (no functional streaming yet) — next step will add incremental emission and latency variance envelope.
 - Federation mismatch false-positive guard benchmark promoted: `BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard` (STATUS=BENCHED; zero false positives over 5000 consistent iterations; single deliberate mismatch).
 - Federation mismatch latency variance envelope benchmark skeleton added: `BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope` (STATUS=IMPL; captures raw + trimmed (5%) stats; enforcement gated by `FED_LATENCY_ENFORCE=1`; targets CV<=0.22 p95/mean<=2.55 prior to promotion).
-- Federation mismatch latency variance envelope benchmark enhanced: added outlier metrics (min_ns, max_ns, outlier_count, outlier_ratio), trimmed p95, classification field (General), and optional stabilization loop (`FED_LATENCY_STABILIZE=1`) performing up to 5 passes until trimmed_cv<=0.22; promotion criteria documented (raw cv & trimmed cv <=0.22, p95/mean<=2.55, outlier_ratio<=0.10) while remaining STATUS=IMPL with enforcement still gated by `FED_LATENCY_ENFORCE=1`.
+- Federation mismatch latency variance envelope benchmark enhanced: added outlier metrics (min_ns, max_ns, outlier_count, outlier_ratio), trimmed p95, classification field (General), and optional stabilization loop (`FED_LATENCY_STABILIZE=1`) performing up to 5 passes until trimmed_cv<=0.22; promotion criteria documented (raw cv & trimmed cv ≤0.22, p95/mean ≤2.55, outlier_ratio ≤0.10) while remaining STATUS=IMPL with enforcement gated by `FED_LATENCY_ENFORCE=1`.
 - Federation mismatch latency multi-run aggregation tool `fed_latency_aggregate` added (STATUS=IMPL; aspect `LatencyAggregateMultiRun`) producing aggregate JSON (avg/max cv/trim_cv/p95_ratio/outlier_ratio, promotion_ready flag). Gated failure via `FED_LATENCY_AGG_REQUIRE=1` when promotion criteria unmet; supports run count override `FED_LATENCY_AGG_RUNS`.
   - Enhancement: verbose mode (`FED_LATENCY_VERBOSE=1`) now emits `runs_detail` array (per-run cv, trim_cv, p95_mean_ratio, outlier_ratio, passes, fail_mask). Failing aggregates include `not_ready_reasons` (subset of: cv, trim_cv, p95_mean_ratio, outlier_ratio) and bit `fail_mask`. Stability rule for future BENCHED promotion: require ≥3 consecutive daily aggregates with `promotion_ready=true` and `max_cv` ≤ threshold (0.22) while raw benchmarks (single-run latency envelope) also individually meet criteria under stabilization (`FED_LATENCY_STABILIZE=1`). CI gating path (opt-in): set `FED_LATENCY_AGG_REQUIRE=1` after stability streak achieved; prior to streak, run in observe-only mode without gating.
   - Enhancement (median + summary): aggregator now also emits `median_cv`, `median_p95_mean_ratio`, and a concise `summary_reason` field (`all_criteria_met` or first failing criterion) to simplify dashboard filtering and streak evaluation.
