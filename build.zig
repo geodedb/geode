@@ -299,6 +299,7 @@ pub fn build(b: *std.Build) void {
     vq_tls13_mod.addImport("sig", vq_sig_mod);
     vq_tls13_mod.addImport("x509", vq_x509_mod);
     vq_sig_mod.addImport("asn1", vq_asn1_mod);
+    vq_sig_mod.addImport("ed25519", vq_ed25519_mod);
     vq_x509_mod.addImport("asn1", vq_asn1_mod);
     vq_x509_mod.addImport("sig", vq_sig_mod);
     vq_x509_mod.addImport("ed25519", vq_ed25519_mod);
