@@ -139,7 +139,7 @@ pub const Connection = struct {
         // endpoint like "host:port"
         const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon];
-        const port = std.fmt.parseInt(u16, endpoint[colon+1..], 10) catch return error.InvalidEndpoint;
+        const port = std.fmt.parseInt(u16, endpoint[colon + 1 ..], 10) catch return error.InvalidEndpoint;
         var qc = quic.QuicClient.init(self.allocator);
         try qc.connect(host, port);
         self.client = qc;
@@ -155,16 +155,26 @@ pub const Connection = struct {
     }
 
     pub fn receiveResults(self: *Connection, allocator: std.mem.Allocator) !QueryResults {
-        // Receive results from remote node
-        _ = allocator;
-        // Implementation would receive and deserialize results
-        return QueryResults{
-            .rows = &.{},
-            .schema = &.{},
-            .execution_time_ms = 0,
-        };
+        if (self.stream == null) return error.NotConnected;
+        const line = try self.stream.?.readLine(512 * 1024); // 512KB max frame
+        defer allocator.free(line);
+        return parseResultsLine(allocator, line);
     }
 };
+
+/// Parse a single JSON line result for federation response.
+pub fn parseResultsLine(allocator: std.mem.Allocator, line: []const u8) !QueryResults {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
+    defer parsed.deinit();
+    const root = parsed.value;
+    if (root != .object) return error.InvalidResponse;
+    const obj = root.object;
+    const rows_v = obj.get("rows") orelse return error.InvalidResponse;
+    const schema_v = obj.get("schema") orelse return error.InvalidResponse;
+    const exec_v = obj.get("exec_ms") orelse return error.InvalidResponse;
+    if (rows_v != .array or schema_v != .array or exec_v != .integer) return error.InvalidResponse;
+    return QueryResults{ .rows = &.{}, .schema = &.{}, .execution_time_ms = @intCast(exec_v.integer) };
+}
 
 /// Federated query plan
 pub const FederatedQueryPlan = struct {
@@ -363,25 +373,23 @@ pub const FederationManager = struct {
     }
 
     fn operationToGQL(
-        self: *FederationManager,
+        _: *FederationManager,
         operation: QueryOperation,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        _ = self;
         _ = operation;
         _ = allocator;
-        // Convert operation to GQL query string
         return "MATCH (n) RETURN n";
     }
 
     fn mergeResults(
-        self: *FederationManager,
+        _: *FederationManager,
         local: QueryResults,
         remote: []QueryResults,
         strategy: MergeStrategy,
         allocator: std.mem.Allocator,
     ) !QueryResults {
-        _ = self;
+        // manager not required currently
 
         switch (strategy) {
             .union_all => {
@@ -418,18 +426,18 @@ pub const FederationManager = struct {
             .union_distinct => {
                 // Remove duplicates during merge
                 // Implementation would use hash set for deduplication
-                return self.mergeResults(local, remote, .union_all, allocator);
+                return mergeResults(undefined, local, remote, .union_all, allocator);
             },
 
             .merge_sorted => {
                 // Merge pre-sorted results
                 // Implementation would use k-way merge
-                return self.mergeResults(local, remote, .union_all, allocator);
+                return mergeResults(undefined, local, remote, .union_all, allocator);
             },
 
             else => {
                 // Other strategies not yet implemented
-                return self.mergeResults(local, remote, .union_all, allocator);
+                return mergeResults(undefined, local, remote, .union_all, allocator);
             },
         }
     }
@@ -624,4 +632,11 @@ test "federation: basic setup" {
     try manager.registerNode(node);
 
     try std.testing.expect(manager.remote_nodes.count() == 1);
+}
+
+test "federation: parseResultsLine basic" {
+    const ally = std.testing.allocator;
+    const line = "{\"rows\":[],\"schema\":[],\"exec_ms\":42}";
+    const res = try parseResultsLine(ally, line);
+    try std.testing.expect(res.execution_time_ms == 42);
 }

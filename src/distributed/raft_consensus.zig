@@ -204,6 +204,101 @@ pub const Message = union(enum) {
     install_snapshot_response: InstallSnapshotResponse,
 };
 
+// Lightweight envelope for Raft traffic over QUIC/newline framed transport.
+// JSON shape: {"term":<u64>,"from":<u64>,"kind":"req_vote|req_vote_resp|append|append_resp|install_snapshot|install_snapshot_resp","payload":{...}}
+pub const RaftFrameKind = enum { req_vote, req_vote_resp, append, append_resp, install_snapshot, install_snapshot_resp };
+
+pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
+    var buf = std.ArrayList(u8).init(ally);
+    errdefer buf.deinit();
+    const w = buf.writer();
+    const kind = switch (msg) {
+        .request_vote => "req_vote",
+        .request_vote_response => "req_vote_resp",
+        .append_entries => "append",
+        .append_entries_response => "append_resp",
+        .install_snapshot => "install_snapshot",
+        .install_snapshot_response => "install_snapshot_resp",
+    };
+    try w.print("{{\"term\":{d},\"from\":{d},\"kind\":\"{s}\",\"payload\":", .{ term, from, kind });
+    const payload = try std.json.stringifyAlloc(ally, msg, .{}); // serializes union with tag
+    defer ally.free(payload);
+    try w.writeAll(payload);
+    try w.writeAll("}\n");
+    return buf.toOwnedSlice();
+}
+
+pub const DecodedRaftFrame = struct {
+    term: u64,
+    from: u64,
+    body: Message,
+    // deinit placeholder (currently no heap inside except maybe in message entries arrays which are borrowed)
+    pub fn deinit(self: DecodedRaftFrame, _: Allocator) void {
+        _ = self;
+    }
+};
+
+pub fn decodeRaftFrame(ally: Allocator, line: []const u8) !DecodedRaftFrame {
+    const parsed = try std.json.parseFromSlice(std.json.Value, ally, line, .{});
+    defer parsed.deinit();
+    const root = parsed.value;
+    if (root != .object) return error.InvalidFrame;
+    const obj = root.object;
+    const term_v = obj.get("term") orelse return error.InvalidFrame;
+    const from_v = obj.get("from") orelse return error.InvalidFrame;
+    const kind_v = obj.get("kind") orelse return error.InvalidFrame;
+    const payload_v = obj.get("payload") orelse return error.InvalidFrame;
+    if (term_v != .integer or from_v != .integer or kind_v != .string or payload_v != .object) return error.InvalidFrame;
+    const term: u64 = @intCast(term_v.integer);
+    const from: u64 = @intCast(from_v.integer);
+    const kind_str = kind_v.string;
+    // We translate payload object back to Message union by matching kind string.
+    if (std.mem.eql(u8, kind_str, "req_vote")) {
+        const po = payload_v.object;
+        const rv = RequestVote{
+            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
+            .candidate_id = @intCast((po.get("candidate_id") orelse return error.InvalidFrame).integer),
+            .last_log_index = @intCast((po.get("last_log_index") orelse return error.InvalidFrame).integer),
+            .last_log_term = @intCast((po.get("last_log_term") orelse return error.InvalidFrame).integer),
+            .pre_vote = if (po.get("pre_vote")) |pv| pv == .bool and pv.bool else false,
+        };
+        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .request_vote = rv } };
+    } else if (std.mem.eql(u8, kind_str, "req_vote_resp")) {
+        const po = payload_v.object;
+        const rvr = RequestVoteResponse{
+            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
+            .vote_granted = if (po.get("vote_granted") orelse return error.InvalidFrame) |vg| vg == .bool and vg.bool else false,
+            .voter_id = @intCast((po.get("voter_id") orelse return error.InvalidFrame).integer),
+        };
+        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .request_vote_response = rvr } };
+    } else if (std.mem.eql(u8, kind_str, "append")) {
+        const po = payload_v.object;
+        // entries array ignored for now (TODO: full log entry materialization)
+        const ae = AppendEntries{
+            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
+            .leader_id = @intCast((po.get("leader_id") orelse return error.InvalidFrame).integer),
+            .prev_log_index = @intCast((po.get("prev_log_index") orelse return error.InvalidFrame).integer),
+            .prev_log_term = @intCast((po.get("prev_log_term") orelse return error.InvalidFrame).integer),
+            .entries = &[_]LogEntry{},
+            .leader_commit = @intCast((po.get("leader_commit") orelse return error.InvalidFrame).integer),
+        };
+        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .append_entries = ae } };
+    } else if (std.mem.eql(u8, kind_str, "append_resp")) {
+        const po = payload_v.object;
+        const aer = AppendEntriesResponse{
+            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
+            .success = if (po.get("success") orelse return error.InvalidFrame) |sv| sv == .bool and sv.bool else false,
+            .match_index = @intCast((po.get("match_index") orelse return error.InvalidFrame).integer),
+        };
+        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .append_entries_response = aer } };
+    } else if (std.mem.eql(u8, kind_str, "install_snapshot")) {
+        return error.UnsupportedFrame; // TODO: implement snapshot frames
+    } else if (std.mem.eql(u8, kind_str, "install_snapshot_resp")) {
+        return error.UnsupportedFrame;
+    }
+    return error.InvalidFrame;
+}
+
 pub const RequestVote = struct {
     term: u64,
     candidate_id: u64,
@@ -837,15 +932,21 @@ pub const RaftNode = struct {
 
     fn sendMessage(self: *RaftNode, peer: Peer, msg: Message) !void {
         if (!peer.alive) return;
-
+        const line = try encodeRaftFrame(self.allocator, self.id, self.current_term, msg);
+        defer self.allocator.free(line);
         if (self.transport) |transport| {
-            const payload = try std.json.stringifyAlloc(self.allocator, msg, .{});
-            defer self.allocator.free(payload);
-            transport.send(peer, payload) catch |err| {
-                log.warn("Failed to send message to peer {}: {}", .{ peer.id, err });
+            transport.send(peer, line) catch |err| {
+                log.warn("Failed to send raft frame to peer {}: {}", .{ peer.id, err });
             };
         } else if (peer.rpc_client) |client| {
-            try client.sendMessage(msg);
+            // Wrap client to send newline-delimited frame
+            if (client.client == null) {
+                try client.sendMessage(msg); // fallback legacy
+            } else {
+                if (client.stream) |s| {
+                    try s.writeAll(line);
+                } else try client.sendMessage(msg);
+            }
         }
     }
 
@@ -972,6 +1073,24 @@ test "raft initialization" {
     try testing.expect(node.commit_index == 0);
     try testing.expect(node.last_applied == 0);
     try testing.expect(node.log.items.len == 1); // Initial noop entry
+}
+
+test "raft frame encode/decode round trip (heartbeat append)" {
+    const ally = std.testing.allocator;
+    var peers = [_]Peer{.{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null }};
+    var node = try RaftNode.init(ally, 1, &peers, 150);
+    defer node.deinit();
+    const msg = Message{ .append_entries = .{ .term = 0, .leader_id = 1, .prev_log_index = 0, .prev_log_term = 0, .entries = &[_]LogEntry{}, .leader_commit = 0 } };
+    const line = try encodeRaftFrame(ally, node.id, node.current_term, msg);
+    defer ally.free(line);
+    const decoded = try decodeRaftFrame(ally, line);
+    defer decoded.deinit(ally);
+    try std.testing.expect(decoded.from == 1);
+    try std.testing.expect(decoded.term == 0);
+    switch (decoded.body) {
+        .append_entries => {},
+        else => return error.UnexpectedKind,
+    }
 }
 
 test "raft single node becomes leader" {

@@ -1,7 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const quic = @import("../transport/quic.zig");
-const RaftNode = @import("raft_consensus.zig").RaftNode;
+const quic = @import("transport/quic");
+const raft_consensus = @import("raft_consensus.zig");
+const RaftNode = raft_consensus.RaftNode;
 const protocol = @import("../protocol.zig");
 const storage = @import("../storage/interface.zig");
 
@@ -224,13 +225,17 @@ pub const ClusterCoordinator = struct {
     }
 
     fn networkLoop(self: *ClusterCoordinator) !void {
-        const listener = try net.Address.listen(net.Address.initIp4([4]u8{ 0, 0, 0, 0 }, 7568));
-        defer listener.deinit();
+        // Initialize (or reuse) QUIC server transport
+        if (self.network_transport.quic_server == null) {
+            const qt = try quic.QuicTransport.init(self.allocator, .{ .address = "0.0.0.0", .port = 7568 });
+            self.network_transport.quic_server = qt;
+            try self.network_transport.quic_server.?.listen();
+        }
 
         while (true) {
-            const conn = try listener.accept();
-            const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, conn });
-            thread.detach();
+            const conn = try self.network_transport.quic_server.?.accept();
+            const t = try std.Thread.spawn(.{}, handleQuicConnection, .{ self, conn });
+            t.detach();
         }
     }
 
@@ -260,20 +265,29 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    fn handleConnection(self: *ClusterCoordinator, conn: net.Server.Connection) !void {
-        defer conn.stream.close();
-
-        var buffer: [4096]u8 = undefined;
+    fn handleQuicConnection(self: *ClusterCoordinator, conn: *quic.QuicConnection) !void {
+        // Accept a single stream (simple model for now)
+        const stream = try conn.acceptStream();
+        // Stream/connection cleanup handled by transport on deinit (no explicit close)
         while (true) {
-            const bytes_read = try conn.stream.read(&buffer);
-            if (bytes_read == 0) break;
-
-            const message = try protocol.decode(buffer[0..bytes_read]);
-            const response = try self.handleClusterMessage(message);
-            const encoded = try protocol.encode(self.allocator, response);
-            defer self.allocator.free(encoded);
-
-            _ = try conn.stream.write(encoded);
+            // Read a single newline-delimited frame (up to 256KB)
+            const line = stream.readLine(256 * 1024) catch |err| switch (err) {
+                error.EndOfStream => break,
+                else => return err,
+            };
+            defer self.allocator.free(line);
+            // Skip empty
+            if (line.len == 0) continue;
+            // Attempt Raft frame decode first
+            const frame_res = raft_consensus.decodeRaftFrame(self.allocator, line) catch |e| {
+                std.log.warn("cluster: failed to decode raft frame: {}", .{e});
+                continue; // Ignore unknown line for now
+            };
+            defer frame_res.deinit(self.allocator);
+            // Dispatch to Raft state machine
+            self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
+                std.log.err("cluster: raft handleMessage error: {}", .{e});
+            };
         }
     }
 
@@ -299,7 +313,7 @@ pub const ClusterCoordinator = struct {
             };
         }
 
-        const node_info = try parseNodeInfo(msg.data);
+        const node_info = try parseNodeInfo(self.allocator, msg.data);
         try self.cluster_state.nodes.append(node_info);
 
         // Trigger rebalancing
@@ -436,8 +450,11 @@ pub const ClusterCoordinator = struct {
         for (peer_configs, 0..) |config, i| {
             peers[i] = .{
                 .id = config.id,
-                .address = try net.Address.parseIp(config.address, config.port),
+                .endpoint = try allocator.dupe(u8, config.address),
+                .port = config.port,
                 .alive = true,
+                .last_contact = std.time.milliTimestamp(),
+                .rpc_client = null,
             };
         }
         return peers;
@@ -458,7 +475,7 @@ pub const ClusterCoordinator = struct {
         _ = config;
         return NetworkTransport{
             .allocator = allocator,
-            .listener = null,
+            .quic_server = null,
             .connections = std.AutoHashMap(u64, NetworkTransport.Connection).init(allocator),
             .message_queue = .{
                 .incoming = std.ArrayList(NetworkTransport.IncomingMessage).init(allocator),
@@ -553,12 +570,30 @@ pub const ClusterCoordinator = struct {
         return "topology";
     }
 
-    fn parseNodeInfo(data: []const u8) !NodeInfo {
-        // TODO: Implement parsing
-        _ = data;
+    fn parseNodeInfo(allocator: Allocator, data: []const u8) !NodeInfo {
+        // Simplified parser: expect JSON {"id":<u64>,"endpoint":"host:port"}
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const ally = arena.allocator();
+        const parsed = std.json.parseFromSlice(std.json.Value, ally, data, .{}) catch |e| {
+            std.log.warn("cluster: parseNodeInfo JSON error: {}", .{e});
+            return error.InvalidNodeInfo;
+        };
+        defer parsed.deinit();
+        const root = parsed.value;
+        var id_val: u64 = 1;
+        var endpoint_val: []const u8 = "unknown:0";
+        if (root == .object) {
+            if (root.object.get("id")) |v| {
+                if (v == .integer) id_val = @intCast(v.integer);
+            }
+            if (root.object.get("endpoint")) |v| {
+                if (v == .string) endpoint_val = v.string;
+            }
+        }
         return NodeInfo{
-            .id = 1,
-            .address = undefined,
+            .id = id_val,
+            .endpoint = endpoint_val,
             .state = .joining,
             .role = .follower,
             .capacity = .{
@@ -569,7 +604,7 @@ pub const ClusterCoordinator = struct {
                 .current_load = 0.0,
             },
             .last_heartbeat = std.time.milliTimestamp(),
-            .metadata = undefined,
+            .metadata = std.StringHashMap([]const u8).init(allocator),
         };
     }
 

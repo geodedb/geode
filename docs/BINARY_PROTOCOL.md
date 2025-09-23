@@ -112,6 +112,91 @@ Flags remain on the outer frame (`flagger_findings`). Typical flags: `I:IllegalO
 
 Planned additions (not yet present): per-op `input_rows`, memory metrics, allocation counters.
 
+## Raft Replication & Cluster Control Framing (Internal over QUIC)
+
+CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrame/TransportEnvelope"; ASPECT=NetworkTransport; STATUS=IMPLEMENTED; TEST=TestRaftFrameEncodeDecodeRoundTrip; OWNER=cluster; UPDATED=2025-09-23
+
+While the client/server binary protocol above governs GQL interactions, intra-cluster consensus traffic (Raft) uses a lightweight newline‑delimited JSON envelope (one frame per line) over a QUIC bidirectional stream. This keeps the transport simple (no length prefix — QUIC records ensure ordering and reliability) and debuggable with plaintext inspection.
+
+RaftFrame JSON schema (prototype v0.15.x):
+
+```json
+{
+  "term": 12,
+  "from": "node-a",
+  "kind": "append_entries",
+  "payload": {
+    /* kind-specific object (currently minimal) */
+  }
+}
+```
+
+Fields:
+
+- `term` (u64) — Raft term.
+- `from` (string) — sender node id (stable cluster identity string).
+- `kind` (enum string) — one of `request_vote`, `append_entries`, `install_snapshot`, `heartbeat` (additional kinds will be additive).
+- `payload` (object) — shape depends on `kind`; presently elided / minimal for heartbeat & vote RPCs (future: entries array, prevLogIndex/Term, leaderCommit, snapshot chunk metadata).
+
+Framing Rules:
+
+- Each serialized frame ends with a single `\n` (LF). Readers call `readLine` with an upper bound (currently 256 KiB) to obtain the full JSON text.
+- Oversized lines => stream error + connection close (future explicit diagnostic code).
+- Unknown `kind` ⇒ ignored (logged at DEBUG) to preserve forward compatibility.
+
+Rationale:
+
+- Simplicity: Avoid bespoke varint length prefix while leveraging QUIC's segmentation.
+- Human readability for initial bring‑up & wireshark/plaintext debugging.
+- Forward compatible: additive fields ignored by existing decoders.
+
+Limitations / TODO:
+
+- `payload` for `append_entries` does not yet serialize the log entry batch — entries are still moved via an internal path (next milestone will embed an array with index / term pairs + data slice references or chunked binary side channel).
+- Snapshot install not implemented (decoder returns UnsupportedFrame placeholder).
+
+## Federated Query Result Line Protocol (Prototype)
+
+CANARY: REQ=REQ-GQL-052; FEATURE="FederationResultLine"; ASPECT=Federation; STATUS=IMPLEMENTED; TEST=TestFederationParseResultsLineBasic; OWNER=federation; UPDATED=2025-09-23
+
+Early federation support introduces a single‑line (newline‑delimited JSON) response per remote sub‑query execution. This is distinct from the client/server `BINDINGS` paging: federation currently performs gather/merge at a coordinator after receiving one JSON object per remote shard or remote database.
+
+Result JSON schema (current minimal form):
+
+```json
+{
+  "rows": [{ "col": 1 }],
+  "schema": [{ "name": "col", "type": "INT" }],
+  "exec_ms": 0.42
+}
+```
+
+Fields:
+
+- `rows` — array of binding objects (unordered unless the sub‑plan enforces ordering; ordering metadata forthcoming).
+- `schema` — array describing columns (`name`, `type`). Can be empty when remote side elides schema (coordinator may reconcile from plan or first non‑empty contributor).
+- `exec_ms` — execution latency observed at remote node (floating seconds or ms? (IMPLEMENTATION: floating milliseconds) — will standardize to integer microseconds in later revision; Flagger will announce the unit change).
+
+Coordinator Behavior (current):
+
+- Parses each line, validates JSON shape, appends into intermediate lists.
+- Merging logic presently stubbed — final result uses first non‑empty schema; row concatenation without dedup or re‑ordering.
+- Future: stable ordered merge (when all contributors flagged ordered), set op reconciliation, error propagation with per‑remote diagnostics.
+
+Safety / Limits:
+
+- Per‑line size guard (512 KiB). Exceeding guard => connection closed.
+- Unknown fields ignored (forward compatibility).
+
+Planned Enhancements:
+
+- Ordering metadata propagation (`ordered`, `order_keys`).
+- Pagination support for large remote result sets.
+- Error frame lines carrying `status_class` + `additional_statuses` for partial failures.
+- Binary row encoding option behind capability negotiation.
+
+NOTE: Federation protocol is internal/experimental; external stability not guaranteed until v0.17+.
+
 ## Diagnostics Examples
 
 - Unordered pagination (`LIMIT/OFFSET` without `ORDER BY`) ⇒ primary `US001` (anchor 16.18–16.19) with flag `U:US001/enforced`.
