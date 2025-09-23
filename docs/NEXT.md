@@ -1,4 +1,4 @@
-# NEXT — Concise Forward Backlog — Regenerated 2025-09-22
+# NEXT — Concise Forward Backlog — Regenerated 2025-09-23
 
 Purpose: Maintain a minimal, actionable slice backlog strictly limited to forward work. Historical landed content lives in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
 
@@ -52,10 +52,18 @@ The following slice has been moved out of the feature-priority backlog. Governan
 | ----- | ----------- | ------------------------------ | ----------------------------------------- | ---------------- |
 | S-020 | REQ-GQL-010 | Governance Multi-Doc Freshness | Mechanism landed & enforced automatically | TEST (CANARY)    |
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Backlog Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceMultiDocFreshness; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Backlog Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceMultiDocFreshness; OWNER=tooling; UPDATED=2025-09-23
 
 ### Recent Slice Landing (Informational)
 
 - Federation ordering mismatch flag now emitted as `U:FederationOrderMismatch` (single consumption) via lightweight `federation_flag` module decoupled from full federation engine to avoid module root collisions.
 - Null ordering variance envelope benchmark added: `BenchmarkCANARY_REQ_GQL_052_FederationNullMergeVarianceEnvelope` (high NULL density).
 - Pagination streaming scaffold (S-018) landed with CANARY test (no functional streaming yet) — next step will add incremental emission and latency variance envelope.
+- Federation mismatch false-positive guard benchmark promoted: `BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard` (STATUS=BENCHED; zero false positives over 5000 consistent iterations; single deliberate mismatch).
+- Federation mismatch latency variance envelope benchmark skeleton added: `BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope` (STATUS=IMPL; captures raw + trimmed (5%) stats; enforcement gated by `FED_LATENCY_ENFORCE=1`; targets CV<=0.22 p95/mean<=2.55 prior to promotion).
+- Federation mismatch latency variance envelope benchmark enhanced: added outlier metrics (min_ns, max_ns, outlier_count, outlier_ratio), trimmed p95, classification field (General), and optional stabilization loop (`FED_LATENCY_STABILIZE=1`) performing up to 5 passes until trimmed_cv<=0.22; promotion criteria documented (raw cv & trimmed cv <=0.22, p95/mean<=2.55, outlier_ratio<=0.10) while remaining STATUS=IMPL with enforcement still gated by `FED_LATENCY_ENFORCE=1`.
+- Federation mismatch latency multi-run aggregation tool `fed_latency_aggregate` added (STATUS=IMPL; aspect `LatencyAggregateMultiRun`) producing aggregate JSON (avg/max cv/trim_cv/p95_ratio/outlier_ratio, promotion_ready flag). Gated failure via `FED_LATENCY_AGG_REQUIRE=1` when promotion criteria unmet; supports run count override `FED_LATENCY_AGG_RUNS`.
+  - Enhancement: verbose mode (`FED_LATENCY_VERBOSE=1`) now emits `runs_detail` array (per-run cv, trim_cv, p95_mean_ratio, outlier_ratio, passes, fail_mask). Failing aggregates include `not_ready_reasons` (subset of: cv, trim_cv, p95_mean_ratio, outlier_ratio) and bit `fail_mask`. Stability rule for future BENCHED promotion: require ≥3 consecutive daily aggregates with `promotion_ready=true` and `max_cv` ≤ threshold (0.22) while raw benchmarks (single-run latency envelope) also individually meet criteria under stabilization (`FED_LATENCY_STABILIZE=1`). CI gating path (opt-in): set `FED_LATENCY_AGG_REQUIRE=1` after stability streak achieved; prior to streak, run in observe-only mode without gating.
+  - Enhancement (median + summary): aggregator now also emits `median_cv`, `median_p95_mean_ratio`, and a concise `summary_reason` field (`all_criteria_met` or first failing criterion) to simplify dashboard filtering and streak evaluation.
+  - Enhancement (extended medians + txt mode): added `median_trim_cv`, `median_outlier_ratio`, and optional human-readable text output via `FED_LATENCY_FORMAT=txt` (single-line summary). JSON path unchanged.
+  - New tool: `fed_latency_streak` (STATUS=IMPL) computes current/longest promotion_ready streak from aggregator JSONL history and eligibility (default ≥3) with txt/JSON dual output; includes CANARY marker `LatencyAggregateStreak`.

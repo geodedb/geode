@@ -492,6 +492,24 @@ pub fn build(b: *std.Build) void {
     const run_pathcache_degree_util_bench = b.addRunArtifact(pathcache_degree_util_bench);
     test_step.dependOn(&run_pathcache_degree_util_bench.step);
 
+    // Federation mismatch false-positive guard benchmark (optional SLO)
+    const federation_mismatch_guard_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_guard", .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_federation_mismatch_frequency.zig"), .target = target, .optimize = optimize }) });
+    federation_mismatch_guard_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
+    b.installArtifact(federation_mismatch_guard_bench);
+    const run_federation_mismatch_guard_bench = b.addRunArtifact(federation_mismatch_guard_bench);
+    test_step.dependOn(&run_federation_mismatch_guard_bench.step);
+
+    // Federation mismatch latency variance envelope benchmark (optional SLO, unpromoted IMPL)
+    const federation_mismatch_latency_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
+    federation_mismatch_latency_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
+    b.installArtifact(federation_mismatch_latency_bench);
+    const run_federation_mismatch_latency_bench = b.addRunArtifact(federation_mismatch_latency_bench);
+    test_step.dependOn(&run_federation_mismatch_latency_bench.step);
+    // Also compile its tests explicitly (so the test block runs under the zig test harness aside from executable run)
+    const federation_mismatch_latency_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
+    federation_mismatch_latency_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
+    test_step.dependOn(&federation_mismatch_latency_test.step);
+
     // Redo optimization delta variance benchmark (S-016)
     const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
     redo_opt_delta_bench.root_module.addImport("wal", wal_mod);
@@ -562,6 +580,22 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(bench_regress_exe);
     tools_step.dependOn(&bench_regress_exe.step);
+
+    // Federation latency multi-run aggregation tool
+    const fed_latency_aggregate_exe = b.addExecutable(.{
+        .name = "fed_latency_aggregate",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_aggregate.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(fed_latency_aggregate_exe);
+    tools_step.dependOn(&fed_latency_aggregate_exe.step);
+
+    // Federation latency streak analysis tool
+    const fed_latency_streak_exe = b.addExecutable(.{
+        .name = "fed_latency_streak",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_streak.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(fed_latency_streak_exe);
+    tools_step.dependOn(&fed_latency_streak_exe.step);
 
     // Variance benchmark runner tool (aggregates benchmarks that don't surface via test harness)
     const run_variance_benches_exe = b.addExecutable(.{
@@ -657,6 +691,15 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&gpu_test.step);
+
+    // Federation mismatch flag E2E protocol-style test (lightweight)
+    const fed_mismatch_flag_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_federation_mismatch_flag.zig"), .target = target, .optimize = optimize }),
+    });
+    fed_mismatch_flag_test.root_module.addImport("geode", root_mod);
+    fed_mismatch_flag_test.root_module.addImport("protocol", protocol_mod);
+    fed_mismatch_flag_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
+    test_step.dependOn(&fed_mismatch_flag_test.step);
 
     // Security and RLS tests
     const auth_test = b.addTest(.{
