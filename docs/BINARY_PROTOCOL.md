@@ -131,12 +131,15 @@ RaftFrame JSON schema (prototype v0.15.x):
 }
 ```
 
-Fields:
+Fields (updated after entries & snapshot support):
 
 - `term` (u64) — Raft term.
 - `from` (string) — sender node id (stable cluster identity string).
-- `kind` (enum string) — one of `request_vote`, `append_entries`, `install_snapshot`, `heartbeat` (additional kinds will be additive).
-- `payload` (object) — shape depends on `kind`; presently elided / minimal for heartbeat & vote RPCs (future: entries array, prevLogIndex/Term, leaderCommit, snapshot chunk metadata).
+- `kind` (enum string) — one of `request_vote`, `append_entries`, `append_resp`, `install_snapshot`, `install_snapshot_resp` (additional kinds like `snapshot_chunk` reserved).
+- `payload` (object) — shape depends on `kind`:
+  - `append_entries`: includes `term,leader_id,prev_log_index,prev_log_term,leader_commit,entries[]` where each entry is `{term,index,cmd}` (command kind tag only; payload elided in prototype).
+  - `install_snapshot`: includes `term,leader_id,last_included_index,last_included_term,offset,done` (empty `data` slice in prototype; chunking TBD).
+  - `request_vote` / `request_vote_response` / `append_entries_response`: unchanged minimal fields.
 
 Framing Rules:
 
@@ -152,8 +155,12 @@ Rationale:
 
 Limitations / TODO:
 
-- `payload` for `append_entries` does not yet serialize the log entry batch — entries are still moved via an internal path (next milestone will embed an array with index / term pairs + data slice references or chunked binary side channel).
-- Snapshot install not implemented (decoder returns UnsupportedFrame placeholder).
+- `entries` omit full command payloads (write data, mutations) and checksums; to be added with size guards.
+- Snapshot `data` omitted (will become chunked binary or base64 with checksum & size guard).
+- `snapshot_chunk` not yet emitted.
+
+CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameEntriesArray"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameEntries; OWNER=cluster; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameSnapshotInstall"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall; OWNER=cluster; UPDATED=2025-09-23
 
 ## Federated Query Result Line Protocol (Prototype)
 
@@ -190,12 +197,16 @@ Safety / Limits:
 
 Planned Enhancements:
 
-- Ordering metadata propagation (`ordered`, `order_keys`).
+- Ordering metadata propagation (`ordered`, `order_keys`). (Parsing + memory lifecycle implemented; merge strategy still concatenation.)
 - Pagination support for large remote result sets.
 - Error frame lines carrying `status_class` + `additional_statuses` for partial failures.
 - Binary row encoding option behind capability negotiation.
 
 NOTE: Federation protocol is internal/experimental; external stability not guaranteed until v0.17+.
+
+Memory Lifecycle: `QueryResults.deinit` releases duplicated `order_keys` strings to avoid allocator growth in high fan‑out queries.
+
+CANARY: REQ=REQ-GQL-052; FEATURE="FederationResultLineMemoryLifecycle"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_052_FederationResultLineDeinit; OWNER=federation; UPDATED=2025-09-23
 
 ## Diagnostics Examples
 

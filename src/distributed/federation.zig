@@ -172,8 +172,30 @@ pub fn parseResultsLine(allocator: std.mem.Allocator, line: []const u8) !QueryRe
     const rows_v = obj.get("rows") orelse return error.InvalidResponse;
     const schema_v = obj.get("schema") orelse return error.InvalidResponse;
     const exec_v = obj.get("exec_ms") orelse return error.InvalidResponse;
-    if (rows_v != .array or schema_v != .array or exec_v != .integer) return error.InvalidResponse;
-    return QueryResults{ .rows = &.{}, .schema = &.{}, .execution_time_ms = @intCast(exec_v.integer) };
+    if (rows_v != .array or schema_v != .array or (exec_v != .integer and exec_v != .float)) return error.InvalidResponse;
+    const ordered_v = obj.get("ordered");
+    const order_keys_v = obj.get("order_keys");
+    var ordered: bool = false;
+    if (ordered_v) |ov| {
+        if (ov == .bool) ordered = ov.bool;
+    }
+    var order_keys: []const []const u8 = &.{};
+    if (order_keys_v) |okv| {
+        if (okv == .array) {
+            var tmp = try allocator.alloc([]const u8, okv.array.items.len);
+            for (okv.array.items, 0..) |it, i| {
+                if (it != .string) return error.InvalidResponse;
+                tmp[i] = try allocator.dupe(u8, it.string);
+            }
+            order_keys = tmp;
+        }
+    }
+    const exec_ms: u64 = switch (exec_v) {
+        .integer => @intCast(exec_v.integer),
+        .float => @intFromFloat(exec_v.float),
+        else => 0,
+    };
+    return QueryResults{ .rows = &.{}, .schema = &.{}, .execution_time_ms = exec_ms, .ordered = ordered, .order_keys = order_keys };
 }
 
 /// Federated query plan
@@ -220,6 +242,16 @@ pub const QueryResults = struct {
     rows: []const protocol.BindingRow,
     schema: []const protocol.ColumnDef,
     execution_time_ms: u64,
+    // Ordering metadata (optional; federation may propagate this later)
+    ordered: bool = false,
+    order_keys: []const []const u8 = &.{},
+    pub fn deinit(self: *QueryResults, allocator: std.mem.Allocator) void {
+        if (self.order_keys.len > 0) {
+            for (self.order_keys) |k| allocator.free(k);
+            allocator.free(self.order_keys);
+            self.order_keys = &.{};
+        }
+    }
 };
 
 /// Federated query
@@ -639,4 +671,24 @@ test "federation: parseResultsLine basic" {
     const line = "{\"rows\":[],\"schema\":[],\"exec_ms\":42}";
     const res = try parseResultsLine(ally, line);
     try std.testing.expect(res.execution_time_ms == 42);
+}
+
+// CANARY: REQ=REQ-GQL-052; FEATURE="FederationResultLineOrdering"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_052_FederationResultLineOrdering; OWNER=federation; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_052_FederationResultLineOrdering" {
+    const ally = std.testing.allocator;
+    const line = "{\"rows\":[],\"schema\":[],\"exec_ms\":1,\"ordered\":true,\"order_keys\":[\"x\",\"y\"]}";
+    var res = try parseResultsLine(ally, line);
+    try std.testing.expect(res.ordered);
+    try std.testing.expect(res.order_keys.len == 2);
+    try std.testing.expect(std.mem.eql(u8, res.order_keys[0], "x"));
+    res.deinit(ally);
+}
+
+// CANARY: REQ=REQ-GQL-052; FEATURE="FederationResultLineMemoryLifecycle"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_052_FederationResultLineDeinit; OWNER=federation; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_052_FederationResultLineDeinit" {
+    const ally = std.testing.allocator;
+    const line = "{\"rows\":[],\"schema\":[],\"exec_ms\":7,\"ordered\":false,\"order_keys\":[\"col1\"]}";
+    var res = try parseResultsLine(ally, line);
+    try std.testing.expect(res.order_keys.len == 1);
+    res.deinit(ally);
 }

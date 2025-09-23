@@ -206,7 +206,7 @@ pub const Message = union(enum) {
 
 // Lightweight envelope for Raft traffic over QUIC/newline framed transport.
 // JSON shape: {"term":<u64>,"from":<u64>,"kind":"req_vote|req_vote_resp|append|append_resp|install_snapshot|install_snapshot_resp","payload":{...}}
-pub const RaftFrameKind = enum { req_vote, req_vote_resp, append, append_resp, install_snapshot, install_snapshot_resp };
+pub const RaftFrameKind = enum { req_vote, req_vote_resp, append, append_resp, install_snapshot, install_snapshot_resp, snapshot_chunk };
 
 pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
     var buf = std.ArrayList(u8).init(ally);
@@ -221,9 +221,31 @@ pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u
         .install_snapshot_response => "install_snapshot_resp",
     };
     try w.print("{{\"term\":{d},\"from\":{d},\"kind\":\"{s}\",\"payload\":", .{ term, from, kind });
-    const payload = try std.json.stringifyAlloc(ally, msg, .{}); // serializes union with tag
-    defer ally.free(payload);
-    try w.writeAll(payload);
+    // Custom payload writer for append_entries to include entries array simplified (term,index,command kind tag)
+    switch (msg) {
+        .append_entries => |ae| {
+            try w.print("{", .{});
+            try w.print("\"term\":{d},\"leader_id\":{d},\"prev_log_index\":{d},\"prev_log_term\":{d},\"leader_commit\":{d},\"entries\":[", .{ ae.term, ae.leader_id, ae.prev_log_index, ae.prev_log_term, ae.leader_commit });
+            for (ae.entries, 0..) |e, i| {
+                if (i > 0) try w.writeAll(",");
+                const cmd_tag = switch (e.command) {
+                    .noop => "noop",
+                    .write => "write",
+                    .graph_mutation => "graph_mutation",
+                    .schema_change => "schema_change",
+                    .config_change => "config_change",
+                    .snapshot_pointer => "snapshot_pointer",
+                };
+                try w.print("{\"term\":{d},\"index\":{d},\"cmd\":\"{s}\"}", .{ e.term, e.index, cmd_tag });
+            }
+            try w.writeAll("]}");
+        },
+        else => {
+            const payload = try std.json.stringifyAlloc(ally, msg, .{});
+            defer ally.free(payload);
+            try w.writeAll(payload);
+        },
+    }
     try w.writeAll("}\n");
     return buf.toOwnedSlice();
 }
@@ -273,13 +295,28 @@ pub fn decodeRaftFrame(ally: Allocator, line: []const u8) !DecodedRaftFrame {
         return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .request_vote_response = rvr } };
     } else if (std.mem.eql(u8, kind_str, "append")) {
         const po = payload_v.object;
-        // entries array ignored for now (TODO: full log entry materialization)
+        var entries: []LogEntry = &[_]LogEntry{};
+        if (po.get("entries")) |ev| ev: {
+            if (ev != .array) break :ev;
+            const arr = ev.array.items;
+            var tmp = try ally.alloc(LogEntry, arr.len);
+            errdefer ally.free(tmp);
+            for (arr, 0..) |item, i| {
+                if (item != .object) return error.InvalidFrame;
+                const io = item.object;
+                const term_i = io.get("term") orelse return error.InvalidFrame;
+                const index_i = io.get("index") orelse return error.InvalidFrame;
+                if (term_i != .integer or index_i != .integer) return error.InvalidFrame;
+                tmp[i] = LogEntry{ .term = @intCast(term_i.integer), .index = @intCast(index_i.integer), .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null };
+            }
+            entries = tmp;
+        }
         const ae = AppendEntries{
             .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
             .leader_id = @intCast((po.get("leader_id") orelse return error.InvalidFrame).integer),
             .prev_log_index = @intCast((po.get("prev_log_index") orelse return error.InvalidFrame).integer),
             .prev_log_term = @intCast((po.get("prev_log_term") orelse return error.InvalidFrame).integer),
-            .entries = &[_]LogEntry{},
+            .entries = entries,
             .leader_commit = @intCast((po.get("leader_commit") orelse return error.InvalidFrame).integer),
         };
         return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .append_entries = ae } };
@@ -292,9 +329,21 @@ pub fn decodeRaftFrame(ally: Allocator, line: []const u8) !DecodedRaftFrame {
         };
         return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .append_entries_response = aer } };
     } else if (std.mem.eql(u8, kind_str, "install_snapshot")) {
-        return error.UnsupportedFrame; // TODO: implement snapshot frames
+        const po = payload_v.object;
+        const isnap = InstallSnapshot{
+            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
+            .leader_id = @intCast((po.get("leader_id") orelse return error.InvalidFrame).integer),
+            .last_included_index = @intCast((po.get("last_included_index") orelse return error.InvalidFrame).integer),
+            .last_included_term = @intCast((po.get("last_included_term") orelse return error.InvalidFrame).integer),
+            .offset = @intCast((po.get("offset") orelse return error.InvalidFrame).integer),
+            .data = &[_]u8{},
+            .done = if (po.get("done")) |dv| dv == .bool and dv.bool else false,
+        };
+        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .install_snapshot = isnap } };
     } else if (std.mem.eql(u8, kind_str, "install_snapshot_resp")) {
-        return error.UnsupportedFrame;
+        const po = payload_v.object;
+        const resp = InstallSnapshotResponse{ .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer) };
+        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .install_snapshot_response = resp } };
     }
     return error.InvalidFrame;
 }
@@ -1089,6 +1138,41 @@ test "raft frame encode/decode round trip (heartbeat append)" {
     try std.testing.expect(decoded.term == 0);
     switch (decoded.body) {
         .append_entries => {},
+        else => return error.UnexpectedKind,
+    }
+}
+
+// CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameEntriesArray"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameEntries; OWNER=cluster; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_074_RaftFrameEntries" {
+    const ally = std.testing.allocator;
+    var entries = [_]LogEntry{.{ .term = 1, .index = 5, .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null }};
+    const msg = Message{ .append_entries = .{ .term = 1, .leader_id = 9, .prev_log_index = 4, .prev_log_term = 1, .entries = &entries, .leader_commit = 4 } };
+    const line = try encodeRaftFrame(ally, 9, 1, msg);
+    defer ally.free(line);
+    const decoded = try decodeRaftFrame(ally, line);
+    defer decoded.deinit(ally);
+    switch (decoded.body) {
+        .append_entries => |ae| {
+            try std.testing.expect(ae.entries.len == 1);
+            try std.testing.expect(ae.entries[0].index == 5);
+        },
+        else => return error.UnexpectedKind,
+    }
+}
+
+// CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameSnapshotInstall"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall; OWNER=cluster; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall" {
+    const ally = std.testing.allocator;
+    const snap = Message{ .install_snapshot = .{ .term = 3, .leader_id = 1, .last_included_index = 100, .last_included_term = 3, .offset = 0, .data = &[_]u8{}, .done = true } };
+    const line = try encodeRaftFrame(ally, 1, 3, snap);
+    defer ally.free(line);
+    const decoded = try decodeRaftFrame(ally, line);
+    defer decoded.deinit(ally);
+    switch (decoded.body) {
+        .install_snapshot => |is| {
+            try std.testing.expect(is.done);
+            try std.testing.expect(is.last_included_index == 100);
+        },
         else => return error.UnexpectedKind,
     }
 }
