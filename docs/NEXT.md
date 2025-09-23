@@ -13,17 +13,17 @@ Purpose: Maintain a minimal, actionable slice backlog strictly limited to forwar
 
 ## 2. Active Backlog (Actionable Only — Focus: Remove STUB/IMPL)
 
-| Slice | REQ         | Title                               | WHY (Short)                   | Acceptance (Abbrev)                                                          | Class    | Owner     |
-| ----- | ----------- | ----------------------------------- | ----------------------------- | ---------------------------------------------------------------------------- | -------- | --------- |
-| S-103 | REQ-GQL-081 | Monitoring Prometheus Export        | Expose metrics externally     | Endpoint/core metrics TESTED; variance envelope BENCHED (cv<=0.22 p95<=2.55) | TEST/BEN | ops       |
-| S-104 | REQ-GQL-082 | Backup/Restore Primitives           | Ensure recoverability         | Full & incremental backup tests; restore integrity checksum match            | DONE     | storage   |
-| S-105 | REQ-GQL-083 | WAL Compaction Pipeline             | Manage log growth             | Checkpoint selection + compaction job test + variance bench (CV≤0.21)        | DONE     | storage   |
-| S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | DONE     | optimizer |
-| S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | DONE     | ops       |
-| S-108 | REQ-GQL-086 | Interactive REPL Launch Prompt      | Developer usability           | Launch prompt emits `geode>` exactly once (ReplLaunchPrompt TESTED)          | DONE     | client    |
-| S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | BENCH    | planner   |
-| S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | BENCH    | planner   |
-| S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | TEST     | tooling   |
+| Slice | REQ         | Title                               | WHY (Short)                   | Acceptance (Abbrev)                                                          | Class | Owner     |
+| ----- | ----------- | ----------------------------------- | ----------------------------- | ---------------------------------------------------------------------------- | ----- | --------- |
+| S-103 | REQ-GQL-081 | Monitoring Prometheus Export        | Expose metrics externally     | Endpoint/core metrics TESTED; variance envelope BENCHED (cv<=0.22 p95<=2.55) | DONE  | ops       |
+| S-104 | REQ-GQL-082 | Backup/Restore Primitives           | Ensure recoverability         | Full & incremental backup tests; restore integrity checksum match            | DONE  | storage   |
+| S-105 | REQ-GQL-083 | WAL Compaction Pipeline             | Manage log growth             | Checkpoint selection + compaction job test + variance bench (CV≤0.21)        | DONE  | storage   |
+| S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | DONE  | optimizer |
+| S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | DONE  | ops       |
+| S-108 | REQ-GQL-086 | Interactive REPL Launch Prompt      | Developer usability           | Launch prompt emits `geode>` exactly once (ReplLaunchPrompt TESTED)          | DONE  | client    |
+| S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | BENCH | planner   |
+| S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | DONE  | planner   |
+| S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | TEST  | tooling   |
 
 ## 3. Variance Policy (Extract)
 
@@ -63,6 +63,10 @@ The following slice has been moved out of the feature-priority backlog. Governan
 // S-122 (REQ-GQL-068 Containers SignaledQueueVarianceEnvelope) — Added variance envelope benchmark (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
 // S-123 (REQ-GQL-010 Governance StubImplAudit) — Added audit test scanning code for stray STATUS=STUB or undisclosed STATUS=IMPL; aspect promoted to TESTED (2025-09-23).
 // S-124 (REQ-GQL-010 Governance CanaryFreshnessAudit) — Enforce UPDATED≤60d for STATUS=TESTED|BENCHED CANARY lines; aspect promoted to TESTED (2025-09-23).
+// S-125 (REQ-GQL-068 Containers SignaledQueueMpmcVarianceEnvelope) — Added MPMC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
+// S-126 (REQ-GQL-068 Containers SignaledQueueMpscVarianceEnvelope) — Added MPSC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
+// S-127 (REQ-GQL-068 Containers SignaledQueueSpmcVarianceEnvelope) — Added SPMC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
+// S-110 (REQ-GQL-004 Pagination Execution Streaming) — Added ordered emission test (TESTED) and streaming latency variance envelope (BENCHED); slice marked DONE (2025-09-23).
 
 ### Completed Slices (Removed from Active Backlog)
 

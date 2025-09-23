@@ -1,6 +1,6 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-23)
 
-<!-- STATUS_JSON_SHA256: 39199fdb076ff972df63d4c780ef8bc6f0171506d0377d92e964124420177d8d -->
+<!-- STATUS_JSON_SHA256: 051db851ef8d60ee6e78410584bb9b619547bdf680eed1dfdd1167d8f4ef3049 -->
 
 ## CANARY Evidence (Scanner Lines)
 

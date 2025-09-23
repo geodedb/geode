@@ -241,7 +241,7 @@ var g_impl_defined_inited: bool = false;
 
 // Pagination streaming scaffold (S-018): introduce a stub to emit incremental pages in future slices.
 // Current implementation writes full result; this stub records an intent and adds CANARY evidence.
-// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
 fn paginationStreamScaffold(total_rows: usize, page_size: usize) bool {
     // Return true if streaming would produce multiple pages (future: drive incremental emission loop)
     if (page_size == 0) return false;

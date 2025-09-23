@@ -108,6 +108,40 @@ test "protocol: pagination multi-page pull-all sequence" {
     try std.testing.expectEqual(@as(usize, 1), finals);
 }
 
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=OrderedEmission; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission; OWNER=planner; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission" {
+    const exe = "./zig-out/bin/geodec";
+    // Build an ordered sequence with explicit ORDER BY to ensure stable order
+    const res = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--json-param", "a", "[3,1,2]", "--page-size", "1", "--pull-all" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Expect rows in ascending order across pages: 1,2,3
+    var seen = [_]bool{ false, false, false };
+    var last: i32 = 0;
+    var it = std.mem.splitScalar(u8, res.out, '\n');
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "\"type\":\"BINDINGS\"") != null) {
+            if (std.mem.indexOf(u8, line, "{\"x\":1}") != null) {
+                try std.testing.expect(last <= 1);
+                last = 1;
+                seen[0] = true;
+            }
+            if (std.mem.indexOf(u8, line, "{\"x\":2}") != null) {
+                try std.testing.expect(last <= 2);
+                last = 2;
+                seen[1] = true;
+            }
+            if (std.mem.indexOf(u8, line, "{\"x\":3}") != null) {
+                try std.testing.expect(last <= 3);
+                last = 3;
+                seen[2] = true;
+            }
+        }
+    }
+    try std.testing.expect(seen[0] and seen[1] and seen[2]);
+}
+
 test "protocol: pagination NoResult after final extra pull" {
     const exe = "./zig-out/bin/geodec";
     // page-size 1 so we get multiple pulls then issue two extra pulls after final
