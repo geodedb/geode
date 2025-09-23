@@ -151,6 +151,16 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&redo_canary_test.step);
 
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
+    const zig_client_quic_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_zig_client_quic.zig"), .target = target, .optimize = optimize }) });
+    // Provide clients/zig client file as a module import path
+    const zig_client_mod = b.createModule(.{ .root_source_file = b.path("clients/zig/client.zig"), .target = target, .optimize = optimize });
+    zig_client_quic_test.root_module.addImport("clients/zig/client.zig", zig_client_mod);
+    // Recreate vendor_quic and transport/quic for this standalone test module
+    const vendor_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
+    const transport_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod_for_test.addImport("vendor_quic", vendor_quic_mod_for_test);
+    zig_client_quic_test.root_module.addImport("../transport/quic.zig", transport_quic_mod_for_test);
+    zig_client_quic_test.root_module.addImport("vendor_quic", vendor_quic_mod_for_test);
 
     // MVCC Advanced tests (expanded)
     const mvcc_adv_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/txn/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
@@ -215,6 +225,7 @@ pub fn build(b: *std.Build) void {
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
+    test_step.dependOn(&zig_client_quic_test.step);
 
     const geoded_exe = b.addExecutable(.{
         .name = "geoded",

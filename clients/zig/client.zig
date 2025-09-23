@@ -1,6 +1,7 @@
 const std = @import("std");
 const net = std.net;
 const json = std.json;
+const quic = @import("../src/transport/quic.zig");
 
 // Client configuration
 pub const Config = struct {
@@ -158,6 +159,8 @@ pub const Client = struct {
     allocator: std.mem.Allocator,
     config: Config,
     stream: ?net.Stream = null,
+    quic_client: ?quic.QuicClient = null,
+    quic_stream: ?*quic.QuicClientStream = null,
     session_token: ?[]const u8 = null,
     in_transaction: bool = false,
 
@@ -171,6 +174,14 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.quic_stream) |qs| {
+            qs.deinit();
+            self.quic_stream = null;
+        }
+        if (self.quic_client) |*qc| {
+            qc.deinit();
+            self.quic_client = null;
+        }
         if (self.stream) |stream| {
             stream.close();
         }
@@ -181,14 +192,21 @@ pub const Client = struct {
 
     pub fn connect(self: *Self) !void {
         if (self.config.use_quic) {
-            // QUIC connection would go here
-            // For now, fall back to TCP
-            try self.connectTCP();
+            const qc = quic.QuicClient.init(self.allocator);
+            self.quic_client = qc;
+            // Try QUIC; if fails, fallback to TCP
+            quic.QuicClient.connect(&self.quic_client.?, self.config.host, self.config.port) catch {
+                self.quic_client.?.deinit();
+                self.quic_client = null;
+                try self.connectTCP();
+            };
+            if (self.quic_client) |_| {
+                self.quic_stream = try self.quic_client.?.getStream();
+            }
         } else {
             try self.connectTCP();
         }
 
-        // Send HELLO message
         const hello = .{
             .type = "HELLO",
             .client_name = self.config.client_name,
@@ -206,6 +224,14 @@ pub const Client = struct {
     }
 
     pub fn disconnect(self: *Self) void {
+        if (self.quic_stream) |qs| {
+            qs.deinit();
+            self.quic_stream = null;
+        }
+        if (self.quic_client) |*qc| {
+            qc.deinit();
+            self.quic_client = null;
+        }
         if (self.stream) |stream| {
             stream.close();
             self.stream = null;
@@ -213,29 +239,44 @@ pub const Client = struct {
     }
 
     fn sendMessage(self: *Self, message: anytype) !void {
-        if (self.stream == null) return error.NotConnected;
-
         var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
         defer buffer.deinit(self.allocator);
 
         try std.json.stringify(message, .{}, buffer.writer());
         try buffer.append(self.allocator, '\n');
 
-        _ = try self.stream.?.write(buffer.items);
+        if (self.quic_stream) |qs| {
+            try qs.writeAll(buffer.items);
+            return;
+        }
+        if (self.stream) |stream| {
+            _ = try stream.write(buffer.items);
+            return;
+        }
+        return error.NotConnected;
     }
 
     fn receiveMessage(self: *Self) !json.Value {
-        if (self.stream == null) return error.NotConnected;
-
         var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
         defer buffer.deinit(self.allocator);
 
-        // Read until newline
-        while (true) {
-            var byte: [1]u8 = undefined;
-            _ = try self.stream.?.read(&byte);
-            if (byte[0] == '\n') break;
-            try buffer.append(byte[0]);
+        if (self.quic_stream) |qs| {
+            while (true) {
+                var byte: [1]u8 = undefined;
+                const n = try qs.read(&byte);
+                if (n == 0) continue; // non-blocking retry
+                if (byte[0] == '\n') break;
+                try buffer.append(byte[0]);
+            }
+        } else if (self.stream) |stream| {
+            while (true) {
+                var byte: [1]u8 = undefined;
+                _ = try stream.read(&byte);
+                if (byte[0] == '\n') break;
+                try buffer.append(byte[0]);
+            }
+        } else {
+            return error.NotConnected;
         }
 
         const parsed = try json.parseFromSlice(json.Value, self.allocator, buffer.items, .{});
@@ -576,7 +617,7 @@ pub fn example() !void {
     const config = Config{
         .host = "127.0.0.1",
         .port = 7567,
-        .use_quic = false, // Start with TCP
+        .use_quic = true,
     };
 
     var client = Client.init(allocator, config);
