@@ -20,8 +20,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
+    const feature_cluster = b.option(bool, "feature-cluster", "Enable cluster coordinator experimental skeleton") orelse false;
+    const feature_recursive = b.option(bool, "feature-recursive", "Enable recursive execution experimental skeleton") orelse false;
+    const feature_rls_abac = b.option(bool, "feature-rls-abac", "Enable RLS/ABAC experimental framework") orelse false;
+    const feature_monitoring = b.option(bool, "feature-monitoring", "Enable monitoring metrics registry & Prometheus endpoint") orelse false;
+    const feature_backup = b.option(bool, "feature-backup", "Enable backup & restore experimental skeleton") orelse false;
+    const feature_wal_compaction = b.option(bool, "feature-wal-compaction", "Enable WAL compaction experimental job") orelse false;
+    const feature_selectivity = b.option(bool, "feature-selectivity", "Enable selectivity estimator & adaptive feedback skeleton") orelse false;
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
+    build_opts.addOption(bool, "feature_cluster", feature_cluster);
+    build_opts.addOption(bool, "feature_recursive", feature_recursive);
+    build_opts.addOption(bool, "feature_rls_abac", feature_rls_abac);
+    build_opts.addOption(bool, "feature_monitoring", feature_monitoring);
+    build_opts.addOption(bool, "feature_backup", feature_backup);
+    build_opts.addOption(bool, "feature_wal_compaction", feature_wal_compaction);
+    build_opts.addOption(bool, "feature_selectivity", feature_selectivity);
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -86,6 +100,12 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    // Migration engine stub module
+    const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("migration", migration_mod);
+    // Logging module shared
+    const logging_mod = b.createModule(.{ .root_source_file = b.path("src/log/logger.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("log/logger.zig", logging_mod);
     // Provide WAL module for recovery optimization benchmarks
     const wal_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     // Provide supporting modules required by wal for tests
@@ -106,6 +126,13 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod_tests);
     custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
+
+    // Add transport/quic module for QUIC canary tests
+    const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    const vendor_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod_tests.addImport("vendor_quic", vendor_quic_mod_tests);
+    custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
+    custom_tests.root_module.addImport("vendor_quic", vendor_quic_mod_tests);
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     const test_step = b.step("test", "Run unit tests");
@@ -246,10 +273,79 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("server/txn/mvcc.zig", server_txn_mvcc_mod);
 
     const vendor_quic_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
+    // Wire vendored QUIC named imports to match its build.zig so api.zig can @import("quic_*") symbols
+    const vq_tls_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/key_schedule.zig"), .target = target, .optimize = optimize });
+    const vq_crypto_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/crypto_quic.zig"), .target = target, .optimize = optimize });
+    const vq_packet_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/packet.zig"), .target = target, .optimize = optimize });
+    const vq_varint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/varint.zig"), .target = target, .optimize = optimize });
+    const vq_frame_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/frame.zig"), .target = target, .optimize = optimize });
+    const vq_recovery_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/recovery.zig"), .target = target, .optimize = optimize });
+    const vq_conn_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/conn.zig"), .target = target, .optimize = optimize });
+    const vq_config_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/config.zig"), .target = target, .optimize = optimize });
+    const vq_loop_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/loop_backend.zig"), .target = target, .optimize = optimize });
+    const vq_endpoint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/endpoint.zig"), .target = target, .optimize = optimize });
+    const vq_tls13_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/tls13.zig"), .target = target, .optimize = optimize });
+    const vq_tp_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/transport_params.zig"), .target = target, .optimize = optimize });
+    const vq_asn1_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/asn1.zig"), .target = target, .optimize = optimize });
+    const vq_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
+    const vq_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
+    const vq_ed25519_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/vendor/ed25519/src/ed25519.zig"), .target = target, .optimize = optimize });
+    // Hook up submodule imports
+    vq_packet_mod.addImport("quic_varint", vq_varint_mod);
+    vq_packet_mod.addImport("quic_tls", vq_tls_mod);
+    vq_packet_mod.addImport("quic_crypto", vq_crypto_mod);
+    vq_tls13_mod.addImport("quic_tls", vq_tls_mod);
+    vq_tls13_mod.addImport("asn1", vq_asn1_mod);
+    vq_tls13_mod.addImport("sig", vq_sig_mod);
+    vq_tls13_mod.addImport("x509", vq_x509_mod);
+    vq_sig_mod.addImport("asn1", vq_asn1_mod);
+    vq_x509_mod.addImport("asn1", vq_asn1_mod);
+    vq_x509_mod.addImport("sig", vq_sig_mod);
+    vq_x509_mod.addImport("ed25519", vq_ed25519_mod);
+    vq_tp_mod.addImport("quic_varint", vq_varint_mod);
+    vq_frame_mod.addImport("quic_varint", vq_varint_mod);
+    vq_recovery_mod.addImport("quic_frame", vq_frame_mod);
+    vq_conn_mod.addImport("quic_packet", vq_packet_mod);
+    vq_conn_mod.addImport("quic_frame", vq_frame_mod);
+    vq_conn_mod.addImport("quic_recovery", vq_recovery_mod);
+    vq_conn_mod.addImport("quic_tls", vq_tls_mod);
+    vq_conn_mod.addImport("quic_tls13", vq_tls13_mod);
+    vq_conn_mod.addImport("quic_transport_params", vq_tp_mod);
+    vq_endpoint_mod.addImport("quic_conn", vq_conn_mod);
+    vq_endpoint_mod.addImport("quic_packet", vq_packet_mod);
+    vq_endpoint_mod.addImport("quic_frame", vq_frame_mod);
+    vq_endpoint_mod.addImport("quic_tls", vq_tls_mod);
+    vq_endpoint_mod.addImport("quic_tls13", vq_tls13_mod);
+    vq_endpoint_mod.addImport("quic_crypto", vq_crypto_mod);
+    vq_endpoint_mod.addImport("quic_varint", vq_varint_mod);
+    vq_endpoint_mod.addImport("quic_recovery", vq_recovery_mod);
+    vq_endpoint_mod.addImport("quic_transport_params", vq_tp_mod);
+    vq_crypto_mod.addImport("quic_tls", vq_tls_mod);
+    vq_endpoint_mod.addImport("config.zig", vq_config_mod);
+    vq_endpoint_mod.addImport("loop_backend.zig", vq_loop_mod);
+    // Finally attach imports to the public vendor_quic module so api.zig resolves named imports
+    vendor_quic_mod.addImport("quic_endpoint", vq_endpoint_mod);
+    vendor_quic_mod.addImport("quic_conn", vq_conn_mod);
+    vendor_quic_mod.addImport("quic_packet", vq_packet_mod);
+    vendor_quic_mod.addImport("quic_varint", vq_varint_mod);
+    vendor_quic_mod.addImport("quic_frame", vq_frame_mod);
+    vendor_quic_mod.addImport("quic_recovery", vq_recovery_mod);
+    vendor_quic_mod.addImport("quic_tls", vq_tls_mod);
+    vendor_quic_mod.addImport("quic_tls13", vq_tls13_mod);
+    vendor_quic_mod.addImport("quic_transport_params", vq_tp_mod);
+    vendor_quic_mod.addImport("quic_crypto", vq_crypto_mod);
+    vendor_quic_mod.addImport("config.zig", vq_config_mod);
+    vendor_quic_mod.addImport("loop_backend.zig", vq_loop_mod);
+    vendor_quic_mod.addImport("asn1", vq_asn1_mod);
+    vendor_quic_mod.addImport("sig", vq_sig_mod);
+    vendor_quic_mod.addImport("x509", vq_x509_mod);
+    vendor_quic_mod.addImport("ed25519", vq_ed25519_mod);
+
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("vendor_quic", vendor_quic_mod);
     geoded_exe.root_module.addImport("transport/quic.zig", transport_quic_mod);
     geoded_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
+    geoded_exe.root_module.addImport("log/logger.zig", logging_mod);
 
     // CDC enhanced streaming module (diagnostics, malformed WAL tracking)
     const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
@@ -267,6 +363,7 @@ pub fn build(b: *std.Build) void {
     geodec_exe.root_module.addOptions("build_options", build_opts);
     geodec_exe.root_module.addImport("../transport/quic.zig", transport_quic_mod);
     geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
+    geodec_exe.root_module.addImport("log/logger.zig", logging_mod);
     b.installArtifact(geodec_exe);
 
     test_step.dependOn(b.getInstallStep());
@@ -311,6 +408,7 @@ pub fn build(b: *std.Build) void {
     const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
     redo_opt_delta_bench.root_module.addImport("wal", wal_mod);
     redo_opt_delta_bench.root_module.addImport("storage_page_manager", storage_page_manager_shared);
+    redo_opt_delta_bench.root_module.addImport("geode", root_mod);
     b.installArtifact(redo_opt_delta_bench);
     const run_redo_opt_delta_bench = b.addRunArtifact(redo_opt_delta_bench);
     test_step.dependOn(&run_redo_opt_delta_bench.step);

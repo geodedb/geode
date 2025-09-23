@@ -35,7 +35,7 @@ pub fn main() !void {
     // Process results
     std.debug.print("✓ Query executed successfully\n", .{});
     std.debug.print("Schema: {} columns\n", .{result.schema.columns.len});
-    
+
     for (result.schema.columns) |col| {
         std.debug.print("  - Column: {s} (type: {s})\n", .{ col.name, col.type_name });
     }

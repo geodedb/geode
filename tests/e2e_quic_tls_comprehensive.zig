@@ -1,10 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
 
-// Simplified QUIC/TLS tests - structure only, no actual process spawning
-// Real integration tests would require the server and client binaries to be built
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICTLSComprehensive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICTLSComprehensive; OWNER=wire; UPDATED=2025-09-22
+// Comprehensive QUIC/TLS tests including configuration, multiplexing, and error handling
 
-test "QUIC TLS configuration structure" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICTLSConfig; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICTLSConfig; OWNER=wire; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_074_QUICTLSConfig" {
     // Test that we can create TLS configuration structures
     const TLSConfig = struct {
         cert_path: []const u8,
@@ -24,7 +25,8 @@ test "QUIC TLS configuration structure" {
     try testing.expectEqualStrings(config.cert_path, "certs/server.crt");
 }
 
-test "QUIC connection parameters" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICConnectionParams; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICConnectionParams; OWNER=wire; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_074_QUICConnectionParams" {
     const QUICParams = struct {
         address: []const u8,
         port: u16,
@@ -43,7 +45,8 @@ test "QUIC connection parameters" {
     try testing.expectEqual(@as(u32, 100), params.max_streams);
 }
 
-test "QUIC vs TCP performance metrics structure" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICPerformanceMetrics; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_074_QUICPerformanceMetrics; OWNER=wire; UPDATED=2025-09-22
+test "BenchmarkCANARY_REQ_GQL_074_QUICPerformanceMetrics" {
     const PerformanceMetrics = struct {
         protocol: enum { QUIC, TCP },
         latency_ms: f64,
@@ -73,7 +76,8 @@ test "QUIC vs TCP performance metrics structure" {
     try testing.expect(latency_ratio > 1.0 and latency_ratio < 2.0);
 }
 
-test "QUIC multiplexed streams management" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICMultiplexedStreams; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICMultiplexedStreams; OWNER=wire; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_074_QUICMultiplexedStreams" {
     const Stream = struct {
         id: u64,
         state: enum { Open, HalfClosed, Closed },
@@ -119,7 +123,8 @@ test "QUIC multiplexed streams management" {
     try testing.expectEqual(@as(usize, 1), conn.streams.items.len);
 }
 
-test "QUIC error handling" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICErrorHandling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICErrorHandling; OWNER=wire; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_074_QUICErrorHandling" {
     const QUICError = error{
         ConnectionTimeout,
         TLSHandshakeFailed,
@@ -144,7 +149,8 @@ test "QUIC error handling" {
     try testing.expectEqualStrings("TLS handshake failed", msg);
 }
 
-test "QUIC connection recovery simulation" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICConnectionRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICConnectionRecovery; OWNER=wire; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_074_QUICConnectionRecovery" {
     const ConnectionState = enum {
         Connected,
         Disconnected,

@@ -420,3 +420,354 @@ Phase 2 Promotion Criteria:
 1. TESTED: Each aspect backed by deterministic unit/integration test demonstrating functional semantics (e.g., sub‑txn rollback only reverts inner scope writes; false positive reduction lowers early aborts on pure read overlaps).
 2. BENCHED: Benchmark harness captures abort ratio delta vs baseline (≥ defined improvement threshold) and exports JSON metrics; contention benchmark emits structured stats (attempts, early_aborts, repaired, partial_rollbacks, false_positive_estimate).
 3. Telemetry counters stable across repeated runs (variance <5% for identical seed) ensuring observability reliability.
+
+## 11. Newly Registered Core Expansion Requirements (IDs 078–084)
+
+These requirements codify additional subsystems referenced in recent design / code review cycles but not yet tracked in this document. All begin at STUB status (no functional code unless stated). Each carries initial CANARY markers to enable evidence‑driven promotion without inflating maturity claims. Dates reflect initial registration (2025‑09‑22). Future slices will enrich scopes; any scope creep requires explicit diff notes in CHANGELOG / GAP_ANALYSIS.
+
+### REQ-GQL-078 — Cluster Coordinator & Raft Leader Skeleton
+
+Problem: Absence of a coordination layer blocks future replication, partition mapping, and distributed transaction orchestration.
+
+Scope (Phase 0 Skeleton):
+
+- In‑process Coordinator service maintaining an in‑memory shard map (single shard fixed).
+- Raft interfaces (AppendEntries / RequestVote) returning NotImplemented but structure validates message envelope & term monotonicity.
+- Leadership assumption: process starts as leader; follower mode stub.
+- Health probe & metrics counters (proposed) for leadership term, append attempts.
+- Flagger code: `ClusterCoordinatorExperimental` when enabled via build flag.
+
+Out of Scope: log replication, membership changes, snapshotting, election timeouts, partition rebalancing.
+
+Acceptance (Promotion to TESTED): basic leader status query returns expected static leader id; shard map query returns single shard descriptor; Raft message validation rejects decreasing term numbers.
+
+```text
+CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=LeaderStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_LeaderStub; BENCH=BenchmarkCANARY_REQ_GQL_078_LeaderStub; OWNER=dist; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=ShardMapStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_ShardMapStub; BENCH=BenchmarkCANARY_REQ_GQL_078_ShardMapStub; OWNER=dist; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=RaftInterfaceValidation; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_RaftInterfaceValidation; BENCH=BenchmarkCANARY_REQ_GQL_078_RaftInterfaceValidation; OWNER=dist; UPDATED=2025-09-22
+```
+
+### REQ-GQL-079 — Recursive CTE / Recursive Pattern Execution Engine
+
+Problem: Lack of recursive evaluation support prevents expressing transitive closures, hierarchical traversals, and certain analytical patterns mandated / enabled by recursive constructs.
+
+Scope (Phase 1):
+
+- Parser recognition for a minimal recursive WITH binding (anchor + recursive member) or equivalent GQL recursive pattern form.
+- Execution driver performing iterative fixpoint with cycle guard and max iteration limit (configurable; default 10k) emitting warning/diagnostic if exceeded.
+- Work table representation (binding table) with duplicate elimination (DISTINCT) toggle.
+- Flagger: `RecursiveExecutionExperimental` when enabled.
+
+Out of Scope: cost‑based recursion strategy selection, memoized semi‑naive evaluation, path deduplication optimizations.
+
+Acceptance (TESTED): simple parent/child hierarchy returns correct transitive closure; cycle detection test yields diagnostic without infinite loop.
+
+```text
+CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; BENCH=BenchmarkCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=FixpointDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_FixpointDriver; BENCH=BenchmarkCANARY_REQ_GQL_079_FixpointDriver; OWNER=engine; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=CycleGuard; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_CycleGuard; BENCH=BenchmarkCANARY_REQ_GQL_079_CycleGuard; OWNER=engine; UPDATED=2025-09-22
+```
+
+### REQ-GQL-080 — RLS (Row Level Security) & ABAC Enforcement Framework
+
+Problem: Need fine‑grained access control over nodes/edges/properties based on attributes and declarative policy definitions; currently absent, limiting multi‑tenant and compliance use cases.
+
+Scope (Phase 0):
+
+- Policy catalog: define RLS predicates & ABAC attribute rules (JSON or DSL placeholder) bound to role identifiers.
+- Enforcement hook in executor applying additional filter predicates post logical planning (security layer injection).
+- Policy cache with LRU invalidation (reusing Containers requirement aspects where possible).
+- Flagger: `SecurityRlsAbacExperimental`.
+
+Out of Scope: attribute derivation functions, hierarchical roles, row‑level auditing, policy provenance.
+
+Acceptance (TESTED): policy restricting label=Sensitive nodes excludes them for a role without permission; ABAC attribute key mismatch yields denial diagnostic; cache invalidation test confirms updated policy takes effect without restart.
+
+```text
+CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCatalog; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCatalog; BENCH=BenchmarkCANARY_REQ_GQL_080_PolicyCatalog; OWNER=security; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=EnforcementHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_EnforcementHook; BENCH=BenchmarkCANARY_REQ_GQL_080_EnforcementHook; OWNER=security; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCache; BENCH=BenchmarkCANARY_REQ_GQL_080_PolicyCache; OWNER=security; UPDATED=2025-09-22
+```
+
+### REQ-GQL-081 — Monitoring & Metrics Exporter (Prometheus Skeleton)
+
+Problem: Limited visibility into runtime performance & health metrics restricts operational governance and alerting.
+
+Scope (Phase 1):
+
+- Metrics registry (counters, gauges, histograms with fixed buckets) in process.
+- Prometheus exposition endpoint (plaintext format) on configurable port (disabled by default).
+- Core metrics: query_latency_ms histogram, active_transactions gauge, wal_bytes_written counter, pathcache_hits/misses counters.
+- Flagger: `MonitoringPrometheusExperimental`.
+
+Out of Scope: dynamic metric creation at runtime, high‑cardinality label sets, push gateway, secure auth.
+
+Acceptance (TESTED): metrics endpoint returns valid exposition text including at least the core metrics; histogram bucket monotonicity test; disabled mode ensures no listener binds.
+
+```text
+CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_MetricsRegistry; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistry; OWNER=ops; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; BENCH=BenchmarkCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; BENCH=BenchmarkCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-22
+```
+
+### REQ-GQL-082 — Backup & Restore (Full + Incremental)
+
+Problem: Lack of durable backup capability (full & incremental) impedes disaster recovery objectives and governance requirements.
+
+Scope (Phase 1):
+
+- Full backup snapshot process quiescing new writes (or using MVCC snapshot) and emitting manifest + page files archive.
+- Incremental backup capturing WAL segment deltas since last full/incremental reference point.
+- Restore driver validating manifest checksum & page/WAL continuity.
+- Flagger: `BackupRestoreExperimental`.
+
+Out of Scope: point‑in‑time recovery beyond last incremental boundary, encrypted backup bundles, parallel backup chunking.
+
+Acceptance (TESTED): full backup + restore round‑trip preserves small dataset integrity (row count & sample property values); incremental after small mutation applies successfully; manifest checksum mismatch test yields diagnostic.
+
+```text
+CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_FullBackup; BENCH=BenchmarkCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; BENCH=BenchmarkCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=RestoreDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_RestoreDriver; BENCH=BenchmarkCANARY_REQ_GQL_082_RestoreDriver; OWNER=storage; UPDATED=2025-09-22
+```
+
+### REQ-GQL-083 — WAL Compaction & Log Maintenance
+
+Problem: Unbounded WAL growth increases recovery time and disk footprint; need compaction and archival strategy.
+
+Scope (Phase 0):
+
+- Identify checkpoint LSN safe for truncation (all active snapshots behind).
+- Compact job rewriting live pages baseline & discarding obsolete WAL segments.
+- Archival hook placeholder for shipping truncated segments (no remote I/O yet).
+- Flagger: `WalCompactionExperimental`.
+
+Out of Scope: tiered storage integration, remote archival upload, compression heuristics.
+
+Acceptance (TESTED): compaction reduces WAL segment count for synthetic workload; recovery after compaction still replays remaining tail correctly.
+
+```text
+CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CheckpointSelection; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_CheckpointSelection; BENCH=BenchmarkCANARY_REQ_GQL_083_CheckpointSelection; OWNER=storage; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_CompactionJob; BENCH=BenchmarkCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; BENCH=BenchmarkCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-22
+```
+
+### REQ-GQL-084 — Selectivity Estimator & Adaptive Optimizer Scaffold
+
+Problem: Lack of foundational statistics & selectivity estimation blocks plan quality improvements and adaptive re‑optimization.
+
+Scope (Phase 1):
+
+- Column/property frequency sampler (reservoir or stratified) producing approximate distinct counts & frequency sketch.
+- Simple selectivity estimator API returning estimated row counts for equality & range (numeric) predicates.
+- Adaptive feedback hook capturing actual vs estimated row counts to refine factor registry (ties to REQ-GQL-075 cost model).
+- Flagger: `SelectivityEstimatorExperimental`.
+
+Out of Scope: multi‑column correlation models, histograms with variable bucket widths, join selectivity estimation, sampling concurrency control.
+
+Acceptance (TESTED): estimator returns finite non‑negative estimates; feedback hook updates calibration snapshot with new observation deltas; over/under estimation ratio reported.
+
+```text
+CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; BENCH=BenchmarkCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; BENCH=BenchmarkCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; BENCH=BenchmarkCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-22
+```
+
+### Summary of New Requirement IDs (High-Level)
+
+- 078 Cluster coordination skeleton for future distribution.
+- 079 Recursive execution enabling hierarchical / transitive queries.
+- 080 RLS/ABAC fine‑grained security enforcement.
+- 081 Monitoring & metrics export for observability.
+- 082 Backup & restore (full + incremental) baseline.
+- 083 WAL compaction & log maintenance to bound recovery cost.
+- 084 Selectivity estimator feeding adaptive optimization.
+- 085 Structured logging & level controls.
+- 086 Interactive client REPL shell (multi-line editing, history, meta-commands – initial registration).
+- 087 Migration engine (schema+data migrations, ledger, locking, policy enforcement, drift detection, resumable data ops).
+
+All remain STUB; no production claims made until CANARY promotion with tests/benches.
+
+## 12. Structured Logging & Level Controls (REQ-GQL-085)
+
+Robust, configurable logging is required for operability, debugging, and governance correlation. Current ad-hoc `std.debug.print` statements provide no structured level filtering or machine-readable format. This requirement introduces a unified JSON Lines logger shared by `geoded` (server) and `geodec` (client) with runtime level selection.
+
+### Scope (Phase 1 – Implemented in this slice)
+
+- Unified logger module (`src/log/logger.zig`) exporting:
+  - Level enum: `trace, debug, info, warn, error, critical` (ordered for filtering)
+  - `parseLevel(str)` (case‑insensitive) → Level
+  - `setLevel(l: Level)` global threshold (default `info`)
+  - `log(level, msg, kv...)` emits single JSON object per line to **stderr** (never mingled with protocol result stdout) with stable key ordering: `ts, level, msg, component, fields (flattened)`
+  - Pluggable sink (test harness injects memory buffer)
+- CLI flag `--log-level <level>` for both `geoded` and `geodec` selecting minimum emitted level.
+- Initial instrumentation points (representative, not exhaustive): server startup, selected configuration toggles, client connection intent.
+- Deterministic timestamp override hook (for future test determinism) left unexposed for now; current implementation uses seconds since epoch.
+
+### Out of Scope (Future Phases)
+
+- Structured per-request correlation ids.
+- Async buffering & backpressure strategy.
+- Log rotation / file sinks.
+- Redaction policies and secret detection.
+- Span/trace propagation.
+
+### Acceptance (Phase 1)
+
+1. CLI parsing test proves case-insensitive mapping and default fallback (info) – CANARY aspect: `LogLevelCliParsing`.
+2. Filtering semantics (messages below threshold suppressed) – CANARY aspect: `LogEmitterFiltering` (test may land separately; initial status STUB until evidence promoted).
+3. JSON formatting stable ordering & uppercase level tokens – CANARY aspect: `LogJSONFormat`.
+4. Client parity (same flag + level affects client logs) – CANARY aspect: `ClientLoggingParity`.
+
+### CANARY Lines (Interactive REPL)
+
+```text
+CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogLevelCliParsing; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogLevelCliParsing; OWNER=ops; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogEmitterFiltering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogEmitterFiltering; OWNER=ops; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogJSONFormat; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogJSONFormat; OWNER=ops; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=ClientLoggingParity; STATUS=STUB; TEST=TestCANARY_REQ_GQL_085_ClientLoggingParity; OWNER=ops; UPDATED=2025-09-22
+```
+
+Promotion to TESTED for each aspect requires deterministic tests asserting semantics (parsing/fallback, filtering counts, JSON schema compliance, identical level behavior client vs server). Future BENCHED aspect may guard logging throughput variance if performance overhead becomes material.
+
+## 13. Interactive Client REPL (REQ-GQL-086)
+
+Enhance `geodec` with an interactive, feature-rich shell (REPL) comparable to `psql`, providing multi-line editing, history, completion, syntax highlighting, meta-commands, and flexible output formats over a persistent protocol session.
+
+### Scope (Phase 1 – Registration Only)
+
+- Launching `geodec` with no query arguments enters interactive mode.
+- Multi-line input buffering with continuation prompts (`geode->`).
+- Command history persisted to `~/.geode_history` (configurable via `GEODE_HISTORY`) with max length policy.
+- Basic meta-commands (Phase 1): `\help`, `\quit`, `\history`, `\set format`, `\timing`, `\connect`, `\edit` (`\e`), `\list graphs` (`\lg`).
+- Session state: current graph, output format (table|json|csv|text), timing toggle, transaction indicator.
+- Output formats: minimal table & JSON (others stubbed/flagged until implemented).
+- Graceful Ctrl+C handling (cancel buffer or attempt query cancel if running).
+- Logging integration (uses StructuredLogging requirement).
+
+### Out of Scope (Deferred Phases)
+
+- Tab completion of schema objects (labels, properties) beyond static keyword list.
+- Syntax highlighting ANSI coloration.
+- External pager integration, output redirection (`\\o`), shell escapes (`\\!`).
+- Embedded server spawn / local `geoded` lifecycle mgmt.
+- Advanced formatting (expanded mode `\\x`, CSV quoting rules, border styles, pretty JSON).
+- Reverse incremental search (Ctrl+R) if not provided by chosen line editor.
+
+### Acceptance (Promotion Criteria)
+
+1. Launch with no args opens REPL and displays prompt `geode>` (TestCANARY_REQ_GQL_086_ReplLaunchPrompt).
+2. Multi-line buffering: entering an unterminated statement (no trailing `;`) produces continuation prompt and accumulates until semicolon (TestCANARY_REQ_GQL_086_MultilineBuffering).
+3. History persistence: commands executed are appended to history file (excluding blank lines) and reloaded across sessions (TestCANARY_REQ_GQL_086_HistoryPersistence).
+4. Meta-commands basic: `\\help` lists commands; `\\set format json` affects subsequent output mode (TestCANARY_REQ_GQL_086_MetaCommandsBasic).
+5. Transaction indicator: after `BEGIN` prompt changes (e.g., `geode*>`) and reverts on COMMIT/ROLLBACK (TestCANARY_REQ_GQL_086_TxnPromptIndicator).
+6. Cancellation: Ctrl+C during input clears buffer without exiting; during running query emits cancellation attempt log/event (TestCANARY_REQ_GQL_086_CtrlCCancelBuffer).
+
+### Future BENCHED (Planned)
+
+- Latency variance of REPL round-trip echo queries (VarianceEnvelope).
+- History append throughput under large history.
+
+### CANARY Lines
+
+```text
+CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=CtrlCCancelBuffer; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_CtrlCCancelBuffer; OWNER=client; UPDATED=2025-09-22
+```
+
+## 14. Migration Engine (REQ-GQL-087)
+
+Introduce a first-class Geode Migration Engine (GME) providing **deterministic, enforced schema & data migration governance**. It supplies a transactional migration ledger, exclusive locking with TTL+heartbeat, policy enforcement (blocking ad‑hoc DDL unless policy allows), idempotent & resumable data migrations with resume tokens, checksum & drift detection, and a CLI / library parity surface (inspired by `golang-migrate` but server‑enforced). All aspects start STUB for traceability; implementation slices will promote individually.
+
+### 14.1 Goals
+
+- Deterministic ordered application of schema (DDL) and optional data migrations under ACID transactions.
+- Enforced exclusive migration lock: prevents competing writers & protects partial states; TTL + heartbeat to avoid orphan locks.
+- Policy control: allow/deny ad-hoc schema changes outside managed migrations (STRICT vs PERMISSIVE modes) with diagnostics.
+- Idempotent, resumable data migrations (chunked transforms) using resume tokens persisted atomically with progress.
+- Drift detection: detect divergence between live schema and expected checksum manifest; fail fast or flag per policy.
+- Strong observability: metrics & structured logs for start, success, failure, drift, resume events.
+- Multi-language API parity (Go primary; Zig shim; Python wrapper planned) plus CLI commands: `migrate create`, `migrate up`, `migrate down`, `migrate status`, `migrate plan`, `migrate verify`, `migrate drift-check`, `migrate resume`.
+
+### 14.2 Non-Goals (Phase 1)
+
+- Automatic migration generation from schema diffs.
+- Cross-shard distributed coordination (single-node scope for v0 phase).
+- Online zero-downtime dual-write shadowing.
+- Data anonymization / masking policies.
+
+### 14.3 Core Artifacts & Metadata
+
+Migration metadata tables (logical names; physical layout TBD in storage slice):
+
+- `geode_schema_migrations` (id, version, name, type={schema|data}, checksum_sha256, applied_at, execution_ms, status, batch, resume_token, attempts, last_error_code, last_error_msg)
+- `geode_schema_lock` (lock_id singleton row, owner_id, acquired_at, expires_at, heartbeat_at)
+- `geode_migration_policy` (mode STRICT|PERMISSIVE, updated_at, updated_by, checksum)
+- `geode_migration_drift` (detected_at, expected_checksum, observed_checksum, severity)
+
+### 14.4 Locking Semantics
+
+- Acquire via optimistic insert/update; must include TTL (expires_at) and periodic heartbeat updates before 50% TTL elapses.
+- Heartbeat drift beyond TTL marks lock stale & reclaimable; attempted steal logged with diagnostic; prevention policy forbids steal unless expired.
+- Lock release on successful completion or explicit `down` concluding batch.
+
+### 14.5 Policy Enforcement
+
+- STRICT: Any DDL outside managed migration results in policy diagnostic (`MigrationPolicyViolation`).
+- PERMISSIVE: Logs warning & records an out-of-band change marker for later drift check.
+- Policy changes require lock ownership & are logged with previous checksum.
+
+### 14.6 Data Migration Model
+
+- Data migrations declared as idempotent steps; progress persisted after each chunk inside same txn commit (resume_token advanced).
+- Chunk size configurable; abort leaves last committed resume_token so re-run resumes at correct boundary.
+
+### 14.7 Drift & Checksum
+
+- Each migration directory maintains manifest with ordered versions & per-file SHA-256; combined digest stored with each applied migration.
+- `drift-check` recomputes digests vs ledger; mismatch triggers diagnostic (`MigrationChecksumMismatch`) and optional hard failure when STRICT.
+
+### 14.8 CLI Commands (Initial Set)
+
+`create`, `plan`, `up`, `down <n|all>`, `status`, `verify`, `drift-check`, `resume`.
+
+### 14.9 Acceptance (Promotion Criteria Examples)
+
+1. Lock acquisition & heartbeat TTL test ensures exclusivity & expiration reclaim path.
+2. Up migration applies ordered set; ledger rows inserted with checksums; re-run is a no-op (idempotent detect).
+3. Policy STRICT mode blocks direct DDL (simulated) with proper diagnostic code.
+4. Checksum mismatch detection surfaces diagnostic & prevents apply.
+5. Resume token test: simulated data migration halts mid-way, resume picks up without duplicating work.
+6. Drift detection test logs drift row & triggers policy outcome.
+7. CLI parity test ensures `status` output aligns with ledger (columns subset).
+8. Metrics emission test observes counters increment (applied_total, failed_total, drift_detected_total, lock_steal_attempts_total).
+
+### 14.10 Future Phases
+
+- Distributed coordination (multi-node lock lease via consensus).
+- Automatic rollback planning / graph of dependencies.
+- Declarative DSL for data transforms with cost-based chunk sizing.
+- Dual-phase dry-run + commit window enforcement.
+
+### 14.11 CANARY Lines (Migration Engine)
+
+```text
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=MigrationLedgerSchema; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_MigrationLedgerSchema; OWNER=migration; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=LockAcquisitionTTLHeartbeat; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat; OWNER=migration; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=UpApplyOrderingIdempotency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_UpApplyOrderingIdempotency; OWNER=migration; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PolicyEnforcementStrictMode; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_PolicyEnforcementStrictMode; OWNER=migration; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ChecksumValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ChecksumValidation; OWNER=migration; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ResumeTokenDataMigration; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_ResumeTokenDataMigration; OWNER=migration; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DriftDetection; OWNER=migration; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=CliParityStatusCommand; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_CliParityStatusCommand; OWNER=migration; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ObservabilityMetrics; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_ObservabilityMetrics; OWNER=migration; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftPolicyOutcomeStrict; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict; OWNER=migration; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DownReversalSafety; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_DownReversalSafety; OWNER=migration; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_PlanDryRunIntegrity; OWNER=migration; UPDATED=2025-09-22
+```
+
+Promotion path: each Migration Engine aspect STUB→TESTED with deterministic unit/integration tests (including simulated ledger + lock harness). BENCHED aspects may be added later for migration throughput & lock acquisition variance.

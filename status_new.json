@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-22T19:14:53.207404526Z",
+  "generated_at": "2025-09-22T22:23:01.89318433Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -1726,6 +1726,34 @@
       "id": "REQ-GQL-021",
       "features": [
         {
+          "feature": "Adaptive Replan Autotune",
+          "aspect": "AdaptiveReplanAutotuneConvergence",
+          "status": "TESTED",
+          "files": [
+            "tests/test_adaptive_replan_autotune.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_AdaptiveReplanAutotuneConvergence"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Adaptive Replan Autotune",
+          "aspect": "AdaptiveReplanAutotuneVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "src/benchmarks/adaptive_replan_autotune_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_021_AdaptiveReplanAutotuneVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
           "feature": "PathCache",
           "aspect": "PathCacheCore",
           "status": "BENCHED",
@@ -2407,6 +2435,22 @@
           "updated": "2025-09-21"
         },
         {
+          "feature": "Storage Redo",
+          "aspect": "RedoOptimizationDeltaVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_redo_optimization_delta.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_022_PhysiologicalRedoCorrectness"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope"
+          ],
+          "owner": "storage",
+          "updated": "2025-09-22"
+        },
+        {
           "feature": "Storage/Recovery",
           "aspect": "RedoOptimizationDeltaVariance",
           "status": "BENCHED",
@@ -2432,7 +2476,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_phantom_anomaly.zig"
+            "src/txn/manager.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2448,7 +2492,7 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "tests/canary_txn_phantom_anomaly.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_023_PhantomDetection"
@@ -2627,7 +2671,7 @@
           "aspect": "PlanCostModelFactors",
           "status": "BENCHED",
           "files": [
-            "src/planner/cost_model.zig"
+            "tests/canary_planner_cost_model.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
@@ -2643,7 +2687,7 @@
           "aspect": "PlanCostModelFactors",
           "status": "BENCHED",
           "files": [
-            "tests/canary_planner_cost_model.zig"
+            "src/planner/cost_model.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
@@ -2877,7 +2921,7 @@
           "aspect": "WriteSkewDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_write_skew.zig"
+            "src/txn/manager.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_025_WriteSkewDetection"
@@ -2893,7 +2937,7 @@
           "aspect": "WriteSkewDetection",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "tests/canary_txn_write_skew.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_025_WriteSkewDetection"
@@ -3656,20 +3700,6 @@
         {
           "feature": "CDC Engine",
           "aspect": "AdaptiveDiffPerfThresholdEnv",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_cdc_adaptive_diff_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
-          ],
-          "owner": "streaming",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "CDC Engine",
-          "aspect": "AdaptiveDiffPerfThresholdEnv",
           "status": "TESTED",
           "files": [
             "tests/canary_cdc_adaptive_diff_min_ratio_env.zig"
@@ -3678,6 +3708,20 @@
             "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv"
           ],
           "benches": [],
+          "owner": "streaming",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "CDC Engine",
+          "aspect": "AdaptiveDiffPerfThresholdEnv",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_cdc_adaptive_diff_perf.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf"
+          ],
           "owner": "streaming",
           "updated": "2025-09-20"
         },
@@ -4917,7 +4961,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -4933,7 +4977,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -5546,6 +5590,140 @@
       "features": [
         {
           "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "IMPL",
+          "files": [
+            "src/planner/cost_seed.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_adaptive_bias.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBiasClampVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmark_bias_clamp_variance.zig",
+            "docs/BENCH_ADAPTIVE_CLAMP.md",
+            "docs/GAP_ANALYSIS.md"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBiasClampWarning",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_bias_clamp_warning.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBiasPersistence",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_bias_persistence.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBiasPersistenceV2",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_bias_persistence_v2.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBiasVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_adaptive_estimator_variance.zig",
+            "docs/GAP_ANALYSIS.md"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorDynamicAlpha",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_dynamic_alpha.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorDynamicAlpha"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "CalibrationEntries",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "src/planner/cost_explain.zig",
+            "tests/cost_model_calibration_entries.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelCalibrationEntries"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
           "aspect": "CalibrationFeedback",
           "status": "TESTED",
           "files": [
@@ -5625,6 +5803,53 @@
         },
         {
           "feature": "Cost Model Enumeration Seed",
+          "aspect": "ExplainJSONBiasFactors",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "src/planner/cost_explain.zig",
+            "test_cost_model_explain_bias.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "ExplainJSONDetailed",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "src/planner/cost_explain.zig",
+            "tests/cost_model_explain_json_detailed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "ExplainJSONDynamicAlpha",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_explain_v4.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
           "aspect": "ExplainProtocolBasic",
           "status": "TESTED",
           "files": [
@@ -5648,6 +5873,21 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "PlannerAdaptiveBiasApplication",
+          "status": "TESTED",
+          "files": [
+            "docs/GAP_ANALYSIS.md",
+            "test_cost_model_planner_bias_application.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication"
           ],
           "benches": [],
           "owner": "planner",
@@ -5788,8 +6028,9 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 181,
-      "TESTED": 199
+      "BENCHED": 185,
+      "IMPL": 1,
+      "TESTED": 210
     },
     "by_aspect": {
       "API": 7,
@@ -5799,8 +6040,17 @@
       "AdaptiveDiffPerfThreshold": 1,
       "AdaptiveDiffPerfThresholdEnv": 2,
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
+      "AdaptiveEstimatorBias": 2,
+      "AdaptiveEstimatorBiasClampVarianceEnvelope": 1,
+      "AdaptiveEstimatorBiasClampWarning": 1,
+      "AdaptiveEstimatorBiasPersistence": 1,
+      "AdaptiveEstimatorBiasPersistenceV2": 1,
+      "AdaptiveEstimatorBiasVarianceEnvelope": 1,
+      "AdaptiveEstimatorDynamicAlpha": 1,
       "AdaptiveFlush": 1,
       "AdaptiveJitterThresholds": 1,
+      "AdaptiveReplanAutotuneConvergence": 1,
+      "AdaptiveReplanAutotuneVarianceEnvelope": 1,
       "AdaptiveReplanExecutionIntegration": 1,
       "AdaptiveStressHarness": 1,
       "AdvancedCostModel": 1,
@@ -5830,6 +6080,7 @@
       "CDCControlProtocolMalformed": 1,
       "CDCDiagnosticsProtocol": 1,
       "CDCWatermarkAdvanceVarianceEnvelope": 1,
+      "CalibrationEntries": 1,
       "CalibrationFeedback": 1,
       "CascadePerf": 2,
       "ClosenessCentrality": 1,
@@ -5877,6 +6128,9 @@
       "EvidenceDeltaGuard": 1,
       "Execution": 1,
       "ExplainJSON": 1,
+      "ExplainJSONBiasFactors": 1,
+      "ExplainJSONDetailed": 1,
+      "ExplainJSONDynamicAlpha": 1,
       "ExplainProtocolBasic": 1,
       "ExplainProtocolCalibrated": 1,
       "FailureInjection": 1,
@@ -6009,6 +6263,7 @@
       "PlanSelectionPipelineVarianceEnvelope": 1,
       "PlanSelectionVarianceEnvelope": 1,
       "Planner": 7,
+      "PlannerAdaptiveBiasApplication": 1,
       "PlannerAdaptiveReplanRefinement": 1,
       "PlannerAdaptiveReplanRefinementVarianceEnvelope": 1,
       "PlannerAdaptiveReplanTrigger": 1,
@@ -6042,6 +6297,7 @@
       "RangeTracker": 3,
       "RealityFreshnessGuard": 1,
       "RedoOptimizationDeltaVariance": 1,
+      "RedoOptimizationDeltaVarianceEnvelope": 1,
       "RedoOptimizedVarianceEnvelope": 1,
       "Refactor": 1,
       "RefreshScheduler": 1,

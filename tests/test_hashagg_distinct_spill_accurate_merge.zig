@@ -12,13 +12,13 @@ test "TestCANARY_REQ_GQL_012_HashAggDistinctSpillAccurateMerge" {
     defer agg.deinit();
 
     const key_val = exec.BindingValue{ .Int = 42 };
-    const agg_spec = [_]exec.Agg{ .CountDistinct };
+    const agg_spec = [_]exec.Agg{.CountDistinct};
 
     // First phase: values 0..149
     var i: usize = 0;
     while (i < 150) : (i += 1) {
         var key_slice = [_]exec.BindingValue{key_val};
-    var inputs = [_]exec.BindingValue{ .{ .Int = @intCast(i) } };
+        var inputs = [_]exec.BindingValue{.{ .Int = @intCast(i) }};
         try agg.addRow(&key_slice, &inputs, &agg_spec);
     }
     try agg.flushSegment(&agg_spec); // spill segment 1
@@ -27,7 +27,7 @@ test "TestCANARY_REQ_GQL_012_HashAggDistinctSpillAccurateMerge" {
     i = 50;
     while (i < 200) : (i += 1) {
         var key_slice2 = [_]exec.BindingValue{key_val};
-    var inputs2 = [_]exec.BindingValue{ .{ .Int = @intCast(i) } };
+        var inputs2 = [_]exec.BindingValue{.{ .Int = @intCast(i) }};
         try agg.addRow(&key_slice2, &inputs2, &agg_spec);
     }
     try agg.flushSegment(&agg_spec); // spill segment 2

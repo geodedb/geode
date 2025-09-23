@@ -42,6 +42,8 @@ pub const benchmarks = struct {
     pub const pagination = @import("benchmarks/pagination_variance.zig");
     // Pagination execution (streaming page) variance benchmark
     pub const pagination_execution = @import("benchmarks/pagination_execution_variance.zig");
+    // Shared variance configuration helper
+    pub const variance_config = @import("benchmarks/variance_config.zig");
 };
 // Time-series module (initial in-memory scaffold)
 pub const timeseries = @import("timeseries/timeseries.zig");

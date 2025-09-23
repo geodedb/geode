@@ -1,5 +1,7 @@
 const std = @import("std");
 
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICBasicE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICBasicE2E; OWNER=wire; UPDATED=2025-09-22
+
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
 fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
@@ -39,7 +41,8 @@ fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = code, .out = out, .err = err };
 }
 
-test "QUIC: basic RUN_GQL works" {
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICProtocol; OWNER=wire; UPDATED=2025-09-22
+test "TestCANARY_REQ_GQL_074_QUICProtocol" {
     const r = try run_quic();
     defer std.testing.allocator.free(r.out);
     defer std.testing.allocator.free(r.err);

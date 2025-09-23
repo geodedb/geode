@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const quic_transport = @import("../transport/quic.zig");
+const logger = @import("log/logger.zig");
 
 fn getStdOut() std.fs.File {
     return if (builtin.os.tag == .windows)
@@ -58,6 +59,7 @@ pub fn main() !void {
     var extra_pulls: usize = 0;
     var fmt_txt = false;
     var use_quic = true; // Default to QUIC
+    var log_level_arg: ?[]const u8 = null;
     var use_stdio = false;
 
     while (i < argv.len) : (i += 1) {
@@ -113,8 +115,16 @@ pub fn main() !void {
             if (i + 1 >= argv.len) break;
             extra_pulls = std.fmt.parseInt(usize, argv[i + 1], 10) catch 0;
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--log-level")) {
+            if (i + 1 < argv.len) {
+                log_level_arg = argv[i + 1];
+                i += 1;
+            }
         }
     }
+
+    if (log_level_arg) |lla| logger.setLevel(logger.parseLevel(lla));
+    logger.info("client.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
 
     if (use_quic) {
         // Use QUIC transport

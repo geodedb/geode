@@ -171,6 +171,11 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     const stddev = std.math.sqrt(variance);
     const cv = stddev / mean_f;
     // p95 based on raw_samples (latency), ignoring normalization trimming for observability.
+    // Rationale: We keep p95 in raw (non-normalized) nanoseconds to retain an intuitive
+    // latency tail metric tied to absolute page emission cost while computing CV on a
+    // normalized (ns per unit page) distribution to reduce heteroskedasticity introduced
+    // by mixing multiple page sizes. This dual-domain approach tightened variance stability
+    // without masking pathological absolute tails (raw p95_ns still emitted in schema v1/v2).
     const p95 = raw_samples[@min(raw_samples.len - 1, (raw_samples.len * 95) / 100)];
     // Raw mean (observability only)
     var raw_sum: u128 = 0;

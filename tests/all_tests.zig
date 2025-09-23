@@ -22,6 +22,9 @@ const _e2e_explain_setops = @import("e2e_explain_setops.zig");
 const _test_cross_platform_stdio = @import("test_cross_platform_stdio.zig");
 const _e2e_catalog_persistence_disk = @import("e2e_catalog_persistence_disk.zig");
 const _e2e_quic_basic = @import("e2e_quic_basic.zig");
+const _e2e_quic_tls_comprehensive = @import("e2e_quic_tls_comprehensive.zig");
+const _canary_quic = @import("canary_quic.zig");
+const _canary_quic_tls = @import("canary_quic_tls.zig");
 const _e2e_with_clause = @import("e2e_with_clause.zig");
 const _unit_shortest_path_tiebreak = @import("unit_shortest_path_tiebreak.zig");
 const _e2e_mutations = @import("e2e_mutations.zig");
@@ -69,6 +72,8 @@ const _benchmark_quic_frame_latency_variance = @import("benchmark_quic_frame_lat
 const _benchmark_advanced_cost_model_calibration_variance = @import("benchmark_advanced_cost_model_calibration_variance.zig");
 const _benchmark_mv_refresh_jitter_variance = @import("benchmark_mv_refresh_jitter_variance.zig");
 const _benchmark_inverted_index_lookup_variance = @import("benchmark_inverted_index_lookup_variance.zig");
+// Migration engine CANARY tests
+const _canary_migration_engine = @import("canary_migration_engine_stubs.zig");
 
 // New advanced feature tests - commented out due to module import issues
 // const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");

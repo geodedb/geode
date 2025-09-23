@@ -15,6 +15,7 @@ const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("tools/cert_gen.zig");
 const mvcc = @import("server/txn/mvcc.zig");
+const logger = @import("log/logger.zig");
 // Cost model modules (planner)
 const cost_explain = @import("planner_cost_explain");
 
@@ -2251,6 +2252,7 @@ pub fn main() !void {
     var compact_profile = false;
     var memcurve_profile = false;
     var ai: usize = 1;
+    var log_level_arg: ?[]const u8 = null;
     var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
     var listen_quic: ?[]const u8 = null;
     var listen_tcp: ?[]const u8 = null;
@@ -2277,6 +2279,7 @@ pub fn main() !void {
             std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
             std.debug.print("  --profile-memcurve           Enable memory curve profiling\n", .{});
             std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
+            std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
             std.debug.print("  --help                       Show this help message\n", .{});
             std.debug.print("\nIf no listen option is specified, defaults to stdio mode.\n", .{});
             std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
@@ -2320,11 +2323,19 @@ pub fn main() !void {
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--test-exit-after-first-request")) {
             test_exit_after_first = true;
+        } else if (std.mem.eql(u8, args[ai], "--log-level") and ai + 1 < args.len) {
+            log_level_arg = args[ai + 1];
+            ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--catalog-create") and ai + 1 < args.len) {
             catalog_create_name = args[ai + 1];
             ai += 1;
         }
     }
+
+    if (log_level_arg) |lla| {
+        logger.setLevel(logger.parseLevel(lla));
+    }
+    logger.info("server.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
 
     // Ensure TLS certificates exist (only if using QUIC and no custom certs specified)
     if (listen_quic != null) {

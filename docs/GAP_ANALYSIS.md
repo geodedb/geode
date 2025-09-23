@@ -1,6 +1,6 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-22)
 
-<!-- STATUS_JSON_SHA256: 121dae16c42a31a240e7081d008f05a502c126a341a799354296cd027aad39f6 -->
+<!-- STATUS_JSON_SHA256: bda48434ae157a3c9651ccd47e7b2f1a574aac209fb0f30542b94678c96d402d -->
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -30,6 +30,50 @@
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasPersistenceV2; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampWarning; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=LeaderStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_LeaderStub; OWNER=dist; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=ShardMapStub; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_ShardMapStub; OWNER=dist; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-078; FEATURE="ClusterCoordinator"; ASPECT=RaftInterfaceValidation; STATUS=STUB; TEST=TestCANARY_REQ_GQL_078_RaftInterfaceValidation; OWNER=dist; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=FixpointDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_FixpointDriver; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=CycleGuard; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_CycleGuard; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCatalog; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCatalog; OWNER=security; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=EnforcementHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_EnforcementHook; OWNER=security; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCache; STATUS=STUB; TEST=TestCANARY_REQ_GQL_080_PolicyCache; OWNER=security; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistry; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_MetricsRegistry; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_MetricsRegistry; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=STUB; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=RestoreDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_082_RestoreDriver; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CheckpointSelection; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_CheckpointSelection; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=STUB; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogLevelCliParsing; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogLevelCliParsing; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogEmitterFiltering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogEmitterFiltering; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=LogJSONFormat; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_085_LogJSONFormat; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-085; FEATURE="StructuredLogging"; ASPECT=ClientLoggingParity; STATUS=STUB; TEST=TestCANARY_REQ_GQL_085_ClientLoggingParity; OWNER=ops; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=CtrlCCancelBuffer; STATUS=STUB; TEST=TestCANARY_REQ_GQL_086_CtrlCCancelBuffer; OWNER=client; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=MigrationLedgerSchema; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_MigrationLedgerSchema; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=LockAcquisitionTTLHeartbeat; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=UpApplyOrderingIdempotency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_UpApplyOrderingIdempotency; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PolicyEnforcementStrictMode; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_PolicyEnforcementStrictMode; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ChecksumValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ChecksumValidation; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ResumeTokenDataMigration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ResumeTokenDataMigration; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DriftDetection; OWNER=migration; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=CliParityStatusCommand; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_CliParityStatusCommand; OWNER=migration; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ObservabilityMetrics; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_ObservabilityMetrics; OWNER=migration; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftPolicyOutcomeStrict; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict; OWNER=migration; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DownReversalSafety; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_DownReversalSafety; OWNER=migration; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=STUB; TEST=TestCANARY_REQ_GQL_087_PlanDryRunIntegrity; OWNER=migration; UPDATED=2025-09-22
 ```
 
 This authoritative ledger is generated from `status.json` emitted by:

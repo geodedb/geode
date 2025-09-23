@@ -140,6 +140,98 @@ Key Points:
 
 Adaptive Sampling (Path Multi-Branch): When `VARIANCE_ADAPTIVE=on` and initial CV/ratio fail thresholds, additional batches are appended (bounded) to reduce variance before final emission; metadata (sample_count) reflects final post-warmup sample size.
 
+### Shared Configuration & Trimming Policy (New)
+
+All newly refactored variance benches (starting with Redo Optimization Delta & PathCache Degree Bucket Utilization) consume a common helper `benchmarks/variance_config.zig` which centralizes:
+
+| Env Var Prefix     | Description                                     | Example Default |
+| ------------------ | ----------------------------------------------- | --------------- |
+| `<PREFIX>_SAMPLES` | Outer sample groups (post-warmup)               | 64 / 128        |
+| `<PREFIX>_INNER`   | Inner repetitions averaged per outer sample     | 8               |
+| `<PREFIX>_TRIM`    | Number of extreme samples trimmed from each end | 1               |
+| `GEODE_BENCH_JSON` | Emit structured JSON (one line) with metrics    | off             |
+
+Trimming occurs AFTER sorting ascending; if `len <= 2*TRIM` no trimming is applied. We retain both trimmed and raw means (where relevant) to avoid obscuring systemic regressions while lowering tail jitter influence.
+
+Example emitted JSON (when `GEODE_BENCH_JSON=1`, current schema_version=2):
+
+```json
+{
+  "schema_version": 2,
+  "benchmark": "redo_optimization_delta_variance",
+  "samples": 64,
+  "inner": 8,
+  "trim_edges": 1,
+  "trimmed_len": 62,
+  "speedup_mean_trimmed": 1.024,
+  "speedup_mean_raw": 1.025,
+  "median_trimmed": 1.022,
+  "mad_trimmed": 0.004,
+  "cv": 0.0909,
+  "cv_threshold": 0.18,
+  "p95": 1.236,
+  "p95_ratio": 1.21,
+  "p95_ratio_threshold": 1.35,
+  "min_speedup_threshold": 1.0,
+  "pass": true
+}
+```
+
+Rationale:
+
+1. Centralizes environment parsing & avoids copy/paste parsing logic.
+2. Explicit trim metadata (`trim_edges`,`trimmed_len`) documents data reduction.
+3. JSON emission allows downstream dashboards & longitudinal variance tracking without scraping free‑form text.
+4. Minimal default trimming (1 edge) balances stability with transparency.
+
+Future enhancements under consideration (some partially implemented in helper stats API):
+
+- Median / MAD-based robust dispersion alternative.
+- Percentile bucket diagnostics (e.g. p50, p75, p90, p95, p99) when CV thresholds marginally fail.
+- Adaptive trim if kurtosis exceeds configured bound.
+- Thresholds array (normalized) emission once downstream tooling updated.
+
+### Diagnostic JSON Schema (schema_version=3) — In-Flight Migration
+
+`schema_version=3` (currently emitted for the redo optimization delta variance envelope) extends v2 with explicit baseline vs optimized timing statistics for speedup style benches and begins formalizing the generic `thresholds_evaluated` array (currently emitted as an empty array placeholder until all benches adopt unified evaluation objects). This aids root-causing regressions where overall speedup hovers near 1.0 by exposing which side (baseline or optimized path) shifted.
+
+Additions over v2 (for speedup benchmarks):
+
+```json
+{
+  "schema_version": 3,
+  "benchmark": "redo_optimization_delta_variance",
+  "samples": 64,
+  "inner": 8,
+  "trim_edges": 2,
+  "trimmed_len": 60,
+  "speedup_mean_trimmed": 1.012,
+  "speedup_mean_raw": 1.01,
+  "baseline_mean_trimmed": 5234567.0,
+  "optimized_mean_trimmed": 5172360.0,
+  "baseline_median_trimmed": 5231000.0,
+  "optimized_median_trimmed": 5171000.0,
+  "baseline_cv": 0.081,
+  "optimized_cv": 0.077,
+  "median_trimmed": 1.011,
+  "mad_trimmed": 0.004,
+  "cv": 0.079,
+  "cv_threshold": 0.18,
+  "p95": 1.14,
+  "p95_ratio": 1.13,
+  "p95_ratio_threshold": 1.35,
+  "min_speedup_threshold": 1.0,
+  "pass": true,
+  "thresholds_evaluated": []
+}
+```
+
+Planned next step: populate `thresholds_evaluated` with objects mirroring v2 conceptual design (`metric, actual, max, pass`) once all variance benches share a consolidated evaluation struct. After two full release cycles with populated arrays, legacy schema_version=1 emission will be retired, followed by v2 after consumer migration (tracked via dedicated CANARY aspect).
+
+### Legacy Mode Deprecation
+
+`GEODE_BENCH_LEGACY=1` temporarily relaxes certain thresholds (notably minimum speedup mean for redo) to keep CI passing while stabilization work proceeds. This flag is marked deprecated and will be removed once the redo optimization delta envelope achieves three consecutive green runs under strict thresholds. Use only for emergency CI unblocking; do not rely on it in new automation.
+
 Synthetic Raft Commit Variance: Replaces prior skipped placeholder with a deterministic LCG-driven quorum delay simulation producing both v1 and v2 envelopes. Thresholds are intentionally looser (cv_max=0.35, ratio_max=3.0) pending real replication path integration.
 
 ### Cross-Reference: Planner & Path Determinism Variance Envelopes
