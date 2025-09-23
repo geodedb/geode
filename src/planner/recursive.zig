@@ -638,4 +638,28 @@ pub const RecursiveQueryProcessor = struct {
         path_tracking: PathTracking = .{},
         optimization_hints: OptimizationHints = .{},
     };
+
+    // Minimal generic fixpoint driver for recursive execution features.
+    // Applies step() repeatedly until it returns false (no new work) or iteration limit reached.
+    // Returns number of iterations executed. If max_iterations hit before convergence, sets *exhausted to true.
+    // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=FixpointDriver; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_FixpointDriver; OWNER=engine; UPDATED=2025-09-23
+    pub fn runFixpoint(
+        allocator: Allocator,
+        max_iterations: u32,
+        exhausted: *bool,
+        step: fn (ctx: *anyopaque, iter: u32) bool,
+        ctx: *anyopaque,
+    ) !u32 {
+        _ = allocator; // placeholder for future memory accounting hooks
+        var i: u32 = 0;
+        exhausted.* = false;
+        while (i < max_iterations) : (i += 1) {
+            const more = step(ctx, i);
+            if (!more) break; // converged
+        }
+        if (i >= max_iterations) {
+            exhausted.* = true;
+        }
+        return i;
+    }
 };

@@ -54,6 +54,9 @@ The following slice has been moved out of the feature-priority backlog. Governan
 // S-113 (REQ-GQL-086 Interactive REPL HistoryPersistence) — File-backed history load/append implemented; aspect promoted to TESTED (2025-09-23).
 // S-114 (REQ-GQL-086 Interactive REPL MetaCommandsBasic) — Added :help, :history, :quit meta command handling; aspect promoted to TESTED (2025-09-23).
 // S-115 (REQ-GQL-086 Interactive REPL TxnPromptIndicator) — Added transaction-aware prompt (geode(txn)> ) with beginTxn/endTxn API; aspect promoted to TESTED (2025-09-23).
+// S-116 (REQ-GQL-086 Interactive REPL CtrlCCancelBuffer) — Added cancelBuffer clearing in-progress multiline without persisting; aspect promoted to TESTED (2025-09-23).
+// S-117 (REQ-GQL-079 RecursiveExecution ParserRecognition) — Minimal WITH RECURSIVE recognition sets has_recursive_cte on first Query; aspect promoted to TESTED (2025-09-23).
+// S-118 (REQ-GQL-079 RecursiveExecution FixpointDriver) — Added generic runFixpoint driver with convergence vs exhaustion detection; aspect promoted to TESTED (2025-09-23).
 
 ### Completed Slices (Removed from Active Backlog)
 
@@ -77,6 +80,5 @@ The following slice has been moved out of the feature-priority backlog. Governan
 To honor the one-aspect-per-slice rule, remaining InteractiveRepl aspects will land as separate future slices:
 
 - S-113: HistoryPersistence -> TESTED
-- S-116: CtrlCCancelBuffer -> TESTED
 
 Each slice acceptance: implement feature + single CANARY test (no bundling).

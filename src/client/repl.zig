@@ -6,6 +6,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MetaCommandsBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MetaCommandsBasic; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=TxnPromptIndicator; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_TxnPromptIndicator; OWNER=client; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=CtrlCCancelBuffer; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_CtrlCCancelBuffer; OWNER=client; UPDATED=2025-09-23
 
 pub const Repl = struct {
     allocator: std.mem.Allocator,
@@ -40,6 +41,11 @@ pub const Repl = struct {
 
     pub fn prompt(self: *const Repl) []const u8 {
         return if (self.in_txn) "geode(txn)> " else "geode> ";
+    }
+
+    /// Cancels the current multiline input (e.g. on Ctrl-C) without persisting.
+    pub fn cancelBuffer(self: *Repl) void {
+        self.buffer.clearRetainingCapacity();
     }
 
     /// Ingest a line (without trailing newline). Returns optional full statement when complete.

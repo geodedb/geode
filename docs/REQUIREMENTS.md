@@ -464,7 +464,7 @@ Acceptance (TESTED): simple parent/child hierarchy returns correct transitive cl
 
 ```text
 CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; BENCH=BenchmarkCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-22
-CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=FixpointDriver; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_FixpointDriver; BENCH=BenchmarkCANARY_REQ_GQL_079_FixpointDriver; OWNER=engine; UPDATED=2025-09-22
+CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=FixpointDriver; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_FixpointDriver; BENCH=BenchmarkCANARY_REQ_GQL_079_FixpointDriver; OWNER=engine; UPDATED=2025-09-23
 CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=CycleGuard; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_CycleGuard; BENCH=BenchmarkCANARY_REQ_GQL_079_CycleGuard; OWNER=engine; UPDATED=2025-09-22
 ```
 

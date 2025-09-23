@@ -70,8 +70,38 @@ pub const Parser = struct {
         // initialize alias set arraylist
         self.path_aliases = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         var list = std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var recursive_mode = false;
+        // Minimal recognition of leading WITH RECURSIVE (no full CTE parsing yet)
+        // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-23
+        if (self.cur.kind == .WITH) {
+            // Peek if next token is identifier RECURSIVE (case-insensitive)
+            var tmp = self.lx.*;
+            const maybe = tmp.next(); // token after WITH
+            if (maybe.kind == .identifier and std.ascii.eqlIgnoreCase(maybe.lexeme, "RECURSIVE")) {
+                // Consume WITH and the RECURSIVE identifier, but skip full CTE parsing for now (stub)
+                self.advance(); // WITH
+                self.advance(); // RECURSIVE
+                recursive_mode = true;
+                // For now we expect immediate query start (MATCH/RETURN etc.)
+            }
+        }
         while (self.cur.kind != .eof) {
             const st = try self.parseStatement();
+            // If we recognized WITH RECURSIVE, propagate flag onto contained queries
+            if (recursive_mode) switch (st) {
+                .Query => |q| {
+                    // set flag; need to patch the copy before appending
+                    var q_mut = q;
+                    q_mut.has_recursive_cte = true;
+                    try list.append(self.arena.allocator(), .{ .Query = q_mut });
+                    if (self.cur.kind == .semicolon) self.advance();
+                    continue;
+                },
+                .Union, .Intersect, .Except => {
+                    // Future: mark nested queries; leave unset for now (recognition limited to simple Query)
+                },
+                else => {},
+            };
             try list.append(self.arena.allocator(), st);
             if (self.cur.kind == .semicolon) self.advance();
         }

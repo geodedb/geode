@@ -36,6 +36,9 @@ pub const Query = struct {
     order_by: ?OrderBy,
     limit: ?usize,
     offset: ?usize,
+    // Indicates this query is part of a WITH RECURSIVE CTE block (parser recognition only for now)
+    // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=STUB; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-23
+    has_recursive_cte: bool = false,
 };
 
 pub const UnionQuery = struct {
