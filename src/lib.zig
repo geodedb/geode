@@ -100,9 +100,7 @@ pub const gpu = struct {
 };
 
 // Distributed consensus primitives (Raft) for tests/benchmarks
-pub const distributed = struct {
-    pub const raft = @import("distributed/raft_consensus.zig");
-};
+// (Removed distributed.raft re-export to avoid duplicate module inclusion with separate distributed module import)
 
 // (Note) Streaming and txn modules are added as separate build modules; tests import them directly as needed.
 

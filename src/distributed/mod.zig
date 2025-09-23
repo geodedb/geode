@@ -89,6 +89,7 @@ pub const PartitionAwarePlanner = struct {
 
     fn extractAccessedKeys(self: *PartitionAwarePlanner, query: []const u8) ![][]const u8 {
         // Simplified: extract node IDs from query
+        _ = self;
         var keys = std.ArrayList([]const u8){};
 
         // In real implementation, parse query AST
@@ -112,7 +113,7 @@ pub const PartitionAwarePlanner = struct {
 
     fn calculateExecutionOrder(self: *PartitionAwarePlanner, partitions: []Partition) ![]usize {
         // Order partitions by estimated cost and data locality
-        var order = try self.allocator.alloc(usize, partitions.len);
+        const order = try self.allocator.alloc(usize, partitions.len);
         for (order, 0..) |*o, i| {
             o.* = i;
         }
@@ -308,7 +309,9 @@ pub const DistributedCoordinator = struct {
             tm = .{ .active_transactions = s.active_transactions, .total_transactions = s.total_transactions, .committed_transactions = s.committed_transactions, .aborted_transactions = s.aborted_transactions };
         }
         var primary_shards: usize = 0;
-        for (self.shard_map.items) |shard| if (std.mem.eql(u8, shard.primary, self.config.node_id)) primary_shards += 1;
+        for (self.shard_map.items) |shard| {
+            if (std.mem.eql(u8, shard.primary, self.config.node_id)) primary_shards += 1;
+        }
         return .{
             .raft_metrics = rm,
             .twophase_metrics = tm,
@@ -374,5 +377,5 @@ test "shard management" {
     try std.testing.expect(is_primary);
     const status = coordinator.getClusterStatus();
     try std.testing.expect(status.sharding_enabled);
-    try std.testing.expect(status.shard_count == 1);
+    try std.testing.expect(status.shard_metrics.total_shards == 1);
 }

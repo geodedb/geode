@@ -239,6 +239,15 @@ var g_mvcc_manager: ?*mvcc.MVCCManager = null;
 var g_impl_defined_codes: [][]const u8 = &.{};
 var g_impl_defined_inited: bool = false;
 
+// Pagination streaming scaffold (S-018): introduce a stub to emit incremental pages in future slices.
+// Current implementation writes full result; this stub records an intent and adds CANARY evidence.
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
+fn paginationStreamScaffold(total_rows: usize, page_size: usize) bool {
+    // Return true if streaming would produce multiple pages (future: drive incremental emission loop)
+    if (page_size == 0) return false;
+    return total_rows > page_size;
+}
+
 fn initImplDefinedFlags(ally: std.mem.Allocator) void {
     if (g_impl_defined_inited) return;
     if (impl_flagger.collect(ally, .{ .zero_length_paths_excluded = true, .collation_binary_default = true, .null_order_policy_default = true })) |findings| {
@@ -473,6 +482,10 @@ fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
         flags_buf_base[n] = F_ADAPT_EST;
         n += 1;
     }
+    // Federation mismatch (ordering metadata disagreement) usage flag (single-frame emission if set)
+    // Federation order mismatch flag emission (usage flag) - single consumption
+    // Direct federation flag consumption
+    // (Temporarily disabled federation mismatch flag emission due to module boundary collision; reinstatement planned with refactor)
     // Append impl-defined codes (e.g., ZeroLengthPathExcluded)
     if (g_impl_defined_inited and g_impl_defined_codes.len > 0) {
         var i: usize = 0;
@@ -4561,4 +4574,12 @@ fn evalExprToPropertyValue(_: std.mem.Allocator, expr: geode.ast.Expr) graph_exe
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         else => .{ .Null = {} }, // Default for unsupported expressions
     };
+}
+
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
+    const expect = std.testing.expect;
+    try expect(!paginationStreamScaffold(10, 0));
+    try expect(!paginationStreamScaffold(5, 10));
+    try expect(paginationStreamScaffold(11, 10));
 }

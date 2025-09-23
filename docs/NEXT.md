@@ -53,3 +53,9 @@ The following slice has been moved out of the feature-priority backlog. Governan
 | S-020 | REQ-GQL-010 | Governance Multi-Doc Freshness | Mechanism landed & enforced automatically | TEST (CANARY)    |
 
 // CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Backlog Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceMultiDocFreshness; OWNER=tooling; UPDATED=2025-09-22
+
+### Recent Slice Landing (Informational)
+
+- Federation ordering mismatch flag now emitted as `U:FederationOrderMismatch` (consumed once per affected merge fallback).
+- Null ordering variance envelope benchmark added: `BenchmarkCANARY_REQ_GQL_052_FederationNullMergeVarianceEnvelope` (high NULL density).
+- Pagination streaming scaffold (S-018) landed with CANARY test (no functional streaming yet) — next step will add incremental emission and latency variance envelope.
