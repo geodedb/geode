@@ -199,6 +199,121 @@ Recently added (now implemented):
 
 Consumers (CI, dashboards) SHOULD treat absence of a step as unknown (not failure) to allow incremental adoption.
 
+## CI Example (GitHub Actions)
+
+Below is a minimal CI job that runs the CANARY scanner in strict mode and executes the consolidated governance pipeline. It also captures artifacts for debugging.
+
+```yaml
+name: governance
+on:
+  push: {}
+  pull_request: {}
+jobs:
+  canary-governance:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build canary scanner
+        run: go build -o ./bin/canaryscan ./tools/canaryscan
+      - name: Strict verify GAP_ANALYSIS vs evidence
+        run: ./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
+      - name: Governance summary
+        run: zig run scripts/governance_ci.zig | tee governance_summary.jsonl
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: governance-artifacts
+          path: |
+            status.json
+            status.csv
+            badges/evidence.svg
+            governance_summary.jsonl
+  telemetry-smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Build binaries
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Run telemetry smoke (soft)
+        env:
+          GEODE_CI_TELEMETRY_SMOKE: '1'
+        run: |
+          export GEODE_CI_TELEMETRY_STRICT="${GEODE_CI_TELEMETRY_STRICT:-0}"
+          zig test test_telemetry_smoke.zig || true
+```
+
+Notes:
+
+- This workflow mirrors `make governance-check` while surfacing individual steps. For full parity, simply run `make governance-check` after building the scanner.
+- Pin Zig and Go versions to ensure deterministic outputs and reliable strict freshness checks.
+- Telemetry job defaults to soft mode. To enforce presence of `PULL_PAGE` telemetry, set `GEODE_CI_TELEMETRY_STRICT=1` in the job environment or repository variables.
+
+### Nightly Governance (Scheduled)
+
+Use a scheduled workflow to refresh evidence, regenerate the badge, enforce badge freshness, append trend history, and emit a nightly governance summary. This does not run strict GAP verification by default (keeps nightly green unless there is a staleness issue):
+
+```yaml
+name: nightly-governance
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+jobs:
+  nightly-governance:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build canary scanner
+        run: go build -o ./bin/canaryscan ./tools/canaryscan
+      - name: Run scanner (non-strict) and write evidence
+        run: ./bin/canaryscan --root . --out status.json --csv status.csv
+      - name: Governance badge
+        run: zig run scripts/generate_badges.zig -- --status status.csv --out badges/evidence.svg
+      - name: Badge staleness guard
+        run: zig run scripts/badge_staleness_guard.zig -- --status status.json --badge badges/evidence.svg --max-days 2
+      - name: Governance trend append
+        run: zig run scripts/governance_trend_append.zig
+      - name: Combined governance summary
+        run: zig run scripts/governance_ci.zig | tee governance_summary_nightly.jsonl
+      - name: Upload nightly artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-governance-artifacts
+          path: |
+            status.json
+            status.csv
+            badges/evidence.svg
+            governance_summary_nightly.jsonl
+            badges/history.jsonl
+```
+
 ---
 
 Maintainers: keep this file minimal, normative, and synchronized with any added guard script flags. All non-trivial guard behavior changes must update this reference to avoid implicit policy shifts.

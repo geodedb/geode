@@ -1,4 +1,4 @@
-# NEXT — Concise Forward Backlog — Regenerated 2025-09-23 (Post Monitoring Variance Bench Promotion)
+# NEXT — Concise Forward Backlog — Regenerated 2025-09-24 (Post Monitoring Variance Bench Promotion)
 
 Purpose: Maintain a minimal, actionable slice backlog strictly limited to forward work. Historical landed content lives in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
 

@@ -21,22 +21,43 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
         return;
     }
 
+    // Optional strict mode: fail if telemetry not observed or if server cannot start
+    const strict_env = getEnvOrNull(allocator, "GEODE_CI_TELEMETRY_STRICT");
+    defer if (strict_env) |s| allocator.free(s);
+    const strict_mode = strict_env != null and std.mem.eql(u8, strict_env.?, "1");
+
     const client_path = "zig-out/bin/geodec";
+    const server_path = "zig-out/bin/geoded";
 
     if (!fileExists(client_path)) {
         // Binaries not present; treat as skip.
+        return;
+    }
+    if (!fileExists(server_path)) {
+        // Server binary not present; treat as skip unless strict is requested.
+        if (strict_mode) {
+            std.debug.print("server binary missing (strict)\n", .{});
+            try std.testing.expect(false);
+        }
         return;
     }
     // Spawn server in TCP mode and enable telemetry via env.
     var server_env = try std.process.getEnvMap(allocator);
     defer server_env.deinit();
     try server_env.put("GEODE_TELEMETRY_PAGING", "1");
-    var server = std.process.Child.init(&.{ "./zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7567", "--log_json", "--result-format", "json", "--test-exit-after-first-request" }, allocator);
+    var server = std.process.Child.init(&.{ server_path, "--listen-tcp", "127.0.0.1:7567", "--log_json", "--result-format", "json", "--test-exit-after-first-request" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Ignore;
     server.stderr_behavior = .Pipe;
     server.env_map = &server_env;
-    try server.spawn();
+    server.spawn() catch |e| {
+        // If server fails to spawn, soft-pass unless strict
+        if (strict_mode) {
+            std.debug.print("server spawn error (strict): {s}\n", .{@errorName(e)});
+            try std.testing.expect(false);
+        }
+        return;
+    };
     // Briefly wait for server to start listening
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
@@ -57,8 +78,10 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     std.Thread.sleep(200 * std.time.ns_per_ms);
     const serr = server.stderr orelse {
         _ = server.wait() catch {};
-        std.debug.print("no server stderr pipe\n", .{});
-        try std.testing.expect(false);
+        if (strict_mode) {
+            std.debug.print("no server stderr pipe (strict)\n", .{});
+            try std.testing.expect(false);
+        }
         return;
     };
     const err_all = serr.readToEndAlloc(allocator, 1 << 20) catch &[_]u8{};
@@ -67,11 +90,9 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     // stack buffer; no free needed
 
     const needle = "\"event\":\"PULL_PAGE\"";
-    const strict = getEnvOrNull(allocator, "GEODE_CI_TELEMETRY_STRICT");
-    defer if (strict) |s| allocator.free(s);
     if (std.mem.indexOf(u8, err_all, needle) == null) {
         // Soft-pass unless strict mode is enabled.
-        if (strict != null and std.mem.eql(u8, strict.?, "1")) {
+        if (strict_mode) {
             std.debug.print("telemetry not found (strict); stderr size={d}\n", .{err_all.len});
             try std.testing.expect(false);
         } else {

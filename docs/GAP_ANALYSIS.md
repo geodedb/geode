@@ -1,6 +1,6 @@
-# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-23)
+# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-24)
 
-<!-- STATUS_JSON_SHA256: fe0cdd5bb4dfad59d673583d58b87b1b699c9dd57b4584087cdbb9d15da689b4 -->
+<!-- STATUS_JSON_SHA256: 708db9271b06e717e4534664a50f9e0c673a0dc5fba42e474489dacc1bbbd8ca -->
 
 > Note: For count-based governance checks, `status.csv` is the authoritative source. This page’s SHA256 marker guards consistency against `status.json`.
 

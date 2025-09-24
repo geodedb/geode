@@ -1,0 +1,42 @@
+name: nightly-governance
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+jobs:
+  nightly-governance:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build canary scanner
+        run: go build -o ./bin/canaryscan ./tools/canaryscan
+      - name: Run scanner (non-strict) and write evidence
+        run: ./bin/canaryscan --root . --out status.json --csv status.csv
+      - name: Governance badge
+        run: zig run scripts/generate_badges.zig -- --status status.csv --out badges/evidence.svg
+      - name: Badge staleness guard
+        run: zig run scripts/badge_staleness_guard.zig -- --status status.json --badge badges/evidence.svg --max-days 2
+      - name: Governance trend append
+        run: zig run scripts/governance_trend_append.zig
+      - name: Combined governance summary
+        run: zig run scripts/governance_ci.zig | tee governance_summary_nightly.jsonl
+      - name: Upload nightly artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-governance-artifacts
+          path: |
+            status.json
+            status.csv
+            badges/evidence.svg
+            governance_summary_nightly.jsonl
+            badges/history.jsonl

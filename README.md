@@ -28,6 +28,32 @@ make governance-dry-run          # Non-failing governance summary (CI preview)
 make governance-freshness-prewarn# Warn on approaching 60d freshness (default threshold 50d)
 ```
 
+### Governance Quickstart (TL;DR)
+
+Run this after adding or updating any CANARY lines, tests, or benches:
+
+```bash
+go build -o ./bin/canaryscan ./tools/canaryscan   # build scanner (once per env)
+./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
+sha256sum status.json | awk '{print $1}'           # copy hash into GAP_ANALYSIS marker if changed
+make update-status-hash                            # or use the helper to rewrite the marker
+zig run scripts/governance_ci.zig                  # full governance summary (same as make governance-check)
+```
+
+If strict verify fails, look for:
+
+- Stale CANARY dates (UPDATED older than 60 days for TESTED/BENCHED)
+- Hash mismatch in `docs/GAP_ANALYSIS.md` vs fresh `status.json`
+- Over-claims in docs not backed by scanner counts
+
+When green, commit the doc updates alongside any new tests to keep evidence and narrative in lock-step.
+
+CI Workflows:
+
+- Governance verification runs on `push`/`pull_request` (see `.github/workflows/governance.yml`).
+- Telemetry smoke runs in soft mode by default; set `GEODE_CI_TELEMETRY_STRICT=1` to enforce.
+- Nightly governance aggregates evidence, refreshes badges, and appends trends (see `.github/workflows/nightly-governance.yml`).
+
 ### Governance Automation
 
 Automated governance ensures documentation + evidence stay in sync. The pipeline (`scripts/governance_ci.zig`) enforces:

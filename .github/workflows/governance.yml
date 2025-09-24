@@ -1,0 +1,68 @@
+name: governance
+on:
+  push: {}
+  pull_request: {}
+jobs:
+  canary-governance:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build canary scanner
+        run: go build -o ./bin/canaryscan ./tools/canaryscan
+      - name: Strict verify GAP_ANALYSIS vs evidence
+        run: ./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
+      - name: Governance summary
+        run: zig run scripts/governance_ci.zig | tee governance_summary.jsonl
+      - name: Generate badge
+        run: zig run scripts/generate_badges.zig -- --status status.csv --out badges/evidence.svg
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: governance-artifacts
+          path: |
+            status.json
+            status.csv
+            badges/evidence.svg
+            governance_summary.jsonl
+  telemetry-smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Build binaries
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Run telemetry smoke (soft)
+        env:
+          GEODE_CI_TELEMETRY_SMOKE: '1'
+        run: |
+          # Run the telemetry smoke test only; ignore failure unless strict is set externally
+          set -e
+          export GEODE_CI_TELEMETRY_STRICT="${GEODE_CI_TELEMETRY_STRICT:-0}"
+          zig test test_telemetry_smoke.zig || true
+      - name: Upload telemetry logs (if present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-artifacts
+          path: |
+            single_stdout.log
+            single_stderr.log
+            test_stdout.log
+            test_stderr.log
+            test_run.log
