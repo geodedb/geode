@@ -336,6 +336,31 @@ The QUIC transport layer is included as a git submodule at `vendor/quic/`. For m
 ./zig-out/bin/geodec "PROFILE MATCH (n) RETURN COUNT(n)" --format json
 ```
 
+### QUIC Smokes and Transport Parity (Optional)
+
+The QUIC transport is experimental and gated in tests. To run the optional QUIC smokes and stdio↔QUIC transport parity tests locally:
+
+```bash
+# 1) Build everything
+zig build -Doptimize=ReleaseSafe
+
+# 2) Run telemetry smoke (soft by default; strict with GEODE_CI_TELEMETRY_STRICT=1)
+GEODE_CI_TELEMETRY_SMOKE=1 zig test test_telemetry_smoke.zig
+
+# 3) Run all gated transport parity tests (non-fatal bundle)
+GEODE_CI_QUIC_SMOKE=1 make transport-parity-smokes
+
+# Notes:
+# - Tests enable passive teardown for QUIC via GEODE_QUIC_PASSIVE_TEARDOWN=1 to reduce flakiness.
+# - Default test runs skip QUIC tests unless GEODE_CI_QUIC_SMOKE is set.
+```
+
+Run a single transport parity test manually:
+
+```bash
+GEODE_CI_QUIC_SMOKE=1 zig test tests/e2e_protocol_transport_parity_case.zig
+```
+
 ### Docker Deployment
 
 Pre-built multi-platform Docker images are available from GitHub Container Registry:

@@ -24,6 +24,7 @@ endif
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict
+.PHONY: transport-parity-smokes
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test
@@ -344,6 +345,30 @@ quic-smoke-strict: build
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_quic_explain_smoke.zig
 	@echo "Running telemetry smoke (STRICT) with passive teardown..."
 	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 GEODE_TELEMETRY_PAGING=1 GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test test_telemetry_smoke.zig
+
+# Run transport parity smokes (env-gated, non-fatal): compares stdio vs QUIC for multiple deterministic queries
+transport-parity-smokes: build
+	@echo "Running transport parity (RETURN ordered rows)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_return_ordered.zig || true
+	@echo "Running transport parity (setop DISTINCT rows)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_setop_distinct.zig || true
+	@echo "Running transport parity (order metadata)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_order_metadata.zig || true
+	@echo "Running transport parity (US001 diagnostics)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_us001.zig || true
+	@echo "Running transport parity (IllegalOrderKey diagnostics)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_illegal_order_key.zig || true
+	@echo "Running transport parity (nulls-last ordering)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_nulls_order.zig || true
+	@echo "Running transport parity (full rows varlen sample)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_fullrows.zig || true
+	@echo "Running transport parity (projection rows)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_projection_rows.zig || true
+	@echo "Running transport parity (ORDER+LIMIT+OFFSET rows)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_order_pagination_rows.zig || true
+	@echo "Running transport parity (CASE 3VL rows, order-insensitive)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_case.zig || true
+	@echo "✓ Transport parity smokes completed (non-fatal mode)"
 
 # Cross-compilation targets (required 64-bit targets only)
 cross-compile: cross-compile-required cross-compile-optional cross-clients
