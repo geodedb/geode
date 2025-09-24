@@ -23,7 +23,7 @@ endif
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
-.PHONY: telemetry-smoke
+.PHONY: telemetry-smoke quic-smoke quic-smoke-strict
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test
@@ -87,6 +87,8 @@ help:
 	@echo ""
 	@echo "Utility targets:"
 	@echo "  make doccheck    - Check documentation"
+	@echo "  make quic-smoke  - Run QUIC and telemetry smoke tests (env-gated, non-fatal)"
+	@echo "  make quic-smoke-strict - Run QUIC and telemetry smokes in strict mode (fail on errors)"
 	@echo "  make quic-status - Check QUIC submodule status"
 	@echo "  make quic-init   - Initialize QUIC submodule"
 	@echo "  make cert-gen    - Generate TLS certificates"
@@ -328,6 +330,20 @@ telemetry-smoke: build
 	else \
 		echo "scripts/telemetry-smoke.sh missing or not executable"; exit 2; \
 	fi
+
+# Run QUIC and telemetry smokes (non-fatal), useful for local validation
+quic-smoke: build
+	@echo "Running QUIC EXPLAIN smoke (env-gated) with passive teardown..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_quic_explain_smoke.zig || true
+	@echo "Running telemetry smoke (env-gated strict) with passive teardown..."
+	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=0 $(ZIG) test test_telemetry_smoke.zig || true
+
+# Strict variant: do not mask failures; useful for dedicated pipelines
+quic-smoke-strict: build
+	@echo "Running QUIC EXPLAIN smoke (STRICT) with passive teardown..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_quic_explain_smoke.zig
+	@echo "Running telemetry smoke (STRICT) with passive teardown..."
+	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 $(ZIG) test test_telemetry_smoke.zig
 
 # Cross-compilation targets (required 64-bit targets only)
 cross-compile: cross-compile-required cross-compile-optional cross-clients

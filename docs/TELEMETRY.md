@@ -1,30 +1,70 @@
-# Paging Telemetry (env-gated)
+# Streaming Telemetry — Paging Events (env-gated)
 
 Geode can emit optional paging telemetry as JSON Lines on stderr. This is disabled by default and gated by environment variables to avoid noisy logs in normal operation.
 
-- Env to enable: `GEODE_TELEMETRY_PAGING=1`
-- Emission: server logs JSON on stderr when a `PULL` emits a page.
-- Location in code: `src/server/main.zig` (`state.telemetry_paging` guards `logger.info` with `{ "type":"TELEMETRY", "event":"PULL_PAGE" }`).
+## Enablement (Environment)
 
-Example server run:
+- `GEODE_TELEMETRY_PAGING=1` — Enable pagination telemetry
+- `GEODE_CI_TELEMETRY_SMOKE=1` — Enable the optional test that verifies telemetry presence
+- `GEODE_CI_TELEMETRY_STRICT=1` — Treat missing telemetry in the smoke test as a failure (use in dedicated pipelines)
+- `GEODE_QUIC_PASSIVE_TEARDOWN=1` — For short-lived QUIC tests, avoid vendor teardown crashes (optional safety)
+
+## Emission
+
+- Location in code: `src/server/main.zig` (`state.telemetry_paging` guards `logger.info` with `{ "type":"TELEMETRY", "event":"PULL_PAGE" }`).
+- The server logs JSON on stderr when a `PULL` emits a page. Telemetry is orthogonal to the wire protocol; frames on stdout remain unchanged.
+
+## Example server run
 
 ```bash
 GEODE_TELEMETRY_PAGING=1 ./zig-out/bin/geoded --listen-quic 127.0.0.1:7567 --log_json --result-format json
 ```
 
-Example client (stdio):
+## Example client (stdio)
 
 ```bash
 GEODE_CAPTURE_SERVER_STDERR=1 ./zig-out/bin/geodec "RETURN 1 AS x ORDER BY x LIMIT 1" --format json
 ```
 
-- The stderr line (pretty-printed) will contain a substring like:
+The stderr line will contain a substring like:
 
 ```json
 { "type": "TELEMETRY", "event": "PULL_PAGE", "page_size": 1, "rows": 1 }
 ```
 
-Notes:
+## Example event (QUIC)
 
-- Telemetry is orthogonal to the wire protocol; frames on stdout remain unchanged.
-- Tests: `test_telemetry_smoke.zig` (env-gated) spawns a server with `--test-exit-after-first-request` and ensures the `"event":"PULL_PAGE"` substring appears in stderr logs when enabled.
+```json
+{
+  "ts": "1758732000",
+  "level": "INFO",
+  "component": "geode",
+  "event": "PULL_PAGE",
+  "page": { "index": 0, "size": 1 },
+  "ordered": true,
+  "order_keys": ["x"],
+  "request_id": "abc123"
+}
+```
+
+## Tests
+
+- `test_telemetry_smoke.zig` (env-gated): spawns a server with `--test-exit-after-first-request` and ensures the `"event":"PULL_PAGE"` substring appears in stderr logs when enabled.
+
+Example run:
+
+```bash
+GEODE_TELEMETRY_PAGING=1 GEODE_CI_TELEMETRY_SMOKE=1 zig test test_telemetry_smoke.zig
+```
+
+Strict mode (dedicated pipelines) — fail if telemetry is missing:
+
+```bash
+make quic-smoke-strict
+```
+
+Convenience/local (non-fatal):
+
+```bash
+make quic-smoke
+```

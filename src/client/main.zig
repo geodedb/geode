@@ -224,6 +224,20 @@ pub fn main() !void {
                 defer gpa.free(response);
                 try stdout_file.writeAll(response);
                 try stdout_file.writeAll("\n");
+                // Optional pagination: keep pulling when requested and response indicates more pages
+                if (pull_all) {
+                    var keep = std.mem.indexOf(u8, response, "\"final\":false") != null;
+                    while (keep) {
+                        const pull_more = try std.fmt.allocPrint(gpa, "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":{d}}}\n", .{page_size});
+                        defer gpa.free(pull_more);
+                        try stream.writeAll(pull_more);
+                        const more = try stream.readLine(1 << 16);
+                        defer gpa.free(more);
+                        try stdout_file.writeAll(more);
+                        try stdout_file.writeAll("\n");
+                        keep = std.mem.indexOf(u8, more, "\"final\":false") != null;
+                    }
+                }
             } else {
                 const pull_msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":{d}}}\n", .{page_size});
                 defer gpa.free(pull_msg);

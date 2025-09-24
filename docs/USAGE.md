@@ -63,6 +63,8 @@ Examples
 
 Demo: evaluator recipes
 
+See `docs/TELEMETRY.md` for details. Quick example to enable paging telemetry:
+
 - Basic WHERE and RETURN with identifiers a (Int) and s (Str):
   - Query: MATCH (n) WHERE s STARTS WITH "A" AND a = "42" RETURN CASE WHEN a IN ["41", "42"] THEN s ELSE "x" END
   - Run: gql --demo-eval examples/eval_where_return.gql
@@ -70,14 +72,12 @@ Demo: evaluator recipes
   - Query: MATCH (n) WHERE a NOT IN [1, null, 3] RETURN n
   - Note: If any NULL is present and there is no match, the result is NULL (unknown) for NOT IN.
 - Mixed-type equality policy:
-  - Eq/Ne across Int and Str compare decimal string forms (e.g., 7 = "7" is true; 7 = "007" is false). Ordering across Int/Str is not allowed.
 
 Parameters
 
 - Use $name inside expressions: WHERE n.name STARTS WITH $prefix AND n.age = $age
 - Bind with --param on CLI (demo-eval): --param prefix=Al --param age=21
-
-Embedding (ParamBindings)
+  Embedding (ParamBindings)
 
 - In host code, you can pass parameters to the evaluator with ParamBindings and makeEnv:
   - geode.lib.ParamBindings{ .names = &.{"age","prefix"}, .values = &.{ .{ .Int = 21 }, .{ .Str = "Al" } } }
@@ -120,5 +120,6 @@ See `docs/TELEMETRY.md` for event shape and examples. In CI, telemetry smoke run
 Quick smoke (local):
 
 ```bash
-make telemetry-smoke
+make quic-smoke       # non-fatal, convenience
+make quic-smoke-strict # strict, fails on missing telemetry or QUIC smoke issues
 ```

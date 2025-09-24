@@ -67,7 +67,7 @@ pub fn main() !void {
     // Append line
     try hist_file.seekFromEnd(0);
     var buf: [512]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{{\"generated_at\":\"{s}\",\"total\":{d},\"tested\":{d},\"benched\":{d},\"impl\":{d},\"stub\":{d},\"coverage\":{d:.4},\"source\":\"status.json\"}}\n", .{ counts.generated_at, counts.total, counts.tested, counts.benched, counts.impl_cnt, counts.stub_cnt, counts.coverage }) catch return fail(2, "format failed");
+    const line = std.fmt.bufPrint(&buf, "{{{{\"generated_at\":\"{s}\",\"total\":{d},\"tested\":{d},\"benched\":{d},\"impl\":{d},\"stub\":{d},\"coverage\":{d:.4},\"source\":\"status.json\"}}}}\n", .{ counts.generated_at, counts.total, counts.tested, counts.benched, counts.impl_cnt, counts.stub_cnt, counts.coverage }) catch return fail(2, "format failed");
     _ = hist_file.write(line) catch return fail(2, "write history failed");
     _ = getStdOut().write("trend_append: appended\n") catch {};
 }
