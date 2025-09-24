@@ -443,8 +443,7 @@ cross-test:
 server: build
 	./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
 
-server-tcp: build
-	./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567
+# TCP transport removed; use QUIC-only server target
 
 # Development setup
 dev-setup: quic-init cert-gen

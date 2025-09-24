@@ -145,14 +145,12 @@ case $ACTION in
         echo "Access points:"
         if [[ "$MODE" == "singleton" ]]; then
             echo "  - QUIC: localhost:7567"
-            echo "  - TCP:  localhost:7568"
             echo "  - Metrics: http://localhost:9090"
         else
             echo "  - Leader QUIC: localhost:7567"
             echo "  - Follower-1 QUIC: localhost:7569"
             echo "  - Follower-2 QUIC: localhost:7571"
-            echo "  - Load Balancer (TCP): localhost:7500"
-            echo "  - HAProxy Stats: http://localhost:8404/stats"
+            echo "  - Load Balancer: QUIC-aware balancer required (see docs)"
         fi
         
         if [[ "$MONITORING" == true ]]; then

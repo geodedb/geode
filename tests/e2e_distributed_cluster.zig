@@ -9,9 +9,9 @@ test "distributed cluster - 3 node setup with leader election" {
     // Configure 3-node cluster
     const node1_config = cluster.ClusterCoordinator.Config{
         .peers = &[_]cluster.ClusterCoordinator.PeerConfig{
-            .{ .id = 1, .address = "127.0.0.1", .port = 7568 },
+            .{ .id = 1, .address = "127.0.0.1", .port = 7567 },
             .{ .id = 2, .address = "127.0.0.1", .port = 7569 },
-            .{ .id = 3, .address = "127.0.0.1", .port = 7570 },
+            .{ .id = 3, .address = "127.0.0.1", .port = 7571 },
         },
         .election_timeout_ms = 1000,
         .replication_factor = 3,
@@ -41,9 +41,9 @@ test "distributed cluster - automatic failover on node failure" {
 
     var coordinator = try cluster.ClusterCoordinator.init(allocator, 1, .{
         .peers = &[_]cluster.ClusterCoordinator.PeerConfig{
-            .{ .id = 1, .address = "127.0.0.1", .port = 7568 },
+            .{ .id = 1, .address = "127.0.0.1", .port = 7567 },
             .{ .id = 2, .address = "127.0.0.1", .port = 7569 },
-            .{ .id = 3, .address = "127.0.0.1", .port = 7570 },
+            .{ .id = 3, .address = "127.0.0.1", .port = 7571 },
         },
         .election_timeout_ms = 1000,
         .replication_factor = 3,
@@ -115,9 +115,9 @@ test "distributed cluster - data sharding and replication" {
 
     var coordinator = try cluster.ClusterCoordinator.init(allocator, 1, .{
         .peers = &[_]cluster.ClusterCoordinator.PeerConfig{
-            .{ .id = 1, .address = "127.0.0.1", .port = 7568 },
+            .{ .id = 1, .address = "127.0.0.1", .port = 7567 },
             .{ .id = 2, .address = "127.0.0.1", .port = 7569 },
-            .{ .id = 3, .address = "127.0.0.1", .port = 7570 },
+            .{ .id = 3, .address = "127.0.0.1", .port = 7571 },
         },
         .replication_factor = 2,
         .sharding_strategy = .hash_based,
@@ -142,7 +142,7 @@ test "distributed cluster - health monitoring and detection" {
 
     var coordinator = try cluster.ClusterCoordinator.init(allocator, 1, .{
         .peers = &[_]cluster.ClusterCoordinator.PeerConfig{
-            .{ .id = 1, .address = "127.0.0.1", .port = 7568 },
+            .{ .id = 1, .address = "127.0.0.1", .port = 7567 },
         },
         .health_check_interval_ms = 100,
         .unhealthy_threshold = 3,

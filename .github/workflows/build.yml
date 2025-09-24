@@ -335,7 +335,7 @@ jobs:
         run: zig build
       - name: Start geoded (tcp)
         run: |
-          ./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567 > server.out 2> server.err &
+          ./zig-out/bin/geoded --listen-quic 127.0.0.1:7567 > server.out 2> server.err &
           echo $! > geoded.pid
           for i in $(seq 1 40); do
             if nc -z 127.0.0.1 7567 2>/dev/null; then echo "server up"; break; fi; sleep 0.1; done

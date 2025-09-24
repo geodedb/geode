@@ -1,13 +1,13 @@
 # Geode CLI (gql)
 
-## QUIC/TLS 1.3 Support
+## QUIC/TLS 1.3 Support (Experimental)
 
-Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication:
+Geode provides an experimental QUIC transport with TLS 1.3. TCP remains the primary/legacy transport for stability. Use QUIC for experiments and local testing.
 
 ### Server
 
 ```bash
-# Start server with QUIC (default port 7567)
+# Start server with QUIC (experimental; default port 7567)
 ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
 
 # Custom certificates (default: certs/server.crt and certs/server.key)
@@ -20,17 +20,17 @@ Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance commu
 ### Client
 
 ```bash
-# Connect using QUIC (default)
+# Connect using QUIC (experimental)
 ./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:7567
 
-# Force stdio mode (backward compatibility)
+# Force TCP/stdio (primary/backward compatibility)
 ./zig-out/bin/geodec "RETURN 1 AS x" --no-quic
 ```
 
 ### Go Client
 
 ```go
-// Connect using QUIC
+// Connect using QUIC (experimental)
 db, _ := gql.Open("quic:127.0.0.1:7567")
 
 // Connect using TCP (backward compatibility)
@@ -118,7 +118,7 @@ For development and ops observability, you can enable paging telemetry on the se
 - Set `GEODE_TELEMETRY_PAGING=1` to emit one JSON line per `PULL` page on server `stderr`.
 - Set `GEODE_CAPTURE_SERVER_STDERR=1` to have `geodec` capture and forward the server's `stderr` to the client's `stderr`.
 
-See `docs/TELEMETRY.md` for event shape and examples.
+See `docs/TELEMETRY.md` for event shape and examples. In CI, telemetry smoke runs in soft mode by default; strict mode is opt-in.
 
 Quick smoke (local):
 

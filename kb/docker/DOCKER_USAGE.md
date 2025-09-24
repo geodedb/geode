@@ -7,12 +7,14 @@ Geode provides multiple Docker images optimized for different use cases:
 ### Image Variants
 
 1. **Standard Image** (`ghcr.io/[owner]/geode:latest`)
+
    - Based on Debian bookworm-slim
    - Includes all tools and utilities
    - Good for development and testing
    - Multi-platform: linux/amd64, linux/arm64
 
 2. **Production Image** (`ghcr.io/[owner]/geode:prod`)
+
    - Based on distroless for minimal attack surface
    - Optimized with ReleaseFast
    - Stripped binaries for smaller size
@@ -41,6 +43,7 @@ docker pull ghcr.io/[owner]/geode:prod
 ### Run the Server
 
 #### QUIC Mode (Default)
+
 ```bash
 # Run with auto-generated certificates
 docker run -d \
@@ -60,31 +63,21 @@ docker run -d \
   --key /certs/server.key
 ```
 
-#### TCP Mode (Legacy)
-```bash
-docker run -d \
-  --name geode-server \
-  -p 7568:7568/tcp \
-  -v geode-data:/data \
-  ghcr.io/[owner]/geode:latest \
-  --listen-tcp 0.0.0.0:7568
-```
+<!-- TCP mode has been removed; QUIC is the only network transport. -->
 
 ### Run Queries
 
 #### Using the CLI
-```bash
-# Direct query
-docker run --rm ghcr.io/[owner]/geode:latest \
-  geodec "RETURN 1 AS x ORDER BY x LIMIT 1" --no-quic
 
-# Connect to running server
+```bash
+# Direct query against a running server
 docker run --rm --network container:geode-server \
   ghcr.io/[owner]/geode:latest \
   geodec "MATCH (n) RETURN n LIMIT 10" --server 127.0.0.1:7567
 ```
 
 #### Interactive Session
+
 ```bash
 docker run -it --rm \
   --network container:geode-server \
@@ -104,8 +97,7 @@ services:
     image: ghcr.io/[owner]/geode:latest
     container_name: geode-server
     ports:
-      - "7567:7567/udp"  # QUIC
-      - "7568:7568/tcp"  # TCP (optional)
+  - "7567:7567/udp"  # QUIC
       - "9090:9090"      # Metrics
     volumes:
       - geode-data:/data
@@ -141,7 +133,7 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9091:9090"
+      - '9091:9090'
 
   grafana:
     image: grafana/grafana:latest
@@ -149,7 +141,7 @@ services:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana:/etc/grafana/provisioning:ro
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
 
@@ -170,7 +162,7 @@ FROM ghcr.io/[owner]/geode:latest as builder
 # Your build steps here
 COPY custom-config.gql /config/
 
-# Runtime stage  
+# Runtime stage
 FROM ghcr.io/[owner]/geode:prod
 
 COPY --from=builder /config/custom-config.gql /config/
@@ -181,27 +173,26 @@ ENTRYPOINT ["/usr/local/bin/geoded", "--config", "/config/custom-config.gql"]
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GEODE_LOG_LEVEL` | Log level (debug, info, warn, error) | info |
-| `GEODE_MAX_CONNECTIONS` | Maximum concurrent connections | 1000 |
-| `GEODE_CACHE_SIZE` | Query cache size | 1GB |
-| `GEODE_WAL_SIZE_LIMIT` | WAL size limit | 10GB |
+| Variable                | Description                          | Default |
+| ----------------------- | ------------------------------------ | ------- |
+| `GEODE_LOG_LEVEL`       | Log level (debug, info, warn, error) | info    |
+| `GEODE_MAX_CONNECTIONS` | Maximum concurrent connections       | 1000    |
+| `GEODE_CACHE_SIZE`      | Query cache size                     | 1GB     |
+| `GEODE_WAL_SIZE_LIMIT`  | WAL size limit                       | 10GB    |
 
 ## Volumes
 
-| Path | Description |
-|------|-------------|
-| `/data` | Data directory for storage and WAL |
-| `/certs` | TLS certificates directory |
-| `/config` | Configuration files |
+| Path      | Description                        |
+| --------- | ---------------------------------- |
+| `/data`   | Data directory for storage and WAL |
+| `/certs`  | TLS certificates directory         |
+| `/config` | Configuration files                |
 
 ## Networking
 
 ### Ports
 
-- **7567/udp** - QUIC with TLS 1.3 (default)
-- **7568/tcp** - TCP (legacy compatibility)
+- **7567/udp** - QUIC with TLS 1.3
 - **9090/tcp** - Prometheus metrics endpoint
 
 ### Docker Networks
@@ -251,17 +242,20 @@ services:
 ## Troubleshooting
 
 ### View Logs
+
 ```bash
 docker logs geode-server
 docker logs -f geode-server  # Follow logs
 ```
 
 ### Check Health
+
 ```bash
 docker exec geode-server geodec "RETURN 1 AS health" --server 127.0.0.1:7567
 ```
 
 ### Debug Connection Issues
+
 ```bash
 # Check if server is listening
 docker exec geode-server ss -tuln | grep 7567
@@ -271,6 +265,7 @@ docker exec -it geode-server geodec "RETURN 1" --server 127.0.0.1:7567
 ```
 
 ### Certificate Issues
+
 ```bash
 # Generate new certificates
 docker run --rm -v certs:/certs ghcr.io/[owner]/geode:latest \
@@ -284,6 +279,7 @@ docker run --rm -v certs:/certs:ro alpine:latest \
 ## Performance Tuning
 
 ### Resource Allocation
+
 ```yaml
 deploy:
   resources:
@@ -296,6 +292,7 @@ deploy:
 ```
 
 ### Kernel Parameters
+
 ```bash
 # Increase UDP buffer sizes for QUIC
 docker run --sysctl net.core.rmem_max=26214400 \
@@ -308,12 +305,13 @@ docker run --sysctl net.core.rmem_max=26214400 \
 ## CI/CD Integration
 
 ### GitHub Actions Example
+
 ```yaml
 - name: Test with Geode
   run: |
     docker run -d --name geode-test -p 7567:7567/udp \
       ghcr.io/[owner]/geode:latest
-    
+
     # Wait for server
     for i in {1..30}; do
       if docker exec geode-test geodec "RETURN 1" --server 127.0.0.1:7567; then
@@ -321,7 +319,7 @@ docker run --sysctl net.core.rmem_max=26214400 \
       fi
       sleep 1
     done
-    
+
     # Run tests
     docker exec geode-test geodec "CREATE (n:Test {id: 1})"
     docker exec geode-test geodec "MATCH (n:Test) RETURN n"
@@ -330,6 +328,7 @@ docker run --sysctl net.core.rmem_max=26214400 \
 ## Multi-Platform Support
 
 All images support multiple architectures:
+
 - `linux/amd64` - Intel/AMD x86_64
 - `linux/arm64` - ARM64/Apple Silicon
 

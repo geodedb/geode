@@ -25,7 +25,7 @@ fn run_query(ally: std.mem.Allocator, exe: []const u8, query: []const u8) ![]con
 
 fn run_server_and_query(ally: std.mem.Allocator, query: []const u8) ![]const u8 {
     // Start server in background
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7567" }, ally);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, ally);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;

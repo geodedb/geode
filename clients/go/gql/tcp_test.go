@@ -1,3 +1,6 @@
+//go:build legacy_tcp
+// +build legacy_tcp
+
 package gql
 
 import (

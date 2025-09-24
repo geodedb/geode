@@ -130,7 +130,7 @@ See `docs/GOVERNANCE.md` for details and failure triage. The complete variance e
 
 - **Binary Protocol**: HELLO / RUN_GQL / PULL (+ diagnostics) with ISO status codes
 - **Policies**: US001 (unordered pagination), UA005/UA006 (path tie-break deterministic)
-- **Transports**: TCP (primary), stdio (debug), QUIC (experimental)
+- **Transports**: QUIC (default) and stdio (local debug). TCP has been removed.
 - **Formats**: JSON (default), text/plain
 
 ### Change Data Capture (CDC) & Diagnostics
@@ -161,7 +161,7 @@ printf '{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS"}\n' | ./zig-out/bin/ge
 {"status_class":"00000","result":{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS","status":"NO_ENGINE","guardrail_epoch":0}}
 
 # Valid reset (engine enabled)
-GEODE_CDC_ENABLE=1 ./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567 &
+GEODE_CDC_ENABLE=1 ./zig-out/bin/geoded --listen-quic 127.0.0.1:7567 &
 printf '{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS"}\n' | ./zig-out/bin/geodec --stdio
 {"status_class":"00000","result":{"type":"CDC_CONTROL","action":"RESET_GUARDRAILS","status":"OK","guardrail_epoch":3}}
 ```
@@ -317,8 +317,7 @@ The QUIC transport layer is included as a git submodule at `vendor/quic/`. For m
 # QUIC mode (default, recommended)
 ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
 
-# TCP mode (legacy)
-./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567
+# QUIC is the only network transport; stdio remains available via `--stdio`.
 
 # With persistent storage
 ./zig-out/bin/geoded --data_dir ./data --listen-quic 0.0.0.0:7567

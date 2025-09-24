@@ -9,10 +9,9 @@ services:
     container_name: geode-leader
     hostname: geode-leader
     ports:
-      - "7567:7567/udp"  # QUIC
-      - "7568:7568/tcp"  # TCP
-      - "9090:9090"      # Metrics
-      - "8300:8300"      # Raft internal
+      - '7567:7567/udp' # QUIC
+      - '9090:9090' # Metrics
+      - '8300:8300' # Raft internal
     volumes:
       - geode-leader-data:/data
       - geode-certs:/certs
@@ -29,7 +28,6 @@ services:
       - GEODE_REPLICATION_FACTOR=2
     command: >
       --listen-quic 0.0.0.0:7567
-      --listen-tcp 0.0.0.0:7568
       --data-dir /data
       --node-id node-1
       --raft-bind 0.0.0.0:8300
@@ -38,7 +36,8 @@ services:
       --log-json
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      test:
+        ['CMD', 'geodec', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -60,10 +59,9 @@ services:
     container_name: geode-follower-1
     hostname: geode-follower-1
     ports:
-      - "7569:7567/udp"  # QUIC
-      - "7570:7568/tcp"  # TCP
-      - "9091:9090"      # Metrics
-      - "8301:8300"      # Raft internal
+      - '7569:7567/udp' # QUIC
+      - '9091:9090' # Metrics
+      - '8301:8300' # Raft internal
     volumes:
       - geode-follower-1-data:/data
       - geode-certs:/certs
@@ -78,7 +76,6 @@ services:
       - GEODE_DISTRIBUTED=true
     command: >
       --listen-quic 0.0.0.0:7567
-      --listen-tcp 0.0.0.0:7568
       --data-dir /data
       --node-id node-2
       --raft-bind 0.0.0.0:8300
@@ -89,7 +86,8 @@ services:
     depends_on:
       - geode-leader
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      test:
+        ['CMD', 'geodec', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -111,10 +109,9 @@ services:
     container_name: geode-follower-2
     hostname: geode-follower-2
     ports:
-      - "7571:7567/udp"  # QUIC
-      - "7572:7568/tcp"  # TCP
-      - "9092:9090"      # Metrics
-      - "8302:8300"      # Raft internal
+      - '7571:7567/udp' # QUIC
+      - '9092:9090' # Metrics
+      - '8302:8300' # Raft internal
     volumes:
       - geode-follower-2-data:/data
       - geode-certs:/certs
@@ -129,7 +126,6 @@ services:
       - GEODE_DISTRIBUTED=true
     command: >
       --listen-quic 0.0.0.0:7567
-      --listen-tcp 0.0.0.0:7568
       --data-dir /data
       --node-id node-3
       --raft-bind 0.0.0.0:8300
@@ -140,7 +136,8 @@ services:
     depends_on:
       - geode-leader
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      test:
+        ['CMD', 'geodec', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -154,28 +151,7 @@ services:
           cpus: '2'
           memory: 4G
 
-  # HAProxy Load Balancer
-  haproxy:
-    image: haproxy:3.2-alpine
-    container_name: geode-lb
-    ports:
-      - "7500:7500"  # Main LB port for TCP
-      - "8404:8404"  # HAProxy stats
-    volumes:
-      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    networks:
-      geode-cluster-net:
-        ipv4_address: 172.29.0.5
-    depends_on:
-      - geode-leader
-      - geode-follower-1
-      - geode-follower-2
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "7500"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
+  # QUIC-only: No HAProxy TCP load balancer. Use DNS round-robin or QUIC-aware LB.
 
   # Prometheus for cluster monitoring
   prometheus:
@@ -189,7 +165,7 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
     ports:
-      - "9093:9090"
+      - '9093:9090'
     networks:
       geode-cluster-net:
         ipv4_address: 172.29.0.20
@@ -207,7 +183,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_INSTALL_PLUGINS=redis-datasource,redis-app
     ports:
-      - "3001:3000"
+      - '3001:3000'
     networks:
       geode-cluster-net:
         ipv4_address: 172.29.0.21

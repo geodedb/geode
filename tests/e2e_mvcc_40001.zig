@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 fn run_server(ally: std.mem.Allocator) !std.ChildProcess {
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7568" }, ally);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, ally);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
@@ -53,7 +53,7 @@ test "MVCC serialization failure yields 40001" {
     defer server.kill() catch {};
 
     // Trigger internal SerializationFailure via synthetic path in server (force path uses manager’s conflict matrix in commit)
-    const args = &[_][]const u8{ "./zig-out/bin/geodec", "RETURN 1", "--server", "127.0.0.1:7568" };
+    const args = &[_][]const u8{ "./zig-out/bin/geodec", "RETURN 1", "--server", "127.0.0.1:7567" };
     const out = try run_cmd(ally, args);
     defer ally.free(out);
 

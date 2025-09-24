@@ -6,7 +6,7 @@
 
 This system is working toward a distributed, ACID property-graph DB that will **speak GQL** per ISO/IEC 39075:2024. Currently implements a SQL-like query engine with GQL syntax parsing. The GQL layer is normative for language and semantics; the engine will follow the **GQL execution model over binding tables** and the **linear composition** of statements. Binding tables carry **ordered vs unordered** descriptors that directly affect `ORDER BY`, `LIMIT`, and `OFFSET`.
 
-**Current Status**: Core linear query operations working (RETURN, ORDER BY, set operations). Path expansion, basic MATCH label/property predicate, OPTIONAL null-preserve semantics, and structural PathCache features partially implemented (cache enrichment & variance guards). MVCC snapshot isolation with phantom prevention instrumentation (RangeTracker) present; recovery corruption latency guard and pagination execution variance envelopes landed. Advanced graph pattern semantics, full optimizer, and distributed features remain partial or stubbed.
+**Current Status**: Core linear query operations working (RETURN, ORDER BY, set operations). Path expansion, basic MATCH label/property predicate, OPTIONAL null-preserve semantics, and structural PathCache features partially implemented (cache enrichment & variance guards). MVCC snapshot isolation with phantom prevention instrumentation (RangeTracker) present; recovery corruption latency guard and pagination execution variance envelopes landed. Advanced graph pattern semantics, full optimizer, and distributed features remain partial or stubbed (single-leader scaffolding; no election/snapshot). QUIC transport is experimental; TCP remains primary.
 
 ## 1. Conformance & Options (ship-blocking)
 
@@ -56,7 +56,7 @@ Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, whi
   - Enable via env: `GEODE_DISK_ENCRYPTION=on`, `GEODE_DISK_KEY_HEX=<64 hex>`, optional `GEODE_WAL_ENCRYPTION=on`
   - PageManager encrypts/decrypts pages; WAL payloads encrypted per-record; files created 0600
   - Key rotation helper: `key_rotate` prints export for env update
-- **TLS 1.3** for transport - QUIC returns NotImplemented ❌
+- **TLS 1.3** for transport - QUIC experimental; TCP primary ⚠️
 
 ## 6. Diagnostics & Protocol Requirements
 

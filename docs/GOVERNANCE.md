@@ -263,7 +263,8 @@ Notes:
 
 - This workflow mirrors `make governance-check` while surfacing individual steps. For full parity, simply run `make governance-check` after building the scanner.
 - Pin Zig and Go versions to ensure deterministic outputs and reliable strict freshness checks.
-- Telemetry job defaults to soft mode. To enforce presence of `PULL_PAGE` telemetry, set `GEODE_CI_TELEMETRY_STRICT=1` in the job environment or repository variables.
+- Build caching: workflows cache `zig-cache` and `zig-out` to speed repeated runs.
+- Telemetry job defaults to soft mode. To enforce presence of `PULL_PAGE` telemetry, set `GEODE_CI_TELEMETRY_STRICT=1` in the job environment or trigger via `workflow_dispatch` input `telemetry_strict=1`.
 
 ### Nightly Governance (Scheduled)
 

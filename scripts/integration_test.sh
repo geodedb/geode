@@ -44,29 +44,14 @@ run_test "Error handling" "! ./zig-out/bin/geodec 'RETURN 1 LIMIT 10 OFFSET 5' -
 run_test "Set operations" "./zig-out/bin/geodec 'RETURN 1 AS x UNION RETURN 1 AS x' --no-quic"
 echo
 
-# Test 2: TCP mode
-echo "=== TCP Mode Tests ==="
-# Start TCP server
-./zig-out/bin/geoded --listen-tcp 127.0.0.1:7567 > /dev/null 2>&1 &
-TCP_PID=$!
-sleep 1
-
-run_test "TCP connection" "nc -z 127.0.0.1 7567"
-run_test "TCP query (Go client)" "cd clients/go/gql && go test -run TestGQL_TCP_OrderLimit_Legacy -timeout 5s"
-
-# Stop TCP server
-kill $TCP_PID 2>/dev/null || true
-wait $TCP_PID 2>/dev/null || true
-echo
-
-# Test 3: QUIC mode
+# Test 2: QUIC mode
 echo "=== QUIC Mode Tests ==="
 # Start QUIC server
-./zig-out/bin/geoded --listen-quic 127.0.0.1:7568 > /dev/null 2>&1 &
+./zig-out/bin/geoded --listen-quic 127.0.0.1:7567 > /dev/null 2>&1 &
 QUIC_PID=$!
 sleep 1
 
-run_test "QUIC server starts" "ps -p $QUIC_PID > /dev/null"
+run_test "QUIC server responds" "./zig-out/bin/geodec 'RETURN 1 AS x' --server 127.0.0.1:7567"
 
 # Stop QUIC server
 kill $QUIC_PID 2>/dev/null || true

@@ -45,7 +45,7 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     var server_env = try std.process.getEnvMap(allocator);
     defer server_env.deinit();
     try server_env.put("GEODE_TELEMETRY_PAGING", "1");
-    var server = std.process.Child.init(&.{ server_path, "--listen-tcp", "127.0.0.1:7567", "--log_json", "--result-format", "json", "--test-exit-after-first-request" }, allocator);
+    var server = std.process.Child.init(&.{ server_path, "--listen-quic", "127.0.0.1:7567", "--log_json", "--result-format", "json", "--test-exit-after-first-request" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Ignore;
     server.stderr_behavior = .Pipe;

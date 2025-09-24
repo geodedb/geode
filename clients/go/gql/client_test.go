@@ -2,7 +2,6 @@ package gql
 
 import (
 	"context"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,29 +50,7 @@ func ensureServer(t *testing.T) string {
 
 // startTCP launches a geoded in TCP mode on the default port (127.0.0.1:7567) for the duration of the test.
 // It waits until the port is accepting connections or fails the test after timeout.
-func startTCP(t *testing.T) string {
-	t.Helper()
-	serverPath := ensureServer(t)
-	// Kill any existing server on the port (could be QUIC or TCP from previous test)
-	// On Windows, use taskkill instead of pkill
-	if runtime.GOOS == "windows" {
-		exec.Command("taskkill", "/F", "/IM", "geoded.exe").Run()
-	} else {
-		exec.Command("pkill", "-f", "geoded.*7567").Run()
-	}
-	time.Sleep(100 * time.Millisecond)
-	
-	cmd := exec.Command(serverPath, "--listen-tcp", "127.0.0.1:7567")
-	if err := cmd.Start(); err != nil { t.Fatalf("start tcp server: %v", err) }
-	// Wait readiness
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if c2, err := net.DialTimeout("tcp", "127.0.0.1:7567", 100*time.Millisecond); err == nil { _ = c2.Close(); break }
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Cleanup(func(){ _ = cmd.Process.Kill() })
-	return "127.0.0.1:7567"
-}
+// TCP transport removed: QUIC is the only network transport.
 
 func withConn(t *testing.T) *Conn {
 	t.Helper()
@@ -176,23 +153,4 @@ func TestGQL_QUIC_OrderLimit(t *testing.T) {
 	if len(first.OrderKeys) == 0 || first.OrderKeys[0] != "x" { t.Fatalf("want order_keys [x], got %v", first.OrderKeys) }
 }
 
-func TestGQL_TCP_OrderLimit(t *testing.T) {
-	if testing.Short() || os.Getenv("CI") != "" {
-		t.Skip("Skipping TCP test in CI/short mode")
-	}
-	addr := startTCP(t)
-	db, err := Open("tcp://" + addr + "?page_size=3")
-	if err != nil { t.Fatalf("Open err: %v", err) }
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	conn, err := db.Connect(ctx)
-	if err != nil { t.Fatalf("Connect err: %v", err) }
-	defer conn.Close()
-	
-	first, _, err := conn.Query(ctx, "RETURN 1 AS x ORDER BY x LIMIT 1", nil, 10)
-	if err != nil { t.Fatalf("query err: %v", err) }
-	if len(first.Rows) != 1 { t.Fatalf("want 1 row, got %d", len(first.Rows)) }
-	if first.Rows[0]["x"].Int != 1 { t.Fatalf("want x=1, got %v", first.Rows[0]["x"]) }
-	if !first.Ordered { t.Fatalf("want ordered=true") }
-	if len(first.OrderKeys) == 0 || first.OrderKeys[0] != "x" { t.Fatalf("want order_keys [x], got %v", first.OrderKeys) }
-}
+// TCP transport tests removed.

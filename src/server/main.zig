@@ -1826,94 +1826,6 @@ fn evaluateBinarySet(
     return out_rows.toOwnedSlice(ally) catch &.{};
 }
 
-fn handleTcpConnectionThread(
-    gpa: std.mem.Allocator,
-    conn: std.net.Server.Connection,
-    result_format_txt: bool,
-    disable_estimates: bool,
-    compact_profile: bool,
-    memcurve_profile: bool,
-    test_wal_skip_ratio: ?f64,
-    env_spill_sort: usize,
-    env_spill_distinct: usize,
-    env_spill_union: usize,
-    env_spill_threshold: usize,
-    env_storage_checksum_error: bool,
-    env_wal_compact_interval: usize,
-    force_serialization_failure: bool,
-) void {
-    handleTcpConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, force_serialization_failure) catch |err| {
-        std.debug.print("Error handling TCP connection: {}\n", .{err});
-    };
-}
-
-fn handleTcpConnection(
-    gpa: std.mem.Allocator,
-    conn: std.net.Server.Connection,
-    result_format_txt: bool,
-    disable_estimates: bool,
-    compact_profile: bool,
-    memcurve_profile: bool,
-    test_wal_skip_ratio: ?f64,
-    env_spill_sort: usize,
-    env_spill_distinct: usize,
-    env_spill_union: usize,
-    env_spill_threshold: usize,
-    env_storage_checksum_error: bool,
-    env_wal_compact_interval: usize,
-    _force_serialization_failure_unused: bool,
-) !void {
-    _ = env_wal_compact_interval;
-    _ = _force_serialization_failure_unused;
-    defer conn.stream.close();
-
-    // Initialize WAL
-    var wal = wal_mod.Wal.init(gpa);
-    defer wal.deinit();
-    wal.openFile("/tmp/geode_ephemeral_wal") catch {};
-    if (test_wal_skip_ratio) |ov| {
-        wal.test_skip_ratio_override = ov;
-    }
-
-    // Initialize state
-    var state = ServerState{ .allocator = gpa };
-    state.telemetry_paging = std.posix.getenv("GEODE_TELEMETRY_PAGING") != null;
-    state.txn_manager.init(gpa);
-    state.inserted_values = .{};
-    state.wal_ptr = @ptrCast(&wal);
-    state.spill_sort = env_spill_sort;
-    state.spill_distinct = env_spill_distinct;
-    state.spill_union = env_spill_union;
-    state.query_mem_limit_bytes = env_spill_threshold;
-    state.storage_checksum_error = env_storage_checksum_error;
-
-    // Use the TCP stream for I/O
-    var line_storage: [65536]u8 = undefined;
-
-    // Process messages (simple blocking read until newline)
-    while (true) {
-        var read_len: usize = 0;
-        while (read_len < line_storage.len) {
-            var one: [1]u8 = undefined;
-            const n = conn.stream.read(&one) catch 0;
-            if (n == 0) break;
-            if (one[0] == '\n') break;
-            line_storage[read_len] = one[0];
-            read_len += 1;
-        }
-        if (read_len == 0) break;
-        const line = line_storage[0..read_len];
-        const response = processMessage(gpa, &state, line, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |e| {
-            const err_msg = std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"status_subclass\":\"000\",\"message\":\"Internal error: {s}\"}}\n", .{@errorName(e)}) catch continue;
-            defer gpa.free(err_msg);
-            _ = conn.stream.writeAll(err_msg) catch {};
-            continue;
-        };
-        defer gpa.free(response);
-        _ = conn.stream.writeAll(response) catch {};
-    }
-}
-
 fn handleQuicConnection(
     gpa: std.mem.Allocator,
     conn: *quic_transport.QuicConnection,
@@ -2278,7 +2190,6 @@ pub fn main() !void {
     var log_level_arg: ?[]const u8 = null;
     var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
     var listen_quic: ?[]const u8 = null;
-    var listen_tcp: ?[]const u8 = null;
     var cert_path: ?[]const u8 = null;
     var key_path: ?[]const u8 = null;
     var order_keys_mode_expr = false;
@@ -2293,7 +2204,6 @@ pub fn main() !void {
             std.debug.print("Usage: geoded [OPTIONS]\n\n", .{});
             std.debug.print("Options:\n", .{});
             std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:7567)\n", .{});
-            std.debug.print("  --listen-tcp <addr:port>     Listen on TCP (e.g., 127.0.0.1:7568)\n", .{});
             std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
             std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
             std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
@@ -2327,9 +2237,6 @@ pub fn main() !void {
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--listen-quic") and ai + 1 < args.len) {
             listen_quic = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--listen-tcp") and ai + 1 < args.len) {
-            listen_tcp = args[ai + 1];
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--cert") and ai + 1 < args.len) {
             cert_path = args[ai + 1];
@@ -2519,39 +2426,6 @@ pub fn main() !void {
                 std.debug.print("Error handling QUIC connection: {}\n", .{err});
             };
 
-            if (test_exit_after_first) break;
-        }
-        return;
-    }
-
-    // TCP mode
-    if (listen_tcp) |addr_str| {
-        const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':');
-        var port: u16 = 7567;
-        var address_str: []const u8 = "127.0.0.1";
-
-        if (colon) |ci| {
-            address_str = addr_str[0..ci];
-            const p = addr_str[ci + 1 ..];
-            port = std.fmt.parseUnsigned(u16, p, 10) catch 7567;
-        } else {
-            // If no colon, treat as port only
-            port = std.fmt.parseUnsigned(u16, addr_str, 10) catch 7567;
-        }
-
-        const address = try std.net.Address.parseIp(address_str, port);
-        var server = try address.listen(.{
-            .reuse_address = true,
-        });
-        defer server.deinit();
-
-        std.debug.print("TCP server listening on {s}:{d}\n", .{ address_str, port });
-
-        while (true) {
-            const conn = try server.accept();
-            // Spawn a thread to handle each connection concurrently
-            const thread = try std.Thread.spawn(.{}, handleTcpConnectionThread, .{ gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false });
-            thread.detach();
             if (test_exit_after_first) break;
         }
         return;

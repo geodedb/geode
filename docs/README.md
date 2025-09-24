@@ -2,24 +2,19 @@
 
 ## Start Here
 
-### Reality Check (REQUIRED READING)
+### Reality Check (Required)
 
-- **[IMPLEMENTATION_REALITY.md](IMPLEMENTATION_REALITY.md)** - CANARY-derived truth about what's actually implemented (30-35% complete)
-- **[ACTUAL_STATUS.md](ACTUAL_STATUS.md)** - Detailed breakdown of working vs non-existent features
-- **[GAP_ANALYSIS.md](GAP_ANALYSIS.md)** - Machine-verified evidence table from CANARY tokens
+- [IMPLEMENTATION_REALITY.md](IMPLEMENTATION_REALITY.md) — Evidence-driven snapshot of what’s actually implemented (generated 2025-09-24)
+- [GAP_ANALYSIS.md](GAP_ANALYSIS.md) — Machine-verified evidence ledger and conformance summary (hash-guarded)
+- [REQUIREMENTS.md](REQUIREMENTS.md) — v0.15.0 scope, acceptance, and policies (ISO/IEC 39075 GQL–first)
 
 ### Technical Documentation
 
-- **[BINARY_PROTOCOL.md](BINARY_PROTOCOL.md)** - Wire protocol frames, diagnostics (WORKING)
-- **[GQL_CONFORMANCE_PROFILE.md](GQL_CONFORMANCE_PROFILE.md)** - ISO GQL conformance status
-- **[CDC_DIAGNOSTICS.md](CDC_DIAGNOSTICS.md)** - CDC control protocol (WORKING)
-- **[CONFORMANCE_MATRIX.md](CONFORMANCE_MATRIX.md)** - Parser/AST implementation status
-- **[TELEMETRY.md](TELEMETRY.md)** - Optional paging telemetry (stderr JSON) and how to enable
-
-### Build & Usage
-
-- **[REQUIREMENTS.md](REQUIREMENTS.md)** - v0.15.0 scope and acceptance criteria
-- **[USAGE.md](USAGE.md)** - How to build and run (basic queries only)
+- [BINARY_PROTOCOL.md](BINARY_PROTOCOL.md) — Wire frames, diagnostics, pagination semantics
+- [USAGE.md](USAGE.md) — Build/run usage, client flags, demos, telemetry
+- [TELEMETRY.md](TELEMETRY.md) — Optional paging telemetry (stderr JSON) and how to enable
+- [GOVERNANCE.md](GOVERNANCE.md) — CANARY governance and CI reference
+- [NEXT.md](NEXT.md) — Forward backlog (date‑guarded)
 
 Telemetry (optional):
 
@@ -28,70 +23,75 @@ Telemetry (optional):
 make telemetry-smoke
 ```
 
-## Quick Status
+## Current Evidence Snapshot (2025-09-24)
 
-Based on CANARY evidence analysis (2025-09-20):
+- 607 tracked aspects (TOTAL)
+- 365 TESTED (functional)
+- 229 BENCHED (variance‑guarded performance)
+- Residuals: 6 STUB, 7 IMPL (unpromoted)
 
-### ✅ What Works (30-35%)
+Counts originate from the CANARY scanner (`status.csv` authoritative) and are cross-checked in governance. See IMPLEMENTATION_REALITY for component-by-component detail.
 
-- Basic SQL-like queries (RETURN, ORDER BY, GROUP BY)
-- Set operations (UNION/INTERSECT/EXCEPT)
-- MVCC transactions (BEGIN/COMMIT)
-- CDC core engine (no Kafka/Kinesis)
-- Schema constraints (check, unique, pattern)
-- Basic path operations
-- Wire protocol
+## High-Level Status
 
-### ❌ What Doesn't Work (65-70%)
+### ✅ Strong (well-tested + benchmarked)
 
-- **Distributed** - No Raft, no sharding (0% implemented)
-- **GPU acceleration** - Complete fake (0% implemented)
-- **ML algorithms** - Not implemented (0% implemented)
-- **Query optimization** - No cost-based optimizer
-- **Graph algorithms** - No PageRank, shortest path, etc.
-- **Materialized views** - All TODOs
-- **QUIC transport** - Returns NotImplemented
-- **Full-text search** - Not implemented
-- **Multi-graph** - Basic structures only
+- Wire protocol (HELLO/RUN_GQL/PULL; SCHEMA/BINDINGS/EXPLAIN/PROFILE)
+- Query engine core (RETURN, ORDER BY legality, set operations)
+- Schema constraints (check/unique/pattern)
+- CDC engine (internal sinks; guardrails)
+
+### ⚠️ Moderate (tested but limited)
+
+- Transactions (MVCC SI; phantom‑prevention instrumentation)
+- Path operations (bounded expansion; determinism; partial MATCH semantics)
+- Storage & WAL (recovery; compaction; partial ARIES optimizations pending)
+
+### ❌ Weak / Not Implemented
+
+- Distributed: partial Raft scaffolding (append entries/commit advance); no election/snapshot; sharding future
+- QUIC transport: experimental (feature‑flagged), TCP remains primary
+- GPU acceleration, advanced graph analytics, full-text search: not implemented
+- Cost-based optimizer: initial cost model scaffolding; no cost-based plan selection
 
 ## Verification
 
-All claims must be backed by CANARY evidence:
+All claims are backed by CANARY evidence. To verify locally:
 
 ```bash
 # Build the scanner
 make canary
 
-# Verify current state
-./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
+# Strict verification of GAP_ANALYSIS vs evidence
+./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
 
-# Check specific requirement
-grep -r "CANARY: REQ=REQ-GQL-" src/ tests/
+# Inspect CANARY lines
+grep -r "CANARY: REQ=REQ-GQL-" src/ tests/ docs/ | head
 ```
 
 ## Documentation Standards
 
-1. **No undocumented claims** - Every feature claim needs a CANARY token
-2. **Evidence-based** - STATUS must be TESTED or BENCHED, not STUB
-3. **Archived aspirations** - Non-working features moved to `docs/archive/`
-4. **Regular verification** - CI runs canary checks on every commit
+1. No undocumented claims — every feature claim must have a CANARY token.
+2. Evidence-based — STATUS is TESTED or BENCHED (STUB/IMPL are residuals tracked to zero).
+3. Freshness — NEXT and IMPLEMENTATION_REALITY are date‑guarded by governance.
+4. Automated checks — CI runs scanner + governance on each push/PR.
 
 ## For Contributors
 
 Before claiming a feature is implemented:
 
-1. Add CANARY token to implementation
-2. Write actual test (not stub test)
-3. Ensure test passes
-4. Update GAP_ANALYSIS.md
-5. Run verification
+1. Add a CANARY line to the implementation or tests.
+2. Add tests and, if relevant, variance benches.
+3. Run `make governance-check` until green.
+4. If counts changed, update docs under governance scripts (hash marker in GAP_ANALYSIS will be rewritten by helper).
 
 Example CANARY token:
 
 ```zig
-// CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_XXX_FeatureName; OWNER=team; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_XXX_FeatureName; OWNER=team; UPDATED=2025-09-24
 ```
 
-## Historical Note
+## Notes
 
-Previous documentation claimed 95% completion. CANARY analysis reveals actual implementation is 30-35%. All aspirational documentation has been archived to `docs/archive/`.
+- QUIC is experimental; TCP remains the primary transport. See USAGE for flags and TLS notes.
+- Distributed features are scaffolding only in v0.15.0 (leader-only posture).

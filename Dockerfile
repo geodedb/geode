@@ -63,11 +63,8 @@ COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
 USER geode
 WORKDIR /home/geode
 
-# Expose ports
-# 7567 - QUIC (default)
-# 7568 - TCP (legacy)
-# 9090 - Metrics/Prometheus
-EXPOSE 7567/udp 7568/tcp 9090/tcp
+# Expose ports (QUIC-only + metrics)
+EXPOSE 7567/udp 9090/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

@@ -14,8 +14,9 @@ func TestPoolConcurrency(t *testing.T) { // part of pool tests
 	if testing.Short() || os.Getenv("CI") != "" {
 		t.Skip("Skipping pool concurrency test in CI/short mode")
 	}
-	startTCP(t)
-	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 3, 10*time.Second) // supply TCP addr
+	// Start QUIC server
+	addr := startQUIC(t)
+	p := NewPool(addr, "gql-go", "0.1", "min", 32, 3, 10*time.Second) // supply QUIC addr
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	iters := 30
@@ -46,9 +47,9 @@ func TestPoolAcquireTimeout(t *testing.T) {
 	if testing.Short() || os.Getenv("CI") != "" {
 		t.Skip("Skipping pool acquire timeout test in CI/short mode")
 	}
-	startTCP(t)
+	addr := startQUIC(t)
 	time.Sleep(50 * time.Millisecond) // Give server time to stabilize
-	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 1, 10*time.Second)
+	p := NewPool(addr, "gql-go", "0.1", "min", 32, 1, 10*time.Second)
 	ctx := context.Background()
 	c, err := p.Acquire(ctx)
 	if err != nil { t.Fatalf("first acquire: %v", err) }
@@ -64,8 +65,8 @@ func TestPoolIdleTimeout(t *testing.T) {
 	if testing.Short() || os.Getenv("CI") != "" {
 		t.Skip("Skipping pool idle timeout test in CI/short mode")
 	}
-	startTCP(t)
-	p := NewPool("127.0.0.1:7567", "gql-go", "0.1", "min", 32, 2, 50*time.Millisecond)
+	addr := startQUIC(t)
+	p := NewPool(addr, "gql-go", "0.1", "min", 32, 2, 50*time.Millisecond)
 	ctx := context.Background()
 	c1, err := p.Acquire(ctx); if err != nil { t.Fatalf("acq1: %v", err) }
 	p.Release(c1)
@@ -73,7 +74,8 @@ func TestPoolIdleTimeout(t *testing.T) {
 	c2, err := p.Acquire(ctx); if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			// Retry: server may have died; restart and retry once
-			startTCP(t)
+			addr = startQUIC(t)
+			_ = addr
 			c2, err = p.Acquire(ctx)
 		}
 		if err != nil { t.Fatalf("acq2: %v", err) }

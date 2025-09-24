@@ -8,13 +8,12 @@ services:
     container_name: geode-singleton
     hostname: geode-node
     ports:
-      - "7567:7567/udp"  # QUIC
-      - "7568:7568/tcp"  # TCP (legacy)
-      - "9090:9090"      # Metrics
+      - '7567:7567/udp' # QUIC
+      - '9090:9090' # Metrics
     volumes:
       - geode-data:/data
       - geode-certs:/certs
-      - ./certs:/certs:ro  # Mount local certs if available
+      - ./certs:/certs:ro # Mount local certs if available
     environment:
       - GEODE_LOG_LEVEL=info
       - GEODE_MAX_CONNECTIONS=1000
@@ -22,7 +21,8 @@ services:
       - GEODE_WAL_SIZE_LIMIT=10GB
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+      test:
+        ['CMD', 'geodec', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -65,7 +65,7 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
     ports:
-      - "9091:9090"
+      - '9091:9090'
     networks:
       - geode-net
     profiles:
@@ -83,7 +83,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_INSTALL_PLUGINS=
     ports:
-      - "3000:3000"
+      - '3000:3000'
     networks:
       - geode-net
     profiles:

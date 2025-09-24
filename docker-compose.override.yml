@@ -18,10 +18,10 @@ services:
       - ./data:/data
     ports:
       # Additional debug port
-      - "9999:9999"
+      - '9999:9999'
     command: >
       --listen-quic 0.0.0.0:7567
-      --listen-tcp 0.0.0.0:7568
       --data-dir /data
       --log-level debug
       --log-json
+    # QUIC-only transport; TCP removed

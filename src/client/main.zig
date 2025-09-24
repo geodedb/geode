@@ -42,7 +42,7 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     if (argv.len < 2) {
-        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback] [--use-quic]\n", .{});
+        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port|/path/to/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback] [--no-quic]\n", .{});
         return;
     }
     const text: []const u8 = argv[1];

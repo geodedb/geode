@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 fn start_server(ally: std.mem.Allocator) !std.ChildProcess {
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-tcp", "127.0.0.1:7570" }, ally);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7570" }, ally);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;

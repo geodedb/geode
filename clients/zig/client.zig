@@ -1,5 +1,4 @@
 const std = @import("std");
-const net = std.net;
 const json = std.json;
 const quic = @import("transport/quic");
 
@@ -152,7 +151,6 @@ pub const Iterator = struct {
 pub const Client = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    stream: ?net.Stream = null,
     quic_client: ?quic.QuicClient = null,
     quic_stream: ?*quic.QuicClientStream = null,
     session_token: ?[]const u8 = null,
@@ -176,9 +174,6 @@ pub const Client = struct {
             qc.deinit();
             self.quic_client = null;
         }
-        if (self.stream) |stream| {
-            stream.close();
-        }
         if (self.session_token) |token| {
             self.allocator.free(token);
         }
@@ -188,11 +183,6 @@ pub const Client = struct {
         if (self.quic_stream) |qs| {
             try qs.writeAll(bytes);
             try qs.writeAll("\n");
-            return;
-        }
-        if (self.stream) |stream| {
-            _ = try stream.write(bytes);
-            _ = try stream.write("\n");
             return;
         }
         return error.NotConnected;
@@ -209,7 +199,8 @@ pub const Client = struct {
         defer self.allocator.free(client_ver);
         const wanted = try self.jsonString("minimum");
         defer self.allocator.free(wanted);
-        const payload = try std.fmt.allocPrint(self.allocator,
+        const payload = try std.fmt.allocPrint(
+            self.allocator,
             "{{\"type\":\"HELLO\",\"client_name\":{s},\"client_ver\":{s},\"wanted_conformance\":{s}}}",
             .{ client_name, client_ver, wanted },
         );
@@ -223,12 +214,14 @@ pub const Client = struct {
         const text = try self.jsonString(gql);
         defer self.allocator.free(text);
         const payload = if (params_null)
-            try std.fmt.allocPrint(self.allocator,
+            try std.fmt.allocPrint(
+                self.allocator,
                 "{{\"type\":\"RUN_GQL\",\"request_id\":{s},\"text\":{s},\"params\":null}}",
                 .{ req, text },
             )
         else
-            try std.fmt.allocPrint(self.allocator,
+            try std.fmt.allocPrint(
+                self.allocator,
                 "{{\"type\":\"RUN_GQL\",\"request_id\":{s},\"text\":{s}}}",
                 .{ req, text },
             );
@@ -239,7 +232,8 @@ pub const Client = struct {
     fn sendPull(self: *Self, request_id: []const u8, page_size: u32) !void {
         const req = try self.jsonString(request_id);
         defer self.allocator.free(req);
-        const payload = try std.fmt.allocPrint(self.allocator,
+        const payload = try std.fmt.allocPrint(
+            self.allocator,
             "{{\"type\":\"PULL\",\"request_id\":{s},\"page_size\":{d}}}",
             .{ req, page_size },
         );
@@ -256,28 +250,13 @@ pub const Client = struct {
     }
 
     pub fn connect(self: *Self) !void {
-        if (self.config.use_quic) {
-            const qc = quic.QuicClient.init(self.allocator);
-            self.quic_client = qc;
-            quic.QuicClient.connect(&self.quic_client.?, self.config.host, self.config.port) catch {
-                self.quic_client.?.deinit();
-                self.quic_client = null;
-                try self.connectTCP();
-            };
-            if (self.quic_client) |_| {
-                self.quic_stream = try self.quic_client.?.getStream();
-            }
-        } else {
-            try self.connectTCP();
-        }
+        const qc = quic.QuicClient.init(self.allocator);
+        self.quic_client = qc;
+        try quic.QuicClient.connect(&self.quic_client.?, self.config.host, self.config.port);
+        self.quic_stream = try self.quic_client.?.getStream();
 
         try self.sendHello();
         _ = try self.receiveMessage();
-    }
-
-    fn connectTCP(self: *Self) !void {
-        const address = try net.Address.parseIp(self.config.host, self.config.port);
-        self.stream = try net.tcpConnectToAddress(address);
     }
 
     pub fn disconnect(self: *Self) void {
@@ -289,12 +268,7 @@ pub const Client = struct {
             qc.deinit();
             self.quic_client = null;
         }
-        if (self.stream) |stream| {
-            stream.close();
-            self.stream = null;
-        }
     }
-
 
     fn receiveMessage(self: *Self) !json.Value {
         var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 256);
@@ -305,13 +279,6 @@ pub const Client = struct {
                 var byte: [1]u8 = undefined;
                 const n = try qs.read(&byte);
                 if (n == 0) continue; // non-blocking retry
-                if (byte[0] == '\n') break;
-                try buffer.append(self.allocator, byte[0]);
-            }
-        } else if (self.stream) |stream| {
-            while (true) {
-                var byte: [1]u8 = undefined;
-                _ = try stream.read(&byte);
                 if (byte[0] == '\n') break;
                 try buffer.append(self.allocator, byte[0]);
             }
@@ -386,7 +353,8 @@ pub const Client = struct {
         defer self.allocator.free(username_json);
         const password_json = try self.jsonString(password);
         defer self.allocator.free(password_json);
-        const payload = try std.fmt.allocPrint(self.allocator,
+        const payload = try std.fmt.allocPrint(
+            self.allocator,
             "{{\"type\":\"AUTH_LOGIN\",\"username\":{s},\"password\":{s}}}",
             .{ username_json, password_json },
         );
@@ -406,9 +374,10 @@ pub const Client = struct {
         const tok = self.session_token.?;
         const token_json = try self.jsonString(tok);
         defer self.allocator.free(token_json);
-        const payload = try std.fmt.allocPrint(self.allocator,
+        const payload = try std.fmt.allocPrint(
+            self.allocator,
             "{{\"type\":\"AUTH_LOGOUT\",\"token\":{s}}}",
-            .{ token_json },
+            .{token_json},
         );
         defer self.allocator.free(payload);
         try self.writeLine(payload);

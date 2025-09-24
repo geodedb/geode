@@ -6,7 +6,7 @@ This guide covers how to deploy Geode using Docker in both singleton and distrib
 
 - Docker Engine 20.10+ and Docker Compose 1.29+
 - At least 4GB RAM for singleton, 8GB for distributed deployment
-- Port availability: 7567-7572 (QUIC/TCP), 9090-9092 (metrics), 3000-3001 (Grafana)
+- Port availability: 7567, 7569, 7571 (QUIC), 9090-9092 (metrics), 3000-3001 (Grafana)
 
 ## Quick Start
 
@@ -66,7 +66,6 @@ docker-compose -f docker-compose.distributed.yml down
 ┌─────────────────────────┐
 │   Geode Singleton       │
 │   - QUIC: 7567          │
-│   - TCP: 7568           │
 │   - Metrics: 9090       │
 └─────────────────────────┘
          │
@@ -148,6 +147,7 @@ docker-compose -f docker-compose.distributed.yml up -d
 ```
 
 Access points:
+
 - Prometheus: http://localhost:9091 (singleton) or :9093 (distributed)
 - Grafana: http://localhost:3000 (admin/admin)
 - HAProxy Stats: http://localhost:8404/stats (distributed only)
@@ -191,8 +191,7 @@ geodec "RETURN 1 AS x ORDER BY x LIMIT 1" --server 127.0.0.1:7567
 # Test QUIC connectivity
 geodec "RETURN 'hello' AS msg" --server 127.0.0.1:7567
 
-# Test TCP connectivity
-geodec "RETURN 'hello' AS msg" --server 127.0.0.1:7568 --no-quic
+# QUIC is the only network transport; stdio remains available via --no-quic when running client and server on the same host.
 ```
 
 ## Production Deployment
@@ -256,34 +255,38 @@ deploy:
 ### Common Issues
 
 1. **Container fails to start**
+
    ```bash
    # Check logs
    docker-compose logs geode
-   
+
    # Verify port availability
-   netstat -tulpn | grep -E '7567|7568'
+   netstat -uapn | grep -E '7567|7569|7571'
    ```
 
 2. **Health check failures**
+
    ```bash
    # Test health endpoint manually
    docker exec geode geodec "RETURN 1 AS health" --server 127.0.0.1:7567
    ```
 
 3. **Cluster nodes not joining**
+
    ```bash
    # Check Raft logs
    docker-compose -f docker-compose.distributed.yml logs | grep -i raft
-   
+
    # Verify network connectivity
    docker exec geode-leader ping geode-follower-1
    ```
 
 4. **Performance issues**
+
    ```bash
    # Check resource usage
    docker stats geode
-   
+
    # Increase memory limits
    docker-compose up -d --scale geode=1 --memory=8g
    ```
@@ -316,13 +319,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Build Docker images
         run: make docker-build
-      
+
       - name: Run tests
         run: make docker-test
-      
+
       - name: Push to registry
         if: github.ref == 'refs/heads/main'
         run: |
@@ -351,24 +354,22 @@ spec:
         app: geode
     spec:
       containers:
-      - name: geode
-        image: geode:latest
-        ports:
-        - containerPort: 7567
-          protocol: UDP
-        - containerPort: 7568
-          protocol: TCP
-        volumeMounts:
-        - name: data
-          mountPath: /data
+        - name: geode
+          image: geode:latest
+          ports:
+            - containerPort: 7567
+              protocol: UDP
+          volumeMounts:
+            - name: data
+              mountPath: /data
   volumeClaimTemplates:
-  - metadata:
-      name: data
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      resources:
-        requests:
-          storage: 10Gi
+    - metadata:
+        name: data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 10Gi
 ```
 
 ## Backup and Recovery
@@ -426,6 +427,7 @@ docker run -d \
 ## Support
 
 For issues or questions:
+
 - Check logs: `docker-compose logs -f`
 - GitHub Issues: https://github.com/yourusername/geode/issues
 - Documentation: /docs/README.md
