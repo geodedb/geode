@@ -21,9 +21,9 @@ Purpose: Maintain a minimal, actionable slice backlog strictly limited to forwar
 | S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | DONE  | optimizer |
 | S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | DONE  | ops       |
 | S-108 | REQ-GQL-086 | Interactive REPL Launch Prompt      | Developer usability           | Launch prompt emits `geode>` exactly once (ReplLaunchPrompt TESTED)          | DONE  | client    |
-| S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | BENCH | planner   |
+| S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | DONE  | planner   |
 | S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | DONE  | planner   |
-| S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | TEST  | tooling   |
+| S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | DONE  | tooling   |
 
 ## 3. Variance Policy (Extract)
 
@@ -67,6 +67,7 @@ The following slice has been moved out of the feature-priority backlog. Governan
 // S-126 (REQ-GQL-068 Containers SignaledQueueMpscVarianceEnvelope) — Added MPSC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
 // S-127 (REQ-GQL-068 Containers SignaledQueueSpmcVarianceEnvelope) — Added SPMC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
 // S-110 (REQ-GQL-004 Pagination Execution Streaming) — Added ordered emission test (TESTED) and streaming latency variance envelope (BENCHED); slice marked DONE (2025-09-23).
+// S-128 (REQ-GQL-090 StreamingTelemetry PagingEvents) — Added env-guarded paging telemetry (stderr JSON) with CANARY e2e; aspect promoted to TESTED (2025-09-23).
 
 ### Completed Slices (Removed from Active Backlog)
 
@@ -92,3 +93,28 @@ To honor the one-aspect-per-slice rule, remaining InteractiveRepl aspects will l
 - S-113: HistoryPersistence -> TESTED
 
 Each slice acceptance: implement feature + single CANARY test (no bundling).
+
+## 7. Slices (Structure Compliance)
+
+### Slice S-129: Streaming Telemetry Docs Link (REQ-GQL-090)
+
+WHY: Improve discoverability of the new paging telemetry by linking docs in README and protocol docs.
+
+WHAT: Add `docs/TELEMETRY.md`, link from `README.md`, `docs/BINARY_PROTOCOL.md`, and `docs/USAGE.md`.
+
+ACCEPTANCE: Governance `make governance-check` passes; telemetry envs documented; example JSON present; links verified by grep.
+
+### Slice S-130: Governance Script Hardening (REQ-GQL-010)
+
+WHY: Fix governance utility regressions on Zig 0.15.1 (format placeholders, signed division) and correct badge staleness date math for reliable CI.
+
+WHAT:
+
+- `scripts/badge_staleness_guard.zig`: escape JSON braces in `std.fmt` strings; replace signed `/` with `@divTrunc`; unify epoch-day math via `daysFromCivil` for status vs badge comparison.
+- `scripts/governance_trend_append.zig`: fix `readToEndAlloc` error handling; escape JSON braces in format string.
+
+ACCEPTANCE:
+
+- `make governance-check` succeeds end-to-end including `badge_staleness` and `trend_append` steps.
+- Badge staleness guard emits success JSON with `diff_days` ≤ configured max (default 2) when run after badge generation.
+- Trend append prints `trend_append: appended` or `already present` (idempotent) and appends a well-formed JSON line.

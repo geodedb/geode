@@ -42,10 +42,7 @@ pub fn main() !void {
     defer hist_file.close();
 
     // Scan existing lines for identical generated_at (quick heuristic); if found and counts identical -> exit 0 no-op.
-    const existing = hist_file.readToEndAlloc(alloc, 2 * 1024 * 1024) catch |e| switch (e) {
-        error.EndOfStream => alloc.alloc(u8, 0) catch unreachable,
-        else => return fail(2, "read history failed"),
-    };
+    const existing = hist_file.readToEndAlloc(alloc, 2 * 1024 * 1024) catch return fail(2, "read history failed");
     defer alloc.free(existing);
     var already: bool = false;
     if (existing.len > 0) {
@@ -70,7 +67,7 @@ pub fn main() !void {
     // Append line
     try hist_file.seekFromEnd(0);
     var buf: [512]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{\"generated_at\":\"{s}\",\"total\":{d},\"tested\":{d},\"benched\":{d},\"impl\":{d},\"stub\":{d},\"coverage\":{d:.4},\"source\":\"status.json\"}\n", .{ counts.generated_at, counts.total, counts.tested, counts.benched, counts.impl_cnt, counts.stub_cnt, counts.coverage }) catch return fail(2, "format failed");
+    const line = std.fmt.bufPrint(&buf, "{{\"generated_at\":\"{s}\",\"total\":{d},\"tested\":{d},\"benched\":{d},\"impl\":{d},\"stub\":{d},\"coverage\":{d:.4},\"source\":\"status.json\"}}\n", .{ counts.generated_at, counts.total, counts.tested, counts.benched, counts.impl_cnt, counts.stub_cnt, counts.coverage }) catch return fail(2, "format failed");
     _ = hist_file.write(line) catch return fail(2, "write history failed");
     _ = getStdOut().write("trend_append: appended\n") catch {};
 }

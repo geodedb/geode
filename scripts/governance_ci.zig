@@ -152,23 +152,16 @@ fn varianceEnvelopeGuardCheck(summary: *Summary) !bool {
 }
 
 fn docConsistency(_: *Summary) !bool {
-    // Compute counts directly by scanning status.json summary.by_status including IMPL/STUB (transitional allowance).
-    const status_path = "status.json";
+    // Compute counts from authoritative status.csv to avoid ambiguity/staleness in status.json summaries.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const a = gpa.allocator();
-    const status_data = std.fs.cwd().readFileAlloc(a, status_path, 4 * 1024 * 1024) catch return false;
-    defer a.free(status_data);
-
-    var tested: usize = 0;
-    var benched: usize = 0;
-    var impl_cnt: usize = 0;
-    var stub_cnt: usize = 0;
-    _ = parsePatternCount(status_data, "\"BENCHED\": ", &benched);
-    _ = parsePatternCount(status_data, "\"TESTED\": ", &tested);
-    _ = parsePatternCount(status_data, "\"IMPL\": ", &impl_cnt);
-    _ = parsePatternCount(status_data, "\"STUB\": ", &stub_cnt);
-    const total = tested + benched + impl_cnt + stub_cnt;
+    const counts = countStatusesFromCsv(a, "status.csv") catch return false;
+    const tested = counts.tested;
+    const benched = counts.benched;
+    const impl_cnt = counts.impl_cnt;
+    const stub_cnt = counts.stub_cnt;
+    const total = counts.total;
     if (total == 0) return false;
     const readme_ok = try checkReadmeExtended(total, tested, benched, impl_cnt, stub_cnt);
     const reality_ok = try checkImplementationRealityExtended(total, tested, benched, impl_cnt, stub_cnt);
@@ -182,17 +175,13 @@ fn gapConsistency(_: *Summary) !bool {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const a = gpa.allocator();
-    const status_data = std.fs.cwd().readFileAlloc(a, "status.json", 4 * 1024 * 1024) catch return false;
-    defer a.free(status_data);
-    var tested: usize = 0;
-    var benched: usize = 0;
-    var impl_cnt: usize = 0;
-    var stub_cnt: usize = 0;
-    _ = parsePatternCount(status_data, "\"TESTED\": ", &tested);
-    _ = parsePatternCount(status_data, "\"BENCHED\": ", &benched);
-    _ = parsePatternCount(status_data, "\"IMPL\": ", &impl_cnt);
-    _ = parsePatternCount(status_data, "\"STUB\": ", &stub_cnt);
-    const total = tested + benched + impl_cnt + stub_cnt;
+    // Prefer authoritative CSV (single source of truth for counts) over JSON which may contain multiple summary blocks.
+    const counts = countStatusesFromCsv(a, "status.csv") catch return false;
+    const tested = counts.tested;
+    const benched = counts.benched;
+    const impl_cnt = counts.impl_cnt;
+    const stub_cnt = counts.stub_cnt;
+    const total = counts.total;
     const gap_data = std.fs.cwd().readFileAlloc(a, "docs/GAP_ANALYSIS.md", 4 * 1024 * 1024) catch return false;
     defer a.free(gap_data);
     const total_s = std.fmt.allocPrint(a, "{d}", .{total}) catch return false;
@@ -205,16 +194,24 @@ fn gapConsistency(_: *Summary) !bool {
     defer a.free(impl_s);
     const stub_s = std.fmt.allocPrint(a, "{d}", .{stub_cnt}) catch return false;
     defer a.free(stub_s);
-    const have_total_row = std.mem.indexOf(u8, gap_data, "| Total aspects (rows) | ") != null and std.mem.indexOf(u8, gap_data, total_s) != null;
-    const have_tested_row = std.mem.indexOf(u8, gap_data, "| TESTED (non") != null and std.mem.indexOf(u8, gap_data, tested_s) != null;
-    const have_benched_row = std.mem.indexOf(u8, gap_data, "| BENCHED") != null and std.mem.indexOf(u8, gap_data, benched_s) != null;
+    // Robust row detection: scan per-line for keywords and counts to tolerate Markdown spacing differences.
+    var have_total_row = false;
+    var have_tested_row = false;
+    var have_benched_row = false;
+    var lines = std.mem.splitScalar(u8, gap_data, '\n');
+    while (lines.next()) |line| {
+        if (!have_total_row and std.mem.indexOf(u8, line, "Total aspects (rows)") != null and std.mem.indexOf(u8, line, total_s) != null) have_total_row = true;
+        if (!have_tested_row and std.mem.indexOf(u8, line, "TESTED") != null and std.mem.indexOf(u8, line, tested_s) != null) have_tested_row = true;
+        if (!have_benched_row and std.mem.indexOf(u8, line, "BENCHED") != null and std.mem.indexOf(u8, line, benched_s) != null) have_benched_row = true;
+        if (have_total_row and have_tested_row and have_benched_row) break;
+    }
     // Optional IMPL/STUB rows tolerated if present; if present must match
     var impl_ok = true;
-    if (std.mem.indexOf(u8, gap_data, "| IMPL (unpromoted)") != null) {
+    if (std.mem.indexOf(u8, gap_data, "IMPL (unpromoted)") != null) {
         impl_ok = std.mem.indexOf(u8, gap_data, impl_s) != null;
     }
     var stub_ok = true;
-    if (std.mem.indexOf(u8, gap_data, "| STUB |") != null) {
+    if (std.mem.indexOf(u8, gap_data, "STUB") != null) {
         stub_ok = std.mem.indexOf(u8, gap_data, stub_s) != null;
     }
     var summary_ok = false;
@@ -222,6 +219,46 @@ fn gapConsistency(_: *Summary) !bool {
         if (std.mem.indexOf(u8, gap_data[pos..], total_s) != null) summary_ok = true;
     }
     return have_total_row and have_tested_row and have_benched_row and impl_ok and stub_ok and summary_ok;
+}
+
+const Counts = struct { tested: usize, benched: usize, impl_cnt: usize, stub_cnt: usize, total: usize };
+
+fn countStatusesFromCsv(a: std.mem.Allocator, path: []const u8) !Counts {
+    const data = try std.fs.cwd().readFileAlloc(a, path, 16 * 1024 * 1024);
+    defer a.free(data);
+    var tested: usize = 0;
+    var benched: usize = 0;
+    var impl_cnt: usize = 0;
+    var stub_cnt: usize = 0;
+    var total_rows: usize = 0;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        if (first) { // header
+            first = false;
+            // Verify header begins with req,feature,aspect,status,
+            // If not, still proceed treating all lines as data.
+            if (std.mem.startsWith(u8, line, "req,feature,aspect,status,")) {
+                continue;
+            }
+        }
+        // Split minimally to extract 4th field (status)
+        var it = std.mem.splitScalar(u8, line, ',');
+        var col: usize = 0;
+        var status_field: ?[]const u8 = null;
+        while (it.next()) |tok| : (col += 1) {
+            if (col == 3) { // 0-based index -> 3 is 4th column
+                status_field = tok;
+                break;
+            }
+        }
+        if (status_field) |st| {
+            if (std.mem.eql(u8, st, "TESTED")) tested += 1 else if (std.mem.eql(u8, st, "BENCHED")) benched += 1 else if (std.mem.eql(u8, st, "IMPL")) impl_cnt += 1 else if (std.mem.eql(u8, st, "STUB")) stub_cnt += 1;
+            total_rows += 1;
+        }
+    }
+    return Counts{ .tested = tested, .benched = benched, .impl_cnt = impl_cnt, .stub_cnt = stub_cnt, .total = total_rows };
 }
 
 fn checkReadmeExtended(total: usize, tested: usize, benched: usize, impl_cnt: usize, stub_cnt: usize) !bool {

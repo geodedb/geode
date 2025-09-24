@@ -156,6 +156,26 @@ test "protocol: pagination NoResult after final extra pull" {
     try std.testing.expect(std.mem.indexOf(u8, combined, "NoResult") != null);
 }
 
+// CANARY: REQ=REQ-GQL-090; FEATURE="StreamingTelemetry"; ASPECT=PagingEvents; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_090_TelemetryPagingPull; OWNER=wire; UPDATED=2025-09-23
+test "TestCANARY_REQ_GQL_090_TelemetryPagingPull" {
+    const exe = "./zig-out/bin/geodec";
+    // Set env var to enable telemetry, then run with page_size=1 and pull-all to generate multiple pages
+    // Spawn process with environment override by invoking a small shell wrapper would be complex; instead, rely on server reading env.
+    // We set env in current process for child to inherit.
+    std.posix.setenvZ("GEODE_TELEMETRY_PAGING", "1", 1) catch {};
+    std.posix.setenvZ("GEODE_CAPTURE_SERVER_STDERR", "1", 1) catch {};
+    const res = try run(&.{ exe, "RETURN a AS v", "--json-param", "a", "[5,6]", "--page-size", "1", "--pull-all" });
+    defer std.testing.allocator.free(res.out);
+    defer std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    // Telemetry is emitted to stderr as JSON lines; assert presence of TELEMETRY and event key
+    try std.testing.expect(contains(res.err, "\"type\":\"TELEMETRY\""));
+    try std.testing.expect(contains(res.err, "\"event\":\"PULL_PAGE\""));
+    // Also should include page_size 1 and rows_emitted 1 at least once
+    try std.testing.expect(contains(res.err, "\"page_size\":\"1\""));
+    try std.testing.expect(contains(res.err, "\"rows_emitted\":\"1\""));
+}
+
 test "explain: query properties ordered limit offset" {
     const exe = "./zig-out/bin/geodec";
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 5 OFFSET 2" });

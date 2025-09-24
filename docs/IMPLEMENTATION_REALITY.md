@@ -2,22 +2,21 @@
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Implementation Reality Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
 
-Generated from CANARY evidence analysis - 2025-09-22 (post cost model factors & variance envelope sync; updated strategic gap IDs 074–077)
+Generated from CANARY evidence analysis - 2025-09-24 (post telemetry paging events + governance sync; updated strategic gap IDs 074–077)
 
 // NOTE: Future slice planning content moved to `NEXT.md` to avoid redundancy. This file remains a snapshot of current implemented reality only.
 
 ## Executive Summary
 
-Latest CANARY scan (`status.json`) incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, NEXT plan freshness automation, and new strategic variance envelopes (cost model calibration, MV refresh latency, inverted index query latency):
+Latest CANARY scan incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, NEXT plan freshness automation, and new strategic variance envelopes (cost model calibration, MV refresh latency, inverted index query latency):
 
-- **359 aspects** (tracked feature/aspect evidence rows)
-  359 aspects (tracked feature/aspect evidence rows)
-- **180 TESTED** (~50.1%) – functional tests present (AdvancedCostModel, RefreshScheduler, InvertedIndexCore, RangeTrackerPhantomPrevention, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, planner phase timing tests)
-  180 TESTED (~50.1%)
-- **179 BENCHED** (~49.9%) – performance / variance / jitter envelopes (AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope, RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
-  179 BENCHED (~49.9%)
-- **0 STUB**, **0 IMPL (unpromoted)** – all governance guards (EvidenceDeltaGuard, RealityFreshnessGuard) now TESTED; strategic gaps (REQ-GQL-074..077) TESTED baseline; variance benches pending for promotion to BENCHED
-- **70+ variance envelopes** (all passing CV & p95/mean thresholds; added AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope; continued consolidation of legacy pagination envelope)
+- **607 aspects** (tracked feature/aspect evidence rows)
+- **365 TESTED** – functional tests present (AdvancedCostModel, RefreshScheduler, InvertedIndexCore, RangeTrackerPhantomPrevention, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, planner phase timing tests)
+- **229 BENCHED** – performance / variance / jitter envelopes (AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope, RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
+- **6 STUB**, **7 IMPL (unpromoted)** – governance guards active; strategic gaps (REQ-GQL-074..077) TESTED baseline; variance benches pending for promotion to BENCHED
+- **70+ variance envelopes** (passing thresholds; AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope; pagination execution envelope consolidated)
+
+Counts are computed from `status.csv` (authoritative) to avoid drift from any stale JSON summaries.
 
 Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassification reflects maturation of several functional features into performance‑guarded states plus addition of new recovery and MVCC guardrails. TESTED decrease is expected due to promotions into BENCHED status categories (mutually exclusive lifecycle states in evidence ledger).
 
@@ -222,11 +221,11 @@ Governance automation (freshness, hash integrity, delta detection) is now consid
 
 ## Conclusion
 
-The CANARY analysis indicates Geode is approximately **~63–66% functionally implemented** toward stated full-scope ambitions (ratio shift due to promotions from TESTED→BENCHED and addition of new performance guardrails):
+The CANARY analysis indicates Geode is approximately **~63–66% functionally implemented** toward stated full-scope ambitions (ratio shift due to promotions from TESTED→BENCHED and addition of new performance guardrails). Current evidence snapshot:
 
-- **342 tracked aspects** (100% promoted; no STUB/IMPL residuals)
-- **175 performance / variance benchmarks** (BENCHED) guarding stability & regressions
-- **65 variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination, recovery, and MVCC phantom prevention
+- **607 tracked aspects**
+- **365 TESTED**, **229 BENCHED**, **6 STUB**, **7 IMPL**
+- **70+ variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination, recovery, and MVCC phantom prevention
 - Foundations in query execution, transactions (with phantom prevention tracking), CDC, schema constraints, and path traversal are stabilizing; distributed & optimizer layers remain nascent.
 
 Areas needing work but with emerging foundations:

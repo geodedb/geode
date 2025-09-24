@@ -62,9 +62,9 @@ pub fn main() !void {
     const now_ns = std.time.nanoTimestamp();
 
     // Parse date_prefix into simple epoch days (naive, assumes Gregorian, ignores months differing lengths; acceptable for <= few days window)
-    const epoch_days_status = naiveEpochDays(date_prefix) catch return fail(2, "date parse");
-    const epoch_days_badge = epochDaysFromNs(badge_mtime_ns);
-    const diff = if (epoch_days_badge > epoch_days_status) @as(i64, @intCast(epoch_days_badge - epoch_days_status)) else @as(i64, @intCast(epoch_days_status - epoch_days_badge));
+    const epoch_days_status: i64 = epochDaysFromDatePrefix(date_prefix) catch return fail(2, "date parse");
+    const epoch_days_badge: i64 = epochDaysFromNs(badge_mtime_ns);
+    const diff: i64 = if (epoch_days_badge > epoch_days_status) (epoch_days_badge - epoch_days_status) else (epoch_days_status - epoch_days_badge);
     const age_ok = diff <= @as(i64, @intCast(max_days));
     const future_ok = badge_mtime_ns <= now_ns; // badge not from the future
 
@@ -83,13 +83,14 @@ fn emitJSON(obj: anytype) !void {
     // Use reflection to check for status field values by formatting generically via std.fmt.
     // Simpler: detect if obj has badge_epoch_days using @hasField.
     if (@hasField(@TypeOf(obj), "badge_epoch_days")) {
-        const line = try std.fmt.bufPrint(&buffer, "{\"status\":\"{s}\",\"badge_epoch_days\":{d},\"status_epoch_days\":{d},\"diff_days\":{d},\"max_days\":{d}}\n", .{ obj.status, obj.badge_epoch_days, obj.status_epoch_days, obj.diff_days, obj.max_days });
+        // Escape literal braces for std.fmt by doubling them
+        const line = try std.fmt.bufPrint(&buffer, "{{\"status\":\"{s}\",\"badge_epoch_days\":{d},\"status_epoch_days\":{d},\"diff_days\":{d},\"max_days\":{d}}}\n", .{ obj.status, obj.badge_epoch_days, obj.status_epoch_days, obj.diff_days, obj.max_days });
         _ = try stdout_file.write(line);
     } else if (@hasField(@TypeOf(obj), "reason")) {
-        const line = try std.fmt.bufPrint(&buffer, "{\"status\":\"{s}\",\"reason\":\"{s}\"}\n", .{ obj.status, obj.reason });
+        const line = try std.fmt.bufPrint(&buffer, "{{\"status\":\"{s}\",\"reason\":\"{s}\"}}\n", .{ obj.status, obj.reason });
         _ = try stdout_file.write(line);
     } else {
-        const line = try std.fmt.bufPrint(&buffer, "{\"status\":\"{s}\"}\n", .{obj.status});
+        const line = try std.fmt.bufPrint(&buffer, "{{\"status\":\"{s}\"}}\n", .{obj.status});
         _ = try stdout_file.write(line);
     }
 }
@@ -116,23 +117,12 @@ fn parseGeneratedDate(data: []const u8) ![]const u8 {
     return data[start..i];
 }
 
-fn naiveEpochDays(date_prefix: []const u8) !u64 {
-    // Very naive conversion: YYYY-MM-DD -> days = (year*372 + (month-1)*31 + (day-1)) for monotonic comparable ordering (not real epoch)
-    if (date_prefix.len < 10) return error.BadDate;
-    const year = (digit(date_prefix[0]) * 1000 + digit(date_prefix[1]) * 100 + digit(date_prefix[2]) * 10 + digit(date_prefix[3]));
-    const month = (digit(date_prefix[5]) * 10 + digit(date_prefix[6]));
-    const day = (digit(date_prefix[8]) * 10 + digit(date_prefix[9]));
-    if (month == 0 or month > 12 or day == 0 or day > 31) return error.BadDate;
-    return @as(u64, year) * 372 + (@as(u64, month) - 1) * 31 + (@as(u64, day) - 1);
-}
-
-fn epochDaysFromNs(ns: i128) u64 {
+fn epochDaysFromNs(ns: i128) i64 {
     // Derive naive day count from unix epoch days using 86400-second boundary
     const day_seconds: i128 = 86_400;
-    const total_seconds: i128 = ns / 1_000_000_000;
-    const days = total_seconds / day_seconds;
-    if (days < 0) return 0; // clamp
-    return @as(u64, @intCast(days));
+    const total_seconds: i128 = @divTrunc(ns, @as(i128, 1_000_000_000));
+    const days: i128 = @divTrunc(total_seconds, day_seconds);
+    return @as(i64, @intCast(days));
 }
 
 fn digit(c: u8) u64 {
@@ -140,3 +130,27 @@ fn digit(c: u8) u64 {
 }
 
 pub const BadgeStalenessError = error{ NotFound, Parse, BadDate };
+
+fn epochDaysFromDatePrefix(date_prefix: []const u8) !i64 {
+    if (date_prefix.len < 10) return error.BadDate;
+    const y: i64 = @as(i64, @intCast(digit(date_prefix[0]) * 1000 + digit(date_prefix[1]) * 100 + digit(date_prefix[2]) * 10 + digit(date_prefix[3])));
+    const m_u: u32 = @as(u32, @intCast(digit(date_prefix[5]) * 10 + digit(date_prefix[6])));
+    const d_u: u32 = @as(u32, @intCast(digit(date_prefix[8]) * 10 + digit(date_prefix[9])));
+    if (m_u == 0 or m_u > 12 or d_u == 0 or d_u > 31) return error.BadDate;
+    return daysFromCivil(y, m_u, d_u);
+}
+
+fn daysFromCivil(year: i64, month: u32, day: u32) i64 {
+    // Howard Hinnant's algorithm: days since 1970-01-01 (Unix epoch)
+    var y = year;
+    y -= if (month <= 2) 1 else 0;
+    const era: i64 = @divTrunc(if (y >= 0) y else (y - 399), 400);
+    const yoe: i64 = y - era * 400; // [0, 399]
+    const m_adj: i64 = @as(i64, @intCast(month));
+    const d_adj: i64 = @as(i64, @intCast(day));
+    const month_offset: i64 = if (month > 2) -3 else 9;
+    const a: i64 = @as(i64, 153) * (m_adj + month_offset) + @as(i64, 2);
+    const doy: i64 = @divTrunc(a, @as(i64, 5)) + d_adj - @as(i64, 1); // [0, 365]
+    const doe: i64 = yoe * @as(i64, 365) + @divTrunc(yoe, @as(i64, 4)) - @divTrunc(yoe, @as(i64, 100)) + @divTrunc(yoe, @as(i64, 400)) + doy; // [0, 146096]
+    return era * @as(i64, 146097) + doe - @as(i64, 719468);
+}

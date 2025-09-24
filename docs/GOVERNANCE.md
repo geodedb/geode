@@ -16,19 +16,19 @@ All critical checks are composed in `scripts/governance_ci.zig` and runnable via
 
 ## Key Artifacts
 
-| File                                  | Purpose                                                                     |
-| ------------------------------------- | --------------------------------------------------------------------------- |
-| `status.csv` / `status.json`          | Authoritative machine-extracted evidence ledger (TESTED / BENCHED aspects). |
-| `docs/GAP_ANALYSIS.md`                | Human-readable structured gap & evidence summary regenerated from scanner.  |
-| `docs/IMPLEMENTATION_REALITY.md`      | Narrative alignment with current evidence snapshot (date-guarded).          |
-| `docs/NEXT.md`                        | Forward plan (Generated date freshness guarded).                            |
-| `docs/VARIANCE_ENVELOPES.md`          | Canonical registry of all variance envelopes with thresholds & exceptions.  |
-| `docs/GOVERNANCE.md`                  | (This file) Consolidated governance policy & guard reference.               |
-| `scripts/generate_badges.zig`         | Produces SVG badge summarizing TOTAL / TESTED / BENCHED counts.             |
-| `scripts/variance_envelope_guard.zig` | Enforces README variance guard floor vs actual count.                       |
-| `scripts/governance_ci.zig`           | Orchestrates multi-step governance checks (JSON summary output).            |
-| `scripts/governance_trend_append.zig` | Appends current evidence metrics to `badges/history.jsonl` (time-series).   |
-| `scripts/badge_staleness_guard.zig`   | Ensures `badges/evidence.svg` is fresh relative to `status.json` timestamp. |
+| File                                  | Purpose                                                                                                                         |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `status.csv` / `status.json`          | Machine-extracted evidence ledger (TESTED / BENCHED aspects). For count-based checks, `status.csv` is the authoritative source. |
+| `docs/GAP_ANALYSIS.md`                | Human-readable structured gap & evidence summary regenerated from scanner.                                                      |
+| `docs/IMPLEMENTATION_REALITY.md`      | Narrative alignment with current evidence snapshot (date-guarded).                                                              |
+| `docs/NEXT.md`                        | Forward plan (Generated date freshness guarded).                                                                                |
+| `docs/VARIANCE_ENVELOPES.md`          | Canonical registry of all variance envelopes with thresholds & exceptions.                                                      |
+| `docs/GOVERNANCE.md`                  | (This file) Consolidated governance policy & guard reference.                                                                   |
+| `scripts/generate_badges.zig`         | Produces SVG badge summarizing TOTAL / TESTED / BENCHED counts.                                                                 |
+| `scripts/variance_envelope_guard.zig` | Enforces README variance guard floor vs actual count.                                                                           |
+| `scripts/governance_ci.zig`           | Orchestrates multi-step governance checks (JSON summary output).                                                                |
+| `scripts/governance_trend_append.zig` | Appends current evidence metrics to `badges/history.jsonl` (time-series).                                                       |
+| `scripts/badge_staleness_guard.zig`   | Ensures `badges/evidence.svg` is fresh relative to `status.json` timestamp.                                                     |
 
 ## Governance Steps (Pipeline)
 
@@ -37,8 +37,8 @@ All critical checks are composed in `scripts/governance_ci.zig` and runnable via
 | `freshness`               | Verifies `docs/NEXT.md` Generated date is today's date.                          | `scripts/governance_ci.zig`           |
 | `canary`                  | Runs CANARY scanner: emits / validates `status.json` & `status.csv`.             | `bin/canaryscan`                      |
 | `variance_envelope_guard` | README claim for variance envelopes meets actual count & floor.                  | `scripts/variance_envelope_guard.zig` |
-| `doc_consistency`         | README & IMPLEMENTATION_REALITY counts match scanner summary.                    | `scripts/governance_ci.zig`           |
-| `gap_consistency`         | Ensures GAP_ANALYSIS tables reflect current counts.                              | `scripts/governance_ci.zig`           |
+| `doc_consistency`         | README & IMPLEMENTATION_REALITY counts match scanner summary (derived from CSV). | `scripts/governance_ci.zig`           |
+| `gap_consistency`         | Ensures GAP_ANALYSIS tables reflect current counts (derived from CSV).           | `scripts/governance_ci.zig`           |
 | `next_slices`             | Structural validation of slice sections (WHY / WHAT / ACCEPTANCE).               | `scripts/governance_ci.zig`           |
 | `slice_req_crosscheck`    | Slice REQ IDs each map to exactly one requirement; must exist in ledger.         | `scripts/governance_ci.zig`           |
 | `evidence_delta`          | Detect removed requirement IDs vs previous snapshot (prevents silent deletions). | `scripts/governance_ci.zig`           |
@@ -154,7 +154,7 @@ Notes:
 
 | Policy                   | Statement                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------- |
-| Evidence Completeness    | 0 STUB / 0 IMPL residuals allowed (all aspects promoted).                             |
+| Evidence Completeness    | Target is 0 STUB / 0 IMPL residuals; current counts are tracked from `status.csv`.    |
 | Freshness                | All UPDATED dates < 60 days old under `--strict`.                                     |
 | Variance Guard Floor     | README floor (N+) must be satisfied by live count.                                    |
 | Single-Purpose Promotion | Each PR should promote at most one aspect per requirement to prevent hidden bundling. |

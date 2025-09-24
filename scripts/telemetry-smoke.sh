@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# telemetry-smoke.sh — start geoded with paging telemetry, run a small query via geodec,
+# print captured telemetry lines, and clean up.
+# Usage: scripts/telemetry-smoke.sh [page_size]
+# Requires: zig build has produced ./zig-out/bin/geoded and ./zig-out/bin/geodec
+
+ROOT_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
+BIN_DIR="$ROOT_DIR/zig-out/bin"
+SERVER_BIN="$BIN_DIR/geoded"
+CLIENT_BIN="$BIN_DIR/geodec"
+PAGE_SIZE="${1:-1}"
+LOG_FILE="$(mktemp -t geode_telemetry.XXXXXX.log)"
+PID_FILE="$(mktemp -t geode_telemetry.XXXXXX.pid)"
+
+cleanup() {
+  if [[ -f "$PID_FILE" ]]; then
+    PID=$(cat "$PID_FILE" || true)
+    if [[ -n "${PID:-}" ]]; then
+      kill "$PID" >/dev/null 2>&1 || true
+      wait "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# Ensure server and client binaries exist and are executable
+if [ ! -x "$SERVER_BIN" ] || [ ! -x "$CLIENT_BIN" ]; then
+  echo "error: build outputs not found; run: zig build" >&2
+  exit 1
+fi
+
+# Start server with telemetry enabled; capture stderr to log file
+GEODE_TELEMETRY_PAGING=1 \
+"$SERVER_BIN" --data_dir "$ROOT_DIR/data" --log_json --result-format json \
+  1>/dev/null 2>"$LOG_FILE" &
+SERVER_PID=$!
+echo "$SERVER_PID" >"$PID_FILE"
+
+# Give server a moment to come up
+sleep 0.5
+
+# Run a tiny ordered+limited query to ensure a single page flows
+"$CLIENT_BIN" "RETURN 1 AS x ORDER BY x LIMIT $PAGE_SIZE" --format json || true
+
+# Print telemetry lines
+if grep -q '"event":"PULL_PAGE"' "$LOG_FILE"; then
+  echo "--- Captured Telemetry ---"
+  grep '"event":"PULL_PAGE"' "$LOG_FILE"
+  echo "--------------------------"
+else
+  echo "warning: no telemetry lines captured (check server startup/logging)" >&2
+fi
+
+exit 0

@@ -77,7 +77,7 @@ Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, whi
 ## Reality Check
 
 - ~63–66% of tracked aspects have functional evidence (TESTED); remaining promoted aspects are BENCHED with performance/variance guardrails.
-- 0 STUB / 0 IMPL residuals (policy enforced); earlier NotImplemented hotspots reduced but some algorithm/backlog placeholders remain.
+- Residuals present in current snapshot: 6 STUB / 7 IMPL (counts derived from `status.csv`). Target policy remains 0 STUB / 0 IMPL at ship; governance tracks progress and will fail if docs over‑claim versus evidence.
 - Advanced optimizer, full MATCH pattern semantics, distributed consensus (election/membership), and external connectors are still pending.
 - Governance automation (ImplementationReality delta tool + NEXT plan freshness guard) reduces documentation drift risk.
 

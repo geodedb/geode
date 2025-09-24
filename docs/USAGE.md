@@ -5,6 +5,7 @@
 Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance communication:
 
 ### Server
+
 ```bash
 # Start server with QUIC (default port 7567)
 ./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
@@ -17,6 +18,7 @@ Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance commu
 ```
 
 ### Client
+
 ```bash
 # Connect using QUIC (default)
 ./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:7567
@@ -26,6 +28,7 @@ Geode now supports QUIC protocol with TLS 1.3 for secure, high-performance commu
 ```
 
 ### Go Client
+
 ```go
 // Connect using QUIC
 db, _ := gql.Open("quic:127.0.0.1:7567")
@@ -107,3 +110,18 @@ Aggregation and path tie-break
 - Illegal ORDER BY key: enable flags to control strictness:
   - --strict-order-keys, --ident-order-only, --forbid-orderby-calls, --forbid-orderby-paths
     The CLI maps these to the IllegalOrderKey diagnostic when violated.
+
+## Telemetry (optional)
+
+For development and ops observability, you can enable paging telemetry on the server and optionally have the client forward it:
+
+- Set `GEODE_TELEMETRY_PAGING=1` to emit one JSON line per `PULL` page on server `stderr`.
+- Set `GEODE_CAPTURE_SERVER_STDERR=1` to have `geodec` capture and forward the server's `stderr` to the client's `stderr`.
+
+See `docs/TELEMETRY.md` for event shape and examples.
+
+Quick smoke (local):
+
+```bash
+make telemetry-smoke
+```

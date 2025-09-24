@@ -250,8 +250,9 @@ pub fn main() !void {
     var child = std.process.Child.init(server_args.items, gpa);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
-    // Inherit stderr so large error outputs don't block the child process
-    child.stderr_behavior = .Inherit;
+    // Optionally capture server stderr when requested (for tests/telemetry); otherwise inherit to avoid blocking
+    const capture_server_stderr = std.posix.getenv("GEODE_CAPTURE_SERVER_STDERR") != null;
+    child.stderr_behavior = if (capture_server_stderr) .Pipe else .Inherit;
     try child.spawn();
     const child_stdin_file = child.stdin.?; // use direct file writes (simpler API under Zig 0.15)
 
@@ -468,6 +469,18 @@ pub fn main() !void {
         }
     }
 
+    // If capturing server stderr, drain and forward to our own stderr before shutdown
+    if (capture_server_stderr) {
+        if (child.stderr) |serr| {
+            const data = serr.readToEndAlloc(gpa, 1 << 20) catch &[_]u8{};
+            if (data.len > 0) {
+                const stderr_file = getStdErr();
+                _ = stderr_file.write(data) catch {};
+            }
+            serr.close();
+            child.stderr = null;
+        }
+    }
     // Done; shutdown server
     // no buffered writer now
     if (child.stdin) |s| {

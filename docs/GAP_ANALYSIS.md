@@ -1,6 +1,8 @@
 # GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-23)
 
-<!-- STATUS_JSON_SHA256: 051db851ef8d60ee6e78410584bb9b619547bdf680eed1dfdd1167d8f4ef3049 -->
+<!-- STATUS_JSON_SHA256: fe0cdd5bb4dfad59d673583d58b87b1b699c9dd57b4584087cdbb9d15da689b4 -->
+
+> Note: For count-based governance checks, `status.csv` is the authoritative source. This page’s SHA256 marker guards consistency against `status.json`.
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -93,21 +95,23 @@ make update-status-hash  # rewrites the STATUS_JSON_SHA256 marker
 
 CI SHOULD run `make canary && make update-status-hash` only when accepting an intentional evidence refresh (avoid noisy hash-only commits). The hash guard test (`status_json_hash_integrity.zig`) will fail if the marker drifts.
 
+-- Total aspect rows (status.csv): 607
+
 ## 1. Evidence Summary (Derived from latest `status.json`)
 
 The previously published summary (2025-09-22) claimed 0 `STUB` and 0 `IMPL`. The latest scan (raw `status.json`) shows non‑zero counts; documentation is therefore downgraded per Truth & Reconciliation (§3 of unified prompt).
 
-| Metric                       | Count |
-| ---------------------------- | ----- |
-| Total aspects (rows)         | 442   |
-| BENCHED                      | 185   |
-| TESTED (non‑BENCHED)         | 223   |
-| STUB                         | 33    |
-| IMPL (unpromoted)            | 1     |
-| Coverage (TESTED or BENCHED) | 92.5% |
-| Stale (>60d)                 | 0     |
+| Metric                       | Count  |
+| ---------------------------- | ------ |
+| Total aspects (rows)         | 607    |
+| BENCHED                      | 229    |
+| TESTED (non‑BENCHED)         | 365    |
+| STUB                         | 6      |
+| IMPL (unpromoted)            | 7      |
+| Coverage (TESTED or BENCHED) | 97.86% |
+| Stale (>60d)                 | 0      |
 
-Discrepancy note: Prior ledger asserted 100% coverage; actual coverage ( (185+223)/442 ) reflects remaining STUB/IMPL work. This correction prevents over‑claim and aligns with CANARY evidence.
+Discrepancy note: Prior ledger asserted 100% coverage; actual coverage ( (229+365)/607 = 97.86% ) reflects remaining STUB/IMPL work. This correction prevents over‑claim and aligns with CANARY evidence.
 
 Promotion lattice (policy reminder): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. Auto‑promotion DOES NOT erase raw `STUB` / `IMPL` lines without evidence; these remain actionable.
 
@@ -164,8 +168,8 @@ _Note_: Table reflects representative multi-aspect density; authoritative enumer
 
 | #   | Gap                                                          | Impact                         | Required Evidence to Close                                     | Target Status       |
 | --- | ------------------------------------------------------------ | ------------------------------ | -------------------------------------------------------------- | ------------------- |
-| 1   | Remaining STUB aspects (33)                                  | Evidence coverage gap          | Convert each STUB to TESTED via minimal positive test or bench | STUB→TESTED/BENCHED |
-| 2   | Single IMPL aspect (cost model factors)                      | Unverified implementation risk | Add targeted test + variance bench then promote                | IMPL→BENCHED        |
+| 1   | Remaining STUB aspects (6)                                   | Evidence coverage gap          | Convert each STUB to TESTED via minimal positive test or bench | STUB→TESTED/BENCHED |
+| 2   | Remaining IMPL aspects (7)                                   | Unverified implementation risk | Add targeted test + variance bench then promote                | IMPL→BENCHED        |
 | 3   | Distributed coordinator stubs (REQ-GQL-078)                  | HA roadmap credibility         | Implement leader stub behaviors & shard map; add tests         | STUB→TESTED         |
 | 4   | Security RLS/ABAC policy catalog & enforcement (REQ-GQL-080) | Access control correctness     | Implement policy evaluation path + caching tests               | STUB→TESTED         |
 | 5   | Monitoring Prometheus endpoint & core metrics (REQ-GQL-081)  | Operability / SLO tracking     | Implement export; verify metrics count & naming                | STUB→TESTED         |
@@ -260,17 +264,16 @@ This authoritative ledger is generated from `status.json` emitted by:
 
 No manual edits should diverge from scanner evidence; contradictions must be resolved by adding/updating CANARY lines or tests/benches.
 
-## 1. Evidence Summary
+## 1. Evidence Summary (Canonical)
 
-| Metric               | Count |
-| -------------------- | ----- |
-| Total aspects (rows) | 359   |
-| BENCHED              | 179   |
-| TESTED (non‑BENCHED) | 180   |
-
-| STUB | 0 |
-| IMPL (unpromoted) | 0 |
-| Coverage (TESTED or BENCHED) | 100% |
-| Stale (>60d) | 0 |
+| Metric                       | Count  |
+| ---------------------------- | ------ |
+| Total aspects (rows)         | 607    |
+| BENCHED                      | 229    |
+| TESTED (non‑BENCHED)         | 365    |
+| STUB                         | 6      |
+| IMPL (unpromoted)            | 7      |
+| Coverage (TESTED or BENCHED) | 97.86% |
+| Stale (>60d)                 | 0      |
 
 Promotion lattice (applied automatically): IMPL + test → TESTED; (IMPL|TESTED) + bench → BENCHED. BENCHED dominates counts. Dates enforced under `--strict` (all current aspects fresh).

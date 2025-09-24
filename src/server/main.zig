@@ -69,6 +69,9 @@ const ServerState = struct {
     agg_build_bytes_last: usize = 0,
     agg_emit_bytes_last: usize = 0,
 
+    // Telemetry toggles (env-driven). When enabled, server emits JSON log lines on paging events.
+    telemetry_paging: bool = false,
+
     // Optional CDC engine pointer for diagnostics protocol frame
     // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
     cdc_engine: ?*@import("cdc_enhanced").CDCEngine = null,
@@ -1874,6 +1877,7 @@ fn handleTcpConnection(
 
     // Initialize state
     var state = ServerState{ .allocator = gpa };
+    state.telemetry_paging = std.posix.getenv("GEODE_TELEMETRY_PAGING") != null;
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
     state.wal_ptr = @ptrCast(&wal);
@@ -1944,6 +1948,7 @@ fn handleQuicConnection(
 
     // Initialize state
     var state = ServerState{ .allocator = gpa };
+    state.telemetry_paging = std.posix.getenv("GEODE_TELEMETRY_PAGING") != null;
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
     state.wal_ptr = @ptrCast(&wal);
@@ -2553,6 +2558,7 @@ pub fn main() !void {
     }
 
     var state = ServerState{ .allocator = gpa };
+    state.telemetry_paging = std.posix.getenv("GEODE_TELEMETRY_PAGING") != null;
     // Initialize CDC engine if enabled via environment
     var cdc_engine_storage: @import("cdc_enhanced").CDCEngine = undefined;
     var cdc_inited = false;
@@ -4275,6 +4281,20 @@ pub fn main() !void {
                 const is_final = end >= state.page_items.len;
                 if (is_final) state.active_result = false;
                 const include_final = (state.page_items.len > 1) or (page_size < state.page_items.len);
+                if (state.telemetry_paging) {
+                    // Emit telemetry JSON log line on stderr via logger
+                    var ps_buf: [32]u8 = undefined;
+                    const ps_str = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
+                    var rows_buf: [32]u8 = undefined;
+                    const rows_str = std.fmt.bufPrint(&rows_buf, "{d}", .{end - start}) catch "0";
+                    logger.info("telemetry", .{
+                        .{ .key = "type", .value = "TELEMETRY" },
+                        .{ .key = "event", .value = "PULL_PAGE" },
+                        .{ .key = "page_size", .value = ps_str },
+                        .{ .key = "rows_emitted", .value = rows_str },
+                        .{ .key = "final", .value = if (is_final) "true" else "false" },
+                    });
+                }
                 writeBindingsAdaptive(stdout_file, state.last_ordered, state.last_order_keys, json_rows, is_final, include_final, computeBaseFlags(state.last_ordered, state.last_distinct));
             },
         }

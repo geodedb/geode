@@ -23,6 +23,7 @@ endif
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
+.PHONY: telemetry-smoke
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test
@@ -316,6 +317,14 @@ cross-compile-strict: cross-linux-x86_64 cross-windows cross-linux-arm cross-lin
 
 # Quick rebuild (no clean)
 quick: build test
+
+# Run telemetry smoke helper script (assumes zig-out/bin binaries exist)
+telemetry-smoke: build
+	@if [ -x scripts/telemetry-smoke.sh ]; then \
+		bash scripts/telemetry-smoke.sh 1; \
+	else \
+		echo "scripts/telemetry-smoke.sh missing or not executable"; exit 2; \
+	fi
 
 # Cross-compilation targets (required 64-bit targets only)
 cross-compile: cross-compile-required cross-compile-optional cross-clients

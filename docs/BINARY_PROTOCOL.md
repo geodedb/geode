@@ -223,6 +223,8 @@ CANARY: REQ=REQ-GQL-052; FEATURE="FederationOrderedMultiKeyDirMerge"; ASPECT=Fed
 - Illegal ORDER key (function call) ⇒ `IllegalOrderKey` (anchor 14.10) + flag `I:IllegalOrderKeyPolicy=ident-only`.
 - Multiple diagnostics (e.g. illegal ORDER key plus unordered pagination) => primary chosen per precedence; secondary appear in `additional_statuses` (UA002 policy).
 
+Note: For optional server-side paging telemetry logging (to stderr) that does not affect wire frames, see `docs/TELEMETRY.md`.
+
 ## Versioning
 
 This document describes protocol draft for Geode v0.15.0+ (post PROFILE staging change). Wire stability: additive until v0.20.0; removals / incompatible renames require a major bump.

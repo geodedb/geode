@@ -3,25 +3,37 @@
 ## Start Here
 
 ### Reality Check (REQUIRED READING)
+
 - **[IMPLEMENTATION_REALITY.md](IMPLEMENTATION_REALITY.md)** - CANARY-derived truth about what's actually implemented (30-35% complete)
 - **[ACTUAL_STATUS.md](ACTUAL_STATUS.md)** - Detailed breakdown of working vs non-existent features
 - **[GAP_ANALYSIS.md](GAP_ANALYSIS.md)** - Machine-verified evidence table from CANARY tokens
 
 ### Technical Documentation
+
 - **[BINARY_PROTOCOL.md](BINARY_PROTOCOL.md)** - Wire protocol frames, diagnostics (WORKING)
 - **[GQL_CONFORMANCE_PROFILE.md](GQL_CONFORMANCE_PROFILE.md)** - ISO GQL conformance status
 - **[CDC_DIAGNOSTICS.md](CDC_DIAGNOSTICS.md)** - CDC control protocol (WORKING)
 - **[CONFORMANCE_MATRIX.md](CONFORMANCE_MATRIX.md)** - Parser/AST implementation status
+- **[TELEMETRY.md](TELEMETRY.md)** - Optional paging telemetry (stderr JSON) and how to enable
 
 ### Build & Usage
+
 - **[REQUIREMENTS.md](REQUIREMENTS.md)** - v0.15.0 scope and acceptance criteria
 - **[USAGE.md](USAGE.md)** - How to build and run (basic queries only)
+
+Telemetry (optional):
+
+```bash
+# Quick local telemetry smoke (captures PULL_PAGE events)
+make telemetry-smoke
+```
 
 ## Quick Status
 
 Based on CANARY evidence analysis (2025-09-20):
 
 ### ✅ What Works (30-35%)
+
 - Basic SQL-like queries (RETURN, ORDER BY, GROUP BY)
 - Set operations (UNION/INTERSECT/EXCEPT)
 - MVCC transactions (BEGIN/COMMIT)
@@ -31,6 +43,7 @@ Based on CANARY evidence analysis (2025-09-20):
 - Wire protocol
 
 ### ❌ What Doesn't Work (65-70%)
+
 - **Distributed** - No Raft, no sharding (0% implemented)
 - **GPU acceleration** - Complete fake (0% implemented)
 - **ML algorithms** - Not implemented (0% implemented)
@@ -66,6 +79,7 @@ grep -r "CANARY: REQ=REQ-GQL-" src/ tests/
 ## For Contributors
 
 Before claiming a feature is implemented:
+
 1. Add CANARY token to implementation
 2. Write actual test (not stub test)
 3. Ensure test passes
@@ -73,6 +87,7 @@ Before claiming a feature is implemented:
 5. Run verification
 
 Example CANARY token:
+
 ```zig
 // CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_XXX_FeatureName; OWNER=team; UPDATED=2025-09-20
 ```
