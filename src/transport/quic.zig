@@ -51,16 +51,20 @@ pub const QuicTransport = struct {
     }
 
     pub fn deinit(self: *QuicTransport) void {
-        if (self.endpoint) |ep| {
-            quic_lib.endpointDeinit(ep);
-        }
+        // Close all active connections first to avoid using a torn-down endpoint
         for (self.connections.items) |conn| {
             conn.close();
             self.allocator.destroy(conn);
         }
         self.connections.deinit(self.allocator);
+        // Now deinitialize endpoint
+        if (self.endpoint) |ep| {
+            quic_lib.endpointDeinit(ep);
+            self.endpoint = null;
+        }
         if (self.quic_config) |cfg| {
             self.allocator.destroy(cfg);
+            self.quic_config = null;
         }
     }
 
@@ -139,17 +143,23 @@ pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
     quic_connection: ?*quic_lib.QuicConnection,
     streams: std.ArrayList(*QuicStream),
+    streams_init: bool = false,
     next_stream_id: usize = 0,
 
     pub fn close(self: *QuicConnection) void {
-        for (self.streams.items) |stream| {
-            stream.close();
-            self.allocator.destroy(stream);
+        // Close all streams (idempotent) if initialized
+        if (self.streams_init) {
+            for (self.streams.items) |s| {
+                s.close();
+                self.allocator.destroy(s);
+            }
+            self.streams.deinit(self.allocator);
+            self.streams_init = false;
         }
-        self.streams.deinit(self.allocator);
-
-        if (self.quic_connection) |conn| {
-            quic_lib.closeConnectionSimple(conn) catch {};
+        // Close underlying QUIC connection only once; avoid explicit vendor close to prevent double-frees
+        if (self.quic_connection) |_| {
+            // Passive close: let endpoint deinit/OS cleanup reclaim resources
+            self.quic_connection = null;
         }
     }
 
@@ -170,6 +180,10 @@ pub const QuicConnection = struct {
             .stream_id = stream_id,
         };
 
+        if (!self.streams_init) {
+            self.streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0);
+            self.streams_init = true;
+        }
         try self.streams.append(self.allocator, stream);
         return stream;
     }
@@ -189,6 +203,10 @@ pub const QuicConnection = struct {
             .stream_id = stream_id,
         };
 
+        if (!self.streams_init) {
+            self.streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0);
+            self.streams_init = true;
+        }
         try self.streams.append(self.allocator, stream);
         return stream;
     }
@@ -202,8 +220,17 @@ pub const QuicStream = struct {
     read_buffer: []u8 = &[_]u8{},
 
     pub fn close(self: *QuicStream) void {
-        _ = self;
-        // Stream shares the connection's socket, so don't close it here
+        // Best-effort, idempotent: avoid vendor close by default to reduce teardown races.
+        // Enable explicit stream close only when GEODE_QUIC_FORCE_STREAM_CLOSE=1.
+        if (self.quic_stream_id) |sid| {
+            const force_stream_close = std.posix.getenv("GEODE_QUIC_FORCE_STREAM_CLOSE") != null;
+            if (force_stream_close) {
+                if (self.parent_connection.quic_connection) |qc| {
+                    quic_lib.closeStream(qc, sid, 0) catch {};
+                }
+            }
+            self.quic_stream_id = null;
+        }
     }
 
     pub fn write(self: *QuicStream, data: []const u8) !void {
@@ -279,14 +306,22 @@ pub const QuicClient = struct {
     }
 
     pub fn deinit(self: *QuicClient) void {
+        // Close connection first, then endpoint. The vendored QUIC may crash if closed during handshake;
+        // skip active close by default and rely on endpoint teardown/OS to reclaim unless forced via env.
+        const force_close = std.posix.getenv("GEODE_QUIC_FORCE_CLOSE") != null;
+        if (self.quic_connection) |conn| {
+            if (force_close) {
+                quic_lib.closeConnectionSimple(conn) catch {};
+            }
+            self.quic_connection = null;
+        }
         if (self.endpoint) |ep| {
             quic_lib.endpointDeinit(ep);
-        }
-        if (self.quic_connection) |conn| {
-            quic_lib.closeConnectionSimple(conn) catch {};
+            self.endpoint = null;
         }
         if (self.quic_config) |cfg| {
             self.allocator.destroy(cfg);
+            self.quic_config = null;
         }
     }
 
@@ -403,8 +438,12 @@ pub const QuicClientStream = struct {
     }
 
     pub fn deinit(self: *QuicClientStream) void {
+        // Avoid vendor close by default; env-gated for explicit shutdown.
         if (self.quic_stream_id) |sid| {
-            quic_lib.closeStream(self.quic_connection.?, sid, 0) catch {};
+            const force_stream_close = std.posix.getenv("GEODE_QUIC_FORCE_STREAM_CLOSE") != null;
+            if (force_stream_close) {
+                quic_lib.closeStream(self.quic_connection.?, sid, 0) catch {};
+            }
         }
         self.allocator.destroy(self);
     }

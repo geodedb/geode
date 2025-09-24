@@ -61,8 +61,9 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     // Briefly wait for server to start listening
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    // Run a tiny ordered+limited query with default network client (QUIC will fallback to TCP)
-    var client = std.process.Child.init(&.{ client_path, "RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "json", "--page-size", "1", "--pull-all" }, allocator);
+    // Run a tiny ordered+limited query against the spawned QUIC server
+    // Important: pass --quic and --server so the client connects to this server (and triggers telemetry)
+    var client = std.process.Child.init(&.{ client_path, "RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "json", "--page-size", "1", "--pull-all", "--quic", "--server", "127.0.0.1:7567" }, allocator);
     client.stdin_behavior = .Ignore;
     client.stdout_behavior = .Ignore;
     client.stderr_behavior = .Ignore;
