@@ -1,8 +1,8 @@
 # Geode CLI (gql)
 
-## QUIC/TLS 1.3 Support (Experimental)
+## Transport: QUIC/TLS 1.3 (Default)
 
-Geode provides an experimental QUIC transport with TLS 1.3. TCP remains the primary/legacy transport for stability. Use QUIC for experiments and local testing.
+Geode uses QUIC with TLS 1.3 as the only network transport. For local/process mode, stdio remains supported.
 
 ### Server
 
@@ -20,21 +20,18 @@ Geode provides an experimental QUIC transport with TLS 1.3. TCP remains the prim
 ### Client
 
 ```bash
-# Connect using QUIC (experimental)
+# Connect using QUIC
 ./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:7567
 
-# Force TCP/stdio (primary/backward compatibility)
-./zig-out/bin/geodec "RETURN 1 AS x" --no-quic
+# Process mode (stdio)
+./zig-out/bin/geodec "RETURN 1 AS x" --process ./zig-out/bin/geoded
 ```
 
 ### Go Client
 
 ```go
-// Connect using QUIC (experimental)
+// Connect using QUIC
 db, _ := gql.Open("quic:127.0.0.1:7567")
-
-// Connect using TCP (backward compatibility)
-db, _ := gql.Open("tcp:127.0.0.1:7567")
 
 // Connect using process mode
 db, _ := gql.Open("process:./zig-out/bin/geoded")

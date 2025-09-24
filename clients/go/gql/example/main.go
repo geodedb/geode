@@ -12,8 +12,8 @@ import (
 
 func main() {
 	var (
-		mode    = flag.String("mode", "process", "Connection mode: process, tcp, or quic")
-		server  = flag.String("server", "127.0.0.1:7567", "Server address for tcp/quic modes")
+		mode    = flag.String("mode", "process", "Connection mode: process or quic")
+		server  = flag.String("server", "127.0.0.1:7567", "Server address for quic mode")
 		query   = flag.String("query", "RETURN 1 AS x ORDER BY x LIMIT 1", "GQL query to execute")
 		verbose = flag.Bool("v", false, "Verbose output")
 	)
@@ -22,8 +22,6 @@ func main() {
 	// Build DSN based on mode
 	var dsn string
 	switch *mode {
-	case "tcp":
-		dsn = fmt.Sprintf("tcp://%s?page_size=100", *server)
 	case "quic":
 		dsn = fmt.Sprintf("quic://%s?page_size=100", *server)
 	default:

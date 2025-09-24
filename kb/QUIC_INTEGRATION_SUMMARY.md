@@ -3,19 +3,25 @@
 This document consolidates the final QUIC integration details, vendor wiring, test/bench coverage, and CANARY evidence in one place.
 
 ## Scope
-- Runtime transport: QUIC over TLS 1.3 (primary), TCP fallback when TLS artifacts missing
+
+Runtime transport: QUIC over TLS 1.3 (only). No TCP fallback. For local development, process mode (stdio) remains available.
+
 - Vendored library in `vendor/quic/`, exported by `vendor/quic/lib.zig`
-- Server/Client transport in `src/transport/quic.zig`
-- Tests, benchmarks, and CANARYs for REQ-GQL-074
+  Server (QuicTransport): QUIC only; allocator-safe connection/stream lists; accepts connections/streams from vendor endpoint.
+  Client (QuicClient): QUIC only; simplifies stream usage from caller perspective.
+  Read/Write: writeStream return value is discarded; readStream errors map to 0 for non-blocking line reads gracefully.
 
 ## Build & Module Wiring
+
 Top-level `build.zig` defines stable module names and connects internal vendor modules.
+
 - Named modules provided to vendor code:
   - quic_tls, quic_crypto, quic_packet, quic_varint, quic_frame, quic_recovery, quic_conn, quic_transport_params, quic_endpoint, quic_tls13
   - TLS helpers: asn1, sig, x509, ed25519
 - Public API is exposed by `vendor/quic/lib.zig` as a thin re-export wrapper around `src/quic/api.zig`.
 
 ## Public API Surface (lib.zig)
+
 - Types: QuicVersion, Role, LoopBackend, QuicConfig, QuicEndpoint, QuicConnection, QuicStreamId
 - Endpoint lifecycle: endpointInit/endpointDeinit, poll, scheduleTimer, cancelTimer, flush
 - Connect/Accept: connect, accept, handshakeComplete, isHandshakeConfirmed (conservative false), handshakeDoneSeen, isDrained
@@ -26,11 +32,13 @@ Top-level `build.zig` defines stable module names and connects internal vendor m
 - Convenience wrappers: closeConnectionSimple(conn), acceptStream(conn) placeholder
 
 ## Transport Layer (src/transport/quic.zig)
+
 - Server (QuicTransport): QUIC when cert/key present, TCP fallback otherwise; allocator-safe connection/stream lists; accepts connections/streams from vendor endpoint.
 - Client (QuicClient): QUIC when CA cert present, else TCP; simplifies stream usage from caller perspective.
 - Read/Write: writeStream return value is discarded; readStream errors map to 0 for non-blocking line reads gracefully.
 
 ## Tests & Benches
+
 - Tests
   - e2e_quic_basic.zig: basic GQL program over QUIC
   - e2e_quic_tls_comprehensive.zig: TLS config, multiplexing, error structures (unit)
@@ -39,6 +47,7 @@ Top-level `build.zig` defines stable module names and connects internal vendor m
   - tests/benchmark_quic_frame_latency_variance.zig: Frame latency variance envelope (REQ-GQL-074)
 
 ## CANARY Evidence (REQ-GQL-074) — Examples
+
 - Tests:
   - TestCANARY_REQ_GQL_074_QUICCore
   - TestCANARY_REQ_GQL_074_QUICListener
@@ -52,6 +61,7 @@ Top-level `build.zig` defines stable module names and connects internal vendor m
   - BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope
 
 ## Usage
+
 ```bash
 zig build
 # Optional certificates
@@ -65,7 +75,7 @@ after build: ./zig-out/bin/cert_gen
 ```
 
 ## Notes & Compatibility
+
 - Zig 0.15.1 adjustments applied in vendor source (syntax tweaks; varint encode style)
 - TLS helpers (asn1/sig/x509/ed25519) are wired in build.zig
 - isHandshakeConfirmed returns false without touching opaque connection state; infer readiness by successful ops
-

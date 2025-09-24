@@ -93,5 +93,5 @@ Example CANARY token:
 
 ## Notes
 
-- QUIC is experimental; TCP remains the primary transport. See USAGE for flags and TLS notes.
+- QUIC is the only network transport; process mode (stdio) remains for local runs. See USAGE for flags and TLS notes.
 - Distributed features are scaffolding only in v0.15.0 (leader-only posture).

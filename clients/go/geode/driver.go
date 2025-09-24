@@ -3,6 +3,7 @@ package geodesql
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	quic "github.com/quic-go/quic-go"
 )
 
 func init() {
@@ -32,9 +35,9 @@ func (d *drv) Open(name string) (driver.Conn, error) {
 }
 
 type dsnConfig struct {
-	Mode        string // "process" (default) or "tcp"
+	Mode        string // "process" (default) or "quic"
 	Path        string // path to geoded (process)
-	Addr        string // host:port (tcp)
+	Addr        string // host:port for quic
 	PageSize    int
 	ResultFmt   string // json|txt (json default)
 	HelloName   string
@@ -63,7 +66,7 @@ func parseDSN(dsn string) (*dsnConfig, error) {
 		}
 		return cfg, nil
 	}
-	// format: process:<path>?... or tcp:<host:port>?...
+	// format: process:<path>?... or quic:<host:port>?...
 	parts := strings.SplitN(dsn, ":", 2)
 	if len(parts) == 2 && (parts[0] == "process" || parts[0] == "proc") {
 		cfg.Mode = "process"
@@ -73,14 +76,17 @@ func parseDSN(dsn string) (*dsnConfig, error) {
 		if q != "" { applyQuery(q, cfg) }
 		return cfg, nil
 	}
-	if len(parts) == 2 && parts[0] == "tcp" {
-		cfg.Mode = "tcp"
+	if len(parts) == 2 && parts[0] == "quic" {
+		cfg.Mode = "quic"
 		rest := parts[1]
 		var q string
 		if i := strings.Index(rest, "?"); i >= 0 { cfg.Addr = rest[:i]; q = rest[i+1:] } else { cfg.Addr = rest }
 		if cfg.Addr == "" { cfg.Addr = "127.0.0.1:7567" }
 		if q != "" { applyQuery(q, cfg) }
 		return cfg, nil
+	}
+	if len(parts) == 2 && parts[0] == "tcp" {
+		return nil, fmt.Errorf("unsupported DSN: tcp (use quic:<host:port> or process:<path>)")
 	}
 	return nil, fmt.Errorf("unsupported DSN: %s", dsn)
 }
@@ -117,9 +123,13 @@ func applyQuery(q string, cfg *dsnConfig) {
 
 type conn struct {
 	cfg    *dsnConfig
+	// process mode
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	// quic mode
+	qConn  interface{}    // quic.Connection
+	qStream interface{}   // *quic.Stream
 	br     *bufio.Reader
 	mu     sync.Mutex // serialize requests; server supports only one active result
 	closed bool
@@ -127,27 +137,32 @@ type conn struct {
 }
 
 func newConn(cfg *dsnConfig) (*conn, error) {
+	if cfg.Mode == "quic" {
+		tlsConf := &tls.Config{ InsecureSkipVerify: true, NextProtos: []string{"geode/1"}, MinVersion: tls.VersionTLS13 }
+		qConn, err := quic.DialAddr(context.Background(), cfg.Addr, tlsConf, nil)
+		if err != nil { return nil, err }
+		qStream, err := qConn.OpenStreamSync(context.Background())
+		if err != nil { _ = qConn.CloseWithError(0, "open stream failed"); return nil, err }
+		c := &conn{ cfg: cfg, qConn: qConn, qStream: &qStream, br: bufio.NewReaderSize(qStream, 64<<10) }
+		// HELLO then read/ignore HELLO response
+		hello := map[string]any{ "type": "HELLO", "client_name": cfg.HelloName, "client_ver": cfg.HelloVer, "wanted_conformance": cfg.Conformance }
+		if err := c.writeJSONLine(hello); err != nil { _ = c.Close(); return nil, err }
+		// discard HELLO response
+		_, _ = c.readLine(context.Background())
+		return c, nil
+	}
+	// process mode
 	path := cfg.Path
 	if !filepath.IsAbs(path) {
-		if wd, _ := os.Getwd(); wd != "" {
-			path = filepath.Join(wd, path)
-		}
+		if wd, _ := os.Getwd(); wd != "" { path = filepath.Join(wd, path) }
 	}
 	cmd := exec.Command(path)
-	stdin, err := cmd.StdinPipe()
-	if err != nil { return nil, err }
-	stdout, err := cmd.StdoutPipe()
-	if err != nil { return nil, err }
+	stdin, err := cmd.StdinPipe(); if err != nil { return nil, err }
+	stdout, err := cmd.StdoutPipe(); if err != nil { return nil, err }
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil { return nil, err }
 	c := &conn{cfg: cfg, cmd: cmd, stdin: stdin, stdout: stdout, br: bufio.NewReaderSize(stdout, 64<<10)}
-	// HELLO
-	hello := map[string]any{
-		"type": "HELLO",
-		"client_name": cfg.HelloName,
-		"client_ver": cfg.HelloVer,
-		"wanted_conformance": cfg.Conformance,
-	}
+	hello := map[string]any{ "type": "HELLO", "client_name": cfg.HelloName, "client_ver": cfg.HelloVer, "wanted_conformance": cfg.Conformance }
 	if err := c.writeJSONLine(hello); err != nil { _ = c.Close(); return nil, err }
 	return c, nil
 }
@@ -156,8 +171,11 @@ func (c *conn) writeJSONLine(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil { return err }
 	b = append(b, '\n')
-	_, err = c.stdin.Write(b)
-	return err
+	if c.qStream != nil {
+		if s, ok := c.qStream.(*quic.Stream); ok { _, err = (*s).Write(b); return err }
+		return fmt.Errorf("invalid quic stream")
+	}
+	_, err = c.stdin.Write(b); return err
 }
 
 func (c *conn) readLine(ctx context.Context) ([]byte, error) {
@@ -186,9 +204,13 @@ func (c *conn) Close() error {
 	defer c.mu.Unlock()
 	if c.closed { return nil }
 	c.closed = true
-	_ = c.stdin.Close()
-	_ = c.stdout.Close()
-	return c.cmd.Wait()
+	if c.qConn != nil {
+		if s, ok := c.qStream.(*quic.Stream); ok { _ = (*s).Close() }
+		if qc, ok := c.qConn.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok { _ = qc.CloseWithError(0, "closing") }
+		c.qConn = nil; c.qStream = nil
+		return nil
+	}
+	_ = c.stdin.Close(); _ = c.stdout.Close(); return c.cmd.Wait()
 }
 func (c *conn) Begin() (driver.Tx, error) { return c.beginTx(context.Background(), driver.TxOptions{}) }
 

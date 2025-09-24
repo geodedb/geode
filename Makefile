@@ -165,12 +165,7 @@ fuzz:
 bench:
 	$(ZIG) build bench $(ZIG_FLAGS)
 
-governance-check: build
-	@if [ -x scripts/governance-check.sh ]; then \
-		scripts/governance-check.sh || exit 2; \
-	else \
-		echo "scripts/governance-check.sh missing or not executable"; exit 2; \
-	fi
+## governance-check is defined below as a combined Zig-based CI step
 
 # Convenience target: recompute sha256 of status.json and update marker in GAP_ANALYSIS.md
 update-status-hash:

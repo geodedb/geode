@@ -69,9 +69,9 @@ func Open(dsn string) (*DB, error) {
 }
 
 type dsnConfig struct {
-	Mode        string // process, tcp, or quic
+	Mode        string // process or quic
 	Path        string // process path
-	Addr        string // tcp/quic address
+	Addr        string // quic address
 	PageSize    int
 	HelloName   string
 	HelloVer    string
@@ -98,15 +98,7 @@ func parseDSN(dsn string) dsnConfig {
 		if q != "" { for _, kv := range strings.Split(q, "&") { if kv==""{continue}; p:=strings.SplitN(kv,"=",2); k:=p[0]; v:=""; if len(p)==2{v=p[1]}; switch k{case"page_size": if n,err:=strconv.Atoi(v); err==nil&&n>0{cfg.PageSize=n}; case"hello_name": if v!=""{cfg.HelloName=v}; case"hello_ver": if v!=""{cfg.HelloVer=v}; case"conformance": if v!=""{cfg.Conformance=v}} } }
 		return cfg
 	}
-	if strings.HasPrefix(dsn, "tcp:") {
-		cfg.Mode = "tcp"
-		rest := strings.TrimPrefix(dsn, "tcp:")
-		q := ""
-		if i := strings.Index(rest, "?"); i >= 0 { cfg.Addr = rest[:i]; q = rest[i+1:] } else { cfg.Addr = rest }
-		if cfg.Addr == "" { cfg.Addr = "127.0.0.1:7567" }
-		if q != "" { for _, kv := range strings.Split(q, "&") { if kv==""{continue}; p:=strings.SplitN(kv,"=",2); k:=p[0]; v:=""; if len(p)==2{v=p[1]}; switch k{case"page_size": if n,err:=strconv.Atoi(v); err==nil&&n>0{cfg.PageSize=n}; case"hello_name": if v!=""{cfg.HelloName=v}; case"hello_ver": if v!=""{cfg.HelloVer=v}; case"conformance": if v!=""{cfg.Conformance=v}} } }
-		return cfg
-	}
+	// tcp: DSNs are no longer supported
 	if strings.HasPrefix(dsn, "quic:") {
 		cfg.Mode = "quic"
 		cfg.UseQUIC = true
@@ -183,21 +175,22 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		return c, nil
 	}
 	
-	if db.addr != "" { // TCP mode
-		// Clean up the address from tcp:// prefix if present
+	if db.addr != "" {
+		// Network mode is QUIC-only
 		addr := db.addr
-		addr = strings.TrimPrefix(addr, "tcp://")
-		addr = strings.TrimPrefix(addr, "tcp:")
+		addr = strings.TrimPrefix(addr, "quic://")
+		addr = strings.TrimPrefix(addr, "quic:")
 		addr = strings.TrimPrefix(addr, "//")
 		if addr == "" { addr = "127.0.0.1:7567" }
-		
-		nc, err := net.Dial("tcp", addr)
+		tlsConf := &tls.Config{ InsecureSkipVerify: true, NextProtos: []string{"geode/1"}, MinVersion: tls.VersionTLS13 }
+		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
 		if err != nil { return nil, err }
-		c := &Conn{nc: nc, bufRd: bufio.NewReaderSize(nc, 64<<10)}
-		c.cancel = func(){ _ = nc.Close() }
+		qStream, err := qConn.OpenStreamSync(ctx)
+		if err != nil { _ = qConn.CloseWithError(0, "failed to open stream"); return nil, err }
+		c := &Conn{ qConn: qConn, qStream: &qStream, bufRd: bufio.NewReaderSize(qStream, 64<<10), useQUIC: true }
+		c.cancel = func(){ if s, ok := c.qStream.(*quic.Stream); ok { _ = (*s).Close() }; if qc, ok := c.qConn.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok { _ = qc.CloseWithError(0, "closing") } }
 		hello := map[string]any{"type":"HELLO","client_name":db.helloName,"client_ver":db.helloVer,"wanted_conformance":db.conf}
 		if err := c.writeJSON(hello); err != nil { _ = c.Close(); return nil, err }
-		// Read and discard HELLO response
 		if _, err := c.readLine(ctx); err != nil { _ = c.Close(); return nil, err }
 		return c, nil
 	}

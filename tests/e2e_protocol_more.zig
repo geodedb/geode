@@ -159,9 +159,8 @@ test "protocol: pagination NoResult after final extra pull" {
 // CANARY: REQ=REQ-GQL-090; FEATURE="StreamingTelemetry"; ASPECT=PagingEvents; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_090_TelemetryPagingPull; OWNER=wire; UPDATED=2025-09-23
 test "TestCANARY_REQ_GQL_090_TelemetryPagingPull" {
     const exe = "./zig-out/bin/geodec";
-    // Set env var to enable telemetry, then run with page_size=1 and pull-all to generate multiple pages
-    // Spawn process with environment override by invoking a small shell wrapper would be complex; instead, rely on server reading env.
-    // We set env in current process for child to inherit.
+    // Set env var to enable telemetry, then run with page_size=1 and pull-all to generate multiple pages.
+    // Set minimal env vars; inherit for child process
     std.posix.setenvZ("GEODE_TELEMETRY_PAGING", "1", 1) catch {};
     std.posix.setenvZ("GEODE_CAPTURE_SERVER_STDERR", "1", 1) catch {};
     const res = try run(&.{ exe, "RETURN a AS v", "--json-param", "a", "[5,6]", "--page-size", "1", "--pull-all" });
