@@ -93,7 +93,7 @@ test "CDC retention policy" {
     }
 
     // Wait for retention period
-    std.time.sleep(600_000_000); // 600ms
+    std.Thread.sleep(600_000_000); // 600ms
 
     // Trigger cleanup
     engine.mutex.lock();
@@ -253,8 +253,6 @@ test "CDC event serialization" {
 }
 
 test "Kafka sink configuration" {
-    const allocator = testing.allocator;
-
     const kafka_config = cdc.KafkaConfig{
         .brokers = "localhost:9092,localhost:9093",
         .topic = "graph-changes",

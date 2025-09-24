@@ -37,7 +37,7 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
         _ = server.child.kill() catch {};
     }
     // Give server a moment
-    std.time.sleep(200 * std.time.ns_per_ms);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     const res = try run(&.{ "./zig-out/bin/geodec", "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:17657", "--format", "json" });
     defer ally.free(res.out);
@@ -57,7 +57,7 @@ test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
     defer {
         _ = server.child.kill() catch {};
     }
-    std.time.sleep(200 * std.time.ns_per_ms);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     const res = try run(&.{ "./zig-out/bin/geodec", "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5", "--server", "127.0.0.1:17658", "--format", "json" });
     defer ally.free(res.out);
@@ -75,7 +75,7 @@ test "protocol QUIC: OPTIONAL MATCH null-preserving semantics" {
     defer {
         _ = server.child.kill() catch {};
     }
-    std.time.sleep(250 * std.time.ns_per_ms);
+    std.Thread.sleep(250 * std.time.ns_per_ms);
 
     // Use sample graph seeded in server; query should return at least one row with null right side when pattern not found
     const res = try run(&.{ "./zig-out/bin/geodec", "MATCH (n:Nonexistent) OPTIONAL MATCH (n)-[r:KNOWS]->(m:Person) RETURN n, m", "--server", "127.0.0.1:17659", "--format", "json" });

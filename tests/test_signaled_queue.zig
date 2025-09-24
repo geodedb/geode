@@ -32,7 +32,7 @@ test "TestCANARY_REQ_GQL_068_SignaledQueueCloseSignalsConsumers" {
     }.run, .{&q}) catch unreachable;
 
     // Allow thread to start waiting.
-    std.time.sleep(100_000);
+    std.Thread.sleep(100_000);
     q.close();
     th.join();
     try std.testing.expect(q.isClosed());

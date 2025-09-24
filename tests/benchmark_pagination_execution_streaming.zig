@@ -9,7 +9,7 @@ fn simulate_page_emission(pages: usize, base_ms: i64, jitter_ms: i64) []i64 {
     while (i < pages and count < times.len) : (i += 1) {
         const start = std.time.milliTimestamp();
         // Simulate work
-        std.time.sleep(@intCast((base_ms + @as(i64, @intCast(i % @as(usize, @intCast(jitter_ms))))) * std.time.ns_per_ms));
+        std.Thread.sleep(@intCast((base_ms + @as(i64, @intCast(i % @as(usize, @intCast(jitter_ms))))) * std.time.ns_per_ms));
         const endt = std.time.milliTimestamp();
         times[count] = endt - start;
         count += 1;

@@ -14,7 +14,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
     defer _ = server.kill() catch {};
 
     // Wait for server to start
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(500 * std.time.ns_per_ms);
 
     // Connect and test
     const client = try std.process.Child.init(&.{
@@ -59,7 +59,7 @@ test "Variable-length path expansion" {
     defer _ = server.kill() catch {};
 
     // Wait for server to start
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(500 * std.time.ns_per_ms);
 
     // Create a path: A -> B -> C -> D
     const queries = [_][]const u8{
@@ -113,7 +113,7 @@ test "MVCC conflict detection - write-write conflict" {
     defer _ = server.kill() catch {};
 
     // Wait for server to start
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(500 * std.time.ns_per_ms);
 
     // Create initial data
     const client1 = try std.process.Child.init(&.{
@@ -171,7 +171,7 @@ test "Storage catalog persistence" {
     try server.spawn();
 
     // Wait for server to start
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(500 * std.time.ns_per_ms);
 
     // Create some data
     const client = try std.process.Child.init(&.{
@@ -200,7 +200,7 @@ test "Storage catalog persistence" {
     defer _ = server2.kill() catch {};
 
     // Wait for server to start
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(500 * std.time.ns_per_ms);
 
     // Query the data - should still be there
     const client2 = try std.process.Child.init(&.{

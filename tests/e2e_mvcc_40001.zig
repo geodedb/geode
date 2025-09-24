@@ -8,7 +8,7 @@ fn run_server(ally: std.mem.Allocator) !std.ChildProcess {
     server.stderr_behavior = .Inherit;
     try server.spawn();
     // allow to boot
-    std.time.sleep(200 * std.time.ms_per_s);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
     return server;
 }
 

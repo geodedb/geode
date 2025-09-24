@@ -23,7 +23,7 @@ test "TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat" {
     // Heartbeat should extend (no error)
     try migrate.heartbeatLock(&lh);
     // Simulate expiry by sleeping beyond TTL (best-effort) if sleep available
-    std.time.sleep(300 * std.time.ns_per_ms) catch {};
+    std.Thread.sleep(300 * std.time.ns_per_ms);
     // New acquire should reclaim (previous expired)
     var lh2 = try migrate.acquireLock(&alloc, 200);
     try std.testing.expect(lh2.id == 1);

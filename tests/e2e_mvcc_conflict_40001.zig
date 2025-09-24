@@ -7,7 +7,7 @@ fn start_server(ally: std.mem.Allocator) !std.ChildProcess {
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
     try server.spawn();
-    std.time.sleep(300 * std.time.ms_per_s);
+    std.Thread.sleep(300 * std.time.ns_per_ms);
     return server;
 }
 
@@ -50,14 +50,14 @@ test "concurrent UPDATE_VALUE conflicts yield 40001 on one commit" {
             const a = std.heap.page_allocator;
             _ = try send(a, addr, "BEGIN");
             _ = try send(a, addr, "UPDATE_VALUE(\"row:1\",\"A\")");
-            std.time.sleep(400 * std.time.ms_per_s);
+            std.Thread.sleep(400 * std.time.ns_per_ms);
             const o = try send(a, addr, "COMMIT");
             ptr.* = o;
         }
     }.run, .{&a_commit});
 
     // Client B: delay slightly; BEGIN; UPDATE; COMMIT (should conflict with A)
-    std.time.sleep(100 * std.time.ms_per_s);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
     const out_b1 = try send(ally, addr, "BEGIN");
     ally.free(out_b1);
     const out_b2 = try send(ally, addr, "UPDATE_VALUE(\"row:1\",\"B\")");

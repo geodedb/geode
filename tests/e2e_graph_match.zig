@@ -33,7 +33,7 @@ fn run_server_and_query(ally: std.mem.Allocator, query: []const u8) ![]const u8 
     defer server.kill() catch {};
 
     // give server a moment
-    std.time.sleep(200 * std.time.ms_per_s);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     // Use CLI over TCP
     var argv = [_][]const u8{ "./zig-out/bin/geodec", query, "--server", "127.0.0.1:7567" };

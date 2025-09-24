@@ -17,7 +17,7 @@ test "TestCANARY_REQ_GQL_042_CDC_Retention" {
     try engine.emitChange(.insert, .node, 1, null, "{\"id\":1}");
     try engine.flushNow();
     // Wait so event becomes stale
-    std.time.sleep(20 * 1_000_000); // 20 ms
+    std.Thread.sleep(20 * 1_000_000); // 20 ms
 
     // Emit second event to drive processing loop and cleanup
     try engine.emitChange(.insert, .node, 2, null, "{\"id\":2}");
