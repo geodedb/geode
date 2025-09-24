@@ -484,8 +484,49 @@ pub fn executeMatch(
 
     var current_bindings: []Binding = &.{};
     for (pattern.chains, 0..) |chain, chain_idx| {
-        if (chain.hops.len == 0) continue;
         var chain_bindings: []Binding = &.{};
+        if (chain.hops.len == 0) {
+            // Single-node pattern: scan nodes according to head pattern
+            if (chain.head) |head_np| {
+                // Extract at most one property predicate from head
+                var prop_key: ?[]const u8 = null;
+                var prop_val: ?PropertyValue = null;
+                if (head_np.props) |props| {
+                    if (props.len > 0) {
+                        const p = props[0];
+                        prop_key = p.key;
+                        prop_val = exprToPropertyValue(p.value.*) catch null;
+                    }
+                }
+                chain_bindings = try nodeScan(allocator, graph, head_np.labels, head_np.name, prop_key, prop_val);
+            } else {
+                // No head info: scan all nodes without binding a name
+                chain_bindings = try nodeScan(allocator, graph, &.{}, null, null, null);
+            }
+            // Attach chain result to current_bindings context
+            if (chain_idx == 0) {
+                current_bindings = chain_bindings;
+            } else if (current_bindings.len == 0) {
+                current_bindings = chain_bindings;
+            } else if (chain_bindings.len == 0) {
+                current_bindings = current_bindings;
+            } else {
+                // For disjoint chains, perform a cross join to combine variable maps
+                var joined = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+                for (current_bindings) |lb| {
+                    for (chain_bindings) |rb| {
+                        var nb = try lb.clone(allocator);
+                        var it = rb.vars.iterator();
+                        while (it.next()) |e| {
+                            try nb.vars.put(e.key_ptr.*, e.value_ptr.*);
+                        }
+                        try joined.append(allocator, nb);
+                    }
+                }
+                current_bindings = try joined.toOwnedSlice(allocator);
+            }
+            continue;
+        }
         for (chain.hops, 0..) |hop, i| {
             if (i == 0) {
                 // Extract at most one property predicate (key = literal) from hop.left.props
@@ -733,6 +774,7 @@ pub fn executeMatch(
         } else if (chain_bindings.len == 0) {
             current_bindings = current_bindings;
         } else {
+            // For now, prefer the most recent chain (assuming linear dependency). If chains are disjoint, the zero-hop case above handled cross join.
             current_bindings = chain_bindings;
         }
     }

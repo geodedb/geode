@@ -79,6 +79,10 @@ pub const Hop = struct { left: NodePattern, rel: RelPattern, right: NodePattern 
 pub const Chain = struct {
     name: ?[]const u8 = null,
     hops: []Hop,
+    // When a graph pattern chain contains only a single node pattern (no relationship hops),
+    // the parser records that standalone node here so executors can perform a NodeScan.
+    // For chains with one or more hops, this remains null and executors should ignore it.
+    head: ?NodePattern = null,
 };
 
 pub const GraphPattern = struct { chains: []Chain };

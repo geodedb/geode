@@ -1198,30 +1198,284 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             bindings = try graph_exec.executeWith(ally, bindings, with, q.where_clause, graph);
         }
 
-        // Convert bindings to JSON rows
-        const rows = try graph_exec.bindingsToJson(ally, bindings, q.ret.items, graph);
-
-        // Build column metadata
+        // Build column metadata (names inferred from RETURN items; types set to MIXED placeholder)
         var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
         for (q.ret.items, 0..) |item, i| {
-            const alias = item.alias orelse "col";
-            cols[i] = .{ .name = alias, .type = "MIXED" }; // Type will be determined at runtime
+            const alias = item.alias orelse blk_al: {
+                const tmp = geode.printer.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
+                break :blk_al tmp;
+            };
+            cols[i] = .{ .name = alias, .type = "MIXED" };
         }
         cols_out.* = cols;
 
-        // Handle ORDER BY if present
-        if (q.order_by) |ob| {
-            // TODO: Implement ordering for graph results
-            ordered_meta.* = true;
-            order_keys.* = try ally.alloc([]const u8, ob.keys.len);
-            for (ob.keys, 0..) |key, i| {
-                if (key.expr == .Ident) {
-                    order_keys.*[i] = key.expr.Ident;
+        // Local helper to convert graph PropertyValue into eval.Value (mirror of exec.zig)
+        const PropToEval = struct {
+            fn conv(pv: graph_exec.PropertyValue) eval.Value {
+                return switch (pv) {
+                    .Null => eval.Value{ .Null = {} },
+                    .Bool => |b| eval.Value{ .Bool = b },
+                    .Int => |i| eval.Value{ .Int = i },
+                    .String => |s| eval.Value{ .Str = s },
+                    .Decimal => |d| eval.Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                };
+            }
+        };
+
+        // Prepare per-row VALUEs for ORDER BY/DISTINCT evaluation
+        var rows_values = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
+        defer rows_values.deinit(ally);
+
+        // Helper: evaluate a single return expression in binding context to eval.Value for ordering/aggregation
+        const EvalInBinding = struct {
+            fn evalRet(alloc: std.mem.Allocator, b: *const graph_exec.Binding, it: geode.ast.ReturnItem, g: *const graph_exec.GraphStorage) eval.Value {
+                return switch (it.expr) {
+                    .Ident => |name| blk_i: {
+                        if (b.vars.get(name)) |bv| {
+                            switch (bv) {
+                                .Value => |pv| break :blk_i PropToEval.conv(pv),
+                                .Node, .Edge, .Path, .Null => break :blk_i eval.Value{ .Null = {} },
+                            }
+                        }
+                        break :blk_i eval.Value{ .Null = {} };
+                    },
+                    .PropertyAccess => |pa| blk_p: {
+                        if (b.vars.get(pa.object)) |ov| {
+                            switch (ov) {
+                                .Node => |nid| {
+                                    if (g.nodes.get(nid)) |node| {
+                                        if (node.properties.get(pa.property)) |prop| {
+                                            break :blk_p PropToEval.conv(prop);
+                                        }
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        break :blk_p eval.Value{ .Null = {} };
+                    },
+                    else => blk_e: {
+                        // Build an eval.Env from binding scalars only; non-scalars mapped to null
+                        var env_names = std.ArrayList([]const u8).initCapacity(alloc, 0) catch unreachable;
+                        var env_values = std.ArrayList(eval.Value).initCapacity(alloc, 0) catch unreachable;
+                        var itv = b.vars.iterator();
+                        while (itv.next()) |entry| {
+                            env_names.append(alloc, entry.key_ptr.*) catch {};
+                            const ev = switch (entry.value_ptr.*) {
+                                .Value => |pv| PropToEval.conv(pv),
+                                else => eval.Value{ .Null = {} },
+                            };
+                            env_values.append(alloc, ev) catch {};
+                        }
+                        const env = eval.Env{ .names = env_names.items, .values = env_values.items };
+                        const v = eval.evalExpr(alloc, it.expr, env) catch eval.Value{ .Null = {} };
+                        break :blk_e v;
+                    },
+                };
+            }
+        };
+
+        // Precompute row values for all bindings
+        var bi: usize = 0;
+        while (bi < bindings.len) : (bi += 1) {
+            var rvals = try ally.alloc(eval.Value, q.ret.items.len);
+            var ci2: usize = 0;
+            while (ci2 < q.ret.items.len) : (ci2 += 1) {
+                rvals[ci2] = EvalInBinding.evalRet(ally, &bindings[bi], q.ret.items[ci2], graph);
+            }
+            rows_values.append(ally, rvals) catch {};
+        }
+
+        // DISTINCT stage for MATCH: deduplicate projected rows based on value semantics
+        if (q.ret.distinct and rows_values.items.len > 1) {
+            var seen = std.StringHashMap(void).init(ally);
+            defer seen.deinit();
+            var kept_bindings = std.ArrayList(graph_exec.Binding).initCapacity(ally, 0) catch return error.OutOfMemory;
+            defer kept_bindings.deinit(ally);
+            var kept_values = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
+            defer kept_values.deinit(ally);
+            var i_dist: usize = 0;
+            while (i_dist < rows_values.items.len and i_dist < bindings.len) : (i_dist += 1) {
+                const vals = rows_values.items[i_dist];
+                const key = canonicalValuesKey(ally, vals[0..q.ret.items.len]);
+                if (!seen.contains(key)) {
+                    seen.put(key, {}) catch {};
+                    // keep this binding and its values
+                    kept_bindings.append(ally, bindings[i_dist]) catch {};
+                    kept_values.append(ally, vals) catch {};
+                } else {
+                    // drop duplicate row: free value slice and key if separately allocated
+                    ally.free(vals);
+                    ally.free(key);
                 }
+            }
+            // Replace arrays; note: bindings contents were moved by value; subsequent code will not use old slice
+            bindings = kept_bindings.toOwnedSlice(ally) catch bindings;
+            // rows_values: clear and move kept_values
+            // Free any remaining unreferenced value slices
+            var jv: usize = i_dist;
+            while (jv < rows_values.items.len) : (jv += 1) ally.free(rows_values.items[jv]);
+            rows_values.clearRetainingCapacity();
+            for (kept_values.items) |rv| rows_values.append(ally, rv) catch {};
+        }
+
+        // ORDER BY
+        var ordered_now = false;
+        var order_keys_local: [][]const u8 = &.{};
+        if (q.order_by) |ob| {
+            ordered_now = true;
+            // Build col index map
+            var col_index = std.StringHashMap(usize).init(ally);
+            defer col_index.deinit();
+            var ci_map: usize = 0;
+            while (ci_map < cols.len) : (ci_map += 1) {
+                col_index.put(cols[ci_map].name, ci_map) catch {};
+            }
+            // Build list of key names for metadata
+            order_keys_local = try ally.alloc([]const u8, ob.keys.len);
+            var okm: usize = 0;
+            while (okm < ob.keys.len) : (okm += 1) {
+                const s = geode.printer.stringifyExprAlloc(ally, ob.keys[okm].expr, .{}) catch "k";
+                order_keys_local[okm] = s;
+            }
+            // Precompute key matrix from rows_values by alias position
+            const KeyKind = enum { Null, Int, Dec, Str };
+            const KeyVal = struct { kind: KeyKind, mantissa: i128 = 0, scale: u8 = 0, str: []const u8 = &.{} };
+            const key_count = ob.keys.len;
+            var key_matrix: []KeyVal = ally.alloc(KeyVal, bindings.len * key_count) catch &.{};
+            defer if (key_matrix.len != 0) ally.free(key_matrix);
+            var ri_k: usize = 0;
+            while (ri_k < bindings.len) : (ri_k += 1) {
+                var ki: usize = 0;
+                while (ki < key_count) : (ki += 1) {
+                    const key_expr = ob.keys[ki].expr;
+                    var kv: KeyVal = .{ .kind = .Null };
+                    if (key_expr == .Ident) {
+                        if (col_index.get(key_expr.Ident)) |posc| {
+                            if (ri_k < rows_values.items.len and posc < rows_values.items[ri_k].len) {
+                                const v = rows_values.items[ri_k][posc];
+                                kv = switch (v) {
+                                    .Null => .{ .kind = .Null },
+                                    .Int => |iv| .{ .kind = .Int, .mantissa = iv },
+                                    .Decimal => |d| .{ .kind = .Dec, .mantissa = d.coeff, .scale = d.scale },
+                                    .Str => |s| .{ .kind = .Str, .str = s },
+                                    .Bool => |b| .{ .kind = .Str, .str = if (b) "true" else "false" },
+                                };
+                            }
+                        }
+                    }
+                    key_matrix[ri_k * key_count + ki] = kv;
+                }
+            }
+            // Sort indices based on key_matrix; tie-break by rendered JSON row lexicographically
+            const idx = ally.alloc(usize, bindings.len) catch null;
+            if (idx) |indices| {
+                var fi: usize = 0;
+                while (fi < indices.len) : (fi += 1) indices[fi] = fi;
+                const Ctx = struct {
+                    keys: []KeyVal,
+                    key_count: usize,
+                    ob: *const @TypeOf(ob),
+                    // Lazily rendered for tie-break only
+                    ally: std.mem.Allocator,
+                    g: *const graph_exec.GraphStorage,
+                    ret_items: []const geode.ast.ReturnItem,
+                    binds: []const graph_exec.Binding,
+                };
+                std.sort.block(usize, indices, Ctx{ .keys = key_matrix, .key_count = key_count, .ob = &ob, .ally = ally, .g = graph, .ret_items = q.ret.items, .binds = bindings }, struct {
+                    fn less(c: Ctx, a: usize, b: usize) bool {
+                        var ki2: usize = 0;
+                        while (ki2 < c.ob.keys.len) : (ki2 += 1) {
+                            const key_expr = c.ob.keys[ki2];
+                            const av = c.keys[a * c.key_count + ki2];
+                            const bv = c.keys[b * c.key_count + ki2];
+                            // Null handling policy
+                            if (av.kind == .Null and bv.kind != .Null) {
+                                if (g_nulls_last) {
+                                    if (key_expr.desc) return true;
+                                    return false;
+                                } else return !key_expr.desc;
+                            }
+                            if (bv.kind == .Null and av.kind != .Null) {
+                                if (g_nulls_last) {
+                                    if (key_expr.desc) return false;
+                                    return true;
+                                } else return key_expr.desc;
+                            }
+                            // Compare by kind
+                            var ord: i2 = 0;
+                            switch (av.kind) {
+                                .Null => ord = 0,
+                                .Str => ord = blk: {
+                                    if (bv.kind == .Str) {
+                                        if (std.mem.lessThan(u8, av.str, bv.str)) break :blk -1;
+                                        if (std.mem.lessThan(u8, bv.str, av.str)) break :blk 1;
+                                        break :blk 0;
+                                    } else break :blk 1; // strings after numbers
+                                },
+                                .Int, .Dec => ord = blk2: {
+                                    switch (bv.kind) {
+                                        .Int, .Dec => {
+                                            var ma = av.mantissa;
+                                            var mb = bv.mantissa;
+                                            const as = av.scale;
+                                            const bs = bv.scale;
+                                            if (as < bs) {
+                                                var d = bs - as;
+                                                while (d > 0) : (d -= 1) ma *= 10;
+                                            }
+                                            if (bs < as) {
+                                                var d2 = as - bs;
+                                                while (d2 > 0) : (d2 -= 1) mb *= 10;
+                                            }
+                                            if (ma < mb) break :blk2 -1;
+                                            if (ma > mb) break :blk2 1;
+                                            break :blk2 0;
+                                        },
+                                        .Str => break :blk2 -1,
+                                        .Null => break :blk2 1,
+                                    }
+                                },
+                            }
+                            if (ord != 0) return if (key_expr.desc) ord > 0 else ord < 0;
+                        }
+                        // Tie-break: render both rows and compare bytes
+                        const ra = graph_exec.bindingsToJson(c.ally, c.binds[a .. a + 1], c.ret_items, c.g) catch &.{};
+                        const rb = graph_exec.bindingsToJson(c.ally, c.binds[b .. b + 1], c.ret_items, c.g) catch &.{};
+                        // Free element buffers before freeing the arrays-of-slices. Note: defer executes LIFO.
+                        defer if (rb.len > 0) c.ally.free(rb);
+                        defer if (ra.len > 0) c.ally.free(ra);
+                        defer if (rb.len > 0) c.ally.free(rb[0]);
+                        defer if (ra.len > 0) c.ally.free(ra[0]);
+                        const sa: []const u8 = if (ra.len > 0) ra[0] else &.{};
+                        const sb: []const u8 = if (rb.len > 0) rb[0] else &.{};
+                        return std.mem.lessThan(u8, sa, sb);
+                    }
+                }.less);
+                // Apply permutation to bindings (so we can render in order)
+                var ordered_bind = std.ArrayList(graph_exec.Binding).initCapacity(ally, bindings.len) catch return error.OutOfMemory;
+                defer ordered_bind.deinit(ally);
+                var oi: usize = 0;
+                while (oi < indices.len) : (oi += 1) ordered_bind.append(ally, try bindings[indices[oi]].clone(ally)) catch {};
+                bindings = ordered_bind.toOwnedSlice(ally) catch bindings;
+                ally.free(indices);
             }
         }
 
-        return rows;
+        // OFFSET/LIMIT
+        var start: usize = 0;
+        if (q.offset) |off| start = if (off < bindings.len) off else bindings.len;
+        var end: usize = bindings.len;
+        if (q.limit) |lim| {
+            if (start + lim < end) end = start + lim;
+        }
+
+        // Set metadata
+        ordered_meta.* = ordered_now;
+        order_keys.* = order_keys_local;
+
+        // Render the final selected slice
+        return graph_exec.bindingsToJson(ally, bindings[start..end], q.ret.items, graph);
     }
 
     // Original implementation for non-MATCH queries

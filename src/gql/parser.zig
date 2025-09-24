@@ -546,7 +546,13 @@ pub const Parser = struct {
                     try self.path_aliases.append(self.arena.allocator(), an);
                 }
             }
-            try chains.append(self.arena.allocator(), .{ .name = chain_name, .hops = try hops.toOwnedSlice(self.arena.allocator()) });
+            // If no hops were parsed, this chain is a single node pattern. Record it in head.
+            const owned_hops = try hops.toOwnedSlice(self.arena.allocator());
+            var head: ?ast.NodePattern = null;
+            if (owned_hops.len == 0) {
+                head = left;
+            }
+            try chains.append(self.arena.allocator(), .{ .name = chain_name, .hops = owned_hops, .head = head });
             // comma-separated chains
             if (self.cur.kind != .comma) break;
             self.advance();

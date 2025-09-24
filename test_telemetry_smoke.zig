@@ -45,6 +45,18 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     var server_env = try std.process.getEnvMap(allocator);
     defer server_env.deinit();
     try server_env.put("GEODE_TELEMETRY_PAGING", "1");
+    // Prepare a fallback capture file for server stderr in case pipe drains empty on some platforms.
+    var tmp_path_buf: [128]u8 = undefined;
+    const ts = std.time.milliTimestamp();
+    const tmp_path = try std.fmt.bufPrint(&tmp_path_buf, "./.tmp_server_stderr_{d}.log", .{ts});
+    // Ensure any previous file is removed; ignore errors.
+    std.fs.cwd().deleteFile(tmp_path) catch {};
+    // Create the file now so the path is valid for the server.
+    {
+        var f = std.fs.cwd().createFile(tmp_path, .{ .read = true, .truncate = true }) catch null;
+        if (f) |*fh| fh.close();
+    }
+    try server_env.put("GEODE_CAPTURE_SERVER_STDERR", tmp_path);
     var server = std.process.Child.init(&.{ server_path, "--listen-quic", "127.0.0.1:7567", "--log_json", "--result-format", "json" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Ignore;
@@ -93,9 +105,9 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     };
     _ = client_term;
 
-    // Allow server to flush telemetry. Use a slightly longer wait in strict mode.
-    var wait_ms: u64 = 400;
-    if (strict_mode) wait_ms = 600;
+    // Allow server to flush telemetry. Use a longer wait in strict mode.
+    var wait_ms: u64 = 500;
+    if (strict_mode) wait_ms = 900;
     std.Thread.sleep(wait_ms * std.time.ns_per_ms);
     // Now terminate server to close stderr and allow draining logs
     _ = server.kill() catch {};
@@ -115,8 +127,29 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
 
     const needle = "\"event\":\"PULL_PAGE\"";
     if (std.mem.indexOf(u8, err_all, needle) == null) {
+        // Fallback: read from capture file if provided
+        var file_hit = false;
+        var file_buf: []u8 = &[_]u8{};
+        defer if (file_buf.len > 0) allocator.free(file_buf);
+        if (fileExists(tmp_path)) {
+            file_buf = std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 20) catch &[_]u8{};
+            if (std.mem.indexOf(u8, file_buf, needle) != null) file_hit = true;
+        }
+        if (!file_hit and strict_mode) {
+            // One more brief wait and retry file read in strict mode to absorb slow flush.
+            std.Thread.sleep(250 * std.time.ns_per_ms);
+            if (fileExists(tmp_path)) {
+                // re-read
+                const retry_buf = std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 20) catch &[_]u8{};
+                defer if (retry_buf.len > 0) allocator.free(retry_buf);
+                if (std.mem.indexOf(u8, retry_buf, needle) != null) file_hit = true;
+            }
+        }
+        if (file_hit) return; // success via capture file
         if (strict_mode) {
-            std.debug.print("telemetry not found (strict) — enable GEODE_CI_TELEMETRY_SMOKE=1 and retry; stderr size={d}\n", .{err_all.len});
+            const sz = err_all.len;
+            const cap_sz: usize = if (file_buf.len > 0) file_buf.len else 0;
+            std.debug.print("telemetry not found (strict) — enable GEODE_CI_TELEMETRY_SMOKE=1 and retry; stderr size={d}, cap size={d}, cap path={s}\n", .{ sz, cap_sz, tmp_path });
             try std.testing.expect(false);
         } else {
             // Soft-pass in convenience mode to avoid flakiness in short-lived runs.

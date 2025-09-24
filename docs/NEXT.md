@@ -98,6 +98,37 @@ Each slice acceptance: implement feature + single CANARY test (no bundling).
 
 ### Slice S-129: Streaming Telemetry Docs Link (REQ-GQL-090)
 
+### Quick Run Instructions for QUIC and Telemetry Smokes
+
+To run the QUIC and telemetry smoke tests, use these convenience targets:
+
+Non-strict (convenience; failures are masked):
+
+```bash
+make quic-smoke
+```
+
+Strict (CI-grade; fails on errors):
+
+```bash
+make quic-smoke-strict
+```
+
+What these targets do:
+
+- Set `GEODE_QUIC_PASSIVE_TEARDOWN=1` to reduce vendor QUIC teardown flakiness.
+- Gate the tests via `GEODE_CI_QUIC_SMOKE=1` and/or `GEODE_CI_TELEMETRY_SMOKE=1`.
+- For telemetry, also set `GEODE_TELEMETRY_PAGING=1` and `GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log` to ensure paging events are emitted and captured.
+- Non-strict mode sets `GEODE_CI_TELEMETRY_STRICT=0`; strict sets it to `1`.
+
+You can also run the telemetry smoke directly:
+
+```bash
+GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 \
+GEODE_TELEMETRY_PAGING=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 \
+zig test test_telemetry_smoke.zig
+```
+
 WHY: Improve discoverability of the new paging telemetry by linking docs in README and protocol docs.
 
 WHAT: Add `docs/TELEMETRY.md`, link from `README.md`, `docs/BINARY_PROTOCOL.md`, and `docs/USAGE.md`.

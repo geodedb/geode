@@ -336,14 +336,14 @@ quic-smoke: build
 	@echo "Running QUIC EXPLAIN smoke (env-gated) with passive teardown..."
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_quic_explain_smoke.zig || true
 	@echo "Running telemetry smoke (env-gated strict) with passive teardown..."
-	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=0 $(ZIG) test test_telemetry_smoke.zig || true
+	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=0 GEODE_TELEMETRY_PAGING=1 GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test test_telemetry_smoke.zig || true
 
 # Strict variant: do not mask failures; useful for dedicated pipelines
 quic-smoke-strict: build
 	@echo "Running QUIC EXPLAIN smoke (STRICT) with passive teardown..."
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_quic_explain_smoke.zig
 	@echo "Running telemetry smoke (STRICT) with passive teardown..."
-	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 $(ZIG) test test_telemetry_smoke.zig
+	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 GEODE_TELEMETRY_PAGING=1 GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test test_telemetry_smoke.zig
 
 # Cross-compilation targets (required 64-bit targets only)
 cross-compile: cross-compile-required cross-compile-optional cross-clients
