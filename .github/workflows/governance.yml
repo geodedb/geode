@@ -2,6 +2,12 @@ name: governance
 on:
   push: {}
   pull_request: {}
+  workflow_dispatch:
+    inputs:
+      telemetry_strict:
+        description: 'Set to 1 to enforce telemetry smoke test failures'
+        required: false
+        default: '0'
 jobs:
   canary-governance:
     runs-on: ubuntu-22.04
@@ -9,6 +15,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('**/build.zig', '**/*.zig') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-
       - name: Setup Zig 0.15.1
         uses: goto-bus-stop/setup-zig@v2
         with:
@@ -41,6 +56,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('**/build.zig', '**/*.zig') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-
       - name: Setup Zig 0.15.1
         uses: goto-bus-stop/setup-zig@v2
         with:
@@ -50,11 +74,13 @@ jobs:
       - name: Run telemetry smoke (soft)
         env:
           GEODE_CI_TELEMETRY_SMOKE: '1'
+          # Allow workflows_dispatch to override strict via input; default 0
+          GEODE_CI_TELEMETRY_STRICT: ${{ github.event.inputs.telemetry_strict || '0' }}
         run: |
-          # Run the telemetry smoke test only; ignore failure unless strict is set externally
-          set -e
-          export GEODE_CI_TELEMETRY_STRICT="${GEODE_CI_TELEMETRY_STRICT:-0}"
-          zig test test_telemetry_smoke.zig || true
+          # Run the telemetry smoke test only; ignore failure unless strict is set
+          set +e
+          zig test test_telemetry_smoke.zig
+          exit 0
       - name: Upload telemetry logs (if present)
         if: always()
         uses: actions/upload-artifact@v4
