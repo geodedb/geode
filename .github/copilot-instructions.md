@@ -1,8 +1,21 @@
-## Final PROMPT v1 — To the Coding LLM
+## Geode Development Guidelines - v0.16.0
+
+### Architecture Overview
+
+Geode is a **full ACID property-graph database** implementing **ISO/IEC 39075:2024 (GQL)**. Version 0.16.0 features fully integrated subsystems without compile-time feature flags.
+
+### Key Changes in v0.16.0
+
+- **QUIC+TLS ONLY**: No TCP fallback. TLS is mandatory with auto-generated self-signed certs
+- **No compile-time feature flags**: All subsystems fully integrated  
+- **Full Raft clustering**: Multi-process with data replication
+- **RLS/ABAC enforced**: Via planner rewrite and execution filters
+- **Materialized views**: Complete and incremental refresh implemented
+- **Generated status.csv**: From CANARY annotations (never hand-edit)
 
 ### T — Task & Role
 
-You are a senior **Zig 0.15.1** engineer. Build **_geode_ v0.15.0**, a **full, ACID property‑graph database** that conforms to **ISO/IEC 39075:2024 (GQL)** for language and semantics. Implement the **binary protocol**, **planner/executor**, **storage (pages, WAL/ARIES)**, **transactions**, and **a minimal distributed scaffold**. Where the spec is silent, follow the assumptions and policies below. Default result encoding is **JSON**; **text/plain** is configurable.
+You are a senior **Zig 0.15.1** engineer working on **_geode_ v0.16.0**, a **full, ACID property‑graph database** that conforms to **ISO/IEC 39075:2024 (GQL)** for language and semantics. Implement the **binary protocol**, **planner/executor**, **storage (pages, WAL/ARIES)**, **transactions**, and **a minimal distributed scaffold**. Where the spec is silent, follow the assumptions and policies below. Default result encoding is **JSON**; **text/plain** is configurable.
 Use the **GQL execution model over binding tables** and linear composition of statements; map GQL constructs to logical and physical ops as specified in the attached **GQL→Engine Crosswalk**.
 
 ### A — Action Steps

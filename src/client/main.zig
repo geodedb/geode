@@ -42,12 +42,13 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     if (argv.len < 2) {
-        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port|/path/to/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback] [--no-quic] [--server-arg <arg>]...\n", .{});
+        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port] [--process /path/to/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt|json] [--begin] [--commit|--rollback] [--server-arg <arg>]...\n", .{});
+        std.debug.print("\nNote: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n", .{});
         return;
     }
     const text: []const u8 = argv[1];
     var server_address: []const u8 = "127.0.0.1";
-    var server_port: u16 = 7567;
+    var server_port: u16 = 8443; // v0.16.0: Default QUIC port
     var param_name: ?[]const u8 = null;
     var param_json: ?[]const u8 = null;
     var do_begin = false;
@@ -58,7 +59,7 @@ pub fn main() !void {
     var i: usize = 2;
     var extra_pulls: usize = 0;
     var fmt_txt = false;
-    var use_quic = false; // Default to stdio; enable QUIC explicitly via --quic
+    var use_quic = true; // v0.16.0: QUIC is default and only network transport
     var log_level_arg: ?[]const u8 = null;
     var use_stdio = false;
 
@@ -71,26 +72,22 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) break;
             const server_str = argv[i + 1];
-            // Check if it's a path (for stdio mode)
-            if (std.mem.startsWith(u8, server_str, "./") or std.mem.startsWith(u8, server_str, "/")) {
-                use_stdio = true;
-                use_quic = false;
+            // Parse host:port for QUIC
+            if (std.mem.lastIndexOfScalar(u8, server_str, ':')) |colon| {
+                server_address = server_str[0..colon];
+                server_port = std.fmt.parseInt(u16, server_str[colon + 1 ..], 10) catch 8443;
             } else {
-                // Parse host:port
-                if (std.mem.lastIndexOfScalar(u8, server_str, ':')) |colon| {
-                    server_address = server_str[0..colon];
-                    server_port = std.fmt.parseInt(u16, server_str[colon + 1 ..], 10) catch 7567;
-                } else {
-                    server_address = server_str;
-                }
+                server_address = server_str;
             }
-            i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--no-quic")) {
-            use_quic = false;
-            use_stdio = true;
-        } else if (std.mem.eql(u8, argv[i], "--quic")) {
             use_quic = true;
             use_stdio = false;
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--process")) {
+            // Process mode for local testing
+            if (i + 1 >= argv.len) break;
+            use_stdio = true;
+            use_quic = false;
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--json-param")) {
             if (i + 2 >= argv.len) break;
             param_name = argv[i + 1];

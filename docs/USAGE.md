@@ -1,27 +1,28 @@
-# Geode CLI (gql)
+# Geode Usage Guide - v0.16.0
 
-## Transport: QUIC/TLS 1.3 (Default)
+## Transport: QUIC/TLS 1.3 (Mandatory)
 
-Geode uses QUIC with TLS 1.3 as the only network transport. For local/process mode, stdio remains supported.
+As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. TCP has been removed. For local/process mode, stdio remains supported.
 
 ### Server
 
 ```bash
-# Start server with QUIC (experimental; default port 7567)
-./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
+# Start server with QUIC (default port 8443)
+./zig-out/bin/geoded --data_dir ./data --log_json
+# Auto-generates self-signed certificates if missing in certs/
 
-# Custom certificates (default: certs/server.crt and certs/server.key)
-./zig-out/bin/geoded --listen-quic 0.0.0.0:7567 --cert path/to/cert.pem --key path/to/key.pem
+# Custom certificates (optional)
+./zig-out/bin/geoded --cert path/to/cert.pem --key path/to/key.pem
 
-# Generate self-signed certificates for development
-./zig-out/bin/cert_gen
+# Multi-node cluster (v0.16.0)
+./zig-out/bin/geoded --node-id 1 --port 7567 --peers 2:7569,3:7571
 ```
 
 ### Client
 
 ```bash
-# Connect using QUIC
-./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:7567
+# Connect using QUIC (v0.16.0 default)
+./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:8443
 
 # Process mode (stdio)
 ./zig-out/bin/geodec "RETURN 1 AS x" --process ./zig-out/bin/geoded

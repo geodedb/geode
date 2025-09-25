@@ -1,6 +1,6 @@
-# Geode — CANARY‑Enabled Unified Prompt (CANARY Tokens + Evaluation)
+# Geode v0.16.0 — CANARY‑Enabled Unified Prompt (CANARY Tokens + Evaluation)
 
-> This module unifies the **CANARY token policy** and the **CANARY‑enabled evaluation workflow**. It force‑links requirements (REQ‑GQL‑###) to code, tests, and benchmarks. All prior library content remains; this replaces scattered guidance with one cohesive, normative spec.
+> **v0.16.0 UPDATE**: All compile-time feature flags have been removed. All subsystems are fully integrated. QUIC+TLS is mandatory with no TCP fallback. This module unifies the **CANARY token policy** and the **CANARY‑enabled evaluation workflow**. It force‑links requirements (REQ‑GQL‑###) to code, tests, and benchmarks.
 
 ---
 

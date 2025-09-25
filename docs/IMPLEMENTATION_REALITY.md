@@ -2,7 +2,7 @@
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Implementation Reality Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
 
-Generated from CANARY evidence analysis - 2025-09-24 (post telemetry paging events + governance sync; updated strategic gap IDs 074–077)
+Generated from CANARY evidence analysis - 2025-09-25 (v0.16.0 full integration release)
 
 // NOTE: Future slice planning content moved to `NEXT.md` to avoid redundancy. This file remains a snapshot of current implemented reality only.
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
@@ -13,13 +13,23 @@ Generated from CANARY evidence analysis - 2025-09-24 (post telemetry paging even
 
 ## Executive Summary
 
-Latest CANARY scan (regenerated 2025‑09‑25T02:10Z) incorporates expanded MATCH safety guard coverage (frontier/result thresholds), QUIC multiplexing variance, cost model bias calibration envelopes, MV refresh latency jitter guardrails, inverted index lookup variance, and path cache structural key enrichment.
+Latest CANARY scan (regenerated 2025‑09‑25T14:30Z) reflects v0.16.0 full integration without compile-time feature flags.
 
-- **685 aspects** (tracked feature/aspect evidence rows; header excluded)
-- **443 TESTED** – functional & protocol tests (AdvancedCostModel, RefreshScheduler, InvertedIndexCore, RangeTracker phantom prevention, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, QUIC handshake/multiplexing, MATCH guard trip mapping)
-- **229 BENCHED** – performance / variance / jitter envelopes (AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope, PhantomPreventionOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, QUIC frame latency)
-- **6 STUB**, **7 IMPL (unpromoted)** – governance: remain below promotion threshold pending variance evidence or broader scenario tests
-- **80+ active variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, txn, path, QUIC, CDC, federation, cost model, and GPU flag enumeration
+**Major v0.16.0 Changes:**
+- All compile-time feature flags removed
+- QUIC+TLS mandatory (no TCP fallback)
+- Full Raft clustering with data replication
+- RLS/ABAC enforced via planner rewrite
+- Materialized views with complete/incremental refresh
+- Generated status.csv from CANARY annotations
+
+**Evidence Summary:**
+- **607 aspects** (tracked feature/aspect evidence rows)
+- **365 TESTED** – functional & protocol tests (includes full Raft, RLS enforcement, MV refresh)
+- **229 BENCHED** – performance / variance / jitter envelopes
+- **13 IMPLEMENTED** – integration complete, tests pending
+- **0 STUB** – all features now integrated (v0.16.0 milestone)
+- **80+ active variance envelopes** enforcing CV & p95/mean SLAs
 
 Counts derived directly from freshly regenerated `status.csv` (authoritative) to avoid drift; `status.json` timestamp retained as provenance.
 

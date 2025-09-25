@@ -138,7 +138,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		// Parse the address for QUIC
 		addr := strings.TrimPrefix(db.addr, "quic:")
 		addr = strings.TrimPrefix(addr, "//")
-		if addr == "" { addr = "127.0.0.1:7567" }
+		if addr == "" { addr = "127.0.0.1:8443" } // v0.16.0: Default QUIC port
 		
 		tlsConf := &tls.Config{
 			InsecureSkipVerify: true, // For development; in production use proper cert validation
@@ -181,7 +181,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		addr = strings.TrimPrefix(addr, "quic://")
 		addr = strings.TrimPrefix(addr, "quic:")
 		addr = strings.TrimPrefix(addr, "//")
-		if addr == "" { addr = "127.0.0.1:7567" }
+		if addr == "" { addr = "127.0.0.1:8443" } // v0.16.0: Default QUIC port
 		tlsConf := &tls.Config{ InsecureSkipVerify: true, NextProtos: []string{"geode/1"}, MinVersion: tls.VersionTLS13 }
 		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
 		if err != nil { return nil, err }

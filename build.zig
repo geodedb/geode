@@ -20,22 +20,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
-    const feature_cluster = b.option(bool, "feature-cluster", "Enable cluster coordinator experimental skeleton") orelse false;
-    const feature_recursive = b.option(bool, "feature-recursive", "Enable recursive execution experimental skeleton") orelse false;
-    const feature_rls_abac = b.option(bool, "feature-rls-abac", "Enable RLS/ABAC experimental framework") orelse false;
-    const feature_monitoring = b.option(bool, "feature-monitoring", "Enable monitoring metrics registry & Prometheus endpoint") orelse false;
-    const feature_backup = b.option(bool, "feature-backup", "Enable backup & restore experimental skeleton") orelse false;
-    const feature_wal_compaction = b.option(bool, "feature-wal-compaction", "Enable WAL compaction experimental job") orelse false;
-    const feature_selectivity = b.option(bool, "feature-selectivity", "Enable selectivity estimator & adaptive feedback skeleton") orelse false;
+    
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
-    build_opts.addOption(bool, "feature_cluster", feature_cluster);
-    build_opts.addOption(bool, "feature_recursive", feature_recursive);
-    build_opts.addOption(bool, "feature_rls_abac", feature_rls_abac);
-    build_opts.addOption(bool, "feature_monitoring", feature_monitoring);
-    build_opts.addOption(bool, "feature_backup", feature_backup);
-    build_opts.addOption(bool, "feature_wal_compaction", feature_wal_compaction);
-    build_opts.addOption(bool, "feature_selectivity", feature_selectivity);
 
     const lib = b.addLibrary(.{
         .name = "wire",

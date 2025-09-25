@@ -1,4 +1,4 @@
-# Binary Protocol — GQL Outcome & Diagnostics Mapping (v0.15.x)
+# Binary Protocol — GQL Outcome & Diagnostics Mapping (v0.16.0)
 
 ## Messages
 
@@ -6,6 +6,8 @@
 - `BEGIN` / `COMMIT` / `ROLLBACK` — transaction demarcation.
 - `RUN_GQL` — submit a GQL program (single statement supported currently) plus params.
 - `PULL` — request next page of current result binding table.
+
+**v0.16.0 Transport**: All messages now transmitted over QUIC+TLS. TCP support removed. Frame format remains unchanged but benefits from QUIC stream multiplexing and 0-RTT resumption.
 
 ## Status & Diagnostics
 

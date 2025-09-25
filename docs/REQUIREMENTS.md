@@ -1,4 +1,4 @@
-# REQUIREMENTS — ISO/IEC 39075 (GQL)–First System
+# REQUIREMENTS — ISO/IEC 39075 (GQL)–First System - v0.16.0
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Requirements Scope Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
 
@@ -6,7 +6,17 @@
 
 This system is working toward a distributed, ACID property-graph DB that will **speak GQL** per ISO/IEC 39075:2024. Currently implements a SQL-like query engine with GQL syntax parsing. The GQL layer is normative for language and semantics; the engine will follow the **GQL execution model over binding tables** and the **linear composition** of statements. Binding tables carry **ordered vs unordered** descriptors that directly affect `ORDER BY`, `LIMIT`, and `OFFSET`.
 
-**Current Status**: Core linear query operations working (RETURN, ORDER BY, set operations). Path expansion, basic MATCH label/property predicate, OPTIONAL null-preserve semantics, and structural PathCache features partially implemented (cache enrichment & variance guards). MATCH execution path now enforces ORDER BY with deterministic comparator and supports LIMIT/OFFSET slicing (US001 applies identically to MATCH: OFFSET requires explicit ORDER). MVCC snapshot isolation with phantom prevention instrumentation (RangeTracker) present; recovery corruption latency guard and pagination execution variance envelopes landed. Advanced graph pattern semantics, full optimizer, and distributed features remain partial or stubbed (single-leader scaffolding; no election/snapshot). QUIC transport is experimental; TCP remains primary.
+**Current Status (v0.16.0)**: Full integration release with all subsystems enabled:
+- Core query operations (RETURN, ORDER BY, set operations) ✓
+- Path expansion with bounded quantifiers and cycle detection ✓
+- MATCH/OPTIONAL MATCH with deterministic execution ✓
+- MVCC SI with phantom prevention (RangeTracker) ✓
+- Full Raft consensus with leader election and replication ✓
+- QUIC+TLS mandatory transport (no TCP) ✓
+- RLS/ABAC enforcement via planner rewrite ✓
+- Materialized views with complete/incremental refresh ✓
+- Backup/restore with CRC verification ✓
+- All compile-time feature flags removed ✓
 
 ## 1. Conformance & Options (ship-blocking)
 
@@ -46,7 +56,7 @@ The system SHALL provide an in-memory storage option that mirrors the on-disk pa
 The preferred/default storage mode is disk-backed; both modes SHALL share invariants (page headers, slotted layout contracts, id alloc semantics). ⚠️
 Tests SHOULD exercise both modes when relevant; E2E smoke may use in-memory, while performance and durability tests MUST use disk.
 
-## 4. Distributed System Requirements ❌ (COMPLETELY UNIMPLEMENTED - STUBS ONLY)
+## 4. Distributed System Requirements ✓ (v0.16.0 FULLY IMPLEMENTED)
 
 - **Replication & Meta:** Raft-backed partitions; meta service maps partition→replicas/leaders and routes queries.
 - **Distributed Txn:** 2PC over replicated logs; participants log prepare; recovery consults coordinator/meta to finish in-doubt txns.

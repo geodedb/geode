@@ -772,18 +772,134 @@ pub const MaterializedViewManager = struct {
         // TODO: Wait for refresh completion
     }
 
-    fn performCompleteRefresh(self: *MaterializedViewManager, view: *ViewCatalog.MaterializedView, job: *RefreshManager.RefreshJob) !void {
-        _ = self;
-        _ = view;
-        _ = job;
-        // TODO: Perform complete refresh
+    pub fn performCompleteRefresh(self: *MaterializedViewManager, view_id: u64) !void {
+        // Acquire single-flight lock
+        self.refresh_manager.refresh_mutex.lock();
+        defer self.refresh_manager.refresh_mutex.unlock();
+        
+        const view = self.catalog.views.get(view_id) orelse return error.ViewNotFound;
+        
+        // Check if refresh already in progress
+        if (self.refresh_manager.active_refreshes.get(view_id) != null) {
+            return error.RefreshInProgress;
+        }
+        
+        // Mark as active
+        const job = try self.allocator.create(RefreshManager.RefreshJob);
+        job.* = .{
+            .view_id = view_id,
+            .method = .complete,
+            .status = .running,
+            .start_time = std.time.milliTimestamp(),
+            .end_time = null,
+            .error_message = null,
+            .rows_processed = 0,
+            .memory_used_bytes = 0,
+            .worker_count = 1,
+        };
+        try self.refresh_manager.active_refreshes.put(view_id, job);
+        defer {
+            _ = self.refresh_manager.active_refreshes.remove(view_id);
+            self.allocator.destroy(job);
+        }
+        
+        // Begin transaction for snapshot read
+        const txn = try self.storage_engine.beginTransaction(.read_committed);
+        defer txn.rollback() catch {};
+        
+        // Execute the view's defining query
+        const query_result = try self.query_executor.execute(view.definition_query, txn);
+        defer query_result.deinit();
+        
+        // Create new storage for refreshed data
+        const temp_storage = try self.storage_engine.createTempTable(view.name);
+        defer self.storage_engine.dropTempTable(temp_storage) catch {};
+        
+        // Insert all rows into temp storage
+        var row_count: u64 = 0;
+        while (try query_result.next()) |row| {
+            try temp_storage.insert(row);
+            row_count += 1;
+        }
+        
+        // Atomically swap storage
+        const swap_txn = try self.storage_engine.beginTransaction(.serializable);
+        errdefer swap_txn.rollback() catch {};
+        
+        try self.storage_engine.swapTable(view.storage_location, temp_storage, swap_txn);
+        try swap_txn.commit();
+        
+        // Update metrics
+        job.rows_processed = row_count;
+        job.end_time = std.time.milliTimestamp();
+        job.status = .completed;
+        
+        // Update view metadata
+        view.last_refresh_time = std.time.milliTimestamp();
+        view.row_count = row_count;
+        
+        self.refresh_manager.metrics.total_refreshes += 1;
+        self.refresh_manager.metrics.complete_refreshes += 1;
     }
 
-    fn performIncrementalRefresh(self: *MaterializedViewManager, view: *ViewCatalog.MaterializedView, job: *RefreshManager.RefreshJob) !void {
-        _ = self;
-        _ = view;
-        _ = job;
-        // TODO: Perform incremental refresh
+    pub fn performIncrementalRefresh(self: *MaterializedViewManager, view_id: u64, since_lsn: u64) !void {
+        self.refresh_manager.refresh_mutex.lock();
+        defer self.refresh_manager.refresh_mutex.unlock();
+        
+        const view = self.catalog.views.get(view_id) orelse return error.ViewNotFound;
+        
+        if (self.refresh_manager.active_refreshes.get(view_id) != null) {
+            return error.RefreshInProgress;
+        }
+        
+        const job = try self.allocator.create(RefreshManager.RefreshJob);
+        job.* = .{
+            .view_id = view_id,
+            .method = .incremental,
+            .status = .running,
+            .start_time = std.time.milliTimestamp(),
+            .end_time = null,
+            .error_message = null,
+            .rows_processed = 0,
+            .memory_used_bytes = 0,
+            .worker_count = 1,
+        };
+        try self.refresh_manager.active_refreshes.put(view_id, job);
+        defer {
+            _ = self.refresh_manager.active_refreshes.remove(view_id);
+            self.allocator.destroy(job);
+        }
+        
+        // Get change data since last LSN
+        const changes = try self.cdc_engine.getChangesSince(since_lsn);
+        defer changes.deinit();
+        
+        // Apply changes to view storage
+        const txn = try self.storage_engine.beginTransaction(.read_committed);
+        defer txn.rollback() catch {};
+        
+        var rows_updated: u64 = 0;
+        while (try changes.next()) |change| {
+            switch (change.operation) {
+                .insert => try view.storage.insert(change.new_data),
+                .update => try view.storage.update(change.key, change.new_data),
+                .delete => try view.storage.delete(change.key),
+            }
+            rows_updated += 1;
+        }
+        
+        try txn.commit();
+        
+        // Update metrics and metadata
+        job.rows_processed = rows_updated;
+        job.end_time = std.time.milliTimestamp();
+        job.status = .completed;
+        
+        view.last_refresh_time = std.time.milliTimestamp();
+        view.last_incremental_lsn = since_lsn;
+        
+        self.refresh_manager.metrics.total_refreshes += 1;
+        self.refresh_manager.metrics.incremental_refreshes += 1;
     }
 
     fn performDifferentialRefresh(self: *MaterializedViewManager, view: *ViewCatalog.MaterializedView, job: *RefreshManager.RefreshJob) !void {

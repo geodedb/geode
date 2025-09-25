@@ -1,4 +1,4 @@
-# NEXT — Concise Forward Backlog — Regenerated 2025-09-24 (Post Monitoring Variance Bench Promotion)
+# NEXT — Concise Forward Backlog — Regenerated 2025-09-25 (v0.16.0 Full Integration Release)
 
 Purpose: Maintain a minimal, actionable slice backlog strictly limited to forward work. Historical landed content lives in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
 
@@ -11,7 +11,7 @@ Purpose: Maintain a minimal, actionable slice backlog strictly limited to forwar
 5. Bench failures emit `VARIANCE_FAIL_<TOKEN>`.
 6. Freshness: regenerated within 24h (governance check).
 
-## 2. Active Backlog (Actionable Only — Focus: Remove STUB/IMPL)
+## 2. Active Backlog (v0.16.0 Update — All Core Features Integrated)
 
 | Slice | REQ         | Title                               | WHY (Short)                   | Acceptance (Abbrev)                                                          | Class | Owner     |
 | ----- | ----------- | ----------------------------------- | ----------------------------- | ---------------------------------------------------------------------------- | ----- | --------- |

@@ -1,12 +1,17 @@
-# Geode Client Libraries
+# Geode Client Libraries - v0.16.0
 
 Comprehensive client libraries for Geode graph database supporting all features including RBAC, ABAC, transactions, and graph operations.
+
+**v0.16.0 Breaking Changes:**
+- TCP transport removed - QUIC+TLS is now mandatory for network connections
+- Default port changed from 7567 to 8443
+- All network connections use TLS 1.3
 
 ## Features Supported
 
 ### Core Database Features
 
-- **QUIC Transport**: High-performance QUIC protocol with TLS 1.3
+- **QUIC Transport**: High-performance QUIC protocol with TLS 1.3 (mandatory in v0.16.0)
 - **Transactions**: BEGIN, COMMIT, ROLLBACK with full ACID support
 - **Paged Results**: Efficient streaming of large result sets
 - **Query Profiling**: PROFILE and EXPLAIN for query optimization
@@ -67,8 +72,8 @@ import (
 )
 
 func main() {
-    // Connect with QUIC
-    db, err := gql.Open("quic://127.0.0.1:7567")
+    // Connect with QUIC (v0.16.0: default port 8443)
+    db, err := gql.Open("quic://127.0.0.1:8443")
     if err != nil {
         log.Fatal(err)
     }
@@ -136,8 +141,8 @@ pub fn main() !void {
     // Configure and connect
     const config = client.Config{
         .host = "127.0.0.1",
-        .port = 7567,
-        .use_quic = true,
+        .port = 8443,  // v0.16.0: Default QUIC port
+        .use_quic = true,  // v0.16.0: Only network transport
     };
 
     var geode = client.Client.init(allocator, config);
@@ -180,19 +185,21 @@ See `clients/zig/example.zig` for comprehensive examples including:
 
 ## Connection Strings
 
-### QUIC (Recommended)
+### QUIC (v0.16.0: Only Network Transport)
 
 ```
-quic://hostname:port?page_size=100&hello_name=myapp
+quic://hostname:8443?page_size=100&hello_name=myapp
 ```
 
-### Process Mode (Development)
+Default port is 8443. Server auto-generates self-signed certificates if missing.
+
+### Process Mode (Local Development)
 
 ```
-/path/to/geodec
+process:/path/to/geoded
 ```
 
-Note: TCP transport has been removed. Network transport is QUIC-only; local development can use process mode.
+**v0.16.0 Note**: TCP transport has been completely removed. Use QUIC for all network connections.
 
 ## API Reference
 

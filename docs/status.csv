@@ -1,0 +1,8 @@
+REQ_ID,Feature,Status,Tests,Benchmarks,Owners,Last_Updated,Aspects,Locations
+REQ-GQL-001,Core Engine,TESTED,TestCANARY_REQ_GQL_001_Core,,core,2025-09-25,Core,src/main.zig:10
+REQ-GQL-025,Recursive Queries,TESTED,TestCANARY_REQ_GQL_025_RecursiveCore,,planner,2025-09-25,RecursiveCore,src/planner/recursive.zig:5
+REQ-GQL-074,Network Transport,TESTED,TestCANARY_REQ_GQL_074_QUICCore;TestCANARY_REQ_GQL_074_QUICListener,,wire,2025-09-22,QUICCore;QUICListener,src/transport/quic.zig:5;src/transport/quic.zig:72
+REQ-GQL-080,Row Level Security,TESTED,TestCANARY_REQ_GQL_080_RLSCore,,security,2025-09-25,RLSCore,src/security/rls.zig:5
+REQ-GQL-090,Materialized Views,IMPLEMENTED,,,storage,2025-09-25,MVCore,src/storage/materialized_views.zig:20
+REQ-GQL-100,Distributed Clustering,IMPLEMENTED,,,distributed,2025-09-25,ClusterCore,src/distributed/cluster.zig:15
+REQ-GQL-110,Backup and Restore,IMPLEMENTED,,,storage,2025-09-25,BackupCore,src/storage/backup.zig:10
