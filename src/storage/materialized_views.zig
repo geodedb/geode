@@ -803,6 +803,8 @@ pub const MaterializedViewManager = struct {
             self.allocator.destroy(job);
         }
         
+        // CANARY: REQ=REQ-GQL-016; FEATURE="MV Complete Refresh"; ASPECT=CompleteRefresh; STATUS=TESTED; TEST=e2e_materialized_views_refresh; OWNER=storage; UPDATED=2025-09-25
+        // Lines 806-814: Complete refresh implementation
         // Begin transaction for snapshot read
         const txn = try self.storage_engine.beginTransaction(.read_committed);
         defer txn.rollback() catch {};
@@ -811,6 +813,7 @@ pub const MaterializedViewManager = struct {
         const query_result = try self.query_executor.execute(view.definition_query, txn);
         defer query_result.deinit();
         
+        // Lines 824-832: Execute defining query
         // Create new storage for refreshed data
         const temp_storage = try self.storage_engine.createTempTable(view.name);
         defer self.storage_engine.dropTempTable(temp_storage) catch {};
@@ -822,6 +825,7 @@ pub const MaterializedViewManager = struct {
             row_count += 1;
         }
         
+        // Lines 832-840: Atomic swap
         // Atomically swap storage
         const swap_txn = try self.storage_engine.beginTransaction(.serializable);
         errdefer swap_txn.rollback() catch {};
@@ -870,10 +874,13 @@ pub const MaterializedViewManager = struct {
             self.allocator.destroy(job);
         }
         
+        // CANARY: REQ=REQ-GQL-017; FEATURE="MV Incremental Refresh"; ASPECT=IncrementalRefresh; STATUS=TESTED; TEST=e2e_materialized_views_refresh; OWNER=storage; UPDATED=2025-09-25
+        // Lines 873-882: Incremental refresh via CDC
         // Get change data since last LSN
         const changes = try self.cdc_engine.getChangesSince(since_lsn);
         defer changes.deinit();
         
+        // Lines 884-892: Apply WAL diffs
         // Apply changes to view storage
         const txn = try self.storage_engine.beginTransaction(.read_committed);
         defer txn.rollback() catch {};

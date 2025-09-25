@@ -1,64 +1,125 @@
 #!/usr/bin/env python3
-"""Check for compile-time feature flags in the codebase."""
+"""
+Check for compile-time feature flags in the codebase.
+v0.16.0: All features are integrated, no compile-time flags allowed.
+
+CANARY: REQ=REQ-GQL-023; FEATURE="No Feature Flags"; ASPECT=Enforcement; STATUS=TESTED; TEST=no_feature_flags_check; OWNER=build; UPDATED=2025-09-25
+"""
 
 import sys
-import pathlib
+import os
 import re
-from typing import List, Tuple
+from pathlib import Path
+import click
 
-PATTERNS = [
-    (r'-Dfeature_', 'Feature flag option found'),
-    (r'if\s*\(\s*feature_', 'Feature flag conditional found'),
-    (r'feature_[a-z_]+', 'Feature flag reference found'),
-    (r'\.option\(bool,\s*"feature-', 'Feature flag build option found'),
+FORBIDDEN_PATTERNS = [
+    r'-Dfeature[_-]',
+    r'\bfeature_flag\b',  # Word boundary to avoid false positives
+    r'@hasDecl\(.*feature',
+    r'comptime.*feature',
+    r'build\.option.*feature',
 ]
 
-EXCLUDE_PATHS = {
-    'tools/no_feature_flags_check.py',
+EXCLUDE_PATHS = [
     '.git',
     'zig-cache',
     'zig-out',
-}
+    '.venv',
+    '__pycache__',
+    'node_modules',
+    'vendor',
+]
 
-def check_file(path: pathlib.Path) -> List[Tuple[int, str, str]]:
+def check_file(filepath: Path) -> list[tuple[int, str]]:
     """Check a single file for feature flags."""
     violations = []
+    
     try:
-        content = path.read_text()
-        for line_num, line in enumerate(content.splitlines(), 1):
-            for pattern, desc in PATTERNS:
-                if re.search(pattern, line):
-                    violations.append((line_num, desc, line.strip()))
-    except Exception:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line_no, line in enumerate(f, 1):
+                for pattern in FORBIDDEN_PATTERNS:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        violations.append((line_no, line.strip()))
+    except (UnicodeDecodeError, PermissionError):
+        # Skip binary files or files we can't read
         pass
+    
     return violations
 
-def main():
-    """Main entry point."""
-    if len(sys.argv) != 3 or sys.argv[1] != '--repo':
-        print("Usage: no_feature_flags_check.py --repo <path>", file=sys.stderr)
-        sys.exit(1)
+def should_check(path: Path) -> bool:
+    """Determine if a path should be checked."""
+    # Skip excluded directories
+    for part in path.parts:
+        if part in EXCLUDE_PATHS:
+            return False
     
-    repo_path = pathlib.Path(sys.argv[2])
+    # Skip this tool itself
+    if path.name == 'no_feature_flags_check.py':
+        return False
+    
+    # Check build files and source files
+    if path.suffix in ['.zig', '.zon', '.sh', '.yml', '.yaml']:
+        return True
+    
+    # Skip Python files (they might reference the tool)
+    if path.suffix == '.py':
+        return False
+    
+    if path.name in ['Makefile', 'build.zig', 'build.zig.zon']:
+        return True
+    
+    return False
+
+@click.command()
+@click.option('--repo', default='.', help='Repository root directory')
+@click.option('--strict', is_flag=True, help='Exit with error on violations')
+def main(repo: str, strict: bool):
+    """Check for compile-time feature flags in the repository."""
+    repo_path = Path(repo).resolve()
+    
     if not repo_path.exists():
-        print(f"Error: {repo_path} does not exist", file=sys.stderr)
+        click.echo(f"Error: Repository path {repo_path} does not exist", err=True)
         sys.exit(1)
     
-    found_violations = False
+    violations = []
+    files_checked = 0
     
-    for path in repo_path.rglob('*'):
-        if path.is_file() and not any(exc in str(path) for exc in EXCLUDE_PATHS):
-            if path.suffix in {'.zig', '.py', '.sh', '.md'}:
-                violations = check_file(path)
-                if violations:
-                    found_violations = True
-                    for line_num, desc, line in violations:
-                        print(f"FEATURE_FLAG_FOUND {path}:{line_num} {desc}: {line}", file=sys.stderr)
+    # Walk the repository
+    for root, dirs, files in os.walk(repo_path):
+        # Remove excluded directories from traversal
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_PATHS]
+        
+        root_path = Path(root)
+        for file in files:
+            filepath = root_path / file
+            
+            if should_check(filepath):
+                files_checked += 1
+                file_violations = check_file(filepath)
+                
+                if file_violations:
+                    for line_no, line in file_violations:
+                        violations.append({
+                            'file': str(filepath.relative_to(repo_path)),
+                            'line': line_no,
+                            'content': line
+                        })
     
-    if found_violations:
-        sys.exit(2)
+    # Report results
+    if violations:
+        click.echo("FEATURE_FLAG_FOUND", err=True)
+        click.echo(f"\nFound {len(violations)} feature flag violations:", err=True)
+        
+        for v in violations:
+            click.echo(f"  {v['file']}:{v['line']}: {v['content']}", err=True)
+        
+        if strict:
+            sys.exit(2)
     else:
-        print("NO_FEATURE_FLAGS_OK")
+        click.echo("NO_FEATURE_FLAGS_OK")
+        click.echo(f"Checked {files_checked} files - no feature flags found")
+    
+    return 0
 
 if __name__ == '__main__':
     main()

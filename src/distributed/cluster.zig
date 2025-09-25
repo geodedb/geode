@@ -608,12 +608,13 @@ pub const ClusterCoordinator = struct {
         };
     }
 
-    fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: protocol.Message) !void {
+    // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
+    pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: protocol.Message) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
         
         const conn = self.connections.get(node_id) orelse {
-            // Establish new connection
+            // Establish new QUIC connection
             const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
             const new_conn = try self.transport.connect(node.address);
             try self.connections.put(node_id, new_conn);
@@ -628,16 +629,22 @@ pub const ClusterCoordinator = struct {
         try buffer.writer().writeByte(@intFromEnum(msg.type));
         try buffer.writer().writeAll(msg.payload);
         
-        // Send with retries
+        // Send with retries (50ms, 100ms, 200ms backoff)
         var retries: u32 = 0;
         while (retries < 3) : (retries += 1) {
             conn.send(buffer.items) catch |err| {
                 if (retries == 2) return err;
-                std.time.sleep(50 * std.time.ns_per_ms * std.math.pow(u64, 2, retries));
+                const backoff_ms = @as(u64, 50) * std.math.pow(u64, 2, retries);
+                std.time.sleep(backoff_ms * std.time.ns_per_ms);
                 continue;
             };
             break;
         }
+    }
+    
+    // CANARY: REQ=REQ-GQL-021; FEATURE="Cluster Message Handler"; ASPECT=OnMessage; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
+    pub fn onMessage(self: *ClusterCoordinator, callback: fn (*ClusterCoordinator, *const protocol.Message) void) void {
+        self.message_callback = callback;
     }
 
     fn handleLeaveCluster(self: *ClusterCoordinator, msg: protocol.Message) !protocol.Response {

@@ -110,10 +110,10 @@ pub const QuicTransport = struct {
             .cert_path = self.cert_path,
             .key_path = self.key_path,
             .ca_path = null,
-            .allow_insecure = false,
+            .allow_insecure = false,  // v0.16.0: No insecure connections allowed
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .real_tls = true,  // TLS is mandatory
+            .real_tls = true,  // v0.16.0: TLS is mandatory, no TCP fallback
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };

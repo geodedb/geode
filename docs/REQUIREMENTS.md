@@ -8,15 +8,17 @@ This system is working toward a distributed, ACID property-graph DB that will **
 
 **Current Status (v0.16.0)**: Full integration release with all subsystems enabled:
 - Core query operations (RETURN, ORDER BY, set operations) ✓
-- Path expansion with bounded quantifiers and cycle detection ✓
+- Path expansion with bounded quantifiers and cycle detection (DEFAULT ON) ✓
+- Recursive CTEs with WITH RECURSIVE (DEFAULT ON) ✓
 - MATCH/OPTIONAL MATCH with deterministic execution ✓
-- MVCC SI with phantom prevention (RangeTracker) ✓
+- ORDER BY required when using LIMIT/OFFSET (ISO enforcement) ✓
+- MVCC SI with phantom prevention via RangeTracker (DEFAULT ON) ✓
 - Full Raft consensus with leader election and replication ✓
-- QUIC+TLS mandatory transport (no TCP) ✓
-- RLS/ABAC enforcement via planner rewrite ✓
+- QUIC+TLS mandatory transport on port 8443 (no TCP fallback) ✓
+- RLS/ABAC enforcement via planner rewrite with audit logging ✓
 - Materialized views with complete/incremental refresh ✓
-- Backup/restore with CRC verification ✓
-- All compile-time feature flags removed ✓
+- Backup/restore with CRC-32 verification ✓
+- All compile-time feature flags removed (unified build) ✓
 
 ## 1. Conformance & Options (ship-blocking)
 
