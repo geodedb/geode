@@ -1,8 +1,8 @@
-# GAP Analysis — geode (CANARY Evidence Driven, Regenerated 2025-09-24)
+# GAP Analysis — geode v0.16.0 (CANARY Evidence Driven, Regenerated 2025-09-25)
 
 <!-- STATUS_JSON_SHA256: ddc0301b78df18587dc3df0334e8991983dfc0b2fb89740c8509ffe4580c44bf -->
 
-> Note: For count-based governance checks, `status.csv` is the authoritative source. This page’s SHA256 marker guards consistency against `status.json`.
+> **v0.16.0 UPDATE**: Full integration release with 451 CANARY aspects (329 TESTED, 60 BENCHED, 60 IMPL, 2 STUB). All compile-time feature flags removed. QUIC+TLS mandatory on port 8443. For count-based governance checks, `status.csv` is the authoritative source. This page's SHA256 marker guards consistency against `status.json`.
 
 ## CANARY Evidence (Scanner Lines)
 

@@ -15,7 +15,7 @@ As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. T
 ./zig-out/bin/geoded --cert path/to/cert.pem --key path/to/key.pem
 
 # Multi-node cluster (v0.16.0)
-./zig-out/bin/geoded --node-id 1 --port 7567 --peers 2:7569,3:7571
+./zig-out/bin/geoded --node-id 1 --port 8443 --peers 2:8444,3:8445
 ```
 
 ### Client
@@ -32,7 +32,7 @@ As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. T
 
 ```go
 // Connect using QUIC
-db, _ := gql.Open("quic:127.0.0.1:7567")
+db, _ := gql.Open("quic:127.0.0.1:8443")
 
 // Connect using process mode
 db, _ := gql.Open("process:./zig-out/bin/geoded")

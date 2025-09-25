@@ -1,167 +1,97 @@
-# NEXT — Concise Forward Backlog — Regenerated 2025-09-25 (v0.16.0 Full Integration Release)
+# NEXT — v0.16.0 Full Integration Release - Regenerated 2025-09-25
 
-Purpose: Maintain a minimal, actionable slice backlog strictly limited to forward work. Historical landed content lives in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
+Purpose: Track immediate forward work after v0.16.0 integration. Historical content in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
 
-## 1. Global Acceptance (Machine Enforced)
+## v0.16.0 Integration Complete
 
-1. Exactly one aspect promotion per slice (TESTED or BENCHED).
-2. New or promoted aspect must add a CANARY line with `UPDATED`=today.
-3. All slices must pass `./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict` prior to merge.
-4. Variance benches use class thresholds (Hot≤0.18, Storage≤0.21, General≤0.22, GraphAnalytics≤0.23 CV; p95/mean caps 2.40–2.60) or add `// VARIANCE_EXCEPTION:`.
-5. Bench failures emit `VARIANCE_FAIL_<TOKEN>`.
-6. Freshness: regenerated within 24h (governance check).
+Major milestone achieved with full system integration:
+- **451 CANARY aspects tracked** (329 TESTED, 60 BENCHED, 60 IMPL, 2 STUB)
+- **All compile-time feature flags removed** - unified build
+- **QUIC+TLS mandatory** - TCP removed, port 8443 default
+- **All subsystems integrated** - RLS, MV, Raft, CDC, backup/restore
 
-## 2. Active Backlog (v0.16.0 Update — All Core Features Integrated)
+## Active Work (Post-v0.16.0)
 
-| Slice | REQ         | Title                               | WHY (Short)                   | Acceptance (Abbrev)                                                          | Class | Owner     |
-| ----- | ----------- | ----------------------------------- | ----------------------------- | ---------------------------------------------------------------------------- | ----- | --------- |
-| S-103 | REQ-GQL-081 | Monitoring Prometheus Export        | Expose metrics externally     | Endpoint/core metrics TESTED; variance envelope BENCHED (cv<=0.22 p95<=2.55) | DONE  | ops       |
-| S-104 | REQ-GQL-082 | Backup/Restore Primitives           | Ensure recoverability         | Full & incremental backup tests; restore integrity checksum match            | DONE  | storage   |
-| S-105 | REQ-GQL-083 | WAL Compaction Pipeline             | Manage log growth             | Checkpoint selection + compaction job test + variance bench (CV≤0.21)        | DONE  | storage   |
-| S-106 | REQ-GQL-084 | Selectivity Estimator Framework     | Improve planner accuracy      | Frequency sampler + adaptive feedback test + variance bench (CV≤0.22)        | DONE  | optimizer |
-| S-107 | REQ-GQL-085 | Structured Logging Client Parity    | Consistent client/server logs | Client parity test verifying JSON schema equivalence                         | DONE  | ops       |
-| S-108 | REQ-GQL-086 | Interactive REPL Launch Prompt      | Developer usability           | Launch prompt emits `geode>` exactly once (ReplLaunchPrompt TESTED)          | DONE  | client    |
-| S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | DONE  | planner   |
-| S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | DONE  | planner   |
-| S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | DONE  | tooling   |
-| S-131 | REQ-GQL-087 | GPU Execution Kernel Prototype      | Begin actual GPU offload      | Single noop operator kernel launches + variance bench (cv≤0.22)              | PLAN  | accel     |
-| S-132 | REQ-GQL-088 | Advanced Analytics Seed (PageRank)  | Add first advanced analytic   | PageRank prototype (small graph determinism + variance harness stub)         | PLAN  | analytics |
-| S-133 | REQ-GQL-089 | QUIC Flow Control & Loss Recovery   | Transport completeness        | Flow control window tests + loss recovery latency variance bench             | PLAN  | transport |
-| S-134 | REQ-GQL-091 | MV Incremental Delta Refresh        | Reduce refresh overhead       | Delta capture tests + refresh latency delta variance envelope                | PLAN  | storage   |
-| S-135 | REQ-GQL-092 | Cost Model Cardinality Integration  | Prepare full CBO              | Cardinality estimator integration tests + plan enumeration cost sanity       | PLAN  | optimizer |
-| S-136 | REQ-GQL-093 | CDC External Connector (Kafka)      | External sink support         | Kafka mock sink e2e + throughput variance envelope (cv≤0.22 p95≤2.55)        | PLAN  | cdc       |
-| S-137 | REQ-GQL-094 | Namespace Isolation (Multi-Graph)   | Tenant separation             | Catalog namespace creation/list isolation tests                              | PLAN  | catalog   |
+| Priority | Area | Task | Rationale | Acceptance |
+|----------|------|------|-----------|------------|
+| P0 | GPU | Kernel execution | Move beyond detection | Single operator kernel launch + variance bench |
+| P0 | Federation | Query routing | Complete federation scaffold | Router tests + shard map validation |
+| P1 | Analytics | PageRank/Betweenness | Advanced graph analytics | Deterministic results + variance envelope |
+| P1 | Performance | Query plan cache | Reduce planning overhead | Hit rate >90% + eviction policy test |
+| P2 | Storage | Columnar format | Analytical workloads | Compression ratio >3x + scan perf bench |
+| P2 | ML | Integration APIs | External model serving | Python binding + inference latency bench |
 
-## 3. Variance Policy (Extract)
+## Recently Completed (v0.16.0)
 
-Hot≤0.18 p95/mean≤2.40; Storage/WAL≤0.21; General≤0.22; GraphAnalytics≤0.23 (p95/mean≤2.60). Exceptions require inline justification.
+### Core Integration
+- ✅ **Planner**: ORDER BY enforcement with LIMIT/OFFSET (ISO compliance)
+- ✅ **RLS/ABAC**: Planner rewrite integration with audit logging
+- ✅ **MV Refresh**: Complete and incremental via CDC
+- ✅ **Backup/Restore**: CRC-32 verification round-trip
+- ✅ **Phantom Prevention**: Range tracking enabled by default
+- ✅ **QUIC+TLS**: Mandatory with auto-generated certificates
+- ✅ **Raft Clustering**: Leader election, replication, failover
+- ✅ **Feature Flags**: Complete removal, unified build
 
-## 4. Governance Hooks
+### Testing & Tooling
+- ✅ **no_feature_flags_check.py**: Enforce no compile flags
+- ✅ **status_generate.py**: Auto-generate status.csv from CANARY
+- ✅ **canary_check.py**: Verify all aspects have tests
+- ✅ **cluster_spawn.sh**: Multi-node testing harness
 
-Run: `make governance-check` (freshness + strict verify). Stale (>24h) ⇒ fail.
-Nightly (non-blocking) summary: `make governance-aggregate` emits combined delta + freshness pre-warn + dry-run JSON for observability.
+## Variance Policy
 
-## 5. Appendix (Pointer Only)
+| Category | CV Target | p95/mean Target |
+|----------|-----------|-----------------|
+| Hot Path | ≤0.18 | ≤2.40 |
+| Storage/WAL | ≤0.21 | ≤2.50 |
+| General | ≤0.22 | ≤2.55 |
+| Graph Analytics | ≤0.23 | ≤2.60 |
 
-Historical slice details live in `docs/GAP_ANALYSIS.md` & `docs/IMPLEMENTATION_REALITY.md`.
+Exceptions require `// VARIANCE_EXCEPTION:` justification.
 
-## 6. Maintenance / Governance (De-Prioritized)
-
-The following slice has been moved out of the feature-priority backlog. Governance freshness is now considered baseline hygiene, not a competitive differentiator; feature delivery (planner, storage, distributed, acceleration) takes precedence for the current cycle.
-
-| Slice | REQ         | Title                          | Rationale (Why De-Prioritized)            | Current Evidence |
-| ----- | ----------- | ------------------------------ | ----------------------------------------- | ---------------- |
-| S-020 | REQ-GQL-010 | Governance Multi-Doc Freshness | Mechanism landed & enforced automatically | TEST (CANARY)    |
-
-// CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Backlog Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceMultiDocFreshness; OWNER=tooling; UPDATED=2025-09-24
-
-### Recent Slice Landing (Informational)
-
-// S-112 (REQ-GQL-086 Interactive REPL MultilineBuffering) — Multiline accumulation with semicolon and blank line flush implemented; aspect promoted to TESTED (2025-09-23).
-// S-113 (REQ-GQL-086 Interactive REPL HistoryPersistence) — File-backed history load/append implemented; aspect promoted to TESTED (2025-09-23).
-// S-114 (REQ-GQL-086 Interactive REPL MetaCommandsBasic) — Added :help, :history, :quit meta command handling; aspect promoted to TESTED (2025-09-23).
-// S-115 (REQ-GQL-086 Interactive REPL TxnPromptIndicator) — Added transaction-aware prompt (geode(txn)> ) with beginTxn/endTxn API; aspect promoted to TESTED (2025-09-23).
-// S-116 (REQ-GQL-086 Interactive REPL CtrlCCancelBuffer) — Added cancelBuffer clearing in-progress multiline without persisting; aspect promoted to TESTED (2025-09-23).
-// S-117 (REQ-GQL-079 RecursiveExecution ParserRecognition) — Minimal WITH RECURSIVE recognition sets has_recursive_cte on first Query; aspect promoted to TESTED (2025-09-23).
-// S-118 (REQ-GQL-079 RecursiveExecution FixpointDriver) — Added generic runFixpoint driver with convergence vs exhaustion detection; aspect promoted to TESTED (2025-09-23).
-// S-119 (REQ-GQL-079 RecursiveExecution CycleGuard) — Added hasCycleSimple O(n) hash-based detector; aspect promoted to TESTED (2025-09-23).
-// S-120 (REQ-GQL-068 Containers CursorContainer) — Added CursorContainer generic forward cursor with tests; aspect promoted to TESTED (2025-09-23).
-// S-121 (REQ-GQL-068 Containers SignaledQueue) — Added SignaledQueue thread-safe FIFO with blocking dequeue; aspect promoted to TESTED (2025-09-23).
-// S-122 (REQ-GQL-068 Containers SignaledQueueVarianceEnvelope) — Added variance envelope benchmark (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
-// S-123 (REQ-GQL-010 Governance StubImplAudit) — Added audit test scanning code for stray STATUS=STUB or undisclosed STATUS=IMPL; aspect promoted to TESTED (2025-09-23).
-// S-124 (REQ-GQL-010 Governance CanaryFreshnessAudit) — Enforce UPDATED≤60d for STATUS=TESTED|BENCHED CANARY lines; aspect promoted to TESTED (2025-09-23).
-// S-125 (REQ-GQL-068 Containers SignaledQueueMpmcVarianceEnvelope) — Added MPMC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
-// S-126 (REQ-GQL-068 Containers SignaledQueueMpscVarianceEnvelope) — Added MPSC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
-// S-127 (REQ-GQL-068 Containers SignaledQueueSpmcVarianceEnvelope) — Added SPMC variance envelope (CV≤0.22 p95/mean≤2.55); aspect promoted to BENCHED (2025-09-23).
-// S-110 (REQ-GQL-004 Pagination Execution Streaming) — Added ordered emission test (TESTED) and streaming latency variance envelope (BENCHED); slice marked DONE (2025-09-23).
-// S-128 (REQ-GQL-090 StreamingTelemetry PagingEvents) — Added env-guarded paging telemetry (stderr JSON) with CANARY e2e; aspect promoted to TESTED (2025-09-23).
-
-### Completed Slices (Removed from Active Backlog)
-
-- S-101 (REQ-GQL-078 Cluster Coordinator Core) — LeaderStub, ShardMapStub, RaftInterfaceValidation all TESTED (2025-09-23).
-- S-102 (REQ-GQL-080 RLS/ABAC Enforcement) — PolicyCatalog, EnforcementHook, PolicyCache all TESTED (2025-09-23).
-
-- Federation ordering mismatch flag now emitted as `U:FederationOrderMismatch` (single consumption) via lightweight `federation_flag` module decoupled from full federation engine to avoid module root collisions.
-- Null ordering variance envelope benchmark added: `BenchmarkCANARY_REQ_GQL_052_FederationNullMergeVarianceEnvelope` (high NULL density).
-- Pagination streaming scaffold (S-018) landed with CANARY test (no functional streaming yet) — next step will add incremental emission and latency variance envelope.
-- Federation mismatch false-positive guard benchmark promoted: `BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard` (STATUS=BENCHED; zero false positives over 5000 consistent iterations; single deliberate mismatch).
-- Federation mismatch latency variance envelope benchmark skeleton added: `BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope` (STATUS=IMPL; captures raw + trimmed (5%) stats; enforcement gated by `FED_LATENCY_ENFORCE=1`; targets CV<=0.22 p95/mean<=2.55 prior to promotion).
-- Federation mismatch latency variance envelope benchmark enhanced: added outlier metrics (min_ns, max_ns, outlier_count, outlier_ratio), trimmed p95, classification field (General), and optional stabilization loop (`FED_LATENCY_STABILIZE=1`) performing up to 5 passes until trimmed_cv<=0.22; promotion criteria documented (raw cv & trimmed cv ≤0.22, p95/mean ≤2.55, outlier_ratio ≤0.10) while remaining STATUS=IMPL with enforcement gated by `FED_LATENCY_ENFORCE=1`.
-- Federation mismatch latency multi-run aggregation tool `fed_latency_aggregate` added (STATUS=IMPL; aspect `LatencyAggregateMultiRun`) producing aggregate JSON (avg/max cv/trim_cv/p95_ratio/outlier_ratio, promotion_ready flag). Gated failure via `FED_LATENCY_AGG_REQUIRE=1` when promotion criteria unmet; supports run count override `FED_LATENCY_AGG_RUNS`.
-  - Enhancement: verbose mode (`FED_LATENCY_VERBOSE=1`) now emits `runs_detail` array (per-run cv, trim_cv, p95_mean_ratio, outlier_ratio, passes, fail_mask). Failing aggregates include `not_ready_reasons` (subset of: cv, trim_cv, p95_mean_ratio, outlier_ratio) and bit `fail_mask`. Stability rule for future BENCHED promotion: require ≥3 consecutive daily aggregates with `promotion_ready=true` and `max_cv` ≤ threshold (0.22) while raw benchmarks (single-run latency envelope) also individually meet criteria under stabilization (`FED_LATENCY_STABILIZE=1`). CI gating path (opt-in): set `FED_LATENCY_AGG_REQUIRE=1` after stability streak achieved; prior to streak, run in observe-only mode without gating.
-  - Enhancement (median + summary): aggregator now also emits `median_cv`, `median_p95_mean_ratio`, and a concise `summary_reason` field (`all_criteria_met` or first failing criterion) to simplify dashboard filtering and streak evaluation.
-  - Enhancement (extended medians + txt mode): added `median_trim_cv`, `median_outlier_ratio`, and optional human-readable text output via `FED_LATENCY_FORMAT=txt` (single-line summary). JSON path unchanged.
-  - New tool: `fed_latency_streak` (STATUS=IMPL) computes current/longest promotion_ready streak from aggregator JSONL history and eligibility (default ≥3) with txt/JSON dual output; includes CANARY marker `LatencyAggregateStreak`.
-
-### Upcoming REPL Aspect Micro-Slices (Post S-108)
-
-To honor the one-aspect-per-slice rule, remaining InteractiveRepl aspects will land as separate future slices:
-
-- S-113: HistoryPersistence -> TESTED
-
-Each slice acceptance: implement feature + single CANARY test (no bundling).
-
-## 7. Slices (Structure Compliance)
-
-### Slice S-129: Streaming Telemetry Docs Link (REQ-GQL-090)
-
-### Quick Run Instructions for QUIC and Telemetry Smokes
-
-To run the QUIC and telemetry smoke tests, use these convenience targets:
-
-Non-strict (convenience; failures are masked):
+## Governance
 
 ```bash
-make quic-smoke
+# Daily checks
+make governance-check           # Freshness + strict verify
+tools/status_generate.py --repo . --out docs/status.csv
+tools/no_feature_flags_check.py --repo .
+
+# Nightly aggregate
+make governance-aggregate       # Combined delta + pre-warn
+
+# After changes
+make update-status-hash
 ```
 
-Strict (CI-grade; fails on errors):
+## Migration Notes (v0.15.0 → v0.16.0)
 
-```bash
-make quic-smoke-strict
-```
+1. **Remove all feature flags from build scripts**
+2. **Update ports**: 7567 → 8443 (QUIC+TLS)
+3. **Add ORDER BY to queries with LIMIT/OFFSET**
+4. **Review RLS policies** (now enforced by default)
+5. **Ensure certs/ directory** (auto-generates if missing)
 
-What these targets do:
+## Next Sprint Focus
 
-- Set `GEODE_QUIC_PASSIVE_TEARDOWN=1` to reduce vendor QUIC teardown flakiness.
-- Gate the tests via `GEODE_CI_QUIC_SMOKE=1` and/or `GEODE_CI_TELEMETRY_SMOKE=1`.
-- For telemetry, also set `GEODE_TELEMETRY_PAGING=1` and `GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log` to ensure paging events are emitted and captured.
-- Non-strict mode sets `GEODE_CI_TELEMETRY_STRICT=0`; strict sets it to `1`.
+### Sprint 17 (Oct 2025)
+- GPU kernel execution prototype
+- Federation query router completion
+- PageRank implementation
+- Query plan cache v1
 
-You can also run the telemetry smoke directly:
+### Sprint 18 (Oct 2025)
+- Columnar storage format
+- ML integration APIs
+- Betweenness centrality
+- Performance regression suite
 
-```bash
-GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 \
-GEODE_TELEMETRY_PAGING=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 \
-zig test test_telemetry_smoke.zig
-```
+## Appendix
 
-WHY: Improve discoverability of the new paging telemetry by linking docs in README and protocol docs.
+For detailed implementation status, see:
+- [GAP_ANALYSIS.md](GAP_ANALYSIS.md) - Feature gap tracking
+- [IMPLEMENTATION_REALITY.md](IMPLEMENTATION_REALITY.md) - Evidence-based status
+- [status.csv](status.csv) - Auto-generated CANARY report (DO NOT EDIT)
 
-WHAT: Add `docs/TELEMETRY.md`, link from `README.md`, `docs/BINARY_PROTOCOL.md`, and `docs/USAGE.md`.
-
-ACCEPTANCE: Governance `make governance-check` passes; telemetry envs documented; example JSON present; links verified by grep.
-
-### Slice S-130: Governance Script Hardening (REQ-GQL-010)
-
-WHY: Fix governance utility regressions on Zig 0.15.1 (format placeholders, signed division) and correct badge staleness date math for reliable CI.
-
-WHAT:
-
-- `scripts/badge_staleness_guard.zig`: escape JSON braces in `std.fmt` strings; replace signed `/` with `@divTrunc`; unify epoch-day math via `daysFromCivil` for status vs badge comparison.
-- `scripts/governance_trend_append.zig`: fix `readToEndAlloc` error handling; escape JSON braces in format string.
-
-ACCEPTANCE:
-
-- `make governance-check` succeeds end-to-end including `badge_staleness` and `trend_append` steps.
-- Badge staleness guard emits success JSON with `diff_days` ≤ configured max (default 2) when run after badge generation.
-- Trend append prints `trend_append: appended` or `already present` (idempotent) and appends a well-formed JSON line.
-
-### Optional Improvements (Formatting + Diagnostics Mapping)
-
-- Formatting remediation: replaced non-Zig ternary idioms and complex generic writer patterns in `scripts/regen_conformance.zig` and `src/tools/canary_freshness.zig` to ensure `zig fmt` stability.
-- Wire-level additional status propagation for MATCH safety guard trips (`ExecutionGuardTrip`) without elevating to error-class; partial results remain success frames.
-- New protocol E2E test `e2e_protocol_match_guard_status.zig` verifying `additional_statuses` includes `ExecutionGuardTrip`.
-- Conformance profile updated with "Wire Mapping: ExecutionGuardTrip Additional Status" section and CANARY markers.
-- Guard trip remains precedence-ranked after existing error diagnostics; success frames use advisory additional status instead of error path.
-- Documentation consolidated around partial result truncation semantics (determinism preserved; clients may retry with relaxed guard thresholds).
+// CANARY: REQ=REQ-GQL-100; FEATURE="v0.16.0 Integration"; ASPECT=Complete; STATUS=TESTED; TEST=all_acceptance_tests; OWNER=team; UPDATED=2025-09-25

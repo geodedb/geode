@@ -2,7 +2,7 @@
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Implementation Reality Accuracy"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-22
 
-Generated from CANARY evidence analysis - 2025-09-25 (v0.16.0 full integration release)
+Generated from CANARY evidence analysis - 2025-09-25 (v0.16.0 Full Integration Release)
 
 // NOTE: Future slice planning content moved to `NEXT.md` to avoid redundancy. This file remains a snapshot of current implemented reality only.
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
@@ -13,7 +13,7 @@ Generated from CANARY evidence analysis - 2025-09-25 (v0.16.0 full integration r
 
 ## Executive Summary
 
-Latest CANARY scan (regenerated 2025‑09‑25T14:30Z) reflects v0.16.0 full integration without compile-time feature flags.
+Latest CANARY scan (regenerated 2025-09-25) reflects v0.16.0 full integration without compile-time feature flags.
 
 **Major v0.16.0 Changes:**
 - All compile-time feature flags removed
@@ -24,12 +24,12 @@ Latest CANARY scan (regenerated 2025‑09‑25T14:30Z) reflects v0.16.0 full int
 - Generated status.csv from CANARY annotations
 
 **Evidence Summary:**
-- **607 aspects** (tracked feature/aspect evidence rows)
-- **365 TESTED** – functional & protocol tests (includes full Raft, RLS enforcement, MV refresh)
-- **229 BENCHED** – performance / variance / jitter envelopes
-- **13 IMPLEMENTED** – integration complete, tests pending
-- **0 STUB** – all features now integrated (v0.16.0 milestone)
-- **80+ active variance envelopes** enforcing CV & p95/mean SLAs
+- **451 aspects** (tracked feature/aspect evidence rows)
+- **329 TESTED** – functional & protocol tests (includes full Raft, RLS enforcement, MV refresh)
+- **60 BENCHED** – performance / variance / jitter envelopes
+- **60 IMPLEMENTED** – integration complete, tests pending
+- **2 STUB** – migration engine CLI commands pending
+- **10+ new acceptance tests** with exact expected outputs
 
 Counts derived directly from freshly regenerated `status.csv` (authoritative) to avoid drift; `status.json` timestamp retained as provenance.
 
