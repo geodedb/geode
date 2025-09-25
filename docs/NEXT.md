@@ -149,3 +149,12 @@ ACCEPTANCE:
 - `make governance-check` succeeds end-to-end including `badge_staleness` and `trend_append` steps.
 - Badge staleness guard emits success JSON with `diff_days` ≤ configured max (default 2) when run after badge generation.
 - Trend append prints `trend_append: appended` or `already present` (idempotent) and appends a well-formed JSON line.
+
+### Optional Improvements (Formatting + Diagnostics Mapping)
+
+- Formatting remediation: replaced non-Zig ternary idioms and complex generic writer patterns in `scripts/regen_conformance.zig` and `src/tools/canary_freshness.zig` to ensure `zig fmt` stability.
+- Wire-level additional status propagation for MATCH safety guard trips (`ExecutionGuardTrip`) without elevating to error-class; partial results remain success frames.
+- New protocol E2E test `e2e_protocol_match_guard_status.zig` verifying `additional_statuses` includes `ExecutionGuardTrip`.
+- Conformance profile updated with "Wire Mapping: ExecutionGuardTrip Additional Status" section and CANARY markers.
+- Guard trip remains precedence-ranked after existing error diagnostics; success frames use advisory additional status instead of error path.
+- Documentation consolidated around partial result truncation semantics (determinism preserved; clients may retry with relaxed guard thresholds).

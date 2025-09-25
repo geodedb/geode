@@ -750,7 +750,7 @@ pub fn executeMatch(
                             }
                             try bfs_results.append(allocator, nb);
                             produced_results += 1;
-                            if (produced_results > opts.max_results) {
+                            if (produced_results >= opts.max_results) {
                                 // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=ResultLimit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
                                 if (eval_diag) |ed| ed.* = .ExecutionGuardTrip;
                                 break; // stop collecting
@@ -787,7 +787,7 @@ pub fn executeMatch(
                     } else {
                         chain_bindings = expanded;
                         produced_results += expanded.len;
-                        if (produced_results > opts.max_results) {
+                        if (produced_results >= opts.max_results) {
                             // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=ResultLimitSimpleExpand; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
                             if (eval_diag) |ed| ed.* = .ExecutionGuardTrip;
                             if (chain_bindings.len > opts.max_results) chain_bindings = chain_bindings[0..opts.max_results];

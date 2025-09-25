@@ -71,3 +71,19 @@ Rationale: Provides predictable resource ceilings and governance evidence (CANAR
 
 - Default collation: binary; Unicode collation optional.
 - Null ordering policy: default nulls-last; nulls-first via env override.
+
+## Wire Mapping: ExecutionGuardTrip Additional Status
+
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-24
+When a safety guard trips during MATCH evaluation (result/frontier/hops), the server emits primary success frames with `status_class` `00000` and includes `"ExecutionGuardTrip"` inside the `additional_statuses` array of the `SCHEMA` frame and (for redundancy) the first `BINDINGS` frame. This indicates a partial result truncation event without elevating to an error-class status. Clients SHOULD surface a warning and MAY retry with adjusted guard thresholds. No change to exit codes (remain 0). This mirrors policy rationale in Safety Guards section and provides transport-level observability without failing successful partial computation.
+
+### Environment Overrides (Test / Diagnostics)
+
+Guard threshold overrides (test/support use only):
+
+- CLI (preferred for determinism):
+  - `geoded --match-max-results <N>` lowers the `max_results` guard at process start.
+  - `geoded --match-max-frontier <N>` lowers the `max_frontier` guard at process start.
+- Environment (legacy/fallback): `GEODE_MATCH_MAX_RESULTS` and `GEODE_MATCH_MAX_FRONTIER` may still be set; if both CLI and env are provided, the CLI flags win.
+
+Production deployments SHOULD leave these unset (defaults: 100_000). Frames emitted under overridden thresholds still carry the additional status for transparency.

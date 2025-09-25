@@ -37,6 +37,8 @@ const ServerState = struct {
     page_items: [][]const u8 = &.{}, // each: JSON row fragment {..}
     page_index: usize = 0,
     active_result: bool = false,
+    // Advisory diagnostic flags for current active result set (cleared after first page emission)
+    guard_trip: bool = false, // set when ExecutionGuardTrip occurred during evaluation
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
@@ -1167,6 +1169,11 @@ fn trackerGet(ctx: *anyopaque) usize {
 
 const graph_exec = @import("graph/exec.zig");
 
+// Global test override for MATCH guard max results (set via --match-max-results)
+var g_match_max_results_override: ?usize = null;
+// Global test override for MATCH guard max frontier (set via --match-max-frontier)
+var g_match_max_frontier_override: ?usize = null;
+
 // Centralized CDC_CONTROL handler to eliminate duplicated logic between processMessage
 // (network path) and stdio loop. Returns a newly allocated response line or null slice on OOM.
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=server; UPDATED=2025-09-20
@@ -1191,7 +1198,21 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         const graph = getOrCreateGraphStorage(ally);
 
         // Execute MATCH pattern
-        var bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause, null, eval_diag);
+        // Read environment overrides for MATCH guard limits (deterministic test triggering of ExecutionGuardTrip)
+        var m_opts = graph_exec.MatchOptions{};
+        if (g_match_max_results_override) |ovr| m_opts.max_results = ovr;
+        if (g_match_max_frontier_override) |ovf| m_opts.max_frontier = ovf;
+        if (std.process.getEnvVarOwned(ally, "GEODE_MATCH_MAX_RESULTS")) |mv| {
+            defer ally.free(mv);
+            const parsed = std.fmt.parseInt(usize, mv, 10) catch null;
+            if (parsed) |p| m_opts.max_results = p;
+        } else |_| {}
+        if (std.process.getEnvVarOwned(ally, "GEODE_MATCH_MAX_FRONTIER")) |fv| {
+            defer ally.free(fv);
+            const parsedf = std.fmt.parseInt(usize, fv, 10) catch null;
+            if (parsedf) |pf| m_opts.max_frontier = pf;
+        } else |_| {}
+        var bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause, m_opts, eval_diag);
 
         // Apply WITH clause if present
         if (q.with_clause) |with| {
@@ -1478,7 +1499,9 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         order_keys.* = order_keys_local;
 
         // Render the final selected slice
-        return graph_exec.bindingsToJson(ally, bindings[start..end], q.ret.items, graph);
+        const rows_slice = try graph_exec.bindingsToJson(ally, bindings[start..end], q.ret.items, graph);
+        // If a guard trip diagnostic occurred, mark eval_diag (already set upstream) and return rows.
+        return rows_slice;
     }
 
     // Original implementation for non-MATCH queries
@@ -2248,8 +2271,14 @@ fn processMessage(
                             state.page_items = @constCast(rows);
                             state.page_index = 0;
                             state.active_result = true;
+                            state.guard_trip = (run_code == .ExecutionGuardTrip);
                             const flags = computeBaseFlags(ord, q.ret.distinct);
-                            const schema_line = protocol.buildSchemaLine(gpa, state.last_columns, &.{}, flags) catch return try gpa.dupe(u8, "");
+                            var addl_buf: [1][]const u8 = undefined;
+                            const addl_schema: []const []const u8 = if (state.guard_trip) blk: {
+                                addl_buf[0] = "ExecutionGuardTrip";
+                                break :blk addl_buf[0..1];
+                            } else &.{};
+                            const schema_line = protocol.buildSchemaLine(gpa, state.last_columns, addl_schema, flags) catch return try gpa.dupe(u8, "");
                             if (!explain_mode and !profile_mode) return schema_line;
                             // Build explain chain when requested (emit EXPLAIN frame immediately, THEN return bindings via PULL normally)
                             if (explain_mode) {
@@ -2394,8 +2423,14 @@ fn processMessage(
             const is_final = end >= state.page_items.len;
             if (is_final) state.active_result = false;
             const flags = computeBaseFlags(state.last_ordered, state.last_distinct);
-            // Build standard bindings line then strip the optional final field for compatibility
-            const line = protocol.buildBindingsLine(gpa, state.last_ordered, state.last_order_keys, json_rows, is_final, &.{}, flags) catch return try gpa.dupe(u8, "");
+            // Build bindings; include ExecutionGuardTrip advisory on first page if set
+            var addl_rows_buf: [1][]const u8 = undefined;
+            const addl_rows: []const []const u8 = if (start == 0 and state.guard_trip) blk: {
+                addl_rows_buf[0] = "ExecutionGuardTrip";
+                break :blk addl_rows_buf[0..1];
+            } else &.{};
+            const line = protocol.buildBindingsLine(gpa, state.last_ordered, state.last_order_keys, json_rows, is_final, addl_rows, flags) catch return try gpa.dupe(u8, "");
+            if (start == 0 and state.guard_trip) state.guard_trip = false; // clear after first emission
             // Strip ,"final":true/false substring for compatibility
             var s = line;
             if (std.mem.indexOf(u8, s, ",\"final\":true")) |pos| {
@@ -2446,6 +2481,7 @@ pub fn main() !void {
     var data_dir: ?[]const u8 = null;
     var test_exit_after_first: bool = false;
     var catalog_create_name: ?[]const u8 = null;
+    var match_max_results_override: ?usize = null; // test deterministic guard trigger
 
     // Check for help flag
     for (args[1..]) |arg| {
@@ -2462,6 +2498,8 @@ pub fn main() !void {
             std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
             std.debug.print("  --profile-memcurve           Enable memory curve profiling\n", .{});
             std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
+            std.debug.print("  --match-max-results <N>      Override MATCH guard max_results (test/deterministic)\n", .{});
+            std.debug.print("  --match-max-frontier <N>     Override MATCH guard max_frontier (test/deterministic)\n", .{});
             std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
             std.debug.print("  --help                       Show this help message\n", .{});
             std.debug.print("\nIf no listen option is specified, defaults to stdio mode.\n", .{});
@@ -2509,6 +2547,14 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, args[ai], "--catalog-create") and ai + 1 < args.len) {
             catalog_create_name = args[ai + 1];
             ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--match-max-results") and ai + 1 < args.len) {
+            const mv = std.fmt.parseInt(usize, args[ai + 1], 10) catch 0;
+            if (mv > 0) match_max_results_override = mv;
+            ai += 1;
+        } else if (std.mem.eql(u8, args[ai], "--match-max-frontier") and ai + 1 < args.len) {
+            const fv = std.fmt.parseInt(usize, args[ai + 1], 10) catch 0;
+            if (fv > 0) g_match_max_frontier_override = fv;
+            ai += 1;
         }
     }
 
@@ -2516,6 +2562,8 @@ pub fn main() !void {
         logger.setLevel(logger.parseLevel(lla));
     }
     logger.info("server.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
+
+    if (match_max_results_override) |mmr| g_match_max_results_override = mmr;
 
     // Ensure TLS certificates exist (only if using QUIC and no custom certs specified)
     if (listen_quic != null) {
@@ -4121,6 +4169,7 @@ pub fn main() !void {
                                 state.last_distinct = q.ret.distinct;
                                 state.page_items = @constCast(rows);
                                 state.active_result = true;
+                                state.guard_trip = (run_code == .ExecutionGuardTrip);
                                 if (result_format_txt) {
                                     // Plain text mode: emit header once then all rows (single page). Disable further pulls.
                                     var hi: usize = 0;
@@ -4156,7 +4205,13 @@ pub fn main() !void {
                                     }
                                     state.active_result = false; // fully emitted
                                 } else {
-                                    if (protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(state.last_ordered, q.ret.distinct))) |line| {
+                                    var addl_schema2: [][]const u8 = &.{};
+                                    var addl_schema_buf: [1][]const u8 = undefined;
+                                    if (state.guard_trip) {
+                                        addl_schema_buf[0] = "ExecutionGuardTrip";
+                                        addl_schema2 = addl_schema_buf[0..1];
+                                    }
+                                    if (protocol.buildSchemaLine(gpa, state.last_columns, addl_schema2, computeBaseFlags(state.last_ordered, q.ret.distinct))) |line| {
                                         defer gpa.free(line);
                                         _ = stdout_file.write(line) catch {};
                                     } else |_| {}

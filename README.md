@@ -80,6 +80,7 @@ See `docs/GOVERNANCE.md` for details and failure triage. The complete variance e
 - ⚠️ **Aggregations**: Limited (COUNT / simple SUM) — advanced agg & spill policies still evolving
 - ✅ **Transactions**: MVCC snapshot isolation; phantom prevention guard (range tracker); conflict detection basic
 - ⚠️ **Path Operations**: Basic expansion; advanced weighted/path algorithms not fully implemented (claims in older docs reduced)
+- 🛡️ **Safety Guards**: MATCH execution bounded by implementation-defined thresholds (`max_results`, `max_frontier`, `max_hops_limit`). When a bound trips the engine emits an advisory additional status `ExecutionGuardTrip` (success frame, not an error) on SCHEMA (and first BINDINGS) indicating partial truncation. Deterministic test overrides: `--match-max-results <N>`, `--match-max-frontier <N>` (preferred) or legacy env `GEODE_MATCH_MAX_RESULTS`, `GEODE_MATCH_MAX_FRONTIER`.
 
 ### Distributed & Consensus (Scaffold Only)
 
