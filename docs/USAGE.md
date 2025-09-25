@@ -1,14 +1,16 @@
-# Geode Usage Guide - v0.16.0
+# Geode Usage Guide - v0.17.0
 
 ## Transport: QUIC/TLS 1.3 (Mandatory)
 
-As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. TCP has been completely removed. For local/process mode, stdio remains supported.
+As of v0.17.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. TCP code has been completely eliminated from the codebase.
 
-**Key v0.16.0 Changes:**
-- TCP removed entirely - no fallback
-- Default port changed: 7567 → 8443
-- Auto-generates self-signed certificates if missing
-- All compile-time feature flags removed
+**Key v0.17.0 Changes:**
+- Complete MATCH/DML implementation with RLS enforcement
+- Cost-Based Optimizer v1 (enable with GEODE_ENABLE_CBO=1)
+- CDC external sinks (Kafka/Webhook) with at-least-once delivery
+- Raft persistence with snapshots and dynamic membership
+- Graph algorithms: shortestPath() and pageRank() functions
+- Port 8443 is mandatory for QUIC+TLS
 
 ### Server
 
@@ -20,8 +22,8 @@ As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. T
 # Custom certificates (optional)
 ./zig-out/bin/geoded --cert path/to/cert.pem --key path/to/key.pem
 
-# Multi-node cluster (v0.16.0 - full Raft implementation)
-./zig-out/bin/geoded --node-id 1 --port 8443 --peers 2:8444,3:8445
+# Multi-node cluster (v0.17.0 - persistent Raft with dynamic membership)
+./zig-out/bin/geoded --node-id 1 --port 8443 --peers 2:8444,3:8445 --data_dir ./node1
 
 # Or use the test script for 3-node cluster
 sh scripts/cluster_spawn.sh
@@ -30,8 +32,19 @@ sh scripts/cluster_spawn.sh
 ### Client
 
 ```bash
-# Connect using QUIC (v0.16.0 default)
+# Connect using QUIC (v0.17.0 - only option)
 ./zig-out/bin/geodec "RETURN 1 AS x" --server 127.0.0.1:8443
+
+# Complex MATCH with nested OPTIONAL
+./zig-out/bin/geodec "MATCH (p:Person)-[:KNOWS*1..3]->(f) OPTIONAL MATCH (p)-[:WORKS_AT]->(c) RETURN p, f, c"
+
+# DML operations
+./zig-out/bin/geodec "INSERT (:Person {name: 'Alice', age: 30})"
+./zig-out/bin/geodec "UPDATE (p:Person {name: 'Alice'}) SET p.age = 31"
+
+# Graph algorithms
+./zig-out/bin/geodec "MATCH (a), (b) WHERE a.id = 1 AND b.id = 10 RETURN shortestPath((a)-[*]-(b))"
+./zig-out/bin/geodec "MATCH (n) RETURN n.name, pageRank(n) AS rank ORDER BY rank DESC"
 
 # Process mode (stdio)
 ./zig-out/bin/geodec "RETURN 1 AS x" --process ./zig-out/bin/geoded

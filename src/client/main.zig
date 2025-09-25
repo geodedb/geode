@@ -48,7 +48,7 @@ pub fn main() !void {
     }
     const text: []const u8 = argv[1];
     var server_address: []const u8 = "127.0.0.1";
-    var server_port: u16 = 8443; // v0.16.0: Default QUIC port
+    var server_port: u16 = 8443; // v0.17.0: Default QUIC+TLS port
     var param_name: ?[]const u8 = null;
     var param_json: ?[]const u8 = null;
     var do_begin = false;
@@ -59,7 +59,7 @@ pub fn main() !void {
     var i: usize = 2;
     var extra_pulls: usize = 0;
     var fmt_txt = false;
-    var use_quic = true; // v0.16.0: QUIC is default and only network transport
+    var use_quic = true; // v0.17.0: QUIC is the only network transport, TCP removed
     var log_level_arg: ?[]const u8 = null;
     var use_stdio = false;
 

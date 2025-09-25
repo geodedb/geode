@@ -1,23 +1,25 @@
-# Geode Documentation - v0.16.0
+# Geode Documentation - v0.17.0
 
 ## Start Here
 
-### What's New in v0.16.0
+### What's New in v0.17.0
 
-**Major Integration Release** - All subsystems fully integrated without compile-time feature flags:
+**Feature Completeness Release** - Critical gaps closed with production-ready implementations:
 
-- **QUIC+TLS Only**: No TCP fallback, TLS mandatory with auto-generated certificates
-- **No Feature Flags**: All previously experimental features are now core
-- **Full Raft Clustering**: Multi-process with data replication and automatic failover
-- **RLS/ABAC Enforced**: Row-level security via planner rewrite and execution filters
-- **Materialized Views**: Complete and incremental refresh with single-flight locking
-- **Status Tracking**: Generated `status.csv` from CANARY annotations (never hand-edit)
+- **Complete MATCH Engine**: Complex patterns, nested OPTIONAL, filtered variable-length paths
+- **DML Operations**: INSERT/UPDATE/DELETE for nodes/edges with RLS enforcement
+- **Cost-Based Optimizer v1**: Statistics, cardinality estimation, join reordering (GEODE_ENABLE_CBO=1)
+- **CDC External Sinks**: Kafka and Webhook with at-least-once delivery, retry, DLQ
+- **Raft Persistence**: Durable log, snapshots, compaction, dynamic membership
+- **Graph Algorithms**: shortestPath() and pageRank() as GQL functions
+- **WHERE Advanced**: Subqueries, IN/EXISTS/ANY/ALL predicates
+- **QUIC-only**: TCP completely removed, port 8443 mandatory
 
 ### Reality Check (Required)
 
-- [IMPLEMENTATION_REALITY.md](IMPLEMENTATION_REALITY.md) — Evidence-driven snapshot of what's actually implemented (updated 2025-09-25)
-- [GAP_ANALYSIS.md](GAP_ANALYSIS.md) — Machine-verified evidence ledger and conformance summary (hash-guarded)
-- [REQUIREMENTS.md](REQUIREMENTS.md) — v0.16.0 scope, acceptance, and policies (ISO/IEC 39075 GQL–first)
+- [IMPLEMENTATION_REALITY.md](IMPLEMENTATION_REALITY.md) — Evidence-driven snapshot of what's actually implemented (v0.17.0 update)
+- [GAP_ANALYSIS.md](GAP_ANALYSIS.md) — Machine-verified evidence ledger with 827 CANARY aspects
+- [REQUIREMENTS.md](REQUIREMENTS.md) — v0.17.0 feature completeness scope (ISO/IEC 39075 GQL–first)
 
 ### Technical Documentation
 

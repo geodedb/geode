@@ -1,48 +1,50 @@
-# NEXT — v0.16.0 Full Integration Release - Regenerated 2025-09-25
+# NEXT — v0.17.0 Feature Completeness Release - Updated 2025-09-25
 
-Purpose: Track immediate forward work after v0.16.0 integration. Historical content in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
+Purpose: Track immediate forward work after v0.17.0 feature completeness. Historical content in `GAP_ANALYSIS.md` & `IMPLEMENTATION_REALITY.md`.
 
-## v0.16.0 Integration Complete
+## v0.17.0 Feature Completeness Achieved
 
-Major milestone achieved with full system integration:
-- **456 CANARY aspects tracked** (334 TESTED, 60 BENCHED, 60 IMPL, 2 STUB)
-- **All compile-time feature flags removed** - unified build
-- **QUIC+TLS mandatory** - TCP removed, port 8443 default, auto-generates certificates
-- **All subsystems integrated** - RLS/ABAC with audit, MV, full Raft clustering, CDC, backup/restore
+Critical feature gaps closed with production-ready implementations:
+- **827 CANARY aspects tracked** (generated via tools/status_generate.py)
+- **Complete MATCH/DML** - Complex patterns, nested OPTIONAL, filtered variable-length paths
+- **Cost-Based Optimizer v1** - Statistics registry, cardinality estimation, join reordering (gated)
+- **CDC External Sinks** - Kafka and Webhook with at-least-once delivery, retry, DLQ
+- **Raft Persistence** - Durable log, snapshots, compaction, dynamic membership
+- **QUIC+TLS only** - Port 8443 mandatory, no TCP fallback whatsoever
 
-## Active Work (Post-v0.16.0)
+## Active Work (Post-v0.17.0)
 
 | Priority | Area | Task | Rationale | Acceptance |
 |----------|------|------|-----------|------------|
-| P0 | GPU | Kernel execution | Move beyond detection | Single operator kernel launch + variance bench |
-| P0 | Federation | Query routing | Complete federation scaffold | Router tests + shard map validation |
-| P1 | Analytics | PageRank/Betweenness | Advanced graph analytics | Deterministic results + variance envelope |
-| P1 | Performance | Query plan cache | Reduce planning overhead | Hit rate >90% + eviction policy test |
-| P2 | Storage | Columnar format | Analytical workloads | Compression ratio >3x + scan perf bench |
-| P2 | ML | Integration APIs | External model serving | Python binding + inference latency bench |
+| P0 | Performance | CBO Tuning | Optimize cost model calibration | Prediction accuracy >85% |
+| P0 | Federation | Cross-shard joins | Complete distributed query execution | 2PC over Raft for consistency |
+| P1 | Storage | Columnar format | Analytical workloads | Compression ratio >3x + scan perf bench |
+| P1 | ML | Embedding support | Vector similarity search | HNSW index + recall >95% |
+| P2 | Observability | OpenTelemetry | Distributed tracing | Trace propagation + sampling |
+| P2 | Cloud | S3 backup | Cloud-native deployment | Multipart upload + IAM integration |
 
-## Recently Completed (v0.16.0)
+## Recently Completed (v0.17.0)
 
-### Core Integration
-- ✅ **Planner**: ORDER BY enforcement with LIMIT/OFFSET (ISO compliance)
-- ✅ **Recursive CTEs**: Default-enabled with cycle detection and depth limits
-- ✅ **Bounded Path Expansions**: Default-enabled with deterministic ordering
-- ✅ **RLS/ABAC**: Full enforcement via planner rewrite + tuple filter with audit logging
-- ✅ **MV Refresh**: Complete (atomic swap) and incremental (CDC apply) fully implemented
-- ✅ **Backup/Restore**: Full + incremental with zstd compression, CRC-32 verification
-- ✅ **Phantom Prevention**: Range tracking enabled by default (SERIALIZABLE)
-- ✅ **QUIC+TLS**: Mandatory with auto-generated self-signed certificates
-- ✅ **Raft Clustering**: Full implementation - leader election, log replication, InstallSnapshot, failover
-- ✅ **Inter-node Messaging**: QUIC streams with retry logic and health checks
-- ✅ **Feature Flags**: Complete removal, unified build, enforced by CI
+### Feature Completeness
+- ✅ **MATCH Engine**: Complex patterns, nested OPTIONAL, filtered variable-length paths with cycle detection
+- ✅ **WHERE Clauses**: Subqueries, IN/EXISTS/ANY/ALL predicates, correlated expressions
+- ✅ **DML Operations**: INSERT/UPDATE/DELETE for nodes/edges with property management and RLS enforcement
+- ✅ **Cost-Based Optimizer**: Statistics registry, histograms, cardinality estimation, left-deep join enumeration
+- ✅ **CDC Sinks**: Kafka and Webhook with at-least-once delivery, exponential backoff, DLQ
+- ✅ **Incremental MV**: CDC-driven delta application in addition to complete refresh
+- ✅ **Raft Persistence**: Durable log with CRC, snapshots with compression, log compaction
+- ✅ **Dynamic Membership**: Joint consensus for add/remove nodes without downtime
+- ✅ **Graph Algorithms**: shortestPath() and pageRank() integrated as GQL functions
+- ✅ **2PC over Raft**: Cross-shard transactions with replicated coordinator log
+- ✅ **QUIC-only Transport**: TCP completely removed, port 8443 mandatory
 
 ### Testing & Tooling
-- ✅ **no_feature_flags_check.py**: Enforce no compile flags (fails CI on violation)
-- ✅ **status_generate.py**: Auto-generate status.csv from CANARY annotations
-- ✅ **cluster_spawn.sh**: 3-node cluster testing with leader election and failover
-- ✅ **Audit Logger**: JSON Lines output with PII redaction support
-- ✅ **Network Transport**: Inter-node QUIC messaging with length-prefix framing
-- ✅ **12 New Acceptance Tests**: Exact expected outputs for all v0.16.0 features
+- ✅ **no_feature_flags_check.py**: Enforce no compile flags (excludes docs, fails CI on violation)
+- ✅ **status_generate.py**: Parse CANARY markers to generate docs/status.csv (827 aspects)
+- ✅ **cluster_spawn.sh**: Multi-process Raft cluster with election, replication, failover testing
+- ✅ **14 New E2E Tests**: ORDER BY enforcement, MATCH complex, WHERE subqueries, DML+RLS, CBO toggle, CDC sinks, MV incremental, backup/restore, Raft persistence
+- ✅ **Makefile Enhanced**: New targets for status-generate, no-feature-flags, cluster-test
+- ✅ **CI Integration**: Automated status generation and feature flag checking in pipeline
 
 ## Variance Policy
 

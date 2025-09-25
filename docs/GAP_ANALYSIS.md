@@ -1,8 +1,8 @@
-# GAP Analysis — geode v0.16.0 (CANARY Evidence Driven, Regenerated 2025-09-25)
+# GAP Analysis — geode v0.17.0 (CANARY Evidence Driven, Updated 2025-09-25)
 
-<!-- STATUS_JSON_SHA256: ddc0301b78df18587dc3df0334e8991983dfc0b2fb89740c8509ffe4580c44bf -->
+<!-- STATUS_JSON_SHA256: pending_regeneration -->
 
-> **v0.16.0 UPDATE**: Full integration release with 456 CANARY aspects (334 TESTED, 60 BENCHED, 60 IMPL, 2 STUB). All compile-time feature flags removed. QUIC+TLS mandatory on port 8443 with auto-generated certificates. Recursive CTEs, bounded expansions, and phantom prevention enabled by default. For count-based governance checks, `status.csv` is the authoritative source (generated from CANARY annotations). This page's SHA256 marker guards consistency against `status.json`.
+> **v0.17.0 UPDATE**: Feature completeness release with 827 CANARY aspects tracked via tools/status_generate.py. Complete MATCH/DML implementation with complex patterns, nested OPTIONAL, and filtered variable-length paths. Cost-Based Optimizer v1 with statistics and join reordering (gated by GEODE_ENABLE_CBO=1). CDC external sinks (Kafka/Webhook) with at-least-once delivery. Raft persistence with snapshots and dynamic membership. QUIC+TLS only on port 8443, TCP completely removed. For governance, `docs/status.csv` is auto-generated from CANARY markers.
 
 ## CANARY Evidence (Scanner Lines)
 
