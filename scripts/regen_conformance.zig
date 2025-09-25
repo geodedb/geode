@@ -1,6 +1,29 @@
 const std = @import("std");
 const scan = @import("scan_requirements.zig");
 
+const Builder = struct {
+    alloc: std.mem.Allocator,
+    buf: []u8,
+    len: usize,
+};
+
+fn builderInit(a: std.mem.Allocator) !Builder {
+    return .{ .alloc = a, .buf = try a.alloc(u8, 0), .len = 0 };
+}
+
+fn builderAppend(b: *Builder, data: []const u8) !void {
+    const new_len = b.len + data.len;
+    b.buf = try b.alloc.realloc(b.buf, new_len);
+    std.mem.copyForwards(u8, b.buf[b.len..new_len], data);
+    b.len = new_len;
+}
+
+fn builderPrint(b: *Builder, comptime fmt: []const u8, args: anytype) !void {
+    const tmp = try std.fmt.allocPrint(b.alloc, fmt, args);
+    defer b.alloc.free(tmp);
+    try builderAppend(b, tmp);
+}
+
 fn writeTable(alloc: std.mem.Allocator, w: anytype, res: scan.ReqScanResult) !void {
     try w.print("| Requirement ID | Status | Duplicate Count |\n", .{});
     try w.print("| -------------- | ------ | ---------------- |\n", .{});
@@ -27,22 +50,21 @@ fn replaceSegment(content: []const u8, marker_begin: []const u8, marker_end: []c
     if (end <= start) return error.MarkerOrder;
     var buf = try alloc.alloc(u8, 0);
     var len: usize = 0;
-    // helper to append slice
-    inline for (.{}) |_| {}
-    const append = struct {
-        fn do(alloc: std.mem.Allocator, current: *[]u8, len_ptr: *usize, data: []const u8) !void {
+    // helper to append slice (no-op placeholder removed)
+    const local_append = struct {
+        fn run(a: std.mem.Allocator, current: *[]u8, len_ptr: *usize, data: []const u8) !void {
             const old = len_ptr.*;
             const new_len = old + data.len;
-            current.* = try alloc.realloc(current.* , new_len);
+            current.* = try a.realloc(current.*, new_len);
             std.mem.copyForwards(u8, current.*[old..new_len], data);
             len_ptr.* = new_len;
         }
     };
-    try append.do(alloc, &buf, &len, content[0 .. start + marker_begin.len]);
-    try append.do(alloc, &buf, &len, "\n");
-    try append.do(alloc, &buf, &len, replacement);
-    if (content[start + marker_begin.len - 1] != '\n') try append.do(alloc, &buf, &len, "\n");
-    try append.do(alloc, &buf, &len, content[end..]);
+    try local_append.run(alloc, &buf, &len, content[0 .. start + marker_begin.len]);
+    try local_append.run(alloc, &buf, &len, "\n");
+    try local_append.run(alloc, &buf, &len, replacement);
+    if (content[start + marker_begin.len - 1] != '\n') try local_append.run(alloc, &buf, &len, "\n");
+    try local_append.run(alloc, &buf, &len, content[end..]);
     return buf;
 }
 
@@ -56,39 +78,17 @@ pub fn main() !void {
     const res = try scanner.finalize(alloc);
     defer res.gaps.deinit();
     // Build replacement markdown
-    var gen_buf = try alloc.alloc(u8, 0);
-    var gen_len: usize = 0;
-    const append = struct {
-        fn do(alloc: std.mem.Allocator, current: *[]u8, len_ptr: *usize, data: []const u8) !void {
-            const old = len_ptr.*;
-            const new_len = old + data.len;
-            current.* = try alloc.realloc(current.* , new_len);
-            std.mem.copyForwards(u8, current.*[old..new_len], data);
-            len_ptr.* = new_len;
-        }
-    };
-    const W = struct {
-        alloc: std.mem.Allocator,
-        buf: *[]u8,
-        len_ptr: *usize,
-        pub fn writeFn(self: @This(), data: []const u8) !usize {
-            try append.do(self.alloc, self.buf, self.len_ptr, data);
-            return data.len;
-        }
-    };
-    var writer_ctx = W{ .alloc = alloc, .buf = &gen_buf, .len_ptr = &gen_len };
-    inline fn writeProxy(ctx: W, data: []const u8) !usize { return ctx.writeFn(data); }
-    const WriterType = std.io.Writer(W, error{OutOfMemory}, writeProxy);
-    var w = WriterType{ .context = writer_ctx };
-    try w.print("Auto-generated (unix_ts={d})\n\n", .{std.time.timestamp()});
-    try writeTable(alloc, w, res);
+    // Build replacement markdown using expandable buffer
+    var builder = try builderInit(alloc);
+    try builder.print("Auto-generated (unix_ts={d})\n\n", .{std.time.timestamp()});
+    try writeTable(alloc, &builder, res);
 
     const gap_path = "docs/GAP_ANALYSIS.md";
     var gap_file = try std.fs.cwd().openFile(gap_path, .{ .mode = .read_only });
     defer gap_file.close();
     const gap_data = try gap_file.readToEndAlloc(alloc, 1024 * 1024);
     defer alloc.free(gap_data);
-    const new_gap = try replaceSegment(gap_data, "<!-- AUTOGEN:BEGIN REQUIREMENTS_LEDGER", "<!-- AUTOGEN:END REQUIREMENTS_LEDGER -->", gen_buf[0..gen_len], alloc);
+    const new_gap = try replaceSegment(gap_data, "<!-- AUTOGEN:BEGIN REQUIREMENTS_LEDGER", "<!-- AUTOGEN:END REQUIREMENTS_LEDGER -->", builder.buf[0..builder.len], alloc);
     defer alloc.free(new_gap);
     try std.fs.cwd().writeFile(.{ .sub_path = gap_path, .data = new_gap });
 

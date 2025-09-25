@@ -43,6 +43,23 @@ This document captures currently claimed features and implementation-defined/dep
   // CANARY: REQ=REQ-GQL-024; FEATURE="Nulls-Last Ordering Parity"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_TransportParity_NullsLastOrder; OWNER=engine; UPDATED=2025-09-24
 - UA005/UA006 (bounded path tie-break determinism): Shorter paths preferred; ties broken deterministically by bound IDs and JSON-lex row key. Transport-parity enforced by tests.
 
+## Safety Guards (Execution Limits)
+
+The engine enforces protective upper bounds during MATCH evaluation to prevent excessive memory or time consumption. These are implementation-defined and surfaced via diagnostics (ExecutionGuardTrip) when tripped; partial results MAY be returned (truncated) per STEAL/NO-FORCE policy while maintaining deterministic ordering of emitted rows.
+
+- Default `max_results`: 100_000 (bindings) — truncates result set if exceeded.
+- Default `max_frontier`: 100_000 (active frontier nodes / partial paths in BFS for variable-length expansions) — halts further expansion when exceeded.
+- Default `max_hops_limit`: 64 (upper bound on variable-length traversal hops) — guards against unbounded or accidental large expansions when query-specified upper bound is higher or absent.
+- Diagnostic code: `ExecutionGuardTrip` (maps to internal engine guard; reported with ISO precedence rules alongside any additional statuses).
+- Policy: Guard trip preserves already produced bindings (up to truncation) and sets deterministic ordering via existing ordering key comparator.
+- Override (future): Environment or session parameters (flagger will emit findings when overridden; not yet exposed in v0.15.0).
+
+Rationale: Provides predictable resource ceilings and governance evidence (CANARY) for controlled execution of bounded quantifiers and high fan-out graphs.
+
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuardsPolicy"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchFrontierGuard"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchResultGuard"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+
 ## Flagger
 
 - I:IllegalOrderKeyPolicy=ident-only

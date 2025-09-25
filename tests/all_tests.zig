@@ -28,6 +28,7 @@ const _canary_quic_tls = @import("canary_quic_tls.zig");
 const _e2e_with_clause = @import("e2e_with_clause.zig");
 const _unit_shortest_path_tiebreak = @import("unit_shortest_path_tiebreak.zig");
 const _e2e_mutations = @import("e2e_mutations.zig");
+const _unit_match_executor_guards = @import("unit_match_executor_guards.zig");
 // CDC enhanced guardrail tests
 const _cdc_guardrail_reset = @import("cdc_guardrail_reset.zig");
 const _cdc_guardrail_ts_monotonic = @import("cdc_guardrail_timestamps_monotonic.zig");

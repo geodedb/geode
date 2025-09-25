@@ -474,7 +474,11 @@ pub fn executeMatch(
     graph: *const GraphStorage,
     pattern: ast.GraphPattern,
     where_clause: ?ast.Expr,
+    opts_opt: ?MatchOptions,
+    eval_diag: ?*geode.diagnostics.Code,
 ) ![]Binding {
+    const opts: MatchOptions = opts_opt orelse .{};
+    // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=EngineGuardInit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
     if (pattern.chains.len == 0) {
         const binding = Binding.init(allocator);
         var results = try allocator.alloc(Binding, 1);
@@ -483,6 +487,8 @@ pub fn executeMatch(
     }
 
     var current_bindings: []Binding = &.{};
+    var frontier_expanded: usize = 0; // safety accounting
+    var produced_results: usize = 0;
     for (pattern.chains, 0..) |chain, chain_idx| {
         var chain_bindings: []Binding = &.{};
         if (chain.hops.len == 0) {
@@ -561,7 +567,13 @@ pub fn executeMatch(
                 const has_vlen = @hasField(@TypeOf(hop.rel), "min_len") and @hasField(@TypeOf(hop.rel), "max_len") and (hop.rel.min_len != null or hop.rel.max_len != null);
                 if (has_vlen) {
                     const min_len: usize = if (hop.rel.min_len) |m| m else 1;
-                    const max_len: usize = if (hop.rel.max_len) |m2| m2 else min_len;
+                    const raw_max: usize = if (hop.rel.max_len) |m2| m2 else min_len;
+                    const max_len: usize = @min(raw_max, opts.max_hops_limit);
+                    if (min_len > max_len) {
+                        // CANARY: REQ=REQ-GQL-017; FEATURE="PathExpandBounded"; ASPECT=GuardBoundsValidation; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
+                        if (eval_diag) |ed| ed.* = .ExecutionGuardTrip; // bounds invalid
+                        return error.InvalidHopBounds;
+                    }
                     var bfs_results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
                     for (chain_bindings) |b| {
                         const src_val = b.vars.get(source_var) orelse continue;
@@ -612,6 +624,12 @@ pub fn executeMatch(
                                 };
                                 if (edge_ids) |edges| {
                                     for (edges.items) |eid| {
+                                        frontier_expanded += 1;
+                                        if (frontier_expanded > opts.max_frontier) {
+                                            // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=FrontierLimit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
+                                            if (eval_diag) |ed| ed.* = .ExecutionGuardTrip;
+                                            break; // break out to stop expansion
+                                        }
                                         const e = graph.edges.items[@intCast(eid)];
                                         if (hop.rel.types.len > 0) {
                                             var matches = false;
@@ -731,6 +749,12 @@ pub fn executeMatch(
                                 try nb.vars.put(ev, selected_path);
                             }
                             try bfs_results.append(allocator, nb);
+                            produced_results += 1;
+                            if (produced_results > opts.max_results) {
+                                // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=ResultLimit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
+                                if (eval_diag) |ed| ed.* = .ExecutionGuardTrip;
+                                break; // stop collecting
+                            }
                         }
                         // if no paths and OPTIONAL semantics, preserve with nulls
                         if (bfs_results.items.len == 0) {
@@ -762,6 +786,13 @@ pub fn executeMatch(
                         chain_bindings = try preserved.toOwnedSlice(allocator);
                     } else {
                         chain_bindings = expanded;
+                        produced_results += expanded.len;
+                        if (produced_results > opts.max_results) {
+                            // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=ResultLimitSimpleExpand; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
+                            if (eval_diag) |ed| ed.* = .ExecutionGuardTrip;
+                            if (chain_bindings.len > opts.max_results) chain_bindings = chain_bindings[0..opts.max_results];
+                            break; // truncate further expansion
+                        }
                     }
                 }
             }
@@ -784,6 +815,63 @@ pub fn executeMatch(
     }
 
     return current_bindings;
+}
+
+// MATCH safety and ordering options with sane defaults
+pub const MatchOptions = struct {
+    max_results: usize = 100_000,
+    max_frontier: usize = 100_000,
+    max_hops_limit: usize = 64,
+};
+
+// Deterministic ordering key: sorted variable names; node/edge ids and path len+ids appended
+fn buildOrderingKey(allocator: std.mem.Allocator, b: *const Binding) ![]u64 {
+    // CANARY: REQ=REQ-GQL-017; FEATURE="MatchOrderingDeterminism"; ASPECT=OrderingKeyBuild; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit; OWNER=engine; UPDATED=2025-09-24
+    var names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var it = b.vars.iterator();
+    while (it.next()) |e| names.append(allocator, e.key_ptr.*) catch {};
+    std.sort.block([]const u8, names.items, {}, struct {
+        fn less(_: void, a_name: []const u8, b_name: []const u8) bool {
+            return std.mem.lessThan(u8, a_name, b_name);
+        }
+    }.less);
+    var out = std.ArrayList(u64).initCapacity(allocator, names.items.len * 4) catch return error.OutOfMemory;
+    for (names.items) |nm| {
+        if (b.vars.get(nm)) |val| {
+            switch (val) {
+                .Node => |nid| out.append(allocator, nid) catch {},
+                .Edge => |eid| out.append(allocator, eid) catch {},
+                .Path => |p| {
+                    out.append(allocator, @intCast(p.len)) catch {};
+                    var i: usize = 0;
+                    while (i < p.len) : (i += 1) out.append(allocator, p[i]) catch {};
+                },
+                else => {},
+            }
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn sortBindingsDeterministic(allocator: std.mem.Allocator, bindings: []Binding) void {
+    if (bindings.len <= 1) return;
+    // CANARY: REQ=REQ-GQL-017; FEATURE="MatchOrderingDeterminism"; ASPECT=SortBindings; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit; OWNER=engine; UPDATED=2025-09-24
+    std.sort.insertion(Binding, bindings, allocator, struct {
+        fn less(alloc: std.mem.Allocator, a: Binding, b: Binding) bool {
+            const ka = buildOrderingKey(alloc, &a) catch return false;
+            const kb = buildOrderingKey(alloc, &b) catch return true;
+            defer alloc.free(ka);
+            defer alloc.free(kb);
+            var i: usize = 0;
+            const ml = @min(ka.len, kb.len);
+            while (i < ml) : (i += 1) {
+                if (ka[i] < kb[i]) return true;
+                if (ka[i] > kb[i]) return false;
+            }
+            if (ka.len != kb.len) return ka.len < kb.len;
+            return false;
+        }
+    }.less);
 }
 
 // Convert bindings to JSON rows for protocol
@@ -956,7 +1044,7 @@ pub fn executeOptionalMatch(
 ) ![]Binding {
     // If no base bindings, treat as regular MATCH
     if (base_bindings.len == 0) {
-        return executeMatch(allocator, graph, pattern, where_clause);
+        return executeMatch(allocator, graph, pattern, where_clause, null, null);
     }
 
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;

@@ -10,13 +10,19 @@ pub const Entry = struct { updated: []const u8 };
 fn daysFromCivil(y: i64, m: i64, d: i64) i64 {
     // Howard Hinnant algorithm (public domain)
     var yy = y;
-    var mm = m;
-    yy -= mm <= 2 ? 1 : 0;
-    const era = (yy >= 0 ? yy : yy - 399) / 400;
-    const yoe = yy - era * 400;                           // [0, 399]
-    const doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + d - 1; // [0, 365]
-    const doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;    // [0, 146096]
-    return era * 146097 + doe - 719468;                   // Days since 1970-01-01
+    const mm = m;
+    if (mm <= 2) {
+        yy -= 1;
+    }
+    const era = blk: {
+        if (yy >= 0) break :blk yy / 400;
+        break :blk (yy - 399) / 400;
+    };
+    const yoe = yy - era * 400; // [0, 399]
+    const m_adj = if (mm > 2) (mm - 3) else (mm + 9);
+    const doy = (153 * m_adj + 2) / 5 + d - 1; // [0, 365]
+    const doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    return era * 146097 + doe - 719468; // Days since 1970-01-01
 }
 
 fn parseDate(date: []const u8) !i64 {
@@ -44,7 +50,11 @@ pub fn evaluate(entries: []Entry, now_days: i64) FreshnessReport {
             rep.fail += 1; // parse error counts as failure
             continue;
         };
-        if (age >= FailThresholdDays) rep.fail += 1 else if (age >= WarnThresholdDays) rep.warn += 1;
+        if (age >= FailThresholdDays) {
+            rep.fail += 1;
+        } else if (age >= WarnThresholdDays) {
+            rep.warn += 1;
+        }
     }
     return rep;
 }

@@ -36,6 +36,7 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
     // Pagination ordered variance benchmark (exposed for variance runner)

@@ -9,6 +9,7 @@ pub const Code = enum(u16) {
     TypeMismatchDivZero = 5, // Division by zero subclass
     TxnState = 6,
     StoragePageChecksum = 7,
+    ExecutionGuardTrip = 8, // MATCH safety guard (max_results/max_frontier) triggered
 };
 
 pub fn codeName(c: Code) []const u8 {
@@ -20,6 +21,7 @@ pub fn codeName(c: Code) []const u8 {
         .TypeMismatchDivZero => "TypeMismatch.DivZero",
         .TxnState => "TxnState",
         .StoragePageChecksum => "StoragePageChecksum",
+        .ExecutionGuardTrip => "ExecutionGuardTrip",
     };
 }
 
@@ -30,6 +32,7 @@ pub fn anchorFor(c: Code) []const u8 {
         .TypeMismatch, .TypeMismatchDivZero => "16.x",
         .TxnState => "8",
         .StoragePageChecksum => "4",
+        .ExecutionGuardTrip => "14.x",
     };
 }
 
@@ -42,6 +45,7 @@ pub fn defaultMessage(c: Code) []const u8 {
         .TypeMismatchDivZero => "division by zero",
         .TxnState => "transaction state error",
         .StoragePageChecksum => "page checksum mismatch detected during load",
+        .ExecutionGuardTrip => "match execution safety guard tripped",
     };
 }
 
@@ -55,7 +59,7 @@ pub const Diagnostic = struct {
 
 pub fn precedence(a: Code, b: Code) Code {
     // Explicit precedence ordering table (lower index wins): US001, IllegalOrderKey, GroupByIllegal, TypeMismatch, TypeMismatchDivZero
-    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch, Code.TypeMismatchDivZero, Code.TxnState }) |ord| {
+    inline for (.{ Code.US001, Code.IllegalOrderKey, Code.GroupByIllegal, Code.TypeMismatch, Code.TypeMismatchDivZero, Code.TxnState, Code.ExecutionGuardTrip }) |ord| {
         // extend precedence sequence with StoragePageChecksum lowest priority (surface separately)
         if (a == ord and b == ord) return a;
     }
@@ -69,7 +73,8 @@ pub fn precedence(a: Code, b: Code) Code {
                 .TypeMismatch => 3,
                 .TypeMismatchDivZero => 4,
                 .TxnState => 5,
-                .StoragePageChecksum => 6,
+                .ExecutionGuardTrip => 6,
+                .StoragePageChecksum => 7,
             };
         }
     };

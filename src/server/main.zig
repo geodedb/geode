@@ -1191,7 +1191,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         const graph = getOrCreateGraphStorage(ally);
 
         // Execute MATCH pattern
-        var bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause);
+        var bindings = try graph_exec.executeMatch(ally, graph, q.match, q.where_clause, null, eval_diag);
 
         // Apply WITH clause if present
         if (q.with_clause) |with| {
@@ -1285,6 +1285,9 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             }
             rows_values.append(ally, rvals) catch {};
         }
+
+        // Deterministic base ordering (before DISTINCT) using graph binding structural comparator
+        graph_exec.sortBindingsDeterministic(ally, bindings);
 
         // DISTINCT stage for MATCH: deduplicate projected rows based on value semantics
         if (q.ret.distinct and rows_values.items.len > 1) {
@@ -4639,7 +4642,7 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Execute MATCH if present to find items to delete
     var bindings: []graph_exec.Binding = &.{};
     if (stmt.match_clause) |match| {
-        bindings = try graph_exec.executeMatch(allocator, graph, match, stmt.where_clause);
+        bindings = try graph_exec.executeMatch(allocator, graph, match, stmt.where_clause, null, null);
     }
 
     var deleted_count: usize = 0;
@@ -4723,7 +4726,7 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
     }
 
     // Try to match the pattern first
-    const existing_bindings = try graph_exec.executeMatch(allocator, graph, stmt.pattern, null);
+    const existing_bindings = try graph_exec.executeMatch(allocator, graph, stmt.pattern, null, null, null);
 
     var created = false;
     var matched = false;

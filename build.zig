@@ -100,6 +100,9 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    // Provide server graph exec module for guard tests referencing MATCH executor internals
+    const server_graph_exec_mod = b.createModule(.{ .root_source_file = b.path("src/server/graph/exec.zig"), .target = target, .optimize = optimize });
+    custom_tests.root_module.addImport("server_graph_exec", server_graph_exec_mod);
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("migration", migration_mod);

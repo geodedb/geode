@@ -1,5 +1,7 @@
 # MATCH Subset Tutorial (Geode)
 
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchTutorial"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_E2EMatchBasic; OWNER=docs; UPDATED=2025-09-24
+
 This short tutorial demonstrates the currently supported MATCH subset in Geode, with deterministic ordering and pagination policies.
 
 ## Prerequisites
@@ -91,3 +93,5 @@ GEODE_CI_QUIC_SMOKE=1 zig test tests/e2e_protocol_transport_parity_match_varlen_
 - MATCH semantics are partial; advanced features (chained OPTIONAL over varlen, complex property predicates on varlen) are in progress.
 - Default collation is binary; nulls sort last by default (flagger surfaces policy).
 - Always include `ORDER BY` before `LIMIT/OFFSET` to avoid `US001`.
+- Safety guards: max_results=100k, max_frontier=100k, max_hops_limit=64 (diagnostic `ExecutionGuardTrip` if tripped; partial results possible).
+- Deterministic ordering comparator: variable names asc → structural ids (node/edge) → path length + path nodes (lex order).
