@@ -24,10 +24,10 @@ endif
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict
-.PHONY: transport-parity-smokes
+.PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 
 # Default target - build everything including cross-compilation checks (non-blocking)
-all: sub build go-build test cross-test
+all: sub build go-build test cross-test no-feature-flags status-generate
 
 wine-info:
 ifeq ($(WINE_AVAILABLE),1)
@@ -41,13 +41,16 @@ sub:
 
 # Help target
 help:
-	@echo "Geode Makefile targets:"
+	@echo "Geode Makefile targets (v0.17.0):"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make build       - Build debug version (Zig + Go)"
 	@echo "  make release     - Build release version (Zig + Go)"
 	@echo "  make tools       - Build all tools"
 	@echo "  make cross-compile - Build for all cross-compilation targets"
+	@echo "  make status-generate - Generate docs/status.csv from CANARY markers"
+	@echo "  make no-feature-flags - Check for compile-time feature flags"
+	@echo "  make cluster-test - Run multi-node Raft cluster test"
 	@echo ""
 	@echo "Cross-compilation targets:"
 	@echo "  make cross-windows      - Build for Windows x86_64"
@@ -101,6 +104,8 @@ help:
 	@echo "  make governance-dry-run   - Non-failing governance-check wrapper (always exit 0)"
 	@echo "  make governance-freshness-prewarn - Nightly freshness pre-warning (50d threshold)"
 	@echo "  make governance-aggregate - Aggregate nightly governance signals into one JSON"
+	@echo "  make status-generate - Generate docs/status.csv from CANARY markers"
+	@echo "  make no-feature-flags - Enforce no compile-time feature flags"
 
 build:
 	$(ZIG) build $(ZIG_FLAGS)
@@ -316,8 +321,8 @@ clean:
 	$(MAKE) go-clean
 
 # Run build, test, fuzz, bench sequentially for CI
-ci: clean build test fuzz bench cross-compile-strict test-cross-clients governance-check
-	@echo "CI pipeline completed successfully"
+ci: clean build test fuzz bench cross-compile-strict test-cross-clients no-feature-flags status-generate governance-check
+	@echo "CI pipeline completed successfully (v0.17.0)"
 
 # Strict cross-compilation for CI (fails on any error)
 cross-compile-strict: cross-linux-x86_64 cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64
@@ -489,7 +494,34 @@ cross-test:
 
 # Server targets
 server: build
-	./zig-out/bin/geoded --listen-quic 0.0.0.0:7567
+	./zig-out/bin/geoded --listen-quic 0.0.0.0:8443
+
+# Status generation from CANARY markers
+status-generate:
+	@if [ -x tools/status_generate.py ]; then \
+		tools/status_generate.py --repo . --out docs/status.csv; \
+	else \
+		echo "tools/status_generate.py not found or not executable"; \
+		exit 1; \
+	fi
+
+# Check for compile-time feature flags
+no-feature-flags:
+	@if [ -x tools/no_feature_flags_check.py ]; then \
+		tools/no_feature_flags_check.py --repo .; \
+	else \
+		echo "tools/no_feature_flags_check.py not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run multi-node Raft cluster test
+cluster-test: build
+	@if [ -x scripts/cluster_spawn.sh ]; then \
+		scripts/cluster_spawn.sh; \
+	else \
+		echo "scripts/cluster_spawn.sh not found or not executable"; \
+		exit 1; \
+	fi
 
 # TCP transport removed; use QUIC-only server target
 

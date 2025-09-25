@@ -1,8 +1,8 @@
-# Geode Graph Database - v0.16.0
+# Geode Graph Database - v0.17.0
 
 ## Description
 
-Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.15.1. Version 0.16.0 represents a major integration milestone with all subsystems fully integrated without compile-time feature flags.
+Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.15.1. Version 0.17.0 closes critical feature gaps with complete MATCH/DML support, cost-based optimizer, CDC external sinks, and production-ready Raft clustering.
 
 ![Evidence Coverage](badges/evidence.svg)
 
@@ -12,20 +12,22 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 - **60 IMPLEMENTED aspects** (integration complete, tests pending)
 - **2 STUB aspects** (pending implementation)
 
-## What's New in v0.16.0
+## What's New in v0.17.0
 
-### Major Integration Release
+### Feature Completeness Release
 
-- **🔒 QUIC+TLS Only**: TCP removed entirely, TLS mandatory with auto-generated certificates
-- **🚫 No Feature Flags**: All compile-time flags removed, unified build
-- **Full Raft Clustering**: Multi-node with data replication and automatic failover
-- **RLS/ABAC Enforced**: Row-level security via planner rewrite with audit logging
-- **Materialized Views**: Complete and incremental refresh implemented
-- **Status Tracking**: Generated `docs/status.csv` from CANARY annotations
-- **ISO Compliance**: ORDER BY required with LIMIT/OFFSET (US001 policy)
-- **Defaults ON**: Recursion, bounded expansions, phantom prevention enabled by default
+- **✨ Complete MATCH Engine**: Complex patterns, nested OPTIONAL, filtered variable-length paths with deterministic tie-break
+- **📝 DML Operations**: INSERT/UPDATE/DELETE for nodes/edges with RLS enforcement and audit logging
+- **🎯 Cost-Based Optimizer v1**: Statistics registry, cardinality estimation, left-deep join enumeration (gated by GEODE_ENABLE_CBO=1)
+- **🔄 CDC External Sinks**: Kafka and Webhook with at-least-once delivery, backpressure, retry, and DLQ
+- **💾 Raft Persistence**: Durable log, snapshots, compaction, and dynamic membership with joint consensus
+- **🔒 QUIC+TLS Mandatory**: Port 8443 only, auto-generated self-signed certs, no TCP fallback
+- **📊 Incremental MV Refresh**: Via CDC/WAL change stream in addition to complete refresh
+- **🚫 No Feature Flags**: Enforced by tools/no_feature_flags_check.py CI integration
+- **📈 Status Generation**: tools/status_generate.py creates docs/status.csv from CANARY markers
+- **🎭 Graph Algorithms**: shortestPath() and pageRank() functions integrated with MATCH/RETURN
 
-## Breaking Changes from v0.15.0
+## Breaking Changes from v0.16.0
 
 ### 1. Transport Layer
 - **TCP removed entirely** - QUIC+TLS is now mandatory
@@ -69,16 +71,19 @@ tools/status_generate.py --repo . --out docs/status.csv
 scripts/cluster_spawn.sh
 ```
 
-## Verified Working Features (v0.16.0)
+## Verified Working Features (v0.17.0)
 
 ### Core Database
 
 - ✅ **Query Engine**: RETURN, ORDER BY (required with LIMIT), set operations
-- ✅ **Path Operations**: Variable-length with bounded quantifiers and deterministic tie-break
+- ✅ **MATCH/OPTIONAL MATCH**: Complex patterns, variable-length paths, nested optional, cycle detection
+- ✅ **WHERE Clauses**: Subqueries, IN/EXISTS/ANY/ALL predicates, correlated expressions
+- ✅ **DML Operations**: INSERT/UPDATE/DELETE nodes and edges with property management
+- ✅ **Path Operations**: Variable-length with bounded quantifiers and deterministic tie-break (UA005/UA006)
 - ✅ **Recursive CTEs**: WITH RECURSIVE with cycle detection (default ON)
 - ✅ **Transactions**: MVCC SI with phantom prevention via RangeTracker (default ON)
 - ✅ **Schema Constraints**: Check/unique/pattern with cascade
-- ✅ **CDC Engine**: Streaming with backpressure and guardrails
+- ✅ **CDC Engine**: Streaming with Kafka/Webhook sinks, at-least-once delivery, DLQ
 
 ### Security & Access Control
 
@@ -90,14 +95,18 @@ scripts/cluster_spawn.sh
 
 ### High Availability
 
-- ✅ **Raft Consensus**: Leader election, log replication, automatic failover
-- ✅ **Backup/Restore**: Full and incremental with CRC-32 verification
-- ✅ **Materialized Views**: Complete and incremental refresh via CDC
-- ✅ **WAL Compaction**: After successful backup
+- ✅ **Raft Consensus**: Persistent log, snapshots, compaction, dynamic membership changes
+- ✅ **Multi-Process Clustering**: Leader election, replication, automatic failover (scripts/cluster_spawn.sh)
+- ✅ **2PC over Raft**: Cross-shard transactions with replicated coordinator log
+- ✅ **Backup/Restore**: Full and incremental with CRC-32 verification, PITR support
+- ✅ **Materialized Views**: Complete and incremental refresh via CDC change stream
+- ✅ **WAL Compaction**: Log-structured merge with snapshot integration
 
 ### Advanced Features
 
-- ✅ **Cost Model**: Calibrated with bias tracking and plan candidate rescoring
+- ✅ **Cost-Based Optimizer**: Statistics registry, histograms, cardinality/selectivity estimation, join reordering
+- ✅ **Graph Algorithms**: Dijkstra shortestPath(), PageRank integrated as GQL functions
+- ✅ **Plan Cache**: Structural key derivation with collision < 8% guaranteed
 - ✅ **Path Cache**: Structural key derivation with collision avoidance
 - ⚠️ **GPU Acceleration**: Detection only, kernel execution pending
 - ⚠️ **Federation**: Router scaffolding, execution pending
