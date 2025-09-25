@@ -69,8 +69,7 @@
                 commonPackages
               ])
               ++ (with pkgs; [
-                tcpdump
-                tshark
+                glibc
                 file
                 wine
               ]);

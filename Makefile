@@ -119,11 +119,13 @@ test:
 go-build:
 	@if [ -d "clients/go/gql" ]; then \
 		if command -v go >/dev/null 2>&1; then \
+			echo "Preparing Go client build..."; \
+			cd clients/go/gql && go mod vendor || echo "go mod vendor failed, continuing"; \
 			echo "Building Go client library..."; \
-			cd clients/go/gql && go build ./... || { echo "Go build failed (skipping)"; exit 0; }; \
+			cd clients/go/gql && go build -mod=vendor ./... || { echo "Go build failed (skipping)"; exit 0; }; \
 			if [ -d "example" ]; then \
 				echo "Building Go example program..."; \
-				cd example && go build -o ../../../zig-out/bin/gql-example . || echo "Failed to build example"; \
+				cd clients/go/gql/example && go build -mod=vendor -o ../../../zig-out/bin/gql-example . || echo "Failed to build example"; \
 			fi; \
 			echo "Go client library built (or skipped failures)"; \
 		else \
