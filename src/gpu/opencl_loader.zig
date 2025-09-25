@@ -1,11 +1,10 @@
 const std = @import("std");
 
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("CL/cl.h");
 });
 
 pub const OpenCL = struct {
-    // Platform / device discovery
     pub fn get_platform_ids(num_entries: u32, platforms: ?*c.cl_platform_id, num_platforms: ?*u32) c.cl_int {
         return c.clGetPlatformIDs(num_entries, platforms, num_platforms);
     }
