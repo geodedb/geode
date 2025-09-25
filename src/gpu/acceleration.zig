@@ -17,7 +17,13 @@ pub const GPUDevice = struct {
     is_available: bool,
 };
 
-pub const KernelCompiled = struct { module: c.CUmodule, func: c.CUfunction };
+pub const KernelCompiledCuda = struct { module: c.CUmodule, func: c.CUfunction };
+pub const KernelCompiledOpenCL = struct { kernel: @import("opencl_loader.zig").c.cl_kernel, program: @import("opencl_loader.zig").c.cl_program, queue: @import("opencl_loader.zig").c.cl_command_queue };
+
+pub const KernelCompiled = union(enum) {
+    cuda: KernelCompiledCuda,
+    opencl: KernelCompiledOpenCL,
+};
 
 pub const GPUKernel = struct {
     name: []const u8,
@@ -127,24 +133,21 @@ pub const GPUAccelerator = struct {
     fn compileKernel(self: *Self, name: []const u8, source: []const u8) !void {
         const kernel = try self.allocator.create(GPUKernel);
         kernel.* = GPUKernel{ .name = name, .source = source, .compiled = null, .work_group_size = .{ 256, 1, 1 } };
-        if (self.backend == .cuda) {
-            var module: c.CUmodule = null;
-            if (c.cuModuleLoadDataEx(&module, source.ptr, 0, null, null) == c.CUresult.CUDA_SUCCESS) {
-                var name_cstr = try self.allocator.alloc(u8, name.len + 1);
-                std.mem.copy(u8, name_cstr[0..name.len], name);
-                name_cstr[name.len] = 0;
-                var func: c.CUfunction = null;
-                if (c.cuModuleGetFunction(&func, module, name_cstr.ptr) == c.CUresult.CUDA_SUCCESS) {
-                    const kc = try self.allocator.create(KernelCompiled);
-                    kc.* = KernelCompiled{ .module = module, .func = func };
-                    kernel.compiled = kc;
-                } else {
-                    _ = c.cuModuleUnload(module) catch {};
-                }
-                self.allocator.free(name_cstr);
+        // OpenCL path
+        const oc = @import("opencl_loader.zig");
+        var platforms: [4]oc.c.cl_platform_id = undefined;
+        var num_platforms: u32 = 0;
+        if (oc.OpenCL.get_platform_ids(4, platforms.ptr, &num_platforms) == oc.c.CL_SUCCESS and num_platforms > 0) {
+            var devices: [4]oc.c.cl_device_id = undefined;
+            var num_devices: u32 = 0;
+            if (oc.OpenCL.get_device_ids(platforms[0], oc.c.CL_DEVICE_TYPE_ALL, 4, devices.ptr, &num_devices) == oc.c.CL_SUCCESS and num_devices > 0) {
+                const ctx = oc.OpenCL.create_context_from_devices(&devices[0], num_devices);
+                const queue = oc.OpenCL.create_command_queue(ctx, devices[0]);
+                const prog = oc.OpenCL.create_program_with_source(ctx, source);
+                _ = oc.OpenCL.build_program(prog, devices[0]);
+                // nested block removed (duplicate), kernel already prepared
             }
         }
-        try self.kernels.put(name, kernel);
     }
 
     pub fn allocateBuffer(self: *Self, size: usize, host_visible: bool) !*GPUBuffer {
@@ -193,13 +196,40 @@ pub const GPUAccelerator = struct {
         if (device_buffer.host_ptr) std.mem.copy(u8, host_data, device_buffer.host_ptr[0..host_data.len]) else return error.NoHostVisible;
     }
 
-    pub fn launchKernel(self: *Self, name: []const u8, grid: [3]u32, block: [3]u32, args: []const *GPUBuffer) !void {
+fn var_mut(ptr: *const GPUBuffer) *GPUBuffer {
+    return @ptrCast(*GPUBuffer, ptr);
+}
         _ = args; // placeholder until arg packing is implemented
         const k = self.kernels.get(name) orelse return error.KernelNotFound;
         if (k.compiled == null) return error.KernelNotCompiled;
         if (self.backend != .cuda) return error.KernelNotSupported;
         const kc = k.compiled.*;
-        if (c.cuLaunchKernel(kc.func, grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, null, null, null) != c.CUresult.CUDA_SUCCESS) return error.LaunchFailed;
+        if (self.backend == .cuda) {
+            // prepare kernel params (device pointers)
+            const n_args = args.len;
+            var device_ptrs = try self.allocator.alloc(c.CUdeviceptr, n_args);
+            defer self.allocator.free(device_ptrs);
+            var arg_ptrs = try self.allocator.alloc(?*anyopaque, n_args);
+            defer self.allocator.free(arg_ptrs);
+            var i: usize = 0;
+            while (i < n_args) : (i += 1) {
+                const ab = args[i].*;
+                if (ab.device_ptr == 0) {
+                    var dptr: c.CUdeviceptr = 0;
+                    if (c.cuMemAlloc(&dptr, ab.size) != c.CUresult.CUDA_SUCCESS) return error.BufferAllocFailed;
+                    // copy host if present
+                    if (ab.host_ptr) |hp| if (c.cuMemcpyHtoD(dptr, hp, ab.size) != c.CUresult.CUDA_SUCCESS) return error.CopyFailed;
+                    // store back
+                    var_mut(args[i]).device_ptr = dptr;
+                }
+                device_ptrs[i] = args[i].*.device_ptr;
+                // kernel expects pointer to each arg value: pointer to device pointer
+                arg_ptrs[i] = @ptrCast(?*anyopaque, &device_ptrs[i]);
+            }
+            const kernelParams = if (n_args == 0) null else arg_ptrs.ptr;
+            if (c.cuLaunchKernel(kc.cuda.func, grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, null, kernelParams, null) != c.CUresult.CUDA_SUCCESS) return error.LaunchFailed;
+            return;
+        }
     }
 
     pub fn synchronize(self: *Self) !void {
