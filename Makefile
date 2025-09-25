@@ -119,8 +119,6 @@ test:
 go-build:
 	@if [ -d "clients/go/gql" ]; then \
 		if command -v go >/dev/null 2>&1; then \
-			echo "Running 'go mod vendor' at repo root (to ensure consistent vendoring)..."; \
-			go mod vendor || echo "go mod vendor (root) failed, continuing"; \
 			echo "Preparing Go client module vendor..."; \
 			cd clients/go/gql && go mod vendor || echo "go mod vendor (clients/go/gql) failed, continuing"; \
 			echo "Building Go client library (using vendor)..."; \
