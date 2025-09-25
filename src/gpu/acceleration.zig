@@ -93,9 +93,21 @@ pub const GPUAccelerator = struct {
         };
 
         // best-effort device detection and backend initialization; failures are non-fatal
-        _ = accel.detectDevices() catch {};
-        _ = accel.initializeBackend() catch {};
-        _ = accel.compileKernels() catch {};
+        // try to initialize CUDA if requested
+        if (self.backend == .cuda) {
+            // call cuInit via cimport if available
+            // safe to call; if cuda headers/lib not present, this will be a compile-time error unless cuda.h is available
+            if (std.builtin.os.tag == .linux) {
+                // attempt to call cuInit
+                // guard with comptime check if cuda.h available
+                comptime {
+                    // nothing here; if cuda is not available the cimport wrapper will fail at build time
+                }
+                // runtime: best-effort
+                // ignore result: we still fall back to mock device if unavailable
+                _ = @import("src/gpu/cuda_loader.zig").CudaLoader.init() catch 1;
+            }
+        }
 
         accel.is_initialized = true;
         return accel;
@@ -181,7 +193,7 @@ pub const GPUAccelerator = struct {
 
     fn initCUDA(self: *Self) !void {
         const RTLD_LAZY: i32 = 1;
-        const candidates = [_][*]const u8{"libcudart.so", "libcudart.so.12", "libcudart.so.11"};
+        const candidates = [_][*]const u8{ "libcudart.so", "libcudart.so.12", "libcudart.so.11" };
         var found: ?*anyopaque = null;
         for (candidates) |c| {
             const h = dlopen(c, RTLD_LAZY);
