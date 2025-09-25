@@ -1,125 +1,89 @@
 #!/usr/bin/env python3
 """
 Check for compile-time feature flags in the codebase.
-v0.16.0: All features are integrated, no compile-time flags allowed.
-
-CANARY: REQ=REQ-GQL-023; FEATURE="No Feature Flags"; ASPECT=Enforcement; STATUS=TESTED; TEST=no_feature_flags_check; OWNER=build; UPDATED=2025-09-25
+Fails if any are found - everything should be built unified.
 """
 
-import sys
 import os
 import re
+import sys
+import argparse
 from pathlib import Path
-import click
 
-FORBIDDEN_PATTERNS = [
-    r'-Dfeature[_-]',
-    r'\bfeature_flag\b',  # Word boundary to avoid false positives
-    r'@hasDecl\(.*feature',
-    r'comptime.*feature',
-    r'build\.option.*feature',
+FEATURE_FLAG_PATTERNS = [
+    re.compile(r'-Dfeature_\w+'),
+    re.compile(r'@import\("build_options"\)\.feature_'),
+    re.compile(r'if\s*\(\s*feature_\w+\s*\)'),
+    re.compile(r'comptime\s+if\s*\(\s*feature_'),
 ]
 
-EXCLUDE_PATHS = [
-    '.git',
+EXCLUDE_DIRS = {
     'zig-cache',
     'zig-out',
-    '.venv',
-    '__pycache__',
+    '.git',
     'node_modules',
     'vendor',
-]
+}
 
-def check_file(filepath: Path) -> list[tuple[int, str]]:
+def check_file_for_feature_flags(file_path: Path) -> List[str]:
     """Check a single file for feature flags."""
     violations = []
     
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line_no, line in enumerate(f, 1):
-                for pattern in FORBIDDEN_PATTERNS:
-                    if re.search(pattern, line, re.IGNORECASE):
-                        violations.append((line_no, line.strip()))
-    except (UnicodeDecodeError, PermissionError):
-        # Skip binary files or files we can't read
-        pass
-    
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            lines = content.split('\n')
+            
+            for line_num, line in enumerate(lines, 1):
+                for pattern in FEATURE_FLAG_PATTERNS:
+                    if pattern.search(line):
+                        violations.append(f"{file_path}:{line_num}: {line.strip()}")
+                        
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}", file=sys.stderr)
+        
     return violations
 
-def should_check(path: Path) -> bool:
-    """Determine if a path should be checked."""
-    # Skip excluded directories
-    for part in path.parts:
-        if part in EXCLUDE_PATHS:
-            return False
+def check_repo_for_feature_flags(repo_path: Path) -> List[str]:
+    """Check entire repository for feature flags."""
+    all_violations = []
     
-    # Skip this tool itself
-    if path.name == 'no_feature_flags_check.py':
-        return False
-    
-    # Check build files and source files
-    if path.suffix in ['.zig', '.zon', '.sh', '.yml', '.yaml']:
-        return True
-    
-    # Skip Python files (they might reference the tool)
-    if path.suffix == '.py':
-        return False
-    
-    if path.name in ['Makefile', 'build.zig', 'build.zig.zon']:
-        return True
-    
-    return False
-
-@click.command()
-@click.option('--repo', default='.', help='Repository root directory')
-@click.option('--strict', is_flag=True, help='Exit with error on violations')
-def main(repo: str, strict: bool):
-    """Check for compile-time feature flags in the repository."""
-    repo_path = Path(repo).resolve()
-    
-    if not repo_path.exists():
-        click.echo(f"Error: Repository path {repo_path} does not exist", err=True)
-        sys.exit(1)
-    
-    violations = []
-    files_checked = 0
-    
-    # Walk the repository
-    for root, dirs, files in os.walk(repo_path):
-        # Remove excluded directories from traversal
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_PATHS]
-        
-        root_path = Path(root)
-        for file in files:
-            filepath = root_path / file
+    for file_path in repo_path.rglob('*'):
+        # Skip excluded directories
+        if any(excl in str(file_path) for excl in EXCLUDE_DIRS):
+            continue
             
-            if should_check(filepath):
-                files_checked += 1
-                file_violations = check_file(filepath)
-                
-                if file_violations:
-                    for line_no, line in file_violations:
-                        violations.append({
-                            'file': str(filepath.relative_to(repo_path)),
-                            'line': line_no,
-                            'content': line
-                        })
+        # Only check relevant file types
+        if not file_path.is_file():
+            continue
+            
+        if file_path.suffix not in ['.zig', '.py', '.sh', '.yml', '.yaml']:
+            continue
+            
+        violations = check_file_for_feature_flags(file_path)
+        all_violations.extend(violations)
+        
+    return all_violations
+
+def main():
+    parser = argparse.ArgumentParser(description='Check for compile-time feature flags')
+    parser.add_argument('--repo', type=Path, default=Path('.'),
+                        help='Repository root path')
+    args = parser.parse_args()
     
-    # Report results
+    violations = check_repo_for_feature_flags(args.repo)
+    
     if violations:
-        click.echo("FEATURE_FLAG_FOUND", err=True)
-        click.echo(f"\nFound {len(violations)} feature flag violations:", err=True)
-        
-        for v in violations:
-            click.echo(f"  {v['file']}:{v['line']}: {v['content']}", err=True)
-        
-        if strict:
-            sys.exit(2)
-    else:
-        click.echo("NO_FEATURE_FLAGS_OK")
-        click.echo(f"Checked {files_checked} files - no feature flags found")
+        print("FEATURE_FLAG_FOUND", file=sys.stderr)
+        print(f"Found {len(violations)} feature flag violations:", file=sys.stderr)
+        for violation in violations[:10]:  # Show first 10
+            print(f"  {violation}", file=sys.stderr)
+        if len(violations) > 10:
+            print(f"  ... and {len(violations) - 10} more", file=sys.stderr)
+        return 2
     
+    print("NO_FEATURE_FLAGS_OK")
     return 0
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

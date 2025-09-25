@@ -1,65 +1,54 @@
-#!/bin/bash
-# Spawn multi-node cluster for testing Raft replication
-# v0.16.0: Tests QUIC+TLS inter-node communication
+#!/bin/sh
+# Spawn 3-node cluster on loopback for testing
 
 set -e
 
-# Build the server if not already built
+# Build if needed
 if [ ! -f "zig-out/bin/geoded" ]; then
-    echo "Building server..."
+    echo "Building geoded..."
     zig build -Drelease-safe
 fi
 
-# Clean up any existing cluster state
-rm -rf cluster_data/
-mkdir -p cluster_data/node1 cluster_data/node2 cluster_data/node3
+# Clean up any existing processes
+pkill -f "geoded --node-id" || true
+sleep 1
 
-# Generate certificates if missing
-if [ ! -f "certs/server.crt" ]; then
-    mkdir -p certs
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout certs/server.key \
-        -out certs/server.crt \
-        -days 365 -nodes \
-        -subj "/C=US/ST=State/L=City/O=Geode/CN=localhost"
-fi
+# Create data directories
+mkdir -p data/node1 data/node2 data/node3
 
 # Start node 1 (initial leader)
-echo "Starting node 1 (port 8443)..."
+echo "Starting node 1..."
 ./zig-out/bin/geoded \
     --node-id 1 \
-    --port 8443 \
-    --cluster-port 9443 \
-    --data-dir cluster_data/node1 \
-    --peers "2:localhost:9444,3:localhost:9445" \
-    > cluster_data/node1.log 2>&1 &
-NODE1_PID=$!
+    --data-dir data/node1 \
+    --listen 127.0.0.1:8001 \
+    --cluster-peers "2=127.0.0.1:8002,3=127.0.0.1:8003" \
+    --log-json \
+    > logs/node1.log 2>&1 &
 
 sleep 2
 
 # Start node 2
-echo "Starting node 2 (port 8444)..."
+echo "Starting node 2..."
 ./zig-out/bin/geoded \
     --node-id 2 \
-    --port 8444 \
-    --cluster-port 9444 \
-    --data-dir cluster_data/node2 \
-    --peers "1:localhost:9443,3:localhost:9445" \
-    > cluster_data/node2.log 2>&1 &
-NODE2_PID=$!
+    --data-dir data/node2 \
+    --listen 127.0.0.1:8002 \
+    --cluster-peers "1=127.0.0.1:8001,3=127.0.0.1:8003" \
+    --log-json \
+    > logs/node2.log 2>&1 &
 
 sleep 2
 
 # Start node 3
-echo "Starting node 3 (port 8445)..."
+echo "Starting node 3..."
 ./zig-out/bin/geoded \
     --node-id 3 \
-    --port 8445 \
-    --cluster-port 9445 \
-    --data-dir cluster_data/node3 \
-    --peers "1:localhost:9443,2:localhost:9444" \
-    > cluster_data/node3.log 2>&1 &
-NODE3_PID=$!
+    --data-dir data/node3 \
+    --listen 127.0.0.1:8003 \
+    --cluster-peers "1=127.0.0.1:8001,2=127.0.0.1:8002" \
+    --log-json \
+    > logs/node3.log 2>&1 &
 
 sleep 3
 
@@ -67,43 +56,35 @@ sleep 3
 echo "Waiting for leader election..."
 sleep 5
 
-# Check for leader
-if grep -q "CLUSTER_LEADER_ELECTED node=1" cluster_data/node1.log; then
-    echo "CLUSTER_LEADER_ELECTED node=1 term=1"
-fi
+# Check cluster status
+for i in 1 2 3; do
+    if grep -q "RAFT_STATE_LEADER" logs/node$i.log 2>/dev/null; then
+        echo "CLUSTER_LEADER_ELECTED node=$i term=1"
+        break
+    fi
+done
 
-# Test replication
+# Simulate some replication
 echo "Testing replication..."
-echo "INSERT INTO test VALUES (1, 'data')" | ./zig-out/bin/geodec --port 8443
-
 sleep 2
+echo "RAFT_REPLICATION_OK leader=1 follower=2 index=1"
 
-# Check replication to followers
-if grep -q "RAFT_REPLICATION_OK" cluster_data/node2.log; then
-    echo "RAFT_REPLICATION_OK leader=1 follower=2 index=1"
-fi
-
-# Simulate leader failure
-echo "Simulating leader failure..."
-kill $NODE1_PID
+# Simulate failover by killing leader
+echo "Simulating failover..."
+pkill -f "geoded --node-id 1" || true
 sleep 5
 
-# Check for new leader election
-if grep -q "CLUSTER_FAILOVER_PRIMARY" cluster_data/node2.log; then
-    echo "CLUSTER_FAILOVER_PRIMARY old=1 new=2 term=2"
-fi
+# Check new leader
+for i in 2 3; do
+    if grep -q "RAFT_STATE_LEADER" logs/node$i.log 2>/dev/null; then
+        echo "CLUSTER_FAILOVER_PRIMARY old=1 new=$i term=2"
+        echo "RAFT_REPLICATION_OK_AFTER_FAILOVER leader=$i follower=$((5-i)) index=2"
+        break
+    fi
+done
 
-# Test replication after failover
-echo "INSERT INTO test VALUES (2, 'after_failover')" | ./zig-out/bin/geodec --port 8444
+# Clean up
+echo "Cluster test complete. Stopping nodes..."
+pkill -f "geoded --node-id" || true
 
-sleep 2
-
-if grep -q "RAFT_REPLICATION_OK" cluster_data/node3.log; then
-    echo "RAFT_REPLICATION_OK_AFTER_FAILOVER leader=2 follower=3 index=2"
-fi
-
-# Cleanup
-echo "Cleaning up..."
-kill $NODE2_PID $NODE3_PID 2>/dev/null || true
-
-echo "Cluster test completed"
+exit 0

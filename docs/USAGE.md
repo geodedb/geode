@@ -2,7 +2,13 @@
 
 ## Transport: QUIC/TLS 1.3 (Mandatory)
 
-As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. TCP has been removed. For local/process mode, stdio remains supported.
+As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. TCP has been completely removed. For local/process mode, stdio remains supported.
+
+**Key v0.16.0 Changes:**
+- TCP removed entirely - no fallback
+- Default port changed: 7567 → 8443
+- Auto-generates self-signed certificates if missing
+- All compile-time feature flags removed
 
 ### Server
 
@@ -14,8 +20,11 @@ As of v0.16.0, Geode uses QUIC with TLS 1.3 as the **only** network transport. T
 # Custom certificates (optional)
 ./zig-out/bin/geoded --cert path/to/cert.pem --key path/to/key.pem
 
-# Multi-node cluster (v0.16.0)
+# Multi-node cluster (v0.16.0 - full Raft implementation)
 ./zig-out/bin/geoded --node-id 1 --port 8443 --peers 2:8444,3:8445
+
+# Or use the test script for 3-node cluster
+sh scripts/cluster_spawn.sh
 ```
 
 ### Client

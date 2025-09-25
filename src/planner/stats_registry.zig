@@ -8,13 +8,20 @@ const cost_model = @import("cost_model.zig");
 // Future slices can extend mapping granularity to per-scan identifiers once LogicalPlan
 // carries relation metadata. For now, signatures differentiate by operator tree.
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanStatisticsRegistry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanStatisticsRegistry; OWNER=planner; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanStatisticsRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanStatisticsRegistry; OWNER=planner; UPDATED=2025-09-25
 pub const StatsRegistry = struct {
     allocator: std.mem.Allocator,
     map: std.AutoHashMap(u64, u64), // signature -> estimated rows
+    enabled: bool,  // Runtime gate, defaults to false (rule-based)
 
     pub fn init(alloc: std.mem.Allocator) StatsRegistry {
-        return .{ .allocator = alloc, .map = std.AutoHashMap(u64, u64).init(alloc) };
+        const enabled = std.process.getEnvVarOwned(alloc, "GEODE_STATS_REGISTRY") catch |_| null;
+        defer if (enabled) |e| alloc.free(e);
+        return .{ 
+            .allocator = alloc, 
+            .map = std.AutoHashMap(u64, u64).init(alloc),
+            .enabled = if (enabled) |e| std.mem.eql(u8, e, "1") or std.mem.eql(u8, e, "true") else false,
+        };
     }
     pub fn deinit(self: *StatsRegistry) void {
         self.map.deinit();
@@ -51,7 +58,10 @@ fn walkWithStats(node: enumerator.LogicalPlan, f: cost_model.CostFactors, sr: *S
     }) * depth_factor;
     const sig_self = signatureOf(node);
     if (node.children.len == 0) {
-        const row_est_leaf: f64 = if (sr.get(sig_self)) |r| @floatFromInt(r) else 1.0;
+        const row_est_leaf: f64 = if (sr.enabled and sr.get(sig_self) != null) 
+            @floatFromInt(sr.get(sig_self).?) 
+        else 
+            1.0;  // Rule-based default when disabled
         return .{ .cost = base + (row_est_leaf / 1000.0) * f.per_k_rows, .rows = row_est_leaf, .joins = if (node.op == .join) 1 else 0 };
     }
     var total_cost: f64 = base;
@@ -65,8 +75,8 @@ fn walkWithStats(node: enumerator.LogicalPlan, f: cost_model.CostFactors, sr: *S
         joins += r.joins;
     }
     // If stats registry has explicit cardinality for this node signature, override row_est with that value
-    if (sr.get(sig_self)) |rows_override| {
-        row_est = @floatFromInt(rows_override);
+    if (sr.enabled and sr.get(sig_self) != null) {
+        row_est = @floatFromInt(sr.get(sig_self).?);
     }
     total_cost += (row_est / 1000.0) * f.per_k_rows;
     if (joins > 1) {

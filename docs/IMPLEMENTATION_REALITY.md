@@ -4,6 +4,8 @@
 
 Generated from CANARY evidence analysis - 2025-09-25 (v0.16.0 Full Integration Release)
 
+**Critical Update**: All subsystems now fully integrated without compile-time feature flags
+
 // NOTE: Future slice planning content moved to `NEXT.md` to avoid redundancy. This file remains a snapshot of current implemented reality only.
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-091; FEATURE="Client Server Arg Passthrough"; ASPECT=CliErgonomics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_091_ClientServerArgPassthrough; OWNER=client; UPDATED=2025-09-24
@@ -16,20 +18,25 @@ Generated from CANARY evidence analysis - 2025-09-25 (v0.16.0 Full Integration R
 Latest CANARY scan (regenerated 2025-09-25) reflects v0.16.0 full integration without compile-time feature flags.
 
 **Major v0.16.0 Changes:**
-- All compile-time feature flags removed
-- QUIC+TLS mandatory (no TCP fallback)
-- Full Raft clustering with data replication
-- RLS/ABAC enforced via planner rewrite
-- Materialized views with complete/incremental refresh
-- Generated status.csv from CANARY annotations
+- All compile-time feature flags removed - unified build enforced by CI
+- QUIC+TLS mandatory (no TCP fallback) with auto-generated certificates
+- Full Raft clustering with leader election, log replication, InstallSnapshot, and automatic failover
+- RLS/ABAC enforced via planner rewrite + tuple filter with JSON Lines audit logging
+- Materialized views with complete (atomic swap) and incremental (CDC apply) refresh
+- Generated status.csv from CANARY annotations (never hand-edited)
+- Recursive CTEs default-enabled with cycle detection (hash/DFS/UF) and depth limits
+- Bounded path expansions default-enabled with deterministic ordering
+- Phantom prevention default-enabled via range tracking
+- Inter-node messaging via QUIC streams with retry logic and health checks
 
 **Evidence Summary:**
-- **451 aspects** (tracked feature/aspect evidence rows)
-- **329 TESTED** – functional & protocol tests (includes full Raft, RLS enforcement, MV refresh)
+- **456 aspects** (tracked feature/aspect evidence rows)
+- **334 TESTED** – functional & protocol tests (includes full Raft, RLS enforcement, MV refresh, recursive CTEs)
 - **60 BENCHED** – performance / variance / jitter envelopes
 - **60 IMPLEMENTED** – integration complete, tests pending
 - **2 STUB** – migration engine CLI commands pending
-- **10+ new acceptance tests** with exact expected outputs
+- **12 new acceptance tests** with exact expected outputs for v0.16.0 features
+- **5 new CANARY annotations** added for v0.16.0 subsystems
 
 Counts derived directly from freshly regenerated `status.csv` (authoritative) to avoid drift; `status.json` timestamp retained as provenance.
 
@@ -42,6 +49,26 @@ Governance automation (freshness, hash integrity, delta detection) is now consid
 ## Implementation Status by Component
 
 ### ✅ STRONG (Well-tested + Benchmarked)
+
+#### Transport Layer (NEW in v0.16.0)
+
+- **Status**: TESTED + Mandatory QUIC+TLS
+- **Evidence**:
+  - QUIC listener with TLS enforcement
+  - Auto-generates self-signed certificates if missing
+  - Startup JSON output verified
+  - No TCP fallback code paths
+- **Location**: `src/transport/quic.zig`
+
+#### Security (ENHANCED in v0.16.0)
+
+- **Status**: TESTED with audit logging
+- **Features Working**:
+  - RLS/ABAC enforcement via planner rewrite
+  - Audit logging to JSON Lines with PII redaction
+  - Tenant hierarchy support
+  - USING/CHECK clause evaluation
+- **Location**: `src/security/rls.zig`, `src/security/audit.zig`
 
 #### Binary Protocol & Wire Format
 
@@ -58,6 +85,9 @@ Governance automation (freshness, hash integrity, delta detection) is now consid
 - **Features Working**:
   - Set operations (UNION/INTERSECT/EXCEPT) - TESTED
   - Diagnostics precedence and folding - BENCHED
+  - Recursive CTEs with cycle detection - TESTED (default-enabled)
+  - Bounded path expansions - TESTED (default-enabled)
+  - OPTIONAL MATCH null semantics - TESTED (fixed)
   - Property access - TESTED + BENCHED
   - Basic aggregations - TESTED
 - **Performance**: Diagnostics folding benchmarked for large datasets

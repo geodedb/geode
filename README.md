@@ -6,8 +6,8 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 
 ![Evidence Coverage](badges/evidence.svg)
 
-- **451 tracked aspects** (requirements / features / bench targets from status.csv)
-- **329 TESTED aspects** (functional tests with exact output validation)
+- **456 tracked aspects** (requirements / features / bench targets from status.csv)
+- **334 TESTED aspects** (functional tests with exact output validation)
 - **60 BENCHED aspects** (performance / throughput / latency envelopes)
 - **60 IMPLEMENTED aspects** (integration complete, tests pending)
 - **2 STUB aspects** (pending implementation)
@@ -18,12 +18,12 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 
 - **🔒 QUIC+TLS Only**: TCP removed entirely, TLS mandatory with auto-generated certificates
 - **🚫 No Feature Flags**: All compile-time flags removed, unified build
-- **🌐 Full Raft Clustering**: Multi-node with data replication and automatic failover
-- **🛡️ RLS/ABAC Enforced**: Row-level security via planner rewrite with audit logging
-- **📊 Materialized Views**: Complete and incremental refresh implemented
-- **📈 Status Tracking**: Generated `docs/status.csv` from CANARY annotations
-- **🎯 ISO Compliance**: ORDER BY required with LIMIT/OFFSET (US001 policy)
-- **🔄 Defaults ON**: Recursion, bounded expansions, phantom prevention enabled by default
+- **Full Raft Clustering**: Multi-node with data replication and automatic failover
+- **RLS/ABAC Enforced**: Row-level security via planner rewrite with audit logging
+- **Materialized Views**: Complete and incremental refresh implemented
+- **Status Tracking**: Generated `docs/status.csv` from CANARY annotations
+- **ISO Compliance**: ORDER BY required with LIMIT/OFFSET (US001 policy)
+- **Defaults ON**: Recursion, bounded expansions, phantom prevention enabled by default
 
 ## Breaking Changes from v0.15.0
 
@@ -40,14 +40,14 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 - **ORDER BY enforcement**: Required when using LIMIT/OFFSET
 
 ### 3. Build System
-- All `-Dfeature-*` flags removed
-- Single unified build: `zig build -Drelease-safe`
-- No conditional compilation based on features
+- All compile-time feature flags removed - everything built unified
+- Single build command: `zig build -Drelease-safe`
+- Runtime configuration via environment variables where needed
 
 ## Quick Start
 
 ```bash
-# Build (no feature flags needed)
+# Build
 zig build -Drelease-safe
 
 # Start server (QUIC+TLS on port 8443, auto-generates certs if missing)

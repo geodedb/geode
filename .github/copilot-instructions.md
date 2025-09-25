@@ -7,11 +7,14 @@ Geode is a **full ACID property-graph database** implementing **ISO/IEC 39075:20
 ### Key Changes in v0.16.0
 
 - **QUIC+TLS ONLY**: No TCP fallback. TLS is mandatory with auto-generated self-signed certs
-- **No compile-time feature flags**: All subsystems fully integrated  
-- **Full Raft clustering**: Multi-process with data replication
-- **RLS/ABAC enforced**: Via planner rewrite and execution filters
-- **Materialized views**: Complete and incremental refresh implemented
+- **No compile-time feature flags**: All subsystems fully integrated, unified build
+- **Full Raft clustering**: Multi-process with leader election, data replication, automatic failover
+- **RLS/ABAC enforced**: Via planner rewrite and execution filters with audit logging
+- **Materialized views**: Complete and incremental refresh fully implemented
 - **Generated status.csv**: From CANARY annotations (never hand-edit)
+- **Recursive CTEs**: Enabled by default with cycle detection and depth limits
+- **Bounded path expansions**: Enabled by default with deterministic ordering
+- **Phantom prevention**: Enabled by default via range tracking
 
 ### T — Task & Role
 
@@ -28,7 +31,7 @@ Use the **GQL execution model over binding tables** and linear composition of st
   - **Planner/Executor** (`/engine`): Map to logical ops **NodeScan/Expand/Filter/Project/Group/Order/Limit/Offset/SetOp** and physicals (**NodeIndexScan/CSR, HashJoin, Sort/Top‑k**), honoring **US001** (pagination of unordered tables) and **UA005/UA006** (path tie‑break).
   - **Storage** (`/storage`): Slotted pages; adjacency blocks (CSR‑style); property heap; **WAL** with ARIES‑style LSNs; **STEAL/NO‑FORCE**; crash recovery.
   - **Transactions** (`/txn`): MVCC for SI; locks for DML; BEGIN/COMMIT/ROLLBACK via protocol; wire outcomes with ISO status classes.&#x20;
-  - **Distributed scaffold** (`/dist`): Raft stubs (leader only in v0.15.0), 2PC coordinator interfaces, shard map placeholders (feature‑flagged).&#x20;
+  - **Distributed** (`/distributed`): Full Raft implementation with leader election, log replication, InstallSnapshot, and automatic failover. Inter-node messaging via QUIC streams with retry logic.&#x20;
   - **Docs & Profiles** (`/docs`): **Conformance Profile** (features claimed; impl‑defined/dependent items) and **Diagnostics table**.&#x20;
 
 - **Errors/Diagnostics Policy**

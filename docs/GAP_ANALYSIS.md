@@ -2,7 +2,7 @@
 
 <!-- STATUS_JSON_SHA256: ddc0301b78df18587dc3df0334e8991983dfc0b2fb89740c8509ffe4580c44bf -->
 
-> **v0.16.0 UPDATE**: Full integration release with 451 CANARY aspects (329 TESTED, 60 BENCHED, 60 IMPL, 2 STUB). All compile-time feature flags removed. QUIC+TLS mandatory on port 8443. For count-based governance checks, `status.csv` is the authoritative source. This page's SHA256 marker guards consistency against `status.json`.
+> **v0.16.0 UPDATE**: Full integration release with 456 CANARY aspects (334 TESTED, 60 BENCHED, 60 IMPL, 2 STUB). All compile-time feature flags removed. QUIC+TLS mandatory on port 8443 with auto-generated certificates. Recursive CTEs, bounded expansions, and phantom prevention enabled by default. For count-based governance checks, `status.csv` is the authoritative source (generated from CANARY annotations). This page's SHA256 marker guards consistency against `status.json`.
 
 ## CANARY Evidence (Scanner Lines)
 
@@ -45,8 +45,12 @@
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistryVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope; OWNER=ops; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCandidateRescoringIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanCandidateRescoringIntegration; OWNER=planner; UPDATED=2025-09-24
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanStatisticsRegistry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanStatisticsRegistry; OWNER=planner; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-012; FEATURE="Recursive CTEs"; ASPECT=CycleDetection; STATUS=TESTED; TEST=e2e_recursive_bounded_default; OWNER=planner; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MV Incremental Refresh"; ASPECT=IncrementalRefresh; STATUS=TESTED; TEST=e2e_materialized_views_refresh; OWNER=storage; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditLogging; STATUS=TESTED; TEST=e2e_rls_integration; OWNER=security; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=InterNodeMessaging; STATUS=TESTED; TEST=e2e_distributed_cluster; OWNER=distributed; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICListener; STATUS=TESTED; TEST=e2e_quic_startup; OWNER=wire; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanStatisticsRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanStatisticsRegistry; OWNER=planner; UPDATED=2025-09-25
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Diff Guard"; ASPECT=GovernanceTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard; OWNER=tooling; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-23

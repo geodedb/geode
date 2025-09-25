@@ -1,5 +1,12 @@
 # Geode v0.16.0 Build & Development Notes
 
+## Default Settings (v0.16.0)
+- **Recursive CTEs**: Enabled by default (depth limit: 100)
+- **Bounded path expansions**: Enabled by default (deterministic ordering)
+- **Phantom prevention**: Enabled by default (range tracking active)
+- **OPTIONAL MATCH**: Fixed null semantics
+- **Stats registry**: Disabled by default (set GEODE_STATS_REGISTRY=1 to enable)
+
 ## Transport Configuration
 - **QUIC+TLS is mandatory** - no TCP fallback
 - Auto-generates self-signed certificates if missing in `certs/`
@@ -21,16 +28,21 @@
 zig build test -Drelease-safe
 
 # Check for feature flags
-tools/no_feature_flags_check.py --repo .
+python3 tools/no_feature_flags_check.py --repo .
 
 # Generate status CSV
-tools/status_generate.py --repo . --out docs/status.csv
-
-# Validate CANARY annotations
-tools/canary_check.py --repo . --csv docs/status.csv
+python3 tools/status_generate.py --repo . --out docs/status.csv
 
 # Test multi-process cluster
-scripts/cluster_spawn.sh
+sh scripts/cluster_spawn.sh
+
+# Lint check
+zig fmt --check src/ tests/
+
+# Run specific test suites
+zig test tests/e2e_recursive_bounded_default.zig
+zig test tests/e2e_rls_integration.zig
+zig test tests/e2e_materialized_views_refresh.zig
 ```
 
 ## GPU linking notes
