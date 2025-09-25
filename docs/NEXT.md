@@ -24,6 +24,13 @@ Purpose: Maintain a minimal, actionable slice backlog strictly limited to forwar
 | S-109 | REQ-GQL-024 | Plan Cost Model Factors Promotion   | Remove lone IMPL risk         | Add test+bench for factors; promote IMPL→BENCHED                             | DONE  | planner   |
 | S-110 | REQ-GQL-004 | Pagination Execution Streaming Var. | Stabilize streaming latency   | Streaming bench (CV≤0.22 p95/mean≤2.55) + ordered emission test              | DONE  | planner   |
 | S-111 | REQ-GQL-010 | Governance: STUB Elimination Audit  | Maintain truthful docs        | Verify no remaining undisclosed STUB/IMPL after preceding slices             | DONE  | tooling   |
+| S-131 | REQ-GQL-087 | GPU Execution Kernel Prototype      | Begin actual GPU offload      | Single noop operator kernel launches + variance bench (cv≤0.22)              | PLAN  | accel     |
+| S-132 | REQ-GQL-088 | Advanced Analytics Seed (PageRank)  | Add first advanced analytic   | PageRank prototype (small graph determinism + variance harness stub)         | PLAN  | analytics |
+| S-133 | REQ-GQL-089 | QUIC Flow Control & Loss Recovery   | Transport completeness        | Flow control window tests + loss recovery latency variance bench             | PLAN  | transport |
+| S-134 | REQ-GQL-091 | MV Incremental Delta Refresh        | Reduce refresh overhead       | Delta capture tests + refresh latency delta variance envelope                | PLAN  | storage   |
+| S-135 | REQ-GQL-092 | Cost Model Cardinality Integration  | Prepare full CBO              | Cardinality estimator integration tests + plan enumeration cost sanity       | PLAN  | optimizer |
+| S-136 | REQ-GQL-093 | CDC External Connector (Kafka)      | External sink support         | Kafka mock sink e2e + throughput variance envelope (cv≤0.22 p95≤2.55)        | PLAN  | cdc       |
+| S-137 | REQ-GQL-094 | Namespace Isolation (Multi-Graph)   | Tenant separation             | Catalog namespace creation/list isolation tests                              | PLAN  | catalog   |
 
 ## 3. Variance Policy (Extract)
 

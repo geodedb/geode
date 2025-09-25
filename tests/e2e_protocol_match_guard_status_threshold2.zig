@@ -18,7 +18,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = code, .out = out, .err = err };
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=CliResultsOverrideThreshold2; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMappingThreshold2; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMappingThreshold2; OWNER=engine; UPDATED=2025-09-25
 // This test sets max_results=2 and expects ExecutionGuardTrip advisory still surfaces (query produces >2 rows)
 
 fn query() []const u8 {

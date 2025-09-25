@@ -19,7 +19,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = code, .out = out, .err = err };
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=AdditionalStatusPropagation; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-25
 // This test triggers the result guard (max_results=1) and expects ExecutionGuardTrip to appear in additional_statuses
 // on either the SCHEMA frame (now preferred) or the first BINDINGS frame produced by geodec after a MATCH query.
 

@@ -51,8 +51,26 @@ Counts originate from the CANARY scanner (`status.csv` authoritative) and are cr
 
 - Distributed: partial Raft scaffolding (append entries/commit advance); no election/snapshot; sharding future
 - QUIC transport: experimental (feature‑flagged), TCP remains primary
-- GPU acceleration, advanced graph analytics, full-text search: not implemented
+- GPU acceleration: flagger + capability enumeration + kernel scaffold only (no operator execution offload yet)
+- Advanced graph analytics & ML (PageRank, centralities, communities): not implemented
+- Full-text search: index & query pipelines not implemented (early inverted index core only)
 - Cost-based optimizer: initial cost model scaffolding; no cost-based plan selection
+
+#### GPU Acceleration Status (REQ-GQL-051)
+
+| Aspect                                | Evidence | Reality                                                 |
+| ------------------------------------- | -------- | ------------------------------------------------------- |
+| GPUFlagger                            | TESTED   | Capability probe / feature flag only                    |
+| GPUFlaggerEnumerationVarianceEnvelope | BENCHED  | Measures enumeration latency variance; no kernel launch |
+| GPUFlaggerUnsupported                 | TESTED   | Surfaces UNSUPPORTED correctly                          |
+| GPU Operator Kernels Foundations      | BENCHED  | Placeholder benchmark; no real compute                  |
+
+##### Implementation notes
+
+- No CUDA/OpenCL kernels compiled or linked; `src/gpu/acceleration.zig` contains stub `launchKernel` returning unsupported.
+- Planner/executor never schedules GPU physical operators; flagger output is advisory only.
+- No device memory management, kernel scheduling, or GPU errors in protocol frames.
+- Prior wording said "not implemented"; refined to reflect partial scaffolding without execution semantics.
 
 ## Verification
 

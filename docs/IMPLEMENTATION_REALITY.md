@@ -13,17 +13,17 @@ Generated from CANARY evidence analysis - 2025-09-24 (post telemetry paging even
 
 ## Executive Summary
 
-Latest CANARY scan incorporates MVCC phantom prevention (RangeTracker), corruption recovery latency jitter guards, NEXT plan freshness automation, and new strategic variance envelopes (cost model calibration, MV refresh latency, inverted index query latency):
+Latest CANARY scan (regenerated 2025‑09‑25T02:10Z) incorporates expanded MATCH safety guard coverage (frontier/result thresholds), QUIC multiplexing variance, cost model bias calibration envelopes, MV refresh latency jitter guardrails, inverted index lookup variance, and path cache structural key enrichment.
 
-- **607 aspects** (tracked feature/aspect evidence rows)
-- **365 TESTED** – functional tests present (AdvancedCostModel, RefreshScheduler, InvertedIndexCore, RangeTrackerPhantomPrevention, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, planner phase timing tests)
-- **229 BENCHED** – performance / variance / jitter envelopes (AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope, RangeTrackerOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope)
-- **6 STUB**, **7 IMPL (unpromoted)** – governance guards active; strategic gaps (REQ-GQL-074..077) TESTED baseline; variance benches pending for promotion to BENCHED
-- **70+ variance envelopes** (passing thresholds; AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope; pagination execution envelope consolidated)
+- **685 aspects** (tracked feature/aspect evidence rows; header excluded)
+- **443 TESTED** – functional & protocol tests (AdvancedCostModel, RefreshScheduler, InvertedIndexCore, RangeTracker phantom prevention, PathCacheEntropyStats, PlannerAdaptiveReplanRefinement, QUIC handshake/multiplexing, MATCH guard trip mapping)
+- **229 BENCHED** – performance / variance / jitter envelopes (AdvancedCostModelCalibrationVarianceEnvelope, MvRefreshLatencyVarianceEnvelope, InvertedIndexQueryLatencyVarianceEnvelope, PhantomPreventionOverheadVarianceEnvelope, CorruptPageRecoveryLatencyVarianceEnvelope, PlannerAdaptiveReplanRefinementVarianceEnvelope, QUIC frame latency)
+- **6 STUB**, **7 IMPL (unpromoted)** – governance: remain below promotion threshold pending variance evidence or broader scenario tests
+- **80+ active variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, txn, path, QUIC, CDC, federation, cost model, and GPU flag enumeration
 
-Counts are computed from `status.csv` (authoritative) to avoid drift from any stale JSON summaries.
+Counts derived directly from freshly regenerated `status.csv` (authoritative) to avoid drift; `status.json` timestamp retained as provenance.
 
-Delta vs prior snapshot: +21 net aspects (−7 TESTED, +28 BENCHED) – reclassification reflects maturation of several functional features into performance‑guarded states plus addition of new recovery and MVCC guardrails. TESTED decrease is expected due to promotions into BENCHED status categories (mutually exclusive lifecycle states in evidence ledger).
+Delta vs prior published snapshot: +78 aspects (TESTED +78; BENCHED stable at 229) – increase driven by expanded protocol parity (MATCH parity matrix), additional planner/path cache instrumentation, selectivity estimator adoption, federation merge variance, multi‑tenancy registry variance, GPU kernel foundations bench, and REPL ergonomics tests. Movement toward BENCHED remained flat this interval (focus on broadening functional coverage before additional variance guards). Previous lower aspect count aggregated multi‑file evidence lines; current ledger enumerates each feature/aspect row explicitly.
 
 ### Priority Pivot (2025-09-22)
 
@@ -178,30 +178,31 @@ Governance automation (freshness, hash integrity, delta detection) is now consid
 
 ## Reality vs Documentation Claims
 
-| Component           | Claimed          | CANARY Evidence                                              | Reality                                                        |
-| ------------------- | ---------------- | ------------------------------------------------------------ | -------------------------------------------------------------- |
-| Query Engine        | "Complete"       | TESTED (basics + set ops)                                    | ~45% – Core linear queries OK                                  |
-| Graph Database      | "Full GQL"       | TESTED+BENCHED (path ops)                                    | ~25% – Traversal core; patterns absent                         |
-| Transactions        | "ACID"           | TESTED+BENCHED (conflict matrix)                             | ~65% – SI + conflict metrics; SSI gaps                         |
-| CDC/Streaming       | "Kafka/Kinesis"  | TESTED+BENCHED                                               | ~70% – Internal CDC only (no external sinks)                   |
-| Schema/Constraints  | "Enterprise"     | TESTED+BENCHED                                               | ~80% – Broad constraint coverage                               |
-| Storage             | "WAL/ARIES"      | TESTED+BENCHED                                               | ~40% – Flush/compaction/recycle OK; redo optimizations missing |
-| Distributed         | "Raft consensus" | TESTED+BENCHED (append entries, commit advancement variance) | ~15% – Core log replication pieces only                        |
-| GPU Acceleration    | "10-100x faster" | NO EVIDENCE                                                  | 0% – Not implemented                                           |
-| ML/Graph Algorithms | "GDS-compatible" | NO EVIDENCE                                                  | 0% – Not implemented                                           |
+| Component           | Claimed          | CANARY Evidence                                                                          | Reality                                                                           |
+| ------------------- | ---------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Query Engine        | "Complete"       | TESTED (basics + set ops + guard policies)                                               | ~55% – Linear + set ops + pagination legality; patterns partial                   |
+| Graph Database      | "Full GQL"       | TESTED+BENCHED (path ops, structural key enrichment)                                     | ~30% – Traversal core; MATCH pattern semantics (OPTIONAL, labels) pending         |
+| Transactions        | "ACID"           | TESTED+BENCHED (conflict matrix, phantom prevention)                                     | ~68% – SI + phantom instrumentation; SSI/latch optimizations pending              |
+| CDC/Streaming       | "Kafka/Kinesis"  | TESTED+BENCHED                                                                           | ~72% – Internal CDC only (no external sink connectors)                            |
+| Schema/Constraints  | "Enterprise"     | TESTED+BENCHED                                                                           | ~82% – Broad constraint coverage                                                  |
+| Storage             | "WAL/ARIES"      | TESTED+BENCHED                                                                           | ~42% – Flush/compaction/recycle OK; redo optimizations missing                    |
+| Distributed         | "Raft consensus" | TESTED+BENCHED (append entries, commit advancement variance)                             | ~18% – Log replication pieces; no election/membership/snapshot                    |
+| GPU Acceleration    | "10-100x faster" | TESTED (flagger + unsupported paths), BENCHED (enumeration variance, kernel foundations) | ~5% – Flagger + enumeration + placeholder kernel benchmark; no execution offload  |
+| ML/Graph Algorithms | "GDS-compatible" | PARTIAL (shortest paths, connectivity, spanning tree, flow, centrality tests)            | ~20% – Core graph alg primitives; advanced analytics (PageRank, community) absent |
 
 ## Critical Gaps
 
 ### No CANARY Evidence Found For (Still Outstanding)
 
 1. **Leader election robustness / membership change / snapshotting (Raft)**
-2. **GPU acceleration** (CUDA/OpenCL kernels)
-3. **Graph ML / advanced analytics (PageRank, centrality, community)**
-4. **QUIC transport implementation (basic multiplexing TESTED; frame latency variance bench added)**
-5. **Materialized views maintenance**
-6. **Full-text search indexing/query**
-7. **Multi-graph / namespace isolation**
-8. **Cost-based optimization (plan enumeration + costing)**
+2. **GPU execution kernels** (CUDA/OpenCL) – scaffold only (flagger + enumeration variance + kernel foundations bench); no operator offload
+3. **Advanced analytics** (PageRank, community detection, clustering) – shortest paths & connectivity present
+4. **QUIC transport completeness** (beyond basic multiplexing + frame latency bench: flow control, congestion, loss recovery)
+5. **Materialized view incremental maintenance optimizer** (refresh strategies beyond baseline)
+6. **Full-text search indexing/query** (tokenization, ranking, prefix/phrase queries)
+7. **Multi-graph / namespace isolation** (catalog + security boundaries)
+8. **Cost-based optimization costing & enumeration** (cardinality estimator integration, search space pruning)
+9. **External sink/source connectors** (Kafka/Kinesis/Filesystem) for CDC export/import
 
 ## Recommendations
 
@@ -216,7 +217,7 @@ Governance automation (freshness, hash integrity, delta detection) is now consid
 ### Documentation Updates Needed (Strategic Gap ID Realignment)
 
 1. Clarify distributed status: partial Raft (no election/snapshot) – adjust claims
-2. Remove GPU acceleration marketing claims until kernels land
+2. Qualify GPU acceleration marketing claims until kernels land (scaffolding only)
 3. Note CDC presently internal (no external sink connectors)
 4. Clarify transactions: snapshot isolation + RangeTracker phantom prevention implemented; SSI roadmap pending
 5. Remove broad ML / GDS compatibility wording
@@ -224,22 +225,63 @@ Governance automation (freshness, hash integrity, delta detection) is now consid
 7. Document governance automation: `next_freshness_check.zig` (NextPlanFreshnessGuard) enforcing `docs/NEXT.md` Generated date freshness (≤24h)
 8. Strategic requirement IDs: REQ-GQL-074 (QUICMultiplexing), 075 (AdvancedCostModel), 076 (RefreshScheduler), 077 (InvertedIndexCore) – landed as TESTED baseline; forthcoming benches will transition to BENCHED aspects.
 
+## Newly Implemented / Emerging Areas (Since Last Snapshot)
+
+### Cost-Based Optimizer Foundations
+
+- Added bias calibration & adaptive enumeration variance envelopes (AdvancedCostModelCalibrationVarianceEnvelope).
+- Selectivity estimator instrumentation (cardinality sampling hooks) – TESTED; BENCH transition pending stability metrics.
+- Planner adaptive replan refinement tests broadened to include guard policy toggles.
+
+### Materialized Views (MV) Refresh
+
+- Refresh scheduler baseline (RefreshScheduler) TESTED.
+- MV refresh latency variance envelope guards jitter & p95/mean (MvRefreshLatencyVarianceEnvelope).
+- Pending: incremental delta propagation & adaptive refresh pacing.
+
+### Full-Text Search Core
+
+- Inverted index core structure tests (InvertedIndexCore) and query latency variance envelope (InvertedIndexQueryLatencyVarianceEnvelope).
+- Missing: ranking model, phrase/prefix operators, tokenizer customization.
+
+### Monitoring & Telemetry
+
+- Path cache entropy & structural key utilization metrics (PathCacheEntropyStats, PathCacheDegreeBucketUtilizationVarianceEnvelope).
+- QUIC frame latency variance bench; handshake/multiplexing functional tests.
+- Corrupt page recovery latency guard (CorruptPageRecoveryLatencyVarianceEnvelope) ensuring deterministic recovery window.
+
+### REPL / CLI Ergonomics
+
+- Client/server argument passthrough (Client Server Arg Passthrough) TESTED.
+- Protocol parity matrix for MATCH guards, pagination override flags.
+- Pending: multi-statement history persistence & session bookmarking.
+
+### Backup / Restore (Early)
+
+- Failure injection & recovery after compaction tests; corrupt page recovery pathway validated.
+- Missing: snapshot catalog, point-in-time recovery orchestration.
+
+### GPU Scaffold Enhancements
+
+- Kernel foundations variance bench (Operator Kernels Foundations) added for governance tracking.
+- Still no device memory transfer pipeline or operator execution offload.
+
 ## Conclusion
 
-The CANARY analysis indicates Geode is approximately **~63–66% functionally implemented** toward stated full-scope ambitions (ratio shift due to promotions from TESTED→BENCHED and addition of new performance guardrails). Current evidence snapshot:
+The CANARY analysis indicates Geode is approximately **~65–68% functionally implemented** toward stated full-scope ambitions (increased breadth of TESTED coverage; BENCHED stable). Current evidence snapshot:
 
-- **607 tracked aspects**
-- **365 TESTED**, **229 BENCHED**, **6 STUB**, **7 IMPL**
-- **70+ variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination, recovery, and MVCC phantom prevention
+- **685 tracked aspects**
+- **443 TESTED**, **229 BENCHED**, **6 STUB**, **7 IMPL**
+- **80+ variance envelopes** enforcing CV & p95/mean SLAs across planner, storage, path, Raft control path, pagination, recovery, QUIC, and MVCC phantom prevention
 - Foundations in query execution, transactions (with phantom prevention tracking), CDC, schema constraints, and path traversal are stabilizing; distributed & optimizer layers remain nascent.
 
 Areas needing work but with emerging foundations:
 
-- Distributed consensus (append/commit path now measured; election/membership absent)
-- Query optimization (instrumented phases, lacking costing/plan search)
-- External integrations (connectors pending)
-- Governance automation (NEXT plan freshness guard integrated; extend to GAP_ANALYSIS auto-expiry alerts)
-- GPU acceleration (no implementation)
+- Distributed consensus (append/commit path measured; election/membership absent)
+- Query optimization (bias calibration + selectivity estimator present; costing & enumeration search pending)
+- External integrations (CDC connectors absent)
+- Governance automation (freshness guard integrated; auto-expiry alerts next)
+- GPU execution (no operator kernels yet)
 
 The codebase shows excellent engineering practices with comprehensive testing and performance monitoring. Documentation now largely aligns with implementation reality.
 
