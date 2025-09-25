@@ -1,0 +1,34 @@
+name: Transport Parity Smokes (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Run with strict telemetry and fail on parity errors'
+        required: false
+        default: 'false'
+
+jobs:
+  parity-smokes:
+    runs-on:
+      group: lab
+      labels: [self-hosted, x86]
+    timeout-minutes: 30
+    steps:
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Run telemetry smoke (soft)
+        if: inputs.strict != 'true'
+        run: GEODE_CI_TELEMETRY_SMOKE=1 zig test test_telemetry_smoke.zig
+      - name: Run telemetry smoke (strict)
+        if: inputs.strict == 'true'
+        run: GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 zig test test_telemetry_smoke.zig
+      - name: Run all gated transport parity tests
+        env:
+          GEODE_CI_QUIC_SMOKE: '1'
+        run: make transport-parity-smokes

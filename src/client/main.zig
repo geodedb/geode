@@ -42,7 +42,7 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     if (argv.len < 2) {
-        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port|/path/to/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback] [--no-quic]\n", .{});
+        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port|/path/to/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt] [--begin] [--commit|--rollback] [--no-quic] [--server-arg <arg>]...\n", .{});
         return;
     }
     const text: []const u8 = argv[1];
@@ -128,6 +128,20 @@ pub fn main() !void {
 
     if (log_level_arg) |lla| logger.setLevel(logger.parseLevel(lla));
     logger.info("client.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
+
+    // Collect extra server args for stdio-spawned server (e.g., --data_dir, feature flags)
+    var server_extra_args = std.ArrayList([]const u8).initCapacity(gpa, 0) catch return error.OutOfMemory;
+    defer server_extra_args.deinit(gpa);
+
+    // Re-scan argv for passthrough flags (supports repetition)
+    var i_scan: usize = 1;
+    while (i_scan < argv.len) : (i_scan += 1) {
+        if (std.mem.eql(u8, argv[i_scan], "--server-arg") and i_scan + 1 < argv.len) {
+            // store next token as a single arg; caller may pass flag name and value via two occurrences
+            server_extra_args.append(gpa, argv[i_scan + 1]) catch return error.OutOfMemory;
+            i_scan += 1;
+        }
+    }
 
     if (use_quic) {
         // Use QUIC transport with graceful fallback to stdio if connection fails
@@ -317,12 +331,17 @@ pub fn main() !void {
 
     // Spawn server
     // Build server args
-    var server_args = std.ArrayList([]const u8).initCapacity(gpa, 4) catch return error.OutOfMemory;
+    var server_args = std.ArrayList([]const u8).initCapacity(gpa, 4 + server_extra_args.items.len) catch return error.OutOfMemory;
     defer server_args.deinit(gpa);
     try server_args.append(gpa, server_path);
     if (test_wal_skip_ratio) |val| {
         try server_args.append(gpa, "--test-wal-skip-ratio");
         try server_args.append(gpa, val);
+    }
+    // Append any passthrough server args after binary path
+    var sai: usize = 0;
+    while (sai < server_extra_args.items.len) : (sai += 1) {
+        try server_args.append(gpa, server_extra_args.items[sai]);
     }
 
     var child = std.process.Child.init(server_args.items, gpa);

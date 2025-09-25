@@ -7,12 +7,15 @@ on:
 
 jobs:
   canary:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: lab
+      labels: [self-hosted, x86]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
         with:
-          go-version: '1.23'
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build scanner
         run: go build -o ./bin/canaryscan ./tools/canaryscan
       - name: Generate status

@@ -368,6 +368,8 @@ transport-parity-smokes: build
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_order_pagination_rows.zig || true
 	@echo "Running transport parity (CASE 3VL rows, order-insensitive)..."
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_case.zig || true
+	@echo "Running transport parity (varlen curated dataset full rows)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig || true
 	@echo "✓ Transport parity smokes completed (non-fatal mode)"
 
 # Cross-compilation targets (required 64-bit targets only)

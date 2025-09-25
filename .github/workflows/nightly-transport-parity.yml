@@ -1,0 +1,75 @@
+name: Nightly Transport Parity Smokes
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # run nightly at 03:17 UTC
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    runs-on:
+      group: lab
+      labels: [self-hosted, x86]
+    steps:
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: QUIC EXPLAIN smoke (STRICT)
+        run: |
+          GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 zig test tests/e2e_quic_explain_smoke.zig
+
+      - name: Telemetry paging smoke (STRICT)
+        run: |
+          GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 GEODE_TELEMETRY_PAGING=1 GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log GEODE_QUIC_PASSIVE_TEARDOWN=1 zig test test_telemetry_smoke.zig
+
+      - name: Transport parity smokes (STRICT)
+        run: |
+          GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 make transport-parity-smokes
+      - name: Generate parity summary
+        run: |
+          bash scripts/parity_summary.sh
+
+      - name: Upload parity summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-summary
+          path: parity-summary.jsonl
+
+      - name: Parity summary diff (optional)
+        run: |
+          if [ -n "${PARITY_PREV_SUMMARY:-}" ] && [ -f "${PARITY_PREV_SUMMARY}" ]; then
+            bash scripts/parity_summary_diff.sh "${PARITY_PREV_SUMMARY}" parity-summary.jsonl > parity-summary-diff.jsonl || true
+            echo "Diff generated" >&2
+          else
+            echo "Skipping diff; PARITY_PREV_SUMMARY unset or file missing" >&2
+          fi
+
+      - name: Upload parity summary diff artifact
+        if: ${{ hashFiles('parity-summary-diff.jsonl') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-summary-diff
+          path: parity-summary-diff.jsonl
+
+      - name: Archive artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-artifacts
+          path: |
+            test_stdout.log
+            test_stderr.log
+            single_stdout.log
+            single_stderr.log
+            build_tools_stdout.log
+            build_tools_stderr.log
+            canary_out.log
+            canary_err.log
+            zig-out/bin/
+            data/varlen_determinism/

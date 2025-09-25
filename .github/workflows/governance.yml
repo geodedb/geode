@@ -10,11 +10,15 @@ on:
         default: '0'
 jobs:
   canary-governance:
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: lab
+      labels: [self-hosted, x86]
     steps:
-      - uses: actions/checkout@v4
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
         with:
-          fetch-depth: 0
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Cache Zig build artifacts
         uses: actions/cache@v4
         with:

@@ -325,7 +325,7 @@ The QUIC transport layer is included as a git submodule at `vendor/quic/`. For m
 
 ### Using the CLI Client
 
-```bash
+````bash
 # Simple query
 ./zig-out/bin/geodec "RETURN 1 AS x ORDER BY x LIMIT 1"
 
@@ -334,7 +334,14 @@ The QUIC transport layer is included as a git submodule at `vendor/quic/`. For m
 
 # Profile a query
 ./zig-out/bin/geodec "PROFILE MATCH (n) RETURN COUNT(n)" --format json
-```
+
+#### Passing server flags in stdio mode
+
+When using stdio mode (default), pass flags to the spawned server via repeated `--server-arg` parameters. This is useful to control `--data_dir` or feature flags without starting the server yourself:
+
+```bash
+./zig-out/bin/geodec "RETURN 1 AS x" --server-arg --data_dir --server-arg ./data --format json
+````
 
 ### QUIC Smokes and Transport Parity (Optional)
 
@@ -360,6 +367,91 @@ Run a single transport parity test manually:
 ```bash
 GEODE_CI_QUIC_SMOKE=1 zig test tests/e2e_protocol_transport_parity_case.zig
 ```
+
+Curated varlen dataset parity (manual):
+
+```bash
+# Prepare: short-lived QUIC server over curated dataset
+GEODE_QUIC_PASSIVE_TEARDOWN=1 ./zig-out/bin/geoded \
+  --listen-quic 127.0.0.1:17671 --log_json --result-format json \
+  --test-exit-after-first-request --data_dir ./data/varlen_determinism &
+sleep 0.4
+
+# Stdio vs QUIC runs should emit identical BINDINGS rows
+Q='MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 6'
+STDIO=$(./zig-out/bin/geodec "$Q" --format json --server-arg --data_dir --server-arg ./data/varlen_determinism)
+QUIC=$(./zig-out/bin/geodec "$Q" --server 127.0.0.1:17671 --quic --format json)
+echo "$STDIO" | grep '"type":"BINDINGS"' > /tmp/stdio_rows.json
+echo "$QUIC" | grep '"type":"BINDINGS"' > /tmp/quic_rows.json
+diff -u /tmp/stdio_rows.json /tmp/quic_rows.json && echo "Rows match"
+```
+
+### Nightly Transport Parity Summary
+
+The nightly workflow (`nightly-transport-parity.yml`) runs the full set of gated transport parity smokes under strict mode and publishes two artifacts:
+
+1. `parity-artifacts` — Raw stdout/stderr logs and binaries snapshot.
+2. `parity-summary` — JSON Lines file (`parity-summary.jsonl`) containing per-test row hash summaries:
+
+Example line:
+
+```json
+{
+  "test": "e2e_protocol_transport_parity_varlen_dataset_rows.zig",
+  "rows_sha256": "1b4f2a...",
+  "status": "OK"
+}
+```
+
+Usage:
+
+```bash
+# After downloading parity-summary.jsonl
+jq -c 'select(.status=="FAIL")' parity-summary.jsonl  # list any failed/parity-mismatched tests
+cut -d ' ' -f2 parity-summary.jsonl | sort | uniq -c    # quick distribution of hashes
+```
+
+If a test unexpectedly changes output determinism, its hash will differ versus prior runs (compare artifacts); investigate planner/executor ordering logic, tie-break policy (UA005/UA006), or result pagination. Server arg passthrough (`--server-arg`) ensures stdio path can mirror dataset flags used by QUIC server for apples-to-apples comparisons.
+
+#### Parity Summary Diff (Historical Comparison)
+
+The helper script `scripts/parity_summary_diff.sh` compares a previous `parity-summary.jsonl` with the current one and emits JSON Lines of type `ADDED`, `REMOVED`, or `CHANGED` (hash differences). Nightly workflow will generate a diff automatically if `PARITY_PREV_SUMMARY` is provided (e.g., via a retained artifact). Manual usage:
+
+```bash
+bash scripts/parity_summary.sh                    # generate current parity-summary.jsonl
+cp old/parity-summary.jsonl prev.jsonl            # retrieved earlier artifact
+bash scripts/parity_summary_diff.sh prev.jsonl parity-summary.jsonl > diff.jsonl
+grep 'CHANGED' diff.jsonl
+```
+
+Guard Test: `tests/e2e_parity_summary_guard.zig` ensures every parity test has a summary row when the summary file is present (skips locally if missing). This prevents silently untracked tests as new parity cases are added.
+
+##### Parity Summary Diff Guard (New)
+
+A complementary governance test `tests/e2e_parity_summary_diff_guard.zig` enforces that:
+
+1. No `REMOVED` entries appear in `parity-summary-diff.jsonl` (removal is treated as a regression until explicitly justified by deleting the underlying test).
+2. The count of `CHANGED` entries does not exceed a configurable threshold (default 0) to catch unexpected determinism drift.
+
+Environment variable:
+
+| Variable                   | Effect                                                  |
+| -------------------------- | ------------------------------------------------------- |
+| `GEODE_PARITY_CHANGED_MAX` | Maximum allowed `CHANGED` entries in diff (default: 0). |
+
+Behavior:
+
+- If `parity-summary-diff.jsonl` is absent (e.g., local dev without historical artifact) the guard test skips.
+- To intentionally allow limited churn (e.g., refactor touching ordering), set `GEODE_PARITY_CHANGED_MAX` to the number of expected changed hashes for that run.
+- Any `REMOVED` entry fails immediately (require adding back test or updating expectations).
+
+Example (allow up to 2 legitimate deterministic changes during a refactor):
+
+```bash
+GEODE_PARITY_CHANGED_MAX=2 zig build test -Doptimize=ReleaseSafe
+```
+
+CI Integration Suggestion: pass `GEODE_PARITY_CHANGED_MAX=0` in nightly to maintain strict regression sensitivity; raise only in a temporary maintenance branch with explicit review.
 
 ### Docker Deployment
 

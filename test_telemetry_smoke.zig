@@ -57,7 +57,7 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
         if (f) |*fh| fh.close();
     }
     try server_env.put("GEODE_CAPTURE_SERVER_STDERR", tmp_path);
-    var server = std.process.Child.init(&.{ server_path, "--listen-quic", "127.0.0.1:7567", "--log_json", "--result-format", "json" }, allocator);
+    var server = std.process.Child.init(&.{ server_path, "--listen-quic", "127.0.0.1:7567", "--log_json", "--result-format", "json", "--test-exit-after-first-request" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Ignore;
     server.stderr_behavior = .Pipe;
@@ -73,8 +73,10 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
         return;
     };
     const serr_file_pre = server.stderr;
-    // Briefly wait for server to start listening
-    std.Thread.sleep(300 * std.time.ns_per_ms);
+    // Briefly wait for server to start listening (longer in strict mode)
+    var boot_ms: u64 = 300;
+    if (strict_mode) boot_ms = 500;
+    std.Thread.sleep(boot_ms * std.time.ns_per_ms);
 
     // Run a query that deterministically yields multiple pages to trigger paging telemetry.
     // Use params path to generate multiple rows and avoid single-row fast paths.

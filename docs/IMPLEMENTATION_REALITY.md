@@ -5,6 +5,11 @@
 Generated from CANARY evidence analysis - 2025-09-24 (post telemetry paging events + governance sync; updated strategic gap IDs 074–077)
 
 // NOTE: Future slice planning content moved to `NEXT.md` to avoid redundancy. This file remains a snapshot of current implemented reality only.
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-091; FEATURE="Client Server Arg Passthrough"; ASPECT=CliErgonomics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_091_ClientServerArgPassthrough; OWNER=client; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Guard"; ASPECT=GovernanceTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryGuard; OWNER=tooling; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Diff"; ASPECT=ToolingScript; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryGuard; OWNER=tooling; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Diff Guard"; ASPECT=GovernanceTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard; OWNER=tooling; UPDATED=2025-09-24
 
 ## Executive Summary
 

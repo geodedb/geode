@@ -15,12 +15,15 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: lab
+      labels: [self-hosted, x86]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
         with:
-          fetch-depth: 0
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
       - name: Use doc-pages composite action
         uses: codeprosorg/doc-pages@main

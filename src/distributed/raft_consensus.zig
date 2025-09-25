@@ -3,6 +3,28 @@ const Allocator = std.mem.Allocator;
 
 const log = std.log.scoped(.raft);
 
+// Clock abstraction for deterministic elections & tests
+pub const Clock = struct {
+    nowMillisFn: *const fn () i64,
+    randFn: *const fn (max: u64) u64,
+    pub fn nowMillis(self: *const Clock) i64 {
+        return self.nowMillisFn();
+    }
+    pub fn rand(self: *const Clock, max: u64) u64 {
+        return if (max == 0) 0 else self.randFn(max);
+    }
+};
+
+fn realNow() i64 {
+    return std.time.milliTimestamp();
+}
+fn realRand(max: u64) u64 {
+    return if (max == 0) 0 else std.crypto.random.int(u64) % max;
+}
+pub const RealClock = struct {
+    pub const instance: Clock = .{ .nowMillisFn = realNow, .randFn = realRand };
+};
+
 // Forward declarations and types
 pub const State = enum {
     follower,
@@ -78,7 +100,34 @@ pub const Statistics = struct {
 };
 
 // RPC client for peer communication
-const quic = @import("transport/quic");
+// During `zig test` the transport/quic module may not be compiled; provide a lightweight stub.
+const builtin = @import("builtin");
+const quic = if (builtin.is_test) struct {
+    pub const QuicClient = struct {
+        pub fn init(_: anytype) QuicClient {
+            return .{};
+        }
+        pub fn connect(_: *QuicClient, _: []const u8, _: u16) !void {}
+        pub fn deinit(_: *QuicClient) void {}
+        pub fn getStream(_: *QuicClient) !*QuicClientStream {
+            return undefined;
+        }
+    };
+    pub const QuicClientStream = struct {
+        pub fn writeAll(_: *QuicClientStream, _: []const u8) !void {}
+        pub fn deinit(_: *QuicClientStream) void {}
+    };
+    pub const QuicTransport = struct {
+        pub fn init(_: anytype, _: anytype) !QuicTransport {
+            return .{};
+        }
+        pub fn listen(_: *QuicTransport) !void {}
+        pub fn deinit(_: *QuicTransport) void {}
+        pub fn getStream(_: *QuicTransport) !*QuicClientStream {
+            return undefined;
+        }
+    };
+} else @import("transport/quic");
 pub const RpcClient = struct {
     allocator: Allocator,
     host: []const u8,
@@ -163,34 +212,172 @@ pub const PersistentStorage = struct {
     }
 
     pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
-        _ = self;
-        return null; // Implementation would read from file
+        // Lazy open; if file doesn't exist return null
+        if (self.current_term_file == null) {
+            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
+            defer dir.close();
+            var exists = true;
+            dir.access("current_term", .{}) catch |err| switch (err) {
+                error.FileNotFound => exists = false,
+                else => return err,
+            };
+            if (!exists) return null;
+            self.current_term_file = try dir.openFile("current_term", .{ .mode = .read_write });
+        }
+        const f = self.current_term_file.?;
+        try f.seekTo(0);
+        var buf: [32]u8 = undefined;
+        const n = try f.read(&buf);
+        if (n == 0) return null;
+        const slice = std.mem.trim(u8, buf[0..n], " \n\r\t");
+        if (slice.len == 0) return null;
+        return try std.fmt.parseInt(u64, slice, 10);
     }
 
     pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
-        _ = self;
-        _ = term;
+        if (self.current_term_file == null) {
+            std.fs.cwd().makePath(self.data_dir) catch {};
+            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
+            defer dir.close();
+            self.current_term_file = try dir.createFile("current_term", .{ .truncate = true });
+        }
+        const f = self.current_term_file.?;
+        try f.seekTo(0);
+        try f.writeAll("\n"); // ensure file not empty to allow atomic style replace
+        try f.seekTo(0);
+        var buf: [64]u8 = undefined;
+        const w = std.fmt.bufPrint(&buf, "{d}\n", .{term}) catch return error.UnexpectedWriteFailure;
+        try f.writeAll(w);
+        try f.sync();
     }
 
     pub fn getVotedFor(self: *PersistentStorage) !?u64 {
-        _ = self;
-        return null;
+        if (self.voted_for_file == null) {
+            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
+            defer dir.close();
+            var exists = true;
+            dir.access("voted_for", .{}) catch |err| switch (err) {
+                error.FileNotFound => exists = false,
+                else => return err,
+            };
+            if (!exists) return null;
+            self.voted_for_file = try dir.openFile("voted_for", .{ .mode = .read_write });
+        }
+        const f = self.voted_for_file.?;
+        try f.seekTo(0);
+        var buf: [32]u8 = undefined;
+        const n = try f.read(&buf);
+        if (n == 0) return null;
+        const slice = std.mem.trim(u8, buf[0..n], " \n\r\t");
+        if (slice.len == 0 or std.mem.eql(u8, slice, "null")) return null;
+        return try std.fmt.parseInt(u64, slice, 10);
     }
 
     pub fn saveVotedFor(self: *PersistentStorage, node_id: ?u64) !void {
-        _ = self;
-        _ = node_id;
+        if (self.voted_for_file == null) {
+            std.fs.cwd().makePath(self.data_dir) catch {};
+            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
+            defer dir.close();
+            self.voted_for_file = try dir.createFile("voted_for", .{ .truncate = true });
+        }
+        const f = self.voted_for_file.?;
+        try f.seekTo(0);
+        var buf: [64]u8 = undefined;
+        if (node_id) |id| {
+            const w = std.fmt.bufPrint(&buf, "{d}\n", .{id}) catch return error.UnexpectedWriteFailure;
+            try f.writeAll(w);
+        } else {
+            try f.writeAll("null\n");
+        }
+        try f.sync();
     }
 
     pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) ![]LogEntry {
-        _ = self;
-        _ = allocator;
-        return &[_]LogEntry{};
+        // Read JSONL log entries file; each line: {"term":..,"index":..,"cmd":"tag"}
+        var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
+        defer dir.close();
+        var exists = true;
+        dir.access("log.jsonl", .{}) catch {
+            exists = false;
+        };
+        if (!exists) return &[_]LogEntry{};
+        const file = try dir.openFile("log.jsonl", .{ .mode = .read_only });
+        defer file.close();
+        var list = std.ArrayList(LogEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        defer if (false) list.deinit();
+        var buf_reader = std.io.bufferedReader(file.reader());
+        var in_stream = buf_reader.reader();
+        while (true) {
+            var line_buf = std.ArrayList(u8).init(allocator);
+            defer line_buf.deinit();
+            const res = in_stream.readUntilDelimiterArrayList(&line_buf, '\n', 1024 * 8) catch |err| switch (err) {
+                error.EndOfStream => break,
+                else => return err,
+            };
+            _ = res;
+            const line = std.mem.trim(u8, line_buf.items, " \r\n\t");
+            if (line.len == 0) continue;
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch |err| {
+                log.warn("Skipping invalid log line: {s} err={}", .{ line, err });
+                continue;
+            };
+            defer parsed.deinit();
+            const root = parsed.value;
+            if (root != .object) continue;
+            const obj = root.object;
+            const term_v = obj.get("term") orelse continue;
+            const index_v = obj.get("index") orelse continue;
+            const cmd_v = obj.get("cmd") orelse continue;
+            if (term_v != .integer or index_v != .integer or cmd_v != .string) continue;
+            const cmd_tag = cmd_v.string;
+            var command: Command = .noop;
+            if (std.mem.eql(u8, cmd_tag, "noop")) {
+                // leave as noop
+            } else if (std.mem.eql(u8, cmd_tag, "write")) {
+                command = Command{ .write = "" }; // payload omitted
+            } else if (std.mem.eql(u8, cmd_tag, "graph_mutation")) {
+                command = Command{ .graph_mutation = .{ .graph = "", .mutation_type = .create, .data = "", .txn_id = null } };
+            } else if (std.mem.eql(u8, cmd_tag, "schema_change")) {
+                command = Command{ .schema_change = .{ .operation = .create_graph, .graph = "", .schema = "" } };
+            } else if (std.mem.eql(u8, cmd_tag, "config_change")) {
+                command = Command{ .config_change = .{ .change_type = .add_server, .server_id = 0, .server_endpoint = null, .server_port = null } };
+            } else if (std.mem.eql(u8, cmd_tag, "snapshot_pointer")) {
+                command = Command{ .snapshot_pointer = .{ .last_included_index = 0, .last_included_term = 0, .size_bytes = 0, .checksum = 0 } };
+            }
+            try list.append(.{ .term = @intCast(term_v.integer), .index = @intCast(index_v.integer), .command = command, .timestamp = 0, .client_id = null, .serial_number = null });
+        }
+        return list.toOwnedSlice();
     }
 
     pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
-        _ = self;
-        _ = entry;
+        if (self.log_file == null) {
+            std.fs.cwd().makePath(self.data_dir) catch {};
+            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
+            defer dir.close();
+            var exists2 = true;
+            dir.access("log.jsonl", .{}) catch {
+                exists2 = false;
+            };
+            if (!exists2) {
+                self.log_file = try dir.createFile("log.jsonl", .{ .truncate = false });
+            } else {
+                self.log_file = try dir.openFile("log.jsonl", .{ .mode = .read_write });
+            }
+        }
+        const f = self.log_file.?;
+        try f.seekFromEnd(0);
+        var buf: [128]u8 = undefined;
+        const cmd_tag = switch (entry.command) {
+            .noop => "noop",
+            .write => "write",
+            .graph_mutation => "graph_mutation",
+            .schema_change => "schema_change",
+            .config_change => "config_change",
+            .snapshot_pointer => "snapshot_pointer",
+        };
+        const line = std.fmt.bufPrint(&buf, "{\"term\":{d},\"index\":{d},\"cmd\":\"{s}\"}\n", .{ entry.term, entry.index, cmd_tag }) catch return error.UnexpectedWriteFailure;
+        try f.writeAll(line);
+        try f.sync();
     }
 };
 
@@ -209,9 +396,9 @@ pub const Message = union(enum) {
 pub const RaftFrameKind = enum { req_vote, req_vote_resp, append, append_resp, install_snapshot, install_snapshot_resp, snapshot_chunk };
 
 pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
-    var buf = std.ArrayList(u8).init(ally);
-    errdefer buf.deinit();
-    const w = buf.writer();
+    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(ally);
+    var w = buf.writer(ally);
     const kind = switch (msg) {
         .request_vote => "req_vote",
         .request_vote_response => "req_vote_resp",
@@ -220,12 +407,12 @@ pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u
         .install_snapshot => "install_snapshot",
         .install_snapshot_response => "install_snapshot_resp",
     };
-    try w.print("{{\"term\":{d},\"from\":{d},\"kind\":\"{s}\",\"payload\":", .{ term, from, kind });
-    // Custom payload writer for append_entries to include entries array simplified (term,index,command kind tag)
+    try w.print("{\"term\":{d},\"from\":{d},\"kind\":\"{s}\",\"payload\":", .{ term, from, kind });
     switch (msg) {
+        .request_vote => |rv| try w.print("{\"term\":{d},\"candidate_id\":{d},\"last_log_index\":{d},\"last_log_term\":{d},\"pre_vote\":{s}}", .{ rv.term, rv.candidate_id, rv.last_log_index, rv.last_log_term, if (rv.pre_vote) "true" else "false" }),
+        .request_vote_response => |rvr| try w.print("{\"term\":{d},\"vote_granted\":{s},\"voter_id\":{d}}", .{ rvr.term, if (rvr.vote_granted) "true" else "false", rvr.voter_id }),
         .append_entries => |ae| {
-            try w.print("{", .{});
-            try w.print("\"term\":{d},\"leader_id\":{d},\"prev_log_index\":{d},\"prev_log_term\":{d},\"leader_commit\":{d},\"entries\":[", .{ ae.term, ae.leader_id, ae.prev_log_index, ae.prev_log_term, ae.leader_commit });
+            try w.print("{\"term\":{d},\"leader_id\":{d},\"prev_log_index\":{d},\"prev_log_term\":{d},\"leader_commit\":{d},\"entries\":[", .{ ae.term, ae.leader_id, ae.prev_log_index, ae.prev_log_term, ae.leader_commit });
             for (ae.entries, 0..) |e, i| {
                 if (i > 0) try w.writeAll(",");
                 const cmd_tag = switch (e.command) {
@@ -240,11 +427,9 @@ pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u
             }
             try w.writeAll("]}");
         },
-        else => {
-            const payload = try std.json.stringifyAlloc(ally, msg, .{});
-            defer ally.free(payload);
-            try w.writeAll(payload);
-        },
+        .append_entries_response => |aer| try w.print("{\"term\":{d},\"success\":{s},\"match_index\":{d}}", .{ aer.term, if (aer.success) "true" else "false", aer.match_index }),
+        .install_snapshot => |is| try w.print("{\"term\":{d},\"leader_id\":{d},\"last_included_index\":{d},\"last_included_term\":{d},\"offset\":{d},\"done\":{s}}", .{ is.term, is.leader_id, is.last_included_index, is.last_included_term, is.offset, if (is.done) "true" else "false" }),
+        .install_snapshot_response => |isr| try w.print("{\"term\":{d}}", .{isr.term}),
     }
     try w.writeAll("}\n");
     return buf.toOwnedSlice();
@@ -414,6 +599,7 @@ pub const RaftNode = struct {
     // Timers
     last_heartbeat: i64,
     election_timer: i64,
+    clock: *const Clock = &RealClock.instance,
 
     // Candidate state
     votes_received: std.AutoHashMap(u64, bool),
@@ -437,6 +623,16 @@ pub const RaftNode = struct {
         peers: []Peer,
         election_timeout_ms: u64,
     ) !RaftNode {
+        return RaftNode.initWithClock(allocator, id, peers, election_timeout_ms, &RealClock.instance);
+    }
+
+    pub fn initWithClock(
+        allocator: Allocator,
+        id: u64,
+        peers: []Peer,
+        election_timeout_ms: u64,
+        clock: *const Clock,
+    ) !RaftNode {
         const log_list = try std.ArrayList(LogEntry).initCapacity(allocator, 10);
 
         var node = RaftNode{
@@ -453,8 +649,9 @@ pub const RaftNode = struct {
             .peers = peers,
             .election_timeout_ms = election_timeout_ms,
             .heartbeat_interval_ms = @max(50, election_timeout_ms / 10),
-            .last_heartbeat = std.time.milliTimestamp(),
-            .election_timer = std.time.milliTimestamp() + @as(i64, @intCast(election_timeout_ms)),
+            .last_heartbeat = clock.nowMillis(),
+            .election_timer = clock.nowMillis() + @as(i64, @intCast(election_timeout_ms)),
+            .clock = clock,
             .votes_received = std.AutoHashMap(u64, bool).init(allocator),
             .election_round = 0,
             .transport = null,
@@ -480,11 +677,10 @@ pub const RaftNode = struct {
             .term = 0,
             .index = 0,
             .command = .noop,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = clock.nowMillis(),
             .client_id = null,
             .serial_number = null,
         });
-
         return node;
     }
 
@@ -537,7 +733,7 @@ pub const RaftNode = struct {
     pub fn tick(self: *RaftNode) !void {
         if (self.state == .shutdown) return;
 
-        const now = std.time.milliTimestamp();
+        const now = self.clock.nowMillis();
 
         switch (self.state) {
             .follower => {
@@ -672,7 +868,7 @@ pub const RaftNode = struct {
             .term = self.current_term,
             .index = last_log_index + 1,
             .command = .noop,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = self.clock.nowMillis(),
             .client_id = null,
             .serial_number = null,
         };
@@ -686,7 +882,7 @@ pub const RaftNode = struct {
 
         // Send initial heartbeat with noop
         try self.sendHeartbeats();
-        self.last_heartbeat = std.time.milliTimestamp();
+        self.last_heartbeat = self.clock.nowMillis();
     }
 
     fn sendHeartbeats(self: *RaftNode) !void {
@@ -819,7 +1015,7 @@ pub const RaftNode = struct {
         // Mark peer as alive
         if (self.getPeer(from)) |peer| {
             peer.alive = true;
-            peer.last_contact = std.time.milliTimestamp();
+            peer.last_contact = self.clock.nowMillis();
         }
     }
 
@@ -956,6 +1152,51 @@ pub const RaftNode = struct {
                 _ = try callback(self.allocator, entry.command);
             }
 
+            // Internal handling for config change to adjust membership
+            switch (entry.command) {
+                .config_change => |cc| {
+                    // Simple synchronous in-memory update (no joint consensus yet)
+                    if (cc.change_type == .add_server) {
+                        if (cc.server_endpoint) |ep| {
+                            // Avoid duplicates
+                            var exists = false;
+                            for (self.peers) |p| {
+                                if (p.id == cc.server_id) {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                            if (!exists) {
+                                var new_peers = try self.allocator.alloc(Peer, self.peers.len + 1);
+                                @memcpy(new_peers[0..self.peers.len], self.peers);
+                                new_peers[self.peers.len] = .{ .id = cc.server_id, .endpoint = ep, .port = cc.server_port orelse 0, .alive = true, .last_contact = self.clock.nowMillis(), .rpc_client = null };
+                                self.peers = new_peers;
+                            }
+                        }
+                    } else if (cc.change_type == .remove_server) {
+                        var idx: usize = 0;
+                        while (idx < self.peers.len) : (idx += 1) {
+                            if (self.peers[idx].id == cc.server_id) {
+                                // remove by swapping last
+                                if (self.peers.len > 1) self.peers[idx] = self.peers[self.peers.len - 1];
+                                self.peers = self.peers[0 .. self.peers.len - 1];
+                                break;
+                            }
+                        }
+                    } else if (cc.change_type == .update_server) {
+                        if (cc.server_endpoint) |ep2| {
+                            for (self.peers) |*p| {
+                                if (p.id == cc.server_id) {
+                                    p.endpoint = ep2;
+                                    if (cc.server_port) |sp| p.port = sp;
+                                }
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+
             self.stats.entries_applied += 1;
             log.info("Applied entry with index {}", .{self.last_applied});
         }
@@ -967,9 +1208,8 @@ pub const RaftNode = struct {
     }
 
     fn resetElectionTimer(self: *RaftNode) void {
-        const random_timeout = self.election_timeout_ms +
-            (std.crypto.random.int(u64) % self.election_timeout_ms);
-        self.election_timer = std.time.milliTimestamp() + @as(i64, @intCast(random_timeout));
+        const random_timeout = self.election_timeout_ms + self.clock.rand(self.election_timeout_ms);
+        self.election_timer = self.clock.nowMillis() + @as(i64, @intCast(random_timeout));
     }
 
     fn getPeer(self: *RaftNode, id: u64) ?*Peer {
@@ -1039,7 +1279,7 @@ pub const RaftNode = struct {
             .term = self.current_term,
             .index = self.getLastLogIndex() + 1,
             .command = command,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = self.clock.nowMillis(),
             .client_id = client_id,
             .serial_number = serial_number,
         };
@@ -1337,4 +1577,38 @@ test "raft statistics tracking" {
     try testing.expect(node.stats.elections_called == 1);
     try testing.expect(node.stats.elections_won == 1);
     try testing.expect(node.stats.entries_appended == 1); // Leader noop
+}
+
+// CANARY: REQ=REQ-GQL-074; FEATURE="RaftPersistentStorage"; ASPECT=Durability; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftPersistentStorageRoundTrip; OWNER=cluster; UPDATED=2025-09-24
+test "TestCANARY_REQ_GQL_074_RaftPersistentStorageRoundTrip" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    // create temp dir
+    var tmp_dir_buf: [128]u8 = undefined;
+    const tmp_name = try std.fmt.bufPrint(&tmp_dir_buf, "raft_ps_{d}", .{std.time.milliTimestamp()});
+    try std.fs.cwd().makePath(tmp_name);
+    defer std.fs.cwd().deleteTree(tmp_name) catch {};
+
+    var storage = try PersistentStorage.init(alloc, tmp_name);
+    defer storage.close();
+    try storage.saveCurrentTerm(7);
+    try storage.saveVotedFor(42);
+    try storage.appendLogEntry(.{ .term = 7, .index = 1, .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null });
+
+    const term = try storage.getCurrentTerm();
+    try testing.expect(term.? == 7);
+    const voted = try storage.getVotedFor();
+    try testing.expect(voted.? == 42);
+    const entries = try storage.getLogEntries(alloc);
+    defer alloc.free(entries);
+    try testing.expect(entries.len == 1);
+    try testing.expect(entries[0].index == 1);
+
+    // Re-open storage new instance
+    var storage2 = try PersistentStorage.init(alloc, tmp_name);
+    defer storage2.close();
+    const term2 = try storage2.getCurrentTerm();
+    try testing.expect(term2.? == 7);
+    const voted2 = try storage2.getVotedFor();
+    try testing.expect(voted2.? == 42);
 }
