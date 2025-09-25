@@ -45,6 +45,8 @@
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistryVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope; OWNER=ops; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=PrometheusEndpoint; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_PrometheusEndpoint; OWNER=ops; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=CoreMetricsSet; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_CoreMetricsSet; OWNER=ops; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCandidateRescoringIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanCandidateRescoringIntegration; OWNER=planner; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanStatisticsRegistry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanStatisticsRegistry; OWNER=planner; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Diff Guard"; ASPECT=GovernanceTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard; OWNER=tooling; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=FullBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_FullBackup; OWNER=storage; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-082; FEATURE="BackupRestore"; ASPECT=IncrementalBackup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_IncrementalBackup; OWNER=storage; UPDATED=2025-09-23

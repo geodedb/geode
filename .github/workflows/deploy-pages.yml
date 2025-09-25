@@ -17,7 +17,7 @@ jobs:
   build:
     runs-on:
       group: lab
-      labels: [self-hosted, x86]
+      labels: [self-hosted, X64]
     steps:
       - uses: spyderorg/workflows/.github/actions/nix-setup@main
         with:
