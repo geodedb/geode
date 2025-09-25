@@ -182,7 +182,6 @@ pub fn build(b: *std.Build) void {
     const vqt_asn1_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/asn1.zig"), .target = target, .optimize = optimize });
     const vqt_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
     const vqt_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
-    const vqt_ed25519_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/vendor/ed25519/src/ed25519.zig"), .target = target, .optimize = optimize });
     // Hook up submodule imports
     vqt_packet_mod.addImport("quic_varint", vqt_varint_mod);
     vqt_packet_mod.addImport("quic_tls", vqt_tls_mod);
@@ -192,10 +191,10 @@ pub fn build(b: *std.Build) void {
     vqt_tls13_mod.addImport("sig", vqt_sig_mod);
     vqt_tls13_mod.addImport("x509", vqt_x509_mod);
     vqt_sig_mod.addImport("asn1", vqt_asn1_mod);
-    vqt_sig_mod.addImport("ed25519", vqt_ed25519_mod);
+    // No longer need ed25519 import - using std.crypto.sign.Ed25519
     vqt_x509_mod.addImport("asn1", vqt_asn1_mod);
     vqt_x509_mod.addImport("sig", vqt_sig_mod);
-    vqt_x509_mod.addImport("ed25519", vqt_ed25519_mod);
+    // No longer need ed25519 import - using std.crypto.sign.Ed25519
     vqt_tp_mod.addImport("quic_varint", vqt_varint_mod);
     vqt_frame_mod.addImport("quic_varint", vqt_varint_mod);
     vqt_recovery_mod.addImport("quic_frame", vqt_frame_mod);
@@ -233,7 +232,7 @@ pub fn build(b: *std.Build) void {
     vendor_quic_mod_for_test.addImport("asn1", vqt_asn1_mod);
     vendor_quic_mod_for_test.addImport("sig", vqt_sig_mod);
     vendor_quic_mod_for_test.addImport("x509", vqt_x509_mod);
-    vendor_quic_mod_for_test.addImport("ed25519", vqt_ed25519_mod);
+    // No longer need ed25519 import - using std.crypto.sign.Ed25519
 
     const transport_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod_for_test.addImport("vendor_quic", vendor_quic_mod_for_test);
@@ -385,7 +384,6 @@ pub fn build(b: *std.Build) void {
     const vq_asn1_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/asn1.zig"), .target = target, .optimize = optimize });
     const vq_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
     const vq_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
-    const vq_ed25519_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/vendor/ed25519/src/ed25519.zig"), .target = target, .optimize = optimize });
     // Hook up submodule imports
     vq_packet_mod.addImport("quic_varint", vq_varint_mod);
     vq_packet_mod.addImport("quic_tls", vq_tls_mod);
@@ -395,10 +393,10 @@ pub fn build(b: *std.Build) void {
     vq_tls13_mod.addImport("sig", vq_sig_mod);
     vq_tls13_mod.addImport("x509", vq_x509_mod);
     vq_sig_mod.addImport("asn1", vq_asn1_mod);
-    vq_sig_mod.addImport("ed25519", vq_ed25519_mod);
+    // No longer need ed25519 import - using std.crypto.sign.Ed25519
     vq_x509_mod.addImport("asn1", vq_asn1_mod);
     vq_x509_mod.addImport("sig", vq_sig_mod);
-    vq_x509_mod.addImport("ed25519", vq_ed25519_mod);
+    // No longer need ed25519 import - using std.crypto.sign.Ed25519
     vq_tp_mod.addImport("quic_varint", vq_varint_mod);
     vq_frame_mod.addImport("quic_varint", vq_varint_mod);
     vq_recovery_mod.addImport("quic_frame", vq_frame_mod);
@@ -436,7 +434,7 @@ pub fn build(b: *std.Build) void {
     vendor_quic_mod.addImport("asn1", vq_asn1_mod);
     vendor_quic_mod.addImport("sig", vq_sig_mod);
     vendor_quic_mod.addImport("x509", vq_x509_mod);
-    vendor_quic_mod.addImport("ed25519", vq_ed25519_mod);
+    // No longer need ed25519 import - using std.crypto.sign.Ed25519
 
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("vendor_quic", vendor_quic_mod);
