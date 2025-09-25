@@ -34,7 +34,6 @@ REQ-GQL-010,Diagnostics Precedence,Engine,IMPL,TestCANARY_REQ_GQL_010_Diagnostic
 REQ-GQL-010,Diagnostics Precedence & Folding,Engine,IMPL,TestCANARY_REQ_GQL_010_DiagnosticsFold,,engine,2025-09-20,src/diagnostics.zig
 REQ-GQL-010,Freshness Guard,StatusFreshnessGuard,TESTED,TestCANARY_REQ_GQL_010_StatusFreshnessGuard,,tooling,2025-09-21,src/tools/canary_freshness.zig
 REQ-GQL-010,Freshness Pre-Warn,FreshnessPreWarn,TESTED,TestCANARY_REQ_GQL_010_FreshnessPreWarn,,tooling,2025-09-22,tests/nightly_freshness_pre_warn.zig
-REQ-GQL-010,Freshness Pre-Warn,FreshnessPreWarn,TESTED,TestCANARY_REQ_GQL_010_FreshnessPreWarn,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-010,Governance,BadgeGeneration,TESTED,TestCANARY_REQ_GQL_010_BadgeGeneration,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance,BadgeStalenessGuard,TESTED,TestCANARY_REQ_GQL_010_BadgeStalenessGuard,,tooling,2025-09-22,scripts/badge_staleness_guard.zig
 REQ-GQL-010,Governance,BadgeStalenessGuardIntegrated,TESTED,TestCANARY_REQ_GQL_010_BadgeStalenessGuard,,tooling,2025-09-22,scripts/governance_ci.zig
@@ -61,20 +60,14 @@ REQ-GQL-010,Governance,TrendAppend,TESTED,TestCANARY_REQ_GQL_010_TrendAppend,,to
 REQ-GQL-010,Governance,TrendRegressionGuardStub,TESTED,TestCANARY_REQ_GQL_010_TrendRegressionGuardStub,,tooling,2025-09-22,scripts/trend_regression_guard.zig
 REQ-GQL-010,Governance,VarianceEnvelopeGuard,TESTED,TestCANARY_REQ_GQL_010_VarianceEnvelopeGuard,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance Aggregate Nightly,GovernanceAggregate,TESTED,TestCANARY_REQ_GQL_010_GovernanceAggregate,,tooling,2025-09-22,tests/nightly_governance_aggregate.zig
-REQ-GQL-010,Governance Aggregate Nightly,GovernanceAggregate,TESTED,TestCANARY_REQ_GQL_010_GovernanceAggregate,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-010,Governance Delta Detection,DeltaGuardPreview,TESTED,TestCANARY_REQ_GQL_010_GovernanceDelta,,tooling,2025-09-22,tests/governance_delta.zig
-REQ-GQL-010,Governance Delta Detection,DeltaGuardPreview,TESTED,TestCANARY_REQ_GQL_010_GovernanceDelta,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-010,Governance Dry Run Wrapper,DryRunWrapper,TESTED,TestCANARY_REQ_GQL_010_GovernanceDryRunWrapper,,tooling,2025-09-22,tests/governance_dry_run_wrapper.zig
-REQ-GQL-010,Governance Dry Run Wrapper,DryRunWrapper,TESTED,TestCANARY_REQ_GQL_010_GovernanceDryRunWrapper,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-010,Governance Freshness Guard,GovernanceScript,TESTED,TestCANARY_REQ_GQL_010_GovernanceScript,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-010,NEXT Backlog Accuracy,GovernanceScript,TESTED,TestCANARY_REQ_GQL_010_GovernanceScript,,tooling,2025-09-22,tests/governance_check.zig
 REQ-GQL-010,NEXT Freshness + Single H1,NextFreshnessGuard,TESTED,TestCANARY_REQ_GQL_010_NextFreshnessAndSingleH1,,tooling,2025-09-22,tests/next_freshness_single_h1.zig
-REQ-GQL-010,NEXT Freshness + Single H1,NextFreshnessGuard,TESTED,TestCANARY_REQ_GQL_010_NextFreshnessAndSingleH1,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-010,Pagination Legality (US001),Execution,TESTED,TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject,,planner,2025-09-24,tests/e2e_protocol_match.zig
 REQ-GQL-010,Pagination Legality (US001),Execution_QUIC,TESTED,TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject_QUIC,,planner,2025-09-24,tests/e2e_protocol_match_quic.zig
 REQ-GQL-010,RealityDocs,ImplementationRealityDeltaTool,TESTED,TestCANARY_REQ_GQL_010_ImplementationRealityDeltaTool,,tooling,2025-09-21,src/tools/implementation_reality_delta.zig
 REQ-GQL-010,Status JSON Hash Integrity,StatusJsonHashIntegrity,TESTED,TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity,,tooling,2025-09-22,tests/status_json_hash_integrity.zig
-REQ-GQL-010,Status JSON Hash Integrity,StatusJsonHashIntegrity,TESTED,TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity,,tooling,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-010,US001 Unordered Pagination (varlen),Execution,TESTED,TestCANARY_REQ_GQL_010_VarLenUnorderedPaginationReject,,planner,2025-09-24,tests/e2e_protocol_match_varlen_negative_us001.zig
 REQ-GQL-011,UNION/EXCEPT/INTERSECT,Engine,TESTED,tests/e2e_setops_all.zig,,engine,2025-09-20,src/exec.zig
 REQ-GQL-012,Aggregation COUNT DISTINCT,CountDistinct,TESTED,TestCANARY_REQ_GQL_012_CountDistinctExec,,engine,2025-09-21,src/exec.zig
@@ -100,7 +93,6 @@ REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,TestCANARY_REQ
 REQ-GQL-012,GROUP BY/Aggregation,MixedAggregateVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_012_MixedAggregateVarianceEnvelope,engine,2025-09-21,tests/benchmark_mixed_agg_variance.zig
 REQ-GQL-012,GROUP BY/Aggregation,MixedAggregationBreadth,TESTED,TestCANARY_REQ_GQL_012_MixedAggregationBreadth,,engine,2025-09-21,tests/test_groupby_mixed_aggregations.zig
 REQ-GQL-012,Planner ISO Enforcement,OrderByEnforcement,TESTED,e2e_planner_order_enforcement,,planner,2025-09-25,tests/e2e_planner_order_enforcement.zig
-REQ-GQL-012,Recursive CTEs,CycleDetection,TESTED,e2e_recursive_bounded_default,,planner,2025-09-25,docs/GAP_ANALYSIS.md
 REQ-GQL-012,Recursive CTEs,CycleDetection,TESTED,e2e_recursive_bounded_default,,planner,2025-09-25,src/planner/recursive.zig
 REQ-GQL-013,Transactions,MVCCVersionPruneVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_013_MVCCVersionPruneVarianceEnvelope,txn,2025-09-21,tests/benchmark_mvcc_version_prune_variance.zig
 REQ-GQL-013,Transactions,SSIPhantomPrevention,TESTED,TestCANARY_REQ_GQL_013_SSIPhantomPrevention,,txn,2025-09-21,tests/canary_txn_ssi_phantom_prevention.zig
@@ -140,7 +132,6 @@ REQ-GQL-017,E2EMatchBasic,Protocol,IMPL,TestCANARY_REQ_GQL_017_E2EMatchBasic,,en
 REQ-GQL-017,MATCH ORDER/LIMIT determinism,ProtocolE2E,TESTED,TestCANARY_REQ_GQL_017_MatchOrderLimit,,engine,2025-09-24,tests/e2e_protocol_match.zig
 REQ-GQL-017,MATCH ORDER/LIMIT determinism,ProtocolE2E_QUIC,TESTED,TestCANARY_REQ_GQL_017_MatchOrderLimit_QUIC,,engine,2025-09-24,tests/e2e_protocol_match_quic.zig
 REQ-GQL-017,MATCHExecutorBasic,Unit,IMPL,TestCANARY_REQ_GQL_017_MatchSingleHop,,engine,2025-09-24,tests/unit_match_executor.zig
-REQ-GQL-017,MV Incremental Refresh,IncrementalRefresh,TESTED,e2e_materialized_views_refresh,,storage,2025-09-25,docs/GAP_ANALYSIS.md
 REQ-GQL-017,MV Incremental Refresh,IncrementalRefresh,TESTED,e2e_materialized_views_refresh,,storage,2025-09-25,src/storage/materialized_views.zig
 REQ-GQL-017,Match Label+Property Predicate,EquivalenceDeterminism,TESTED,TestCANARY_REQ_GQL_017_MatchLabelPropertyEquivalenceDeterminism,,engine,2025-09-21,tests/test_match_label_property.zig
 REQ-GQL-017,Match Label+Property Predicate,Execution,TESTED,TestCANARY_REQ_GQL_017_MatchLabelProperty,,engine,2025-09-21,kb/design/MATCH_LABEL_PREDICATE_SLICE.md
@@ -199,18 +190,10 @@ REQ-GQL-017,VarLen Path Determinism UA005/UA006,Docs,TESTED,TestCANARY_REQ_GQL_0
 REQ-GQL-017,VarLen Path Determinism UA005/UA006,Docs,TESTED,TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,VarLen Path Determinism UA005/UA006,ProtocolE2E,TESTED,TestCANARY_REQ_GQL_017_VarLenDeterminism_STDIO,,engine,2025-09-24,tests/e2e_protocol_match_varlen.zig
 REQ-GQL-017,VarLen Path Determinism UA005/UA006,ProtocolE2E_QUIC,TESTED,TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC,,engine,2025-09-24,tests/e2e_protocol_match_varlen_quic.zig
-REQ-GQL-018,Transport Parity Summary Diff,ToolingScript,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24,docs/IMPLEMENTATION_REALITY.md
-REQ-GQL-018,Transport Parity Summary Diff,ToolingScript,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24,docs/GAP_ANALYSIS.md
 REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard,,tooling,2025-09-24,tests/e2e_parity_summary_diff_guard.zig
-REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard,,tooling,2025-09-24,docs/IMPLEMENTATION_REALITY.md
-REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard,,tooling,2025-09-24,docs/GAP_ANALYSIS.md
 REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24,tests/e2e_parity_summary_guard.zig
-REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24,docs/IMPLEMENTATION_REALITY.md
-REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24,docs/GAP_ANALYSIS.md
 REQ-GQL-018,Transport Parity VarLen Dataset Rows,Docs,TESTED,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2025-09-24,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig
-REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2025-09-24,docs/IMPLEMENTATION_REALITY.md
-REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2025-09-24,docs/GAP_ANALYSIS.md
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,e2e_cluster_replication,,distributed,2025-09-25,src/distributed/cluster.zig
 REQ-GQL-021,Adaptive Replan Autotune,AdaptiveReplanAutotuneConvergence,TESTED,TestCANARY_REQ_GQL_021_AdaptiveReplanAutotuneConvergence,,planner,2025-09-22,tests/test_adaptive_replan_autotune.zig
 REQ-GQL-021,Adaptive Replan Autotune,AdaptiveReplanAutotuneVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_021_AdaptiveReplanAutotuneVarianceEnvelope,planner,2025-09-22,src/benchmarks/adaptive_replan_autotune_variance.zig
@@ -282,9 +265,7 @@ REQ-GQL-024,Conformance Flagger,ImplDefinedFlagsProtocolIntegration,TESTED,TestC
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy,,engine,2025-09-21,src/flagger_impl_defined.zig
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy,,engine,2025-09-21,src/server/flagger_impl_defined.zig
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicyOutput,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicyOutput,,engine,2025-09-21,tests/test_flagger_zero_length_path.zig
-REQ-GQL-024,Conformance Profile Ledger,Docs,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering,,docs,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-024,Conformance Profile Ledger,Docs,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering,,docs,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
-REQ-GQL-024,Cost Based Optimizer,PlanCandidateRescoringIntegration,IMPL,TestCANARY_REQ_GQL_024_PlanCandidateRescoringIntegration,,planner,2025-09-24,docs/REQUIREMENTS.md
 REQ-GQL-024,Cost Based Optimizer,PlanCandidateRescoringIntegration,IMPL,TestCANARY_REQ_GQL_024_PlanCandidateRescoringIntegration,,planner,2025-09-24,src/planner/rescore.zig
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,TestCANARY_REQ_GQL_024_PlanCostModelCalibration,,planner,2025-09-22,src/planner/cost_calibration.zig
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking,,planner,2025-09-22,src/planner/pipeline.zig
@@ -303,8 +284,6 @@ REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,TestCANARY
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption,,planner,2025-09-22,src/planner/pipeline.zig
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineVarianceEnvelope,BENCHED,TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption,BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope,planner,2025-09-22,tests/canary_planner_pipeline_selection.zig
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionVarianceEnvelope,BENCHED,TestCANARY_REQ_GQL_024_PlanSelectionIntegration,BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope,planner,2025-09-22,tests/canary_planner_plan_selection.zig
-REQ-GQL-024,Cost Based Optimizer,PlanStatisticsRegistry,IMPL,TestCANARY_REQ_GQL_024_PlanStatisticsRegistry,,planner,2025-09-24,docs/REQUIREMENTS.md
-REQ-GQL-024,Cost Based Optimizer,PlanStatisticsRegistry,TESTED,TestCANARY_REQ_GQL_024_PlanStatisticsRegistry,,planner,2025-09-25,docs/GAP_ANALYSIS.md
 REQ-GQL-024,Cost Based Optimizer,PlanStatisticsRegistry,TESTED,TestCANARY_REQ_GQL_024_PlanStatisticsRegistry,,planner,2025-09-25,src/planner/stats_registry.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol,,federation,2025-09-23,tests/e2e_federation_mismatch_flag.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,IMPL,TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission,,federation,2025-09-23,src/distributed/federation.zig
@@ -319,10 +298,8 @@ REQ-GQL-024,FederationMismatchFlag,LatencyAggregateSchemaValidation,IMPL,,,feder
 REQ-GQL-024,FederationMismatchFlag,LatencyAggregateStreak,IMPL,,,federation,2025-09-23,src/tools/fed_latency_streak.zig
 REQ-GQL-024,FederationMismatchFlag,LatencyVarianceEnvelope,IMPL,,BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope,federation,2025-09-23,benchmark_federation_mismatch_latency.zig
 REQ-GQL-024,FederationMismatchFlag,MismatchFalsePositiveGuard,BENCHED,,BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard,federation,2025-09-23,benchmark_federation_mismatch_frequency.zig
-REQ-GQL-024,Implementation Reality Accuracy,Docs,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering,,docs,2025-09-22,docs/IMPLEMENTATION_REALITY.md
 REQ-GQL-024,Nulls-Last Ordering Parity,Docs,TESTED,TestCANARY_REQ_GQL_024_TransportParity_NullsLastOrder,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-024,Nulls-Last Ordering Parity,ProtocolE2E,TESTED,TestCANARY_REQ_GQL_024_TransportParity_NullsLastOrder,,engine,2025-09-24,tests/e2e_protocol_transport_parity_nulls_order.zig
-REQ-GQL-024,Requirements Scope Accuracy,Docs,TESTED,TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering,,docs,2025-09-22,docs/REQUIREMENTS.md
 REQ-GQL-025,Disk Storage,Storage,TESTED,tests/e2e_catalog_persistence_disk.zig,,storage,2025-09-20,src/storage/disk.zig
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,TestCANARY_REQ_GQL_025_WriteSkewDetection,BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope,txn,2025-09-21,tests/canary_txn_write_skew.zig
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,IMPL,TestCANARY_REQ_GQL_025_WriteSkewDetection,BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope,txn,2025-09-21,src/txn/manager.zig
@@ -350,7 +327,6 @@ REQ-GQL-028,WAL Segment Recycle,WALSegmentRecycleLatencyVarianceEnvelope,BENCHED
 REQ-GQL-028,WAL/Recovery,CorruptPageRecovery,TESTED,TestCANARY_REQ_GQL_028_CorruptPageRecovery,,storage,2025-09-21,tests/canary_wal_corrupt_page_recovery.zig
 REQ-GQL-028,WAL/Recovery,FailureInjection,TESTED,TestCANARY_REQ_GQL_028_WalFailureInjection,,storage,2025-09-21,tests/canary_wal_failure_injection.zig
 REQ-GQL-028,WAL/Recovery,RedoOptimizedVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_028_RedoOptimizedVarianceEnvelope,storage,2025-09-21,tests/benchmark_wal_redo_optimized_variance.zig
-REQ-GQL-031,Security Audit,AuditLogging,TESTED,e2e_rls_integration,,security,2025-09-25,docs/GAP_ANALYSIS.md
 REQ-GQL-031,Security Audit,AuditLogging,TESTED,e2e_rls_integration,,security,2025-09-25,src/security/audit.zig
 REQ-GQL-032,Check Constraint Evaluation,Engine,IMPL,TestCANARY_REQ_GQL_032_CheckConstraint,,schema,2025-09-20,src/storage/constraints.zig
 REQ-GQL-032,Check Constraint Extended Ops,Engine,IMPL,TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd,,schema,2025-09-20,src/storage/constraints.zig
@@ -375,9 +351,7 @@ REQ-GQL-032,Schema Constraints Performance,UniquePerfVarianceEnvelope,BENCHED,,B
 REQ-GQL-032,Schema Constraints Uniqueness,Engine,IMPL,TestCANARY_REQ_GQL_032_UniqueEnforce,,schema,2025-09-20,src/storage/constraints.zig
 REQ-GQL-040,Raft Consensus,Distributed,BENCHED,TestCANARY_REQ_GQL_040_RaftLeaderElection,BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency,distributed,2025-09-21,src/distributed/raft.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,TestCANARY_REQ_GQL_040_TemporalExtremeOffsetArithmetic,,engine,2025-09-21,tests/test_temporal_extreme_offsets.zig
-REQ-GQL-041,Cluster Networking,InterNodeMessaging,TESTED,e2e_distributed_cluster,,distributed,2025-09-25,docs/GAP_ANALYSIS.md
 REQ-GQL-041,Cluster Networking,InterNodeMessaging,TESTED,e2e_distributed_cluster,,distributed,2025-09-25,src/distributed/network_transport.zig
-REQ-GQL-042,CDC,APIUmbrella,TESTED,TestCANARY_REQ_GQL_042_CDC_E2EUmbrella,,streaming,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-042,CDC,AdaptiveJitterThresholds,TESTED,TestCANARY_REQ_GQL_042_CDC_JitterThresholds,,streaming,2025-09-21,tests/canary_cdc_jitter_thresholds.zig
 REQ-GQL-042,CDC,AdaptiveStressHarness,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness,streaming,2025-09-21,tests/benchmark_cdc_adaptive_stress.zig
 REQ-GQL-042,CDC,CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope,cdc,2025-09-21,tests/benchmark_cdc_adaptive_decision_latency_variance.zig
@@ -385,7 +359,6 @@ REQ-GQL-042,CDC,CDCApplyBatchLatencyVarianceEnvelope,BENCHED,,BenchmarkCANARY_RE
 REQ-GQL-042,CDC,CDCWatermarkAdvanceVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDCWatermarkAdvanceVarianceEnvelope,cdc,2025-09-21,tests/benchmark_cdc_watermark_advance_variance.zig
 REQ-GQL-042,CDC Backfill Latency,API,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency,streaming,2025-09-20,tests/benchmark_cdc_backfill_latency.zig
 REQ-GQL-042,CDC Backfill Latency,API,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency,streaming,2025-09-20,src/canary.zig
-REQ-GQL-042,CDC Core API,API,TESTED,TestCANARY_REQ_GQL_042_CDC_CoreStartStop,,streaming,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-042,CDC Core API,API,TESTED,TestCANARY_REQ_GQL_042_CDC_CoreStartStop,,streaming,2025-09-20,src/cdc/core.zig
 REQ-GQL-042,CDC Engine,API,TESTED,TestCANARY_REQ_GQL_042_CDC_API,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,AdaptiveBaselinePerf,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveBaselinePerf,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
@@ -440,7 +413,6 @@ REQ-GQL-042,CDC Resume Token,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeToken,,
 REQ-GQL-042,CDC Resume Token,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeToken,,streaming,2025-09-20,src/canary.zig
 REQ-GQL-042,CDC Resume Token Restart,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart,,streaming,2025-09-20,tests/canary_cdc_resume_token_restart.zig
 REQ-GQL-042,CDC/Streaming,API,TESTED,TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-21,tools/canaryscan/internal/fixtures/file1.zig
-REQ-GQL-042,CDC/Streaming,APIUmbrella,TESTED,TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella,,streaming,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-042,CDC/Streaming,API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,TestCANARY_REQ_GQL_042_CDC_StartStop,BenchmarkCANARY_REQ_GQL_042_CDC_Publish,streaming,YYYY-MM-DD,docs/PROMPT.md
 REQ-GQL-042,CDC/Streaming,Engine,TESTED,TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-20,docs/PROMPT.md
 REQ-GQL-042,CDCControlProtocol,E2E,TESTED,protocol_CDC_CONTROL_reset,,cdc,2025-09-20,tests/e2e_protocol_cdc_control.zig
@@ -478,142 +450,77 @@ REQ-GQL-052,FederationResultLine,Federation,IMPLEMENTED,TestFederationParseResul
 REQ-GQL-052,FederationResultLineMemoryLifecycle,Federation,TESTED,TestCANARY_REQ_GQL_052_FederationResultLineDeinit,,federation,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-052,FederationResultLineMemoryLifecycle,Federation,TESTED,TestCANARY_REQ_GQL_052_FederationResultLineDeinit,,federation,2025-09-23,src/distributed/federation.zig
 REQ-GQL-052,FederationResultLineOrdering,Federation,TESTED,TestCANARY_REQ_GQL_052_FederationResultLineOrdering,,federation,2025-09-23,src/distributed/federation.zig
-REQ-GQL-060,Core Graph Builders,ConcurrencySafeGraph,TESTED,TestCANARY_REQ_GQL_060_ConcurrencySafe,BenchmarkCANARY_REQ_GQL_060_ConcurrencySafe,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-060,Core Graph Builders,ConcurrencySafeGraph,TESTED,TestCANARY_REQ_GQL_060_ConcurrencySafe,,graph,2025-09-20,src/graph/concurrency_safe.zig
-REQ-GQL-060,Core Graph Builders,DirectedWeightedBuilders,TESTED,TestCANARY_REQ_GQL_060_CoreGraphBuilders,BenchmarkCANARY_REQ_GQL_060_CoreGraphBuilders,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-060,Core Graph Builders,DirectedWeightedBuilders,TESTED,TestCANARY_REQ_GQL_060_CoreGraphBuilders,,graph,2025-09-21,src/graph/builders.zig
 REQ-GQL-060,Core Graph Builders,GraphBuilderThroughputVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_060_GraphBuilderThroughputVarianceEnvelope,graph,2025-09-21,tests/benchmark_graph_builder_throughput_variance.zig
-REQ-GQL-061,DOT Codec,DotMarshalCanonical,STUB,TestCANARY_REQ_GQL_061_DotMarshalCanonical,BenchmarkCANARY_REQ_GQL_061_DotMarshalCanonical,graph,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-061,DOT Codec,DotParseAdvanced,STUB,TestCANARY_REQ_GQL_061_DotParseAdvanced,BenchmarkCANARY_REQ_GQL_061_DotParseAdvanced,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-062,TopologicalSortDFS,Traversal,BENCHED,TestCANARY_REQ_GQL_062_TopoDFS,BenchmarkCANARY_REQ_GQL_062_TopoDFS,graph,2025-09-21,src/graph/topological_sort_dfs.zig
 REQ-GQL-062,Traversals,BFS,BENCHED,TestCANARY_REQ_GQL_062_BFS,BenchmarkCANARY_REQ_GQL_062_BFS,graph,2025-09-21,tests/benchmark_bfs_traversal.zig
-REQ-GQL-062,Traversals,BFS,BENCHED,TestCANARY_REQ_GQL_062_BFS,BenchmarkCANARY_REQ_GQL_062_BFS,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,BFS,TESTED,TestCANARY_REQ_GQL_062_BFS,,graph,2025-09-20,src/graph/traversal_bfs.zig
-REQ-GQL-062,Traversals,CycleDetectDirected,BENCHED,TestCANARY_REQ_GQL_062_CycleDirected,BenchmarkCANARY_REQ_GQL_062_CycleDirected,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,CycleDetectDirected,BENCHED,TestCANARY_REQ_GQL_062_CycleDirected,BenchmarkCANARY_REQ_GQL_062_CycleDirected,graph,2025-09-21,src/graph/cycle_detect_directed.zig
-REQ-GQL-062,Traversals,CycleDetectUndirected,BENCHED,TestCANARY_REQ_GQL_062_CycleUndirected,BenchmarkCANARY_REQ_GQL_062_CycleUndirected,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,CycleDetectUndirected,BENCHED,TestCANARY_REQ_GQL_062_CycleUndirected,BenchmarkCANARY_REQ_GQL_062_CycleUndirected,graph,2025-09-21,src/graph/cycle_detect_undirected.zig
 REQ-GQL-062,Traversals,DFSIterative,BENCHED,TestCANARY_REQ_GQL_062_DFSIterative,BenchmarkCANARY_REQ_GQL_062_DFSIterative,graph,2025-09-21,tests/benchmark_dfs_iterative.zig
-REQ-GQL-062,Traversals,DFSIterative,BENCHED,TestCANARY_REQ_GQL_062_DFSIterative,BenchmarkCANARY_REQ_GQL_062_DFSIterative,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,DFSIterative,BENCHED,TestCANARY_REQ_GQL_062_DFSIterative,BenchmarkCANARY_REQ_GQL_062_DFSIterative,graph,2025-09-21,src/graph/traversal_dfs_iterative.zig
-REQ-GQL-062,Traversals,IDDFS,BENCHED,TestCANARY_REQ_GQL_062_IDDFSBasics,BenchmarkCANARY_REQ_GQL_062_IDDFS,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,IDDFS,BENCHED,TestCANARY_REQ_GQL_062_IDDFSBasics,BenchmarkCANARY_REQ_GQL_062_IDDFS,graph,2025-09-21,src/graph/traversal_iddfs.zig
-REQ-GQL-062,Traversals,TopologicalSortDFS,BENCHED,TestCANARY_REQ_GQL_062_TopoDFS,BenchmarkCANARY_REQ_GQL_062_TopoDFS,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,TopologicalSortKahn,BENCHED,TestCANARY_REQ_GQL_062_TopoKahn,BenchmarkCANARY_REQ_GQL_062_TopoKahn,graph,2025-09-21,tests/benchmark_toposort_kahn.zig
-REQ-GQL-062,Traversals,TopologicalSortKahn,BENCHED,TestCANARY_REQ_GQL_062_TopoKahn,BenchmarkCANARY_REQ_GQL_062_TopoKahn,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-062,Traversals,TopologicalSortKahn,BENCHED,TestCANARY_REQ_GQL_062_TopoKahn,BenchmarkCANARY_REQ_GQL_062_TopoKahn,graph,2025-09-21,src/graph/topological_sort_kahn.zig
-REQ-GQL-063,Shortest Paths,AStar,BENCHED,TestCANARY_REQ_GQL_063_AStar,BenchmarkCANARY_REQ_GQL_063_AStar,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-063,Shortest Paths,AStar,BENCHED,TestCANARY_REQ_GQL_063_AStar,BenchmarkCANARY_REQ_GQL_063_AStar,graph,2025-09-21,src/graph/shortest_astar.zig
-REQ-GQL-063,Shortest Paths,DagShortestPath,BENCHED,TestCANARY_REQ_GQL_063_DagShortestPath,BenchmarkCANARY_REQ_GQL_063_DagShortestPath,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-063,Shortest Paths,DagShortestPath,TESTED,TestCANARY_REQ_GQL_063_DagShortestPath,BenchmarkCANARY_REQ_GQL_063_DagShortestPath,graph,2025-09-21,src/graph/shortest_dag_path.zig
-REQ-GQL-063,Shortest Paths,Dijkstra,BENCHED,TestCANARY_REQ_GQL_063_Dijkstra,BenchmarkCANARY_REQ_GQL_063_Dijkstra,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-063,Shortest Paths,Dijkstra,BENCHED,TestCANARY_REQ_GQL_063_Dijkstra,BenchmarkCANARY_REQ_GQL_063_Dijkstra,graph,2025-09-20,src/graph/shortest_dijkstra.zig
-REQ-GQL-063,Shortest Paths,PathCache,STUB,TestCANARY_REQ_GQL_063_PathCache,BenchmarkCANARY_REQ_GQL_063_PathCache,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-063,Shortest Paths,UnweightedBFSPaths,BENCHED,TestCANARY_REQ_GQL_063_UnweightedBFSPaths,BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths,graph,2025-09-20,tests/benchmark_unweighted_bfs_paths.zig
-REQ-GQL-063,Shortest Paths,UnweightedBFSPaths,BENCHED,TestCANARY_REQ_GQL_063_UnweightedBFSPaths,BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-063,Shortest Paths,UnweightedBFSPaths,TESTED,TestCANARY_REQ_GQL_063_UnweightedBFSPaths,,graph,2025-09-20,src/graph/shortest_unweighted_bfs_paths.zig
-REQ-GQL-063,Shortest Paths,YenKShortest,STUB,TestCANARY_REQ_GQL_063_YenKShortest,BenchmarkCANARY_REQ_GQL_063_YenKShortest,graph,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-064,Connectivity,BiconnectedComponents,BENCHED,TestCANARY_REQ_GQL_064_Biconnected,BenchmarkCANARY_REQ_GQL_064_Biconnected,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-064,Connectivity,BiconnectedComponents,BENCHED,TestCANARY_REQ_GQL_064_Biconnected,BenchmarkCANARY_REQ_GQL_064_Biconnected,graph,2025-09-20,src/graph/connectivity_biconnected.zig
-REQ-GQL-064,Connectivity,BridgesArticulation,BENCHED,TestCANARY_REQ_GQL_064_BridgesArticulation,BenchmarkCANARY_REQ_GQL_064_BridgesArticulation,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-064,Connectivity,BridgesArticulation,BENCHED,TestCANARY_REQ_GQL_064_BridgesArticulation,BenchmarkCANARY_REQ_GQL_064_BridgesArticulation,graph,2025-09-20,src/graph/connectivity_bridges_articulation.zig
-REQ-GQL-064,Connectivity,KosarajuValidation,TESTED,TestCANARY_REQ_GQL_064_Kosaraju,BenchmarkCANARY_REQ_GQL_064_Kosaraju,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-064,Connectivity,KosarajuValidation,TESTED,TestCANARY_REQ_GQL_064_Kosaraju,BenchmarkCANARY_REQ_GQL_064_Kosaraju,graph,2025-09-20,src/graph/connectivity_kosaraju.zig
 REQ-GQL-064,Connectivity,TarjanSCC,BENCHED,TestCANARY_REQ_GQL_064_TarjanSCC,BenchmarkCANARY_REQ_GQL_064_TarjanSCC,graph,2025-09-21,tests/benchmark_connectivity_tarjan_scc.zig
-REQ-GQL-064,Connectivity,TarjanSCC,BENCHED,TestCANARY_REQ_GQL_064_TarjanSCC,BenchmarkCANARY_REQ_GQL_064_TarjanSCC,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-064,Connectivity,TarjanSCC,BENCHED,TestCANARY_REQ_GQL_064_TarjanSCC,BenchmarkCANARY_REQ_GQL_064_TarjanSCC,graph,2025-09-21,src/graph/connectivity_tarjan_scc.zig
-REQ-GQL-065,Spanning Trees,Kruskal,BENCHED,TestCANARY_REQ_GQL_065_Kruskal,BenchmarkCANARY_REQ_GQL_065_Kruskal,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-065,Spanning Trees,Kruskal,BENCHED,TestCANARY_REQ_GQL_065_Kruskal,BenchmarkCANARY_REQ_GQL_065_Kruskal,graph,2025-09-21,src/graph/spanning_kruskal.zig
-REQ-GQL-065,Spanning Trees,Prim,BENCHED,TestCANARY_REQ_GQL_065_Prim,BenchmarkCANARY_REQ_GQL_065_Prim,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-065,Spanning Trees,Prim,BENCHED,TestCANARY_REQ_GQL_065_Prim,BenchmarkCANARY_REQ_GQL_065_Prim,graph,2025-09-21,src/graph/spanning_prim.zig
-REQ-GQL-066,Flow/Matching,Dinic,BENCHED,TestCANARY_REQ_GQL_066_DinicBasic,BenchmarkCANARY_REQ_GQL_066_Dinic,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-066,Flow/Matching,Dinic,BENCHED,TestCANARY_REQ_GQL_066_DinicBasic,BenchmarkCANARY_REQ_GQL_066_Dinic,graph,2025-09-21,src/graph/flow_dinic.zig
 REQ-GQL-066,Flow/Matching,EdmondsKarp,BENCHED,TestCANARY_REQ_GQL_066_EdmondsKarp,BenchmarkCANARY_REQ_GQL_066_EdmondsKarp,graph,2025-09-21,tests/benchmark_flow_edmonds_karp.zig
-REQ-GQL-066,Flow/Matching,EdmondsKarp,BENCHED,TestCANARY_REQ_GQL_066_EdmondsKarp,BenchmarkCANARY_REQ_GQL_066_EdmondsKarp,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-066,Flow/Matching,EdmondsKarp,TESTED,TestCANARY_REQ_GQL_066_EdmondsKarp,BenchmarkCANARY_REQ_GQL_066_EdmondsKarp,graph,2025-09-21,src/graph/flow_edmonds_karp.zig
-REQ-GQL-066,Flow/Matching,HopcroftKarp,BENCHED,TestCANARY_REQ_GQL_066_HopcroftKarpBasic,BenchmarkCANARY_REQ_GQL_066_HopcroftKarp,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-066,Flow/Matching,HopcroftKarp,BENCHED,TestCANARY_REQ_GQL_066_HopcroftKarpBasic,BenchmarkCANARY_REQ_GQL_066_HopcroftKarp,graph,2025-09-21,src/graph/flow_hopcroft_karp.zig
-REQ-GQL-067,Centrality,BetweennessCentrality,BENCHED,TestCANARY_REQ_GQL_067_Betweenness,BenchmarkCANARY_REQ_GQL_067_Betweenness,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-067,Centrality,BetweennessCentrality,BENCHED,TestCANARY_REQ_GQL_067_Betweenness,BenchmarkCANARY_REQ_GQL_067_Betweenness,graph,2025-09-21,src/graph/centrality_betweenness.zig
 REQ-GQL-067,Centrality,BetweennessVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_067_BetweennessVarianceEnvelope,graph,2025-09-21,tests/benchmark_betweenness_variance.zig
-REQ-GQL-067,Centrality,BridgeLeverage,BENCHED,TestCANARY_REQ_GQL_067_BridgeLeverage,BenchmarkCANARY_REQ_GQL_067_BridgeLeverage,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-067,Centrality,BridgeLeverage,TESTED,TestCANARY_REQ_GQL_067_BridgeLeverage,BenchmarkCANARY_REQ_GQL_067_BridgeLeverage,graph,2025-09-21,src/graph/centrality_bridge_leverage.zig
-REQ-GQL-067,Centrality,ClosenessCentrality,BENCHED,TestCANARY_REQ_GQL_067_Closeness,BenchmarkCANARY_REQ_GQL_067_Closeness,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-067,Centrality,ClosenessCentrality,BENCHED,TestCANARY_REQ_GQL_067_Closeness,BenchmarkCANARY_REQ_GQL_067_Closeness,graph,2025-09-21,src/graph/centrality_closeness.zig
 REQ-GQL-067,Centrality,ClosenessVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope,graph,2025-09-21,tests/benchmark_closeness_variance.zig
-REQ-GQL-067,Centrality,EigenvectorCentrality,BENCHED,TestCANARY_REQ_GQL_067_Eigenvector,BenchmarkCANARY_REQ_GQL_067_Eigenvector,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-067,Centrality,EigenvectorCentrality,BENCHED,TestCANARY_REQ_GQL_067_Eigenvector,BenchmarkCANARY_REQ_GQL_067_Eigenvector,graph,2025-09-21,src/graph/centrality_eigenvector.zig
 REQ-GQL-067,Centrality,EigenvectorVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_067_EigenvectorVarianceEnvelope,graph,2025-09-21,tests/benchmark_eigenvector_variance.zig
-REQ-GQL-067,Centrality,GreyCardinalComposite,BENCHED,TestCANARY_REQ_GQL_067_GreyCardinalComposite,BenchmarkCANARY_REQ_GQL_067_GreyCardinalComposite,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-067,Centrality,GreyCardinalComposite,BENCHED,TestCANARY_REQ_GQL_067_GreyCardinalComposite,BenchmarkCANARY_REQ_GQL_067_GreyCardinalComposite,graph,2025-09-21,src/graph/centrality_grey_cardinal.zig
 REQ-GQL-067,Centrality,GreyCardinalCompositeMetricBreakdownVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_067_GreyCardinalCompositeMetricBreakdownVarianceEnvelope,graph,2025-09-21,tests/benchmark_grey_cardinal_composite_metric_breakdown_variance.zig
 REQ-GQL-067,Centrality,GreyCardinalVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_067_GreyCardinalVarianceEnvelope,graph,2025-09-21,tests/benchmark_grey_cardinal_variance.zig
-REQ-GQL-067,Centrality,PageRank,BENCHED,TestCANARY_REQ_GQL_067_PageRank,BenchmarkCANARY_REQ_GQL_067_PageRank,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-067,Centrality,PageRank,BENCHED,TestCANARY_REQ_GQL_067_PageRank,BenchmarkCANARY_REQ_GQL_067_PageRank,graph,2025-09-21,src/graph/centrality_pagerank.zig
 REQ-GQL-067,Centrality,PageRankVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope,graph,2025-09-21,tests/benchmark_pagerank_variance.zig
-REQ-GQL-068,Containers,BloomFilterContainer,BENCHED,TestCANARY_REQ_GQL_068_BloomFilter,BenchmarkCANARY_REQ_GQL_068_BloomFilter,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,BloomFilterContainer,BENCHED,TestCANARY_REQ_GQL_068_BloomFilter,BenchmarkCANARY_REQ_GQL_068_BloomFilter,graph,2025-09-21,src/graph/containers/bloom_filter.zig
-REQ-GQL-068,Containers,CursorContainer,TESTED,TestCANARY_REQ_GQL_068_Cursor,,graph,2025-09-23,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,CursorContainer,TESTED,TestCANARY_REQ_GQL_068_Cursor,,graph,2025-09-23,src/containers/cursor_container.zig
-REQ-GQL-068,Containers,LFUCache,BENCHED,TestCANARY_REQ_GQL_068_LFU,BenchmarkCANARY_REQ_GQL_068_LFU,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,LFUCache,BENCHED,TestCANARY_REQ_GQL_068_LFU,BenchmarkCANARY_REQ_GQL_068_LFU,graph,2025-09-21,src/graph/containers/lfu.zig
-REQ-GQL-068,Containers,LRUCache,BENCHED,TestCANARY_REQ_GQL_068_LRU,BenchmarkCANARY_REQ_GQL_068_LRU,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,LRUCache,BENCHED,TestCANARY_REQ_GQL_068_LRU,BenchmarkCANARY_REQ_GQL_068_LRU,graph,2025-09-21,src/graph/containers/lru.zig
-REQ-GQL-068,Containers,SignaledQueue,TESTED,TestCANARY_REQ_GQL_068_SignaledQueue,,graph,2025-09-23,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,SignaledQueue,TESTED,TestCANARY_REQ_GQL_068_SignaledQueue,,graph,2025-09-23,src/containers/signaled_queue.zig
 REQ-GQL-068,Containers,SignaledQueueMpmcVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_068_SignaledQueueMpmcVarianceEnvelope,graph,2025-09-23,benchmarks/benchmark_signaled_queue_mpmc_variance.zig
 REQ-GQL-068,Containers,SignaledQueueMpscVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_068_SignaledQueueMpscVarianceEnvelope,graph,2025-09-23,benchmarks/benchmark_signaled_queue_mpsc_variance.zig
 REQ-GQL-068,Containers,SignaledQueueSpmcVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_068_SignaledQueueSpmcVarianceEnvelope,graph,2025-09-23,benchmarks/benchmark_signaled_queue_spmc_variance.zig
 REQ-GQL-068,Containers,SignaledQueueVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_068_SignaledQueueVarianceEnvelope,graph,2025-09-23,benchmarks/benchmark_signaled_queue_variance.zig
-REQ-GQL-068,Containers,SkipList,BENCHED,TestCANARY_REQ_GQL_068_SkipList,BenchmarkCANARY_REQ_GQL_068_SkipList,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,SkipList,BENCHED,TestCANARY_REQ_GQL_068_SkipList,BenchmarkCANARY_REQ_GQL_068_SkipList,graph,2025-09-21,src/graph/container_skiplist.zig
-REQ-GQL-068,Containers,Trie,BENCHED,TestCANARY_REQ_GQL_068_Trie,BenchmarkCANARY_REQ_GQL_068_Trie,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,Trie,BENCHED,TestCANARY_REQ_GQL_068_Trie,BenchmarkCANARY_REQ_GQL_068_Trie,graph,2025-09-21,src/graph/container_trie.zig
-REQ-GQL-068,Containers,UnionFind,BENCHED,TestCANARY_REQ_GQL_068_UnionFind,BenchmarkCANARY_REQ_GQL_068_UnionFind,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-068,Containers,UnionFind,BENCHED,TestCANARY_REQ_GQL_068_UnionFind,BenchmarkCANARY_REQ_GQL_068_UnionFind,graph,2025-09-21,src/graph/union_find.zig
-REQ-GQL-069,Probabilistic,BloomFilterMultiHash,STUB,TestCANARY_REQ_GQL_069_BloomFilterMultiHash,BenchmarkCANARY_REQ_GQL_069_BloomFilterMultiHash,graph,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-069,Probabilistic,CountMinSketch,BENCHED,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21,tests/benchmark_count_min_sketch_container.zig
-REQ-GQL-069,Probabilistic,CountMinSketch,BENCHED,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-069,Probabilistic,CountMinSketch,TESTED,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21,src/graph/containers/count_min_sketch.zig
 REQ-GQL-070,Raft Replication,AppendEntriesCommitAdvance,TESTED,TestCANARY_REQ_GQL_070_AppendEntriesCommitAdvance,,distributed,2025-09-21,tests/test_raft_commit_advancement.zig
 REQ-GQL-070,Raft Replication,AppendEntriesSuccess,TESTED,TestCANARY_REQ_GQL_070_AppendEntriesSuccess,,distributed,2025-09-21,tests/test_raft_append_entries.zig
 REQ-GQL-070,Raft Replication,AppendEntriesTermMismatch,TESTED,TestCANARY_REQ_GQL_070_AppendEntriesTermMismatch,,distributed,2025-09-21,tests/test_raft_append_entries.zig
 REQ-GQL-070,Raft Replication,AppendEntriesVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_070_AppendEntriesVarianceEnvelope,distributed,2025-09-21,tests/benchmark_raft_append_entries_variance.zig
 REQ-GQL-070,Raft Replication,CommitAdvancementVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_070_CommitAdvancementVarianceEnvelope,distributed,2025-09-21,tests/benchmark_raft_commit_advancement_variance.zig
-REQ-GQL-070,String Search,KMP,BENCHED,TestCANARY_REQ_GQL_070_KMP,BenchmarkCANARY_REQ_GQL_070_KMP,graph,2025-09-21,docs/REQUIREMENTS.md
 REQ-GQL-070,String Search,KMP,BENCHED,TestCANARY_REQ_GQL_070_KMP,BenchmarkCANARY_REQ_GQL_070_KMP,graph,2025-09-21,src/graph/string_search_kmp.zig
-REQ-GQL-070,String Search,RabinKarp,STUB,TestCANARY_REQ_GQL_070_RabinKarp,BenchmarkCANARY_REQ_GQL_070_RabinKarp,graph,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-071,GreyCardinal,ExplainabilityExport,STUB,TestCANARY_REQ_GQL_071_ExplainabilityExport,BenchmarkCANARY_REQ_GQL_071_ExplainabilityExport,analytics,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-071,GreyCardinal,GqlApiFunction,STUB,TestCANARY_REQ_GQL_071_GqlApiFunction,BenchmarkCANARY_REQ_GQL_071_GqlApiFunction,analytics,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-071,GreyCardinal,IncrementalUpdate,STUB,TestCANARY_REQ_GQL_071_IncrementalUpdate,BenchmarkCANARY_REQ_GQL_071_IncrementalUpdate,analytics,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-071,GreyCardinal,MetricCompositionEngine,STUB,TestCANARY_REQ_GQL_071_MetricComposition,BenchmarkCANARY_REQ_GQL_071_MetricComposition,analytics,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-071,GreyCardinal,RankingStabilityBench,STUB,TestCANARY_REQ_GQL_071_RankingStability,BenchmarkCANARY_REQ_GQL_071_RankingStability,analytics,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-072,HyperledgerGraphMVCC,ConflictClassificationDiagnostics,STUB,TestCANARY_REQ_GQL_072_ConflictClassification,BenchmarkCANARY_REQ_GQL_072_ConflictClassification,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-072,HyperledgerGraphMVCC,ConflictThroughputBench,STUB,TestCANARY_REQ_GQL_072_ConflictThroughput,BenchmarkCANARY_REQ_GQL_072_ConflictThroughput,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-072,HyperledgerGraphMVCC,DeferredValidationPhase,STUB,TestCANARY_REQ_GQL_072_DeferredValidation,BenchmarkCANARY_REQ_GQL_072_DeferredValidation,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-072,HyperledgerGraphMVCC,IsomorphicConflictDetection,STUB,TestCANARY_REQ_GQL_072_IsomorphicConflict,BenchmarkCANARY_REQ_GQL_072_IsomorphicConflict,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-072,HyperledgerGraphMVCC,RwSetGraphProjection,STUB,TestCANARY_REQ_GQL_072_RwSetGraphProjection,BenchmarkCANARY_REQ_GQL_072_RwSetGraphProjection,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-073,MvccAdvanced,AdvancedMvccTelemetry,STUB,TestCANARY_REQ_GQL_073_AdvancedMvccTelemetry,BenchmarkCANARY_REQ_GQL_073_AdvancedMvccTelemetry,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-073,MvccAdvanced,ConflictRepairHeuristics,STUB,TestCANARY_REQ_GQL_073_ConflictRepairHeuristics,BenchmarkCANARY_REQ_GQL_073_ConflictRepairHeuristics,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,ConflictRepairHeuristics,TESTED,TestCANARY_REQ_GQL_073_ConflictRepairHeuristics,BenchmarkCANARY_REQ_GQL_073_ConflictRepairHeuristics,txn,2025-09-20,src/txn/mvcc_adv/conflict_repair_heuristics.zig
 REQ-GQL-073,MvccAdvanced,EarlyConflictDetection,TESTED,TestCANARY_REQ_GQL_073_EarlyConflictDetectionIntegration,BenchmarkCANARY_REQ_GQL_073_EarlyConflictDetection,txn,2025-09-20,tests/canary_mvcc_adv_integration.zig
-REQ-GQL-073,MvccAdvanced,EarlyConflictDetection,STUB,TestCANARY_REQ_GQL_073_EarlyConflictDetection,BenchmarkCANARY_REQ_GQL_073_EarlyConflictDetection,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,EarlyConflictDetection,TESTED,TestCANARY_REQ_GQL_073_EarlyConflictDetection,BenchmarkCANARY_REQ_GQL_073_EarlyConflictDetection,txn,2025-09-20,src/txn/mvcc_adv/early_detect.zig
-REQ-GQL-073,MvccAdvanced,FalsePositiveReduction,STUB,TestCANARY_REQ_GQL_073_FalsePositiveReduction,BenchmarkCANARY_REQ_GQL_073_FalsePositiveReduction,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,FalsePositiveReduction,TESTED,TestCANARY_REQ_GQL_073_FalsePositiveReduction,,txn,2025-09-20,src/txn/mvcc_adv/early_detect.zig
-REQ-GQL-073,MvccAdvanced,PartialRollbackMechanism,STUB,TestCANARY_REQ_GQL_073_PartialRollbackMechanism,BenchmarkCANARY_REQ_GQL_073_PartialRollbackMechanism,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,PartialRollbackMechanism,TESTED,TestCANARY_REQ_GQL_073_PartialRollbackMechanism,BenchmarkCANARY_REQ_GQL_073_PartialRollbackMechanism,txn,2025-09-20,src/txn/mvcc_adv/partial_rollback.zig
-REQ-GQL-073,MvccAdvanced,PredictiveSkewFilter,STUB,TestCANARY_REQ_GQL_073_PredictiveSkewFilter,BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,PredictiveSkewFilter,TESTED,TestCANARY_REQ_GQL_073_PredictiveSkewFilter,,txn,2025-09-21,src/txn/manager.zig
 REQ-GQL-073,MvccAdvanced,PredictiveSkewFilter,BENCHED,TestCANARY_REQ_GQL_073_PredictiveSkewFilter,BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter,txn,2025-09-21,src/txn/mvcc_adv/predictive_skew_filter.zig
-REQ-GQL-073,MvccAdvanced,PredictiveVersionCheck,STUB,TestCANARY_REQ_GQL_073_PredictiveVersionCheck,BenchmarkCANARY_REQ_GQL_073_PredictiveVersionCheck,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,PredictiveVersionCheck,TESTED,TestCANARY_REQ_GQL_073_PredictiveVersionCheck,BenchmarkCANARY_REQ_GQL_073_PredictiveVersionCheck,txn,2025-09-20,src/txn/mvcc_adv/predictive_version_check.zig
-REQ-GQL-073,MvccAdvanced,RealisticContentionBenchmark,STUB,TestCANARY_REQ_GQL_073_RealisticContentionBenchmark,BenchmarkCANARY_REQ_GQL_073_RealisticContentionBenchmark,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,TestCANARY_REQ_GQL_073_RepairThroughputBench,BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench,txn,2025-09-20,tests/benchmark_mvcc_repair_throughput.zig
-REQ-GQL-073,MvccAdvanced,RepairThroughputBench,STUB,TestCANARY_REQ_GQL_073_RepairThroughputBench,BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,TestCANARY_REQ_GQL_073_RepairThroughputBench,BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench,txn,2025-09-20,src/txn/mvcc_adv/repair_throughput_bench.zig
-REQ-GQL-073,MvccAdvanced,SubTxnRollbackIntegration,STUB,TestCANARY_REQ_GQL_073_SubTxnRollbackIntegration,BenchmarkCANARY_REQ_GQL_073_SubTxnRollbackIntegration,txn,2025-09-20,docs/REQUIREMENTS.md
-REQ-GQL-073,MvccAdvanced,TopologicalRepairHeuristic,STUB,TestCANARY_REQ_GQL_073_TopologicalRepairHeuristic,BenchmarkCANARY_REQ_GQL_073_TopologicalRepairHeuristic,txn,2025-09-20,docs/REQUIREMENTS.md
 REQ-GQL-074,Network Transport,QUICAccept,TESTED,TestCANARY_REQ_GQL_074_QUICAccept,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICAccept,TESTED,TestCANARY_REQ_GQL_074_QUICAccept,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICBasicE2E,TESTED,TestCANARY_REQ_GQL_074_QUICBasicE2E,,wire,2025-09-22,tests/e2e_quic_basic.zig
@@ -629,7 +536,6 @@ REQ-GQL-074,Network Transport,QUICFlowControl,TESTED,TestCANARY_REQ_GQL_074_QUIC
 REQ-GQL-074,Network Transport,QUICHandshake,TESTED,TestCANARY_REQ_GQL_074_QUICHandshake,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICIdleTimeout,TESTED,TestCANARY_REQ_GQL_074_QUICIdleTimeout,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICListener,TESTED,TestCANARY_REQ_GQL_074_QUICListener,,wire,2025-09-22,tests/canary_quic.zig
-REQ-GQL-074,Network Transport,QUICListener,TESTED,e2e_quic_startup,,wire,2025-09-25,docs/GAP_ANALYSIS.md
 REQ-GQL-074,Network Transport,QUICListener,TESTED,e2e_quic_startup,,wire,2025-09-25,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICMultiplexedStreams,TESTED,TestCANARY_REQ_GQL_074_QUICMultiplexedStreams,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,TestCANARY_REQ_GQL_074_QUICMultiplexing,,wire,2025-09-22,tests/canary_quic.zig
@@ -652,48 +558,31 @@ REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,TestCANARY_REQ_GQL_
 REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall,,cluster,2025-09-23,src/distributed/raft_consensus.zig
 REQ-GQL-074,RaftPersistentStorage,Durability,TESTED,TestCANARY_REQ_GQL_074_RaftPersistentStorageRoundTrip,,cluster,2025-09-24,src/distributed/raft_consensus.zig
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias,,planner,2025-09-22,test_cost_model_adaptive_bias.zig
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,IMPL,,,planner,2025-09-22,src/planner/cost_seed.zig
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasClampVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope,planner,2025-09-22,benchmark_bias_clamp_variance.zig
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasClampVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope,planner,2025-09-22,kb/BENCH_ADAPTIVE_CLAMP.md
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasClampVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasClampWarning,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning,,planner,2025-09-22,test_cost_model_bias_clamp_warning.zig
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasClampWarning,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasPersistence,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence,,planner,2025-09-22,test_cost_model_bias_persistence.zig
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasPersistence,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasPersistenceV2,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2,,planner,2025-09-22,test_cost_model_bias_persistence_v2.zig
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasPersistenceV2,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasVarianceEnvelope,planner,2025-09-22,benchmarks/benchmark_adaptive_estimator_variance.zig
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasVarianceEnvelope,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorDynamicAlpha,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorDynamicAlpha,,planner,2025-09-22,test_cost_model_dynamic_alpha.zig
-REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorDynamicAlpha,TESTED,TestCANARY_REQ_GQL_075_AdaptiveEstimatorDynamicAlpha,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,CalibrationEntries,TESTED,TestCANARY_REQ_GQL_075_CostModelCalibrationEntries,,planner,2025-09-22,tests/cost_model_calibration_entries.zig
-REQ-GQL-075,Cost Model Enumeration Seed,CalibrationEntries,TESTED,TestCANARY_REQ_GQL_075_CostModelCalibrationEntries,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,CalibrationEntries,TESTED,TestCANARY_REQ_GQL_075_CostModelCalibrationEntries,,planner,2025-09-22,src/planner/cost_explain.zig
-REQ-GQL-075,Cost Model Enumeration Seed,CalibrationFeedback,TESTED,TestCANARY_REQ_GQL_075_CostModelCardinalityCalibrationFeedback,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,CalibrationFeedback,TESTED,TestCANARY_REQ_GQL_075_CostModelCardinalityCalibrationFeedback,,planner,2025-09-22,src/planner/cost_cardinality_feedback.zig
 REQ-GQL-075,Cost Model Enumeration Seed,DesignDoc,BENCHED,TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates,BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope,planner,2025-09-22,kb/design/cost_model_enumeration_seed.md
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,TESTED,TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates,,planner,2025-09-22,tests/cost_model_seed.zig
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,,BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope,planner,2025-09-22,benchmarks/benchmark_cost_model_seed_variance.zig
-REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates,BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates,BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope,planner,2025-09-22,src/planner/cost_seed.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSON,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSON,,planner,2025-09-22,tests/cost_model_explain_json.zig
-REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSON,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSON,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSON,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSON,,planner,2025-09-22,src/planner/cost_explain.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONBiasFactors,TESTED,TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors,,planner,2025-09-22,test_cost_model_explain_bias.zig
-REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONBiasFactors,TESTED,TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONBiasFactors,TESTED,TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors,,planner,2025-09-22,src/planner/cost_explain.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDetailed,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed,,planner,2025-09-22,tests/cost_model_explain_json_detailed.zig
-REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDetailed,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDetailed,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed,,planner,2025-09-22,src/planner/cost_explain.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDynamicAlpha,TESTED,TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha,,planner,2025-09-22,test_cost_model_explain_v4.zig
-REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDynamicAlpha,TESTED,TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainProtocolBasic,TESTED,TestCANARY_REQ_GQL_075_ExplainProtocolBasic,,planner,2025-09-22,tests/e2e_protocol.zig
-REQ-GQL-075,Cost Model Enumeration Seed,ExplainProtocolBasic,TESTED,TestCANARY_REQ_GQL_075_ExplainProtocolBasic,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainProtocolCalibrated,TESTED,TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated,,planner,2025-09-22,tests/e2e_protocol.zig
-REQ-GQL-075,Cost Model Enumeration Seed,ExplainProtocolCalibrated,TESTED,TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Cost Model Enumeration Seed,PlannerAdaptiveBiasApplication,TESTED,TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication,,planner,2025-09-22,test_cost_model_planner_bias_application.zig
-REQ-GQL-075,Cost Model Enumeration Seed,PlannerAdaptiveBiasApplication,TESTED,TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication,,planner,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-075,Query Optimizer,AdvancedCostModel,TESTED,TestCANARY_REQ_GQL_075_AdvancedCostModel,,planner,2025-09-22,src/canary.zig
 REQ-GQL-075,Query Optimizer,AdvancedCostModelCalibrationVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope,planner,2025-09-22,tests/benchmark_advanced_cost_model_calibration_variance.zig
 REQ-GQL-075,Query Optimizer,AdvancedCostModelCalibrationVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope,planner,2025-09-22,src/canary.zig
@@ -703,121 +592,28 @@ REQ-GQL-076,Materialized Views,RefreshScheduler,TESTED,TestCANARY_REQ_GQL_076_Re
 REQ-GQL-077,Full-Text Search,InvertedIndexCore,TESTED,TestCANARY_REQ_GQL_077_InvertedIndexCore,,engine,2025-09-22,src/canary.zig
 REQ-GQL-077,Full-Text Search,InvertedIndexQueryLatencyVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_077_InvertedIndexQueryLatencyVarianceEnvelope,engine,2025-09-22,tests/benchmark_inverted_index_lookup_variance.zig
 REQ-GQL-077,Full-Text Search,InvertedIndexQueryLatencyVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_077_InvertedIndexQueryLatencyVarianceEnvelope,engine,2025-09-22,src/canary.zig
-REQ-GQL-078,ClusterCoordinator,LeaderStub,TESTED,TestCANARY_REQ_GQL_078_LeaderStub,BenchmarkCANARY_REQ_GQL_078_LeaderStub,dist,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-078,ClusterCoordinator,LeaderStub,TESTED,TestCANARY_REQ_GQL_078_LeaderStub,,dist,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-078,ClusterCoordinator,RaftInterfaceValidation,TESTED,TestCANARY_REQ_GQL_078_RaftInterfaceValidation,BenchmarkCANARY_REQ_GQL_078_RaftInterfaceValidation,dist,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-078,ClusterCoordinator,RaftInterfaceValidation,TESTED,TestCANARY_REQ_GQL_078_RaftInterfaceValidation,,dist,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-078,ClusterCoordinator,ShardMapStub,TESTED,TestCANARY_REQ_GQL_078_ShardMapStub,BenchmarkCANARY_REQ_GQL_078_ShardMapStub,dist,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-078,ClusterCoordinator,ShardMapStub,TESTED,TestCANARY_REQ_GQL_078_ShardMapStub,,dist,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-079,RecursiveExecution,CycleGuard,TESTED,TestCANARY_REQ_GQL_079_CycleGuard,BenchmarkCANARY_REQ_GQL_079_CycleGuard,engine,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-079,RecursiveExecution,CycleGuard,TESTED,TestCANARY_REQ_GQL_079_CycleGuard,,engine,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-079,RecursiveExecution,CycleGuard,TESTED,TestCANARY_REQ_GQL_079_CycleGuard,,engine,2025-09-23,src/planner/recursive.zig
-REQ-GQL-079,RecursiveExecution,FixpointDriver,TESTED,TestCANARY_REQ_GQL_079_FixpointDriver,BenchmarkCANARY_REQ_GQL_079_FixpointDriver,engine,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-079,RecursiveExecution,FixpointDriver,TESTED,TestCANARY_REQ_GQL_079_FixpointDriver,,engine,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-079,RecursiveExecution,FixpointDriver,TESTED,TestCANARY_REQ_GQL_079_FixpointDriver,,engine,2025-09-23,src/planner/recursive.zig
-REQ-GQL-079,RecursiveExecution,ParserRecognition,STUB,TestCANARY_REQ_GQL_079_ParserRecognition,BenchmarkCANARY_REQ_GQL_079_ParserRecognition,engine,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-079,RecursiveExecution,ParserRecognition,TESTED,TestCANARY_REQ_GQL_079_ParserRecognition,,engine,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-079,RecursiveExecution,ParserRecognition,STUB,TestCANARY_REQ_GQL_079_ParserRecognition,,engine,2025-09-23,src/gql/ast.zig
 REQ-GQL-079,RecursiveExecution,ParserRecognition,IMPL,TestCANARY_REQ_GQL_079_ParserRecognition,,engine,2025-09-23,src/gql/parser.zig
-REQ-GQL-080,RlsAbac,EnforcementHook,TESTED,TestCANARY_REQ_GQL_080_EnforcementHook,BenchmarkCANARY_REQ_GQL_080_EnforcementHook,security,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-080,RlsAbac,EnforcementHook,TESTED,TestCANARY_REQ_GQL_080_EnforcementHook,,security,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-080,RlsAbac,PolicyCache,TESTED,TestCANARY_REQ_GQL_080_PolicyCache,BenchmarkCANARY_REQ_GQL_080_PolicyCache,security,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-080,RlsAbac,PolicyCache,TESTED,TestCANARY_REQ_GQL_080_PolicyCache,,security,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-080,RlsAbac,PolicyCatalog,TESTED,TestCANARY_REQ_GQL_080_PolicyCatalog,BenchmarkCANARY_REQ_GQL_080_PolicyCatalog,security,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-080,RlsAbac,PolicyCatalog,TESTED,TestCANARY_REQ_GQL_080_PolicyCatalog,,security,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-081,Monitoring,CoreMetricsSet,TESTED,TestCANARY_REQ_GQL_081_CoreMetricsSet,BenchmarkCANARY_REQ_GQL_081_CoreMetricsSet,ops,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-081,Monitoring,CoreMetricsSet,TESTED,TestCANARY_REQ_GQL_081_CoreMetricsSet,,ops,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-081,Monitoring,MetricsRegistry,TESTED,TestCANARY_REQ_GQL_081_MetricsRegistry,BenchmarkCANARY_REQ_GQL_081_MetricsRegistry,ops,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-081,Monitoring,MetricsRegistry,TESTED,TestCANARY_REQ_GQL_081_MetricsRegistry,,ops,2025-09-22,docs/GAP_ANALYSIS.md
 REQ-GQL-081,Monitoring,MetricsRegistryVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope,ops,2025-09-23,benchmarks/benchmark_monitoring_metrics_variance.zig
-REQ-GQL-081,Monitoring,MetricsRegistryVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope,ops,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-081,Monitoring,MetricsRegistryVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope,ops,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-081,Monitoring,PrometheusEndpoint,TESTED,TestCANARY_REQ_GQL_081_PrometheusEndpoint,BenchmarkCANARY_REQ_GQL_081_PrometheusEndpoint,ops,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-081,Monitoring,PrometheusEndpoint,TESTED,TestCANARY_REQ_GQL_081_PrometheusEndpoint,,ops,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-082,BackupRestore,FullBackup,TESTED,TestCANARY_REQ_GQL_082_FullBackup,BenchmarkCANARY_REQ_GQL_082_FullBackup,storage,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-082,BackupRestore,FullBackup,TESTED,TestCANARY_REQ_GQL_082_FullBackup,,storage,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-082,BackupRestore,IncrementalBackup,TESTED,TestCANARY_REQ_GQL_082_IncrementalBackup,BenchmarkCANARY_REQ_GQL_082_IncrementalBackup,storage,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-082,BackupRestore,IncrementalBackup,TESTED,TestCANARY_REQ_GQL_082_IncrementalBackup,,storage,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-082,BackupRestore,RestoreDriver,TESTED,TestCANARY_REQ_GQL_082_RestoreDriver,BenchmarkCANARY_REQ_GQL_082_RestoreDriver,storage,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-082,BackupRestore,RestoreDriver,TESTED,TestCANARY_REQ_GQL_082_RestoreDriver,,storage,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-083,WalCompaction,ArchivalHook,STUB,TestCANARY_REQ_GQL_083_ArchivalHook,BenchmarkCANARY_REQ_GQL_083_ArchivalHook,storage,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-083,WalCompaction,ArchivalHook,TESTED,TestCANARY_REQ_GQL_083_ArchivalHook,,storage,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-083,WalCompaction,ArchivalHook,IMPL,TestCANARY_REQ_GQL_083_ArchivalHook,,storage,2025-09-23,src/storage/wal_compaction_pipeline.zig
-REQ-GQL-083,WalCompaction,CheckpointSelection,STUB,TestCANARY_REQ_GQL_083_CheckpointSelection,BenchmarkCANARY_REQ_GQL_083_CheckpointSelection,storage,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-083,WalCompaction,CheckpointSelection,TESTED,TestCANARY_REQ_GQL_083_CheckpointSelection,,storage,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-083,WalCompaction,CheckpointSelection,IMPL,TestCANARY_REQ_GQL_083_CheckpointSelection,,storage,2025-09-23,src/storage/wal_compaction_pipeline.zig
-REQ-GQL-083,WalCompaction,CompactionJob,STUB,TestCANARY_REQ_GQL_083_CompactionJob,BenchmarkCANARY_REQ_GQL_083_CompactionJob,storage,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-083,WalCompaction,CompactionJob,TESTED,TestCANARY_REQ_GQL_083_CompactionJob,,storage,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-083,WalCompaction,CompactionJob,IMPL,TestCANARY_REQ_GQL_083_CompactionJob,,storage,2025-09-23,src/storage/wal_compaction_pipeline.zig
 REQ-GQL-083,WalCompaction,CompactionVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope,storage,2025-09-23,tests/benchmark_wal_compaction_pipeline_variance.zig
-REQ-GQL-083,WalCompaction,CompactionVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope,storage,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-084,SelectivityEstimator,AdaptiveFeedbackHook,STUB,TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook,BenchmarkCANARY_REQ_GQL_084_AdaptiveFeedbackHook,optimizer,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-084,SelectivityEstimator,AdaptiveFeedbackHook,TESTED,TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook,,optimizer,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-084,SelectivityEstimator,AdaptiveFeedbackHook,IMPL,TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook,,optimizer,2025-09-23,src/optimizer/selectivity_estimator.zig
-REQ-GQL-084,SelectivityEstimator,EstimatorApi,STUB,TestCANARY_REQ_GQL_084_EstimatorApi,BenchmarkCANARY_REQ_GQL_084_EstimatorApi,optimizer,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-084,SelectivityEstimator,EstimatorApi,TESTED,TestCANARY_REQ_GQL_084_EstimatorApi,,optimizer,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-084,SelectivityEstimator,EstimatorApi,IMPL,TestCANARY_REQ_GQL_084_EstimatorApi,,optimizer,2025-09-23,src/optimizer/selectivity_estimator.zig
 REQ-GQL-084,SelectivityEstimator,EstimatorVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope,optimizer,2025-09-23,tests/benchmark_selectivity_estimator_variance.zig
-REQ-GQL-084,SelectivityEstimator,EstimatorVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope,optimizer,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-084,SelectivityEstimator,FrequencySampler,STUB,TestCANARY_REQ_GQL_084_FrequencySampler,BenchmarkCANARY_REQ_GQL_084_FrequencySampler,optimizer,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-084,SelectivityEstimator,FrequencySampler,TESTED,TestCANARY_REQ_GQL_084_FrequencySampler,,optimizer,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-084,SelectivityEstimator,FrequencySampler,IMPL,TestCANARY_REQ_GQL_084_FrequencySampler,,optimizer,2025-09-23,src/optimizer/selectivity_estimator.zig
-REQ-GQL-085,StructuredLogging,ClientLoggingParity,STUB,TestCANARY_REQ_GQL_085_ClientLoggingParity,,ops,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-085,StructuredLogging,ClientLoggingParity,TESTED,TestCANARY_REQ_GQL_085_ClientLoggingParity,,ops,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-085,StructuredLogging,LogEmitterFiltering,TESTED,TestCANARY_REQ_GQL_085_LogEmitterFiltering,,ops,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-085,StructuredLogging,LogEmitterFiltering,TESTED,TestCANARY_REQ_GQL_085_LogEmitterFiltering,,ops,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-085,StructuredLogging,LogJSONFormat,TESTED,TestCANARY_REQ_GQL_085_LogJSONFormat,,ops,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-085,StructuredLogging,LogJSONFormat,TESTED,TestCANARY_REQ_GQL_085_LogJSONFormat,,ops,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-085,StructuredLogging,LogLevelCliParsing,TESTED,TestCANARY_REQ_GQL_085_LogLevelCliParsing,,ops,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-085,StructuredLogging,LogLevelCliParsing,TESTED,TestCANARY_REQ_GQL_085_LogLevelCliParsing,,ops,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-086,InteractiveRepl,CtrlCCancelBuffer,STUB,TestCANARY_REQ_GQL_086_CtrlCCancelBuffer,,client,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-086,InteractiveRepl,CtrlCCancelBuffer,TESTED,TestCANARY_REQ_GQL_086_CtrlCCancelBuffer,,client,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-086,InteractiveRepl,CtrlCCancelBuffer,TESTED,TestCANARY_REQ_GQL_086_CtrlCCancelBuffer,,client,2025-09-23,src/client/repl.zig
-REQ-GQL-086,InteractiveRepl,HistoryPersistence,STUB,TestCANARY_REQ_GQL_086_HistoryPersistence,,client,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-086,InteractiveRepl,HistoryPersistence,TESTED,TestCANARY_REQ_GQL_086_HistoryPersistence,,client,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-086,InteractiveRepl,HistoryPersistence,TESTED,TestCANARY_REQ_GQL_086_HistoryPersistence,,client,2025-09-23,src/client/repl.zig
-REQ-GQL-086,InteractiveRepl,MetaCommandsBasic,STUB,TestCANARY_REQ_GQL_086_MetaCommandsBasic,,client,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-086,InteractiveRepl,MetaCommandsBasic,TESTED,TestCANARY_REQ_GQL_086_MetaCommandsBasic,,client,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-086,InteractiveRepl,MetaCommandsBasic,TESTED,TestCANARY_REQ_GQL_086_MetaCommandsBasic,,client,2025-09-23,src/client/repl.zig
-REQ-GQL-086,InteractiveRepl,MultilineBuffering,STUB,TestCANARY_REQ_GQL_086_MultilineBuffering,,client,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-086,InteractiveRepl,MultilineBuffering,TESTED,TestCANARY_REQ_GQL_086_MultilineBuffering,,client,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-086,InteractiveRepl,MultilineBuffering,TESTED,TestCANARY_REQ_GQL_086_MultilineBuffering,,client,2025-09-23,src/client/repl.zig
-REQ-GQL-086,InteractiveRepl,ReplLaunchPrompt,STUB,TestCANARY_REQ_GQL_086_ReplLaunchPrompt,,client,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-086,InteractiveRepl,ReplLaunchPrompt,TESTED,TestCANARY_REQ_GQL_086_ReplLaunchPrompt,,client,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-086,InteractiveRepl,ReplLaunchPrompt,TESTED,TestCANARY_REQ_GQL_086_ReplLaunchPrompt,,client,2025-09-23,src/client/repl.zig
-REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,STUB,TestCANARY_REQ_GQL_086_TxnPromptIndicator,,client,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,TESTED,TestCANARY_REQ_GQL_086_TxnPromptIndicator,,client,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,TESTED,TestCANARY_REQ_GQL_086_TxnPromptIndicator,,client,2025-09-23,src/client/repl.zig
-REQ-GQL-087,MigrationEngine,ChecksumValidation,TESTED,TestCANARY_REQ_GQL_087_ChecksumValidation,,migration,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,ChecksumValidation,TESTED,TestCANARY_REQ_GQL_087_ChecksumValidation,,migration,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,CliParityStatusCommand,STUB,TestCANARY_REQ_GQL_087_CliParityStatusCommand,,migration,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,CliParityStatusCommand,STUB,TestCANARY_REQ_GQL_087_CliParityStatusCommand,,migration,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,DownReversalSafety,STUB,TestCANARY_REQ_GQL_087_DownReversalSafety,,migration,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,DownReversalSafety,STUB,TestCANARY_REQ_GQL_087_DownReversalSafety,,migration,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,DriftDetection,TESTED,TestCANARY_REQ_GQL_087_DriftDetection,,migration,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,DriftDetection,TESTED,TestCANARY_REQ_GQL_087_DriftDetection,,migration,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,STUB,TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict,,migration,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,STUB,TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict,,migration,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,LockAcquisitionTTLHeartbeat,TESTED,TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat,,migration,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,LockAcquisitionTTLHeartbeat,TESTED,TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat,,migration,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,MigrationLedgerSchema,TESTED,TestCANARY_REQ_GQL_087_MigrationLedgerSchema,,migration,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,MigrationLedgerSchema,TESTED,TestCANARY_REQ_GQL_087_MigrationLedgerSchema,,migration,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,ObservabilityMetrics,STUB,TestCANARY_REQ_GQL_087_ObservabilityMetrics,,migration,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,ObservabilityMetrics,STUB,TestCANARY_REQ_GQL_087_ObservabilityMetrics,,migration,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,STUB,TestCANARY_REQ_GQL_087_PlanDryRunIntegrity,,migration,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,STUB,TestCANARY_REQ_GQL_087_PlanDryRunIntegrity,,migration,2025-09-22,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,PolicyEnforcementStrictMode,TESTED,TestCANARY_REQ_GQL_087_PolicyEnforcementStrictMode,,migration,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,PolicyEnforcementStrictMode,TESTED,TestCANARY_REQ_GQL_087_PolicyEnforcementStrictMode,,migration,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,ResumeTokenDataMigration,STUB,TestCANARY_REQ_GQL_087_ResumeTokenDataMigration,,migration,2025-09-22,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,ResumeTokenDataMigration,TESTED,TestCANARY_REQ_GQL_087_ResumeTokenDataMigration,,migration,2025-09-23,docs/GAP_ANALYSIS.md
-REQ-GQL-087,MigrationEngine,UpApplyOrderingIdempotency,TESTED,TestCANARY_REQ_GQL_087_UpApplyOrderingIdempotency,,migration,2025-09-23,docs/REQUIREMENTS.md
-REQ-GQL-087,MigrationEngine,UpApplyOrderingIdempotency,TESTED,TestCANARY_REQ_GQL_087_UpApplyOrderingIdempotency,,migration,2025-09-23,docs/GAP_ANALYSIS.md
 REQ-GQL-090,StreamingTelemetry,PagingEvents,TESTED,TestCANARY_REQ_GQL_090_TelemetryPagingPull,,wire,2025-09-23,tests/e2e_protocol_more.zig
 REQ-GQL-091,Client Server Arg Passthrough,CliErgonomics,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,tests/e2e_client_server_arg_passthrough.zig
-REQ-GQL-091,Client Server Arg Passthrough,CliErgonomics,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,docs/IMPLEMENTATION_REALITY.md
-REQ-GQL-091,Client Server Arg Passthrough,CliErgonomics,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,docs/GAP_ANALYSIS.md
 REQ-GQL-091,Client Server Arg Passthrough,Docs,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
-REQ-GQL-100,v0.16.0 Integration,Complete,TESTED,all_acceptance_tests,,team,2025-09-25,docs/NEXT.md
 REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,e2e_cbo_toggle,,planner,2025-09-25,src/planner/cbo.zig
 REQ-GQL-CDC-SINKS,CDC External Sinks,KafkaWebhook,TESTED,e2e_cdc_sinks,,streaming,2025-09-25,src/cdc/sinks.zig
 REQ-GQL-MATCH,MATCH Engine,ComplexPatterns,TESTED,e2e_match_complex,,gql,2025-09-25,src/gql/match.zig

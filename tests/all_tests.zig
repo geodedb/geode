@@ -48,6 +48,11 @@ const _benchmark_closeness = @import("benchmark_closeness.zig");
 const _benchmark_grey_cardinal = @import("benchmark_grey_cardinal.zig");
 const _benchmark_grey_cardinal_variance = @import("benchmark_grey_cardinal_variance.zig");
 const _canary_freshness_guard = @import("canary_freshness_guard.zig");
+// v0.18 feature tests
+const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
+const _e2e_s3_backup_restore = @import("e2e_s3_backup_restore.zig");
+const _e2e_cdc_webhook_reliability = @import("e2e_cdc_webhook_reliability.zig");
+const _e2e_cbo_small_n = @import("e2e_cbo_small_n.zig");
 const _canary_cdc_backpressure_adaptive = @import("canary_cdc_backpressure_adaptive.zig");
 const _benchmark_txn_conflict_variance = @import("benchmark_txn_conflict_matrix_variance.zig");
 const _benchmark_betweenness_variance = @import("benchmark_betweenness_variance.zig");

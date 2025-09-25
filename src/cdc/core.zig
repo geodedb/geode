@@ -9,6 +9,22 @@ pub const CoreConfig = struct {
 
 pub const CoreState = enum { stopped, starting, running, stopping };
 
+/// CDC Event structure
+pub const Event = struct {
+    sequence_number: u64,
+    table_name: []const u8,
+    operation: Operation,
+    timestamp: i64,
+    data: std.json.Value,
+};
+
+pub const Operation = enum {
+    insert,
+    update,
+    delete,
+    truncate,
+};
+
 pub const CoreEngine = struct {
     config: CoreConfig,
     state: CoreState = .stopped,

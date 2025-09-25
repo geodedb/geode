@@ -3,6 +3,8 @@ const raft = @import("raft.zig");
 const raft_consensus = @import("raft_consensus.zig");
 const twophase = @import("twophase.zig");
 const sharding = @import("sharding.zig");
+const federation = @import("federation.zig");
+const query_coordinator = @import("query_coordinator.zig");
 
 pub const DistributedConfig = struct {
     node_id: []const u8,
@@ -325,6 +327,8 @@ pub const RaftConfig = raft.RaftConfig;
 pub const TwoPCCoordinator = twophase.TwoPCCoordinator;
 pub const CoordinatorConfig = twophase.CoordinatorConfig;
 pub const TransactionState = twophase.TransactionState;
+pub const FederationConfig = federation.FederationConfig;
+pub const QueryCoordinator = query_coordinator.QueryCoordinator;
 
 test "distributed coordinator initialization" {
     const raft_config = raft.RaftConfig{ .node_id = "node1", .peers = &[_][]const u8{ "node2", "node3" } };

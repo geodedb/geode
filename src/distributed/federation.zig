@@ -1,9 +1,14 @@
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 const planner = @import("../planner.zig");
+const exec = @import("../exec.zig");
+const raft = @import("raft.zig");
 
 /// Federation configuration
 pub const FederationConfig = struct {
+    /// Enable distributed query federation
+    enabled: bool = false,
+    
     /// Maximum number of remote nodes
     max_nodes: u32 = 100,
 
@@ -21,6 +26,12 @@ pub const FederationConfig = struct {
 
     /// Cache TTL in seconds
     cache_ttl_seconds: u64 = 300,
+    
+    /// Enable deterministic pagination
+    enforce_deterministic_pagination: bool = true,
+    
+    /// Top-K merge batch size
+    topk_merge_batch_size: u32 = 1000,
 };
 
 /// Remote Geode instance
@@ -113,7 +124,7 @@ pub const ConnectionPool = struct {
 };
 
 /// Connection to a remote node
-const quic = @import("transport/quic");
+const quic = @import("../transport/quic.zig");
 pub const Connection = struct {
     allocator: std.mem.Allocator,
     client: ?quic.QuicClient = null,
@@ -123,7 +134,8 @@ pub const Connection = struct {
     pub fn init(allocator: std.mem.Allocator) !Connection {
         return .{
             .allocator = allocator,
-            .socket = null,
+            .client = null,
+            .stream = null,
             .last_used = 0,
         };
     }
