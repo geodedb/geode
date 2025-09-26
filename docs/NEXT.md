@@ -15,33 +15,33 @@
 
 1. **Transparent Data Encryption (TDE)**
 
-   - (Progress) AES-256-GCM primitive + page-level encryption integrated (flag gated)
-   - WAL encryption (landed)
-   - Key provider interface (landed; env/static provider, KMS extension pending)
-   - Performance target: <5% overhead (benchmark pending)
-   - Backup/restore key handling (design drafting)
-   - Key rotation scaffold (landed: key_registry interfaces; scheduling logic w/ min/max age)
-   - KMS integration (pending)
-   - Performance target: <5% overhead (benchmarks: overhead sim + encrypt_pages skeleton; real path wiring pending)
+   - (Progress) AES-256-GCM primitive + page-level + WAL encryption integrated (always available; no runtime flag)
+   - Key provider interface (env/static + MockKMS deterministic test provider) landed
+   - Key rotation: scaffold + persistence (save/load state) + scheduling logic implemented
+   - Overhead benchmarks: encrypt_pages benchmark + smoke benchmark (ratio emission) + real-path synthetic benchmark (XOR keystream simulation) landed
+   - ExternalKms stub (deterministic digest of endpoint+api key) added (placeholder for real remote binding)
+   - Rotation state v1 adds version + checksum integrity (tamper → state ignored)
+   - Pending: Real External KMS network binding & wrap/unwrap, backup/restore key handling design finalization, AEAD real-path overhead validation <5%
+   - Target: Publish reproducible perf report (<5% OLTP overhead) and integrate true KMS wrap/unwrap tests (non-deterministic) beyond mock
 
 2. **Multi-Factor Authentication (MFA)**
-   - (Progress) TOTP + recovery scratch codes + authentication path (authenticate / authenticateWithMFA incl. recovery code consumption)
-   - Admin policy controls & enforcement (partial: policy objects + evaluator; governance UI & full conditions pending)
-   - Expanded audit logging (MFA issued/success/failure + recovery code consumption)
-   - Step-up & re-auth policies (partial scaffolding: session elevation metadata + requireStepUp/markStepUp)
+   - (Progress) TOTP + recovery codes + auth path operational (no enabling flag required)
+   - Admin policy controls & enforcement (partial: evaluator present; governance UI & extended conditions pending)
+   - Expanded audit logging (issued/success/failure + recovery code consumption)
+   - Step-up & re-auth policies (scaffolding present: elevation metadata + require/mark APIs)
 
 ### P1 - Performance & Scale
 
 1. **Full-Text Search Enhancements**
 
-   - (Partial in v0.18) Phrase, proximity, basic highlighting (flag gated)
+   - (Partial in v0.18) Phrase, proximity, basic highlighting (integrated; legacy flag removed)
    - Pluggable analyzers (language-specific)
    - BM25 scoring & ranking
    - Fragment configuration & multi-field support
 
 2. **Multi-threaded Query Execution**
 
-   - (Partial in v0.18) Thread pool + deterministic ordered parallelMap
+   - (Partial in v0.18) Thread pool + deterministic ordered parallelMap (now always initialized; expansion to more operators pending)
    - Expand to Expand/Filter/Join operators
    - Work-stealing + adaptive chunk sizing
    - Determinism guarantees for ordered queries

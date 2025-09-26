@@ -79,18 +79,30 @@ pub const KeyRegistry = struct {
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         var w = file.writer();
+        // Compute checksum over concatenated materials (simple SHA-256 then first 16 hex chars)
+        var h = std.crypto.hash.sha2.Sha256.init(.{});
+        for (self.history.items) |entry| h.update(&entry.material);
+        var digest: [32]u8 = undefined;
+        h.final(&digest);
+        var checksum_buf: [16]u8 = undefined;
+        std.mem.copy(u8, checksum_buf[0..16], digest[0..16]);
         try w.print("{{\n", .{});
+        try w.print("  \"version\": 1,\n", .{});
         if (self.active) |a| {
             try w.print("  \"active_id\": {},\n", .{a.id});
         } else {
             try w.print("  \"active_id\": null,\n", .{});
         }
+        try w.print("  \"checksum\": \"", .{});
+        var i_cs: usize = 0;
+        while (i_cs < 16) : (i_cs += 1) try w.print("{x:0>2}", .{checksum_buf[i_cs]});
+        try w.print("\",\n", .{});
         try w.print("  \"history\": [\n", .{});
         var i: usize = 0;
         while (i < self.history.items.len) : (i += 1) {
-            const h = self.history.items[i];
-            try w.print("    {{\"id\":{},\"created\":{},\"material_hex\":\"", .{ h.id, h.created_unix_epoch });
-            for (h.material) |b| try w.print("{x:0>2}", .{b});
+            const hist_entry = self.history.items[i];
+            try w.print("    {\"id\":{},\"created\":{},\"material_hex\":\"", .{ hist_entry.id, hist_entry.created_unix_epoch });
+            for (hist_entry.material) |b| try w.print("{x:0>2}", .{b});
             try w.print("\"}}{s}\n", .{if (i + 1 == self.history.items.len) "" else ","});
         }
         try w.print("  ]\n}}\n", .{});
@@ -107,6 +119,8 @@ pub const KeyRegistry = struct {
         // Minimal JSON scan (avoid full parser): find history and active_id tokens
         // NOT robust JSON; acceptable for internal persistence (documented)
         var it = std.mem.tokenizeAny(u8, data, "\n\r");
+        var parsed_checksum: [16]u8 = [_]u8{0} ** 16;
+        var have_checksum = false;
         self.history.clearRetainingCapacity();
         self.active = null;
         while (it.next()) |line| {
@@ -117,6 +131,20 @@ pub const KeyRegistry = struct {
                     const id_val = std.fmt.parseInt(u64, tail, 10) catch continue;
                     // active will be resolved after reading history
                     self.active = .{ .id = id_val, .created_unix_epoch = 0, .material = [_]u8{0} ** 32 };
+                }
+            } else if (std.mem.indexOf(u8, line, "\"checksum\"")) |_| {
+                // extract checksum hex (first 32 hex chars representing 16 bytes)
+                const first_quote = std.mem.indexOfScalar(u8, line, '"') orelse continue;
+                const second_quote = std.mem.indexOfScalarPos(u8, line, first_quote + 1, '"') orelse continue;
+                const third_quote = std.mem.indexOfScalarPos(u8, line, second_quote + 1, '"') orelse continue;
+                const fourth_quote = std.mem.indexOfScalarPos(u8, line, third_quote + 1, '"') orelse continue;
+                const hex_slice = line[third_quote + 1 .. fourth_quote];
+                if (hex_slice.len == 32) {
+                    var j: usize = 0;
+                    while (j < 16) : (j += 1) {
+                        parsed_checksum[j] = std.fmt.parseInt(u8, hex_slice[j * 2 .. j * 2 + 2], 16) catch 0;
+                    }
+                    have_checksum = true;
                 }
             } else if (std.mem.indexOf(u8, line, "\"id\"")) |idx2| {
                 // parse history entry line simplistic
@@ -164,6 +192,24 @@ pub const KeyRegistry = struct {
                 break;
             };
             if (found) |f| self.active = f else self.active = null;
+        }
+        if (have_checksum) {
+            // verify checksum matches current history
+            var h2 = std.crypto.hash.sha2.Sha256.init(.{});
+            for (self.history.items) |entry| h2.update(&entry.material);
+            var digest2: [32]u8 = undefined;
+            h2.final(&digest2);
+            var mismatch = false;
+            var k: usize = 0;
+            while (k < 16) : (k += 1) if (digest2[k] != parsed_checksum[k]) {
+                mismatch = true;
+                break;
+            };
+            if (mismatch) {
+                // integrity failure: clear loaded state (treat as no-op load)
+                self.history.clearRetainingCapacity();
+                self.active = null;
+            }
         }
     }
 

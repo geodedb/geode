@@ -76,41 +76,42 @@ LIMIT 100
 
 ### ⚠️ Multi-threading
 
-**Reality**: Prototype thread pool + deterministic parallel map operator (flag-gated). Intra-query operator parallelism beyond map not yet implemented.
+**Reality**: Prototype thread pool + deterministic `parallelMap` operator (now always initialized – former flag removed). Intra-query parallelism beyond map is pending.
 
-- **Thread Pool**: Implemented (disabled by default; test override + env flag)
-- **Parallel Operator (Partial)**: `parallelMap` slices work items; preserves ordering
-- **Determinism**: Ordered barrier + post-join deterministic assembly
-- **Missing**: Work-stealing scheduler, adaptive chunk sizing, pipelined parallel joins
-- **Planned**: Expand to Expand/Filter pipelines & hash operations in v0.19
-- **Statistics**: Basic cardinality estimation
-- **Enumeration**: Left-deep joins only
-- **Calibration**: Small-N bias corrections
+- **Thread Pool**: Active by default (fixed workers). Historical env flag removed.
+- **Parallel Operator (Partial)**: `parallelMap` slices work items; preserves ordering via barrier.
+- **Determinism**: Ordered barrier + deterministic assembly.
+- **Missing**: Work-stealing scheduler, adaptive chunk sizing, pipelined parallel joins.
+- **Planned**: Extend to Expand/Filter/Join physical ops in v0.19 timeline.
+- **Statistics**: Basic cardinality estimation only.
+- **Enumeration**: Left-deep joins only.
+- **Calibration**: Small-N bias corrections integrated (CBO small-N module always on).
 
 ### ⚠️ Advanced FTS
 
-**Reality**: Partial enhancements implemented (phrase match, proximity, highlight fragments) behind feature flag. Analyzer plugins & BM25 scoring pending.
+**Reality**: Partial enhancements implemented (phrase match, proximity, highlight fragments) — previously flag-gated; components now always loaded though incomplete features remain dormant until analyzers/scoring land.
 
 - **Working**: Phrase query (substring), proximity (window scan), basic highlighting
 - **Missing**: Language-specific analyzers, scoring (BM25), indexing pipeline integration
 - **Planned**: v0.19 completion
-  **Reality**: Two algorithms integrated
+
+### ✅ Graph Algorithms
+
+**Reality**: Two algorithms integrated
 
 - **Working**: shortestPath(), pageRank()
 
 ### ⚠️ Cost-Based Optimizer
 
-**Reality**: Works but disabled by default. Recursive EXPLAIN JSON (synthetic nested form) added for tooling experimentation.
+**Reality**: Always active (former disable/enable toggle removed). Small-N calibration + confidence scoring integrated. Recursive EXPLAIN JSON (synthetic nested form) present for tooling experimentation.
 
 - **Performance**: Not optimized for large graphs
 - **Limitations**: No histograms, simple cost model, recursive form is illustrative (synthetic nesting, not alternative join trees yet)
 - **API**: Function calls in RETURN clause only
 
-### ⚠️ Security
+### (Replaced) Legacy Security Section
 
-**Reality**: Basic authentication only
-
-- (Replaced) Storage encryption now partially active (pages). MFA enforced path present; remaining gaps listed above.
+Superseded by expanded Security section above. Previously described "basic auth only" is obsolete: encryption, MFA path, rotation persistence, and audit extensions are integrated. Remaining gaps are external KMS, published perf validation (<5% TDE overhead), full MFA policy matrix, and step-up sensitivity modeling.
 
 ## Not Working Yet
 
@@ -127,14 +128,9 @@ LIMIT 100
 - **Missing**: Language analyzers
 - **Planned**: v0.19
 
-### ❌ Multi-threading
+### (Removed) Obsolete Multi-threading Section
 
-**Reality**: Single-threaded execution
-
-- **Current**: One query at a time
-- **Concurrency**: Multiple connections only
-- **Missing**: Intra-query parallelism
-- **Planned**: v0.19
+Single-thread-only statement removed; prototype parallelism now partially implemented (see Multi-threading section above).
 
 ## Performance Reality
 
@@ -227,5 +223,5 @@ geode backup --dest s3://bucket/path --mode full
 ### ⚠️ Use with Caution
 
 - Federation (new, limited testing)
-- CBO (disabled by default)
+- Multi-threaded operator parallelism (prototype scope)
 - 2PC transactions

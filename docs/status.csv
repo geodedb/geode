@@ -669,7 +669,9 @@ REQ-GQL-TDE-002,WAL encryption,TEST,TESTED,,,security,2025-09-26,tests/unit_wal_
 REQ-GQL-TDE-003,Key provider abstraction,SECURITY,PARTIAL,TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-004,MockKMSProvider,SECURITY,PARTIAL,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-004,MockKMSProvider,TEST,TESTED,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
+REQ-GQL-TDE-005,ExternalKmsStub,SECURITY,PARTIAL,TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,STUB,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2025-09-26,tests/benchmark_tde_overhead_smoke.zig
+REQ-GQL-TDE-OVERHEAD-002,TDE real-path overhead benchmark,PERF,PARTIAL,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_002_RealPath,,security,2025-09-26,benchmarks/benchmark_tde_overhead_realpath.zig
 REQ-GQL-XXX,...,...,...,...,...,...,...,tools/status_generate.py
 REQ-GQL-XXX,Name,Component,TESTED,TestCANARY_REQ_GQL_XXX_Feature,,team,2025-09-20,kb/CANARY_ADOPTION_SUMMARY.md
 REQ-GQL-XXX,name,aspect,status,test,bench,team,date,kb/CONSOLIDATED.md

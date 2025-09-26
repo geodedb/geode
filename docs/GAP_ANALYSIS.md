@@ -89,12 +89,17 @@ As of v0.18.0, Geode has closed critical infrastructure gaps while maintaining 1
 - [x] AES-256-GCM implementation (core primitive)
 - [x] Page-level encryption integrated (data pages via page_manager)
 - [x] WAL encryption (log segment encryption w/ per-file nonce derivation)
-- [x] Key provider interface (env/static provider; KMS extension pending)
-- [ ] KMS integration
-- [ ] Performance <5% overhead benchmark
-- [ ] Key rotation workflow
-- [x] Infrastructure prepared
-  - NOTE: Rotation, KMS binding & perf validation pending.
+- [x] Key provider interface (env/static + MockKMS deterministic provider)
+- [x] Key rotation scaffold & scheduling
+- [x] Key rotation state persistence (save/load) tests added
+- [x] Overhead benchmarks (encrypt_pages + smoke ratio benchmark)
+- [x] Real-path synthetic overhead benchmark (XOR keystream sim)
+- [x] ExternalKms stub (deterministic digest) for future wrapping path
+- [x] Rotation state v1 (version + checksum integrity validation)
+- [ ] External KMS integration (real remote binding)
+- [ ] <5% overhead validated on real workload
+- [ ] Backup/restore key handling design finalization
+  - NOTE: Remaining focuses: external KMS + performance validation + backup key workflow.
 
 #### MFA (Multi-Factor Authentication)
 
@@ -116,18 +121,18 @@ As of v0.18.0, Geode has closed critical infrastructure gaps while maintaining 1
 - [x] Hit highlighting (simple fragmenting)
 - [ ] Pluggable analyzers
 - [x] Index infrastructure
-  - NOTE: Scoring (BM25) & analyzers pending; all implemented pieces are behind feature flag.
+  - NOTE: Scoring (BM25) & analyzers pending; previously flag-gated components now always loaded though incomplete features remain dormant.
 
 ### 🔄 Multi-threaded Execution (P1)
 
 **Status**: PARTIAL (thread pool + parallelMap) | **Target**: v0.19
 
-- [x] Thread pool implementation (basic fixed workers)
+- [x] Thread pool implementation (basic fixed workers, always initialized)
 - [ ] Work-stealing scheduler
 - [~] Operator parallelism (parallelMap only; other physical ops pending)
 - [x] Determinism preservation (ordered barrier in parallelMap)
 - [x] Concurrency primitives
-  - NOTE: Additional operators (Expand/Filter/Join) not yet parallelized; scheduling remains FIFO.
+  - NOTE: Additional operators (Expand/Filter/Join) pending; scheduling strategy still FIFO.
 
 ### 🔄 Distributed Write Path (P2)
 

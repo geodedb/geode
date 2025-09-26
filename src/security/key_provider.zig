@@ -6,6 +6,7 @@ const std = @import("std");
 pub const ProviderType = enum {
     StaticEnv,
     MockKms, // deterministic mock for tests & benchmarking
+    ExternalKms, // stub external KMS integration (deterministic hash of endpoint+api key)
 };
 
 pub const KeyMaterial = struct {
@@ -28,6 +29,7 @@ pub const Provider = struct {
         switch (self.typ) {
             .StaticEnv => return try loadStatic(),
             .MockKms => return self.fetchMockKms(),
+            .ExternalKms => return try loadExternalKms(),
         }
     }
 };
@@ -89,6 +91,45 @@ fn fetchMockKms(self: Provider) ?KeyMaterial {
     return Provider_fetchMock(self);
 }
 
+// External KMS stub: deterministically derive keys from env (GEODE_KMS_ENDPOINT + GEODE_KMS_API_KEY)
+// This is a placeholder until real network KMS binding is implemented.
+fn loadExternalKms() !?KeyMaterial {
+    const endpoint = std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_KMS_ENDPOINT") catch |e| switch (e) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return e,
+    };
+    defer std.heap.page_allocator.free(endpoint);
+    const api_key = std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_KMS_API_KEY") catch |e| switch (e) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return e,
+    };
+    defer std.heap.page_allocator.free(api_key);
+
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update(endpoint);
+    h.update(api_key);
+    var digest: [32]u8 = undefined;
+    h.final(&digest);
+
+    // Derive two keys: DATA = H(digest||"DATA"), WAL = H(digest||"WAL")
+    var data_key: [32]u8 = undefined;
+    var wal_key: [32]u8 = undefined;
+    deriveDigest(&digest, "DATA", &data_key);
+    deriveDigest(&digest, "WAL", &wal_key);
+    return KeyMaterial{ .data_key = data_key, .wal_key = wal_key };
+}
+
+fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) void {
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update(base);
+    h.update(label);
+    var dig: [32]u8 = undefined;
+    h.final(&dig);
+    out.* = dig;
+}
+
+// CANARY: REQ=REQ-GQL-TDE-005; FEATURE="ExternalKmsStub"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub; OWNER=security; UPDATED=2025-09-26
+
 // CANARY: REQ=REQ-GQL-TDE-004; FEATURE="MockKMSProvider"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_004_MockKMS; OWNER=security; UPDATED=2025-09-26
 
 // Basic static env provider unit test placeholder (ensures graceful null when unset)
@@ -112,6 +153,23 @@ test "mock kms deterministic and distinct seeds differ" {
     // Different seed => different keys
     var p2 = Provider{ .typ = .MockKms, .mock_seed = 0xDEADBEEFCAFEBABE };
     const km3 = (try p2.fetch(std.heap.page_allocator)).?;
+    try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key));
+    try std.testing.expect(!std.mem.eql(u8, &km1.wal_key, &km3.wal_key));
+}
+
+test "external kms stub deterministic" {
+    // Ensure env set
+    std.os.setenvZ("GEODE_KMS_ENDPOINT", "https://kms.example.local") catch {};
+    std.os.setenvZ("GEODE_KMS_API_KEY", "abc123") catch {};
+    const p = Provider.init(.ExternalKms);
+    const km1 = (try p.fetch(std.heap.page_allocator)).?;
+    const km2 = (try p.fetch(std.heap.page_allocator)).?;
+    try std.testing.expect(std.mem.eql(u8, &km1.data_key, &km2.data_key));
+    try std.testing.expect(std.mem.eql(u8, &km1.wal_key, &km2.wal_key));
+
+    // Change API key -> different derivation
+    std.os.setenvZ("GEODE_KMS_API_KEY", "def456") catch {};
+    const km3 = (try p.fetch(std.heap.page_allocator)).?;
     try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key));
     try std.testing.expect(!std.mem.eql(u8, &km1.wal_key, &km3.wal_key));
 }
