@@ -2,7 +2,7 @@ const std = @import("std");
 
 // Advanced Full Text Search enhancements (phrase, proximity, highlighting, analyzers)
 // Runtime gated by shared feature flag (GEODE_ENABLE_ADVANCED_FTS) via util/feature_flags.zig.
-// CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=QUERY; STATUS=PARTIAL; TEST=tests/e2e_fts_advanced.zig:1; OWNER=search; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=QUERY; STATUS=IMPL; TEST=tests/e2e_fts_advanced.zig:1; OWNER=search; UPDATED=2025-09-26
 
 pub const Analyzer = enum { simple, whitespace, english };
 

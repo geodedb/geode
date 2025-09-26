@@ -6,7 +6,7 @@ const storage = @import("storage_page_manager");
 
 // WAL encryption wrapper: AES-256-GCM per record (nonce: 12 bytes derived from LSN + payload len).
 // Layout when encrypted: [nonce(12)][tag(16)][ciphertext]. Header payload length = 28 + plaintext_len.
-// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="WAL encryption"; ASPECT=STORAGE; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_002_WalEncryptionRoundTrip; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="WAL encryption"; ASPECT=STORAGE; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_002_WalEncryptionRoundTrip; OWNER=security; UPDATED=2025-09-26
 const WalEnc = struct {
     pub const NonceBytes: usize = 12;
     pub const TagBytes: usize = 16;

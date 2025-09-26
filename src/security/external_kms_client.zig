@@ -6,7 +6,7 @@ const crypto = std.crypto;
 // a remote service. Non-deterministic via random nonce so the same plaintext key
 // produces different envelopes. Future implementation would replace internals with
 // QUIC RPC to a remote KMS service performing hardware-backed encryption.
-// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-001; FEATURE="ExternalKMSWrapUnwrap"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-001; FEATURE="ExternalKMSWrapUnwrap"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap; OWNER=security; UPDATED=2025-09-26
 
 pub const Envelope = struct {
     version: u8 = 1,

@@ -220,6 +220,25 @@ grep -r "CANARY: REQ=REQ-GQL-" src/ tests/ | head
 4. **Automated checks** — CI enforces via scanner + governance
 5. **Generated artifacts** — `status.csv` is generated, never hand-edited
 
+## Monitoring Variance Benchmarks (Unified)
+
+The legacy `MetricsRegistryVarianceEnvelope` benchmark has been **deprecated** and its CANARY line marked `STATUS=REMOVED`.
+
+Canonical evidence now comes exclusively from the unified harness:
+
+- Benchmark: `BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified`
+- Test: `TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified`
+
+Rationale:
+
+- Eliminates duplicate variance envelopes for the same registry code path
+- Simplifies governance diffs (single ASPECT to track)
+- Ensures future regressions are caught in one authoritative place
+
+Action for contributors: Do NOT add new variance envelope benchmarks for metrics registry internals; extend the unified harness instead (add scenario toggles or sub-measures as needed). Existing historical REMOVED tag remains for audit provenance.
+
+Governance verification (`./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict`) enforces that only the unified benchmark is active.
+
 ## For Contributors
 
 Before claiming a feature is implemented:

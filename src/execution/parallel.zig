@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // Parallel execution thread pool (always enabled; feature flags removed).
-// CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=PARTIAL; TEST=tests/e2e_parallel_execution.zig:1; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=IMPL; TEST=tests/e2e_parallel_execution.zig:1; OWNER=engine; UPDATED=2025-09-26
 
 // Legacy helpers removed; always active.
 

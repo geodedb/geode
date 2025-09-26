@@ -27,6 +27,8 @@ const PolicyCatalog = struct {
     }
 };
 
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCacheInvalidationRace; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace; OWNER=security; UPDATED=2025-09-26
+
 const PolicyCache = struct {
     allocator: std.mem.Allocator,
     hits: usize = 0,
@@ -50,6 +52,9 @@ const PolicyCache = struct {
         }
         self.misses += 1;
         return null;
+    }
+    fn invalidate(self: *PolicyCache, id: []const u8) void {
+        _ = self.store.remove(id);
     }
 };
 
@@ -95,4 +100,22 @@ pub fn TestCANARY_REQ_GQL_080_PolicyCache() !void {
     _ = p_second;
     try testing.expectEqual(@as(usize, 1), cache.hits);
     try testing.expectEqual(@as(usize, 1), cache.misses); // first load miss, second hit
+}
+
+pub fn TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace() !void {
+    if (!bo.feature_rls_abac) return;
+    var catalog = PolicyCatalog.init(testing.allocator);
+    defer catalog.deinit();
+    try catalog.add(.{ .id = "p1", .expr = "label=Person;attr=region:eu" });
+    var cache = PolicyCache.init(testing.allocator);
+    defer cache.deinit();
+    // Initial load (miss)
+    _ = cache.getOrLoad(&catalog, "p1") orelse return error.TestExpectedFound;
+    // Simulated race: invalidate before a second requester attempts to read.
+    cache.invalidate("p1");
+    // Second load should be another miss (re-load)
+    _ = cache.getOrLoad(&catalog, "p1") orelse return error.TestExpectedFound;
+    // Expect two misses, zero hits (both loads after invalidation required fetch)
+    try testing.expectEqual(@as(usize, 0), cache.hits);
+    try testing.expectEqual(@as(usize, 2), cache.misses);
 }

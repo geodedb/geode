@@ -5,7 +5,7 @@ const keyprov = @import("src/security/key_provider.zig");
 // benchmark_tde_overhead_aead.zig
 // Measures real AES-256-GCM encryption cost per page vs memcpy baseline.
 // Deterministic seed for reproducibility; non-deterministic nonces per page.
-// CANARY: REQ=REQ-GQL-TDE-OVERHEAD-003; FEATURE="TDE real AEAD overhead benchmark"; ASPECT=PERF; STATUS=PARTIAL; TEST=BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_003_AEAD; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-OVERHEAD-003; FEATURE="TDE real AEAD overhead benchmark"; ASPECT=PERF; STATUS=BENCHED; TEST=BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_003_AEAD; OWNER=security; UPDATED=2025-09-26
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

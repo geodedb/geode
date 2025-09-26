@@ -10,16 +10,16 @@ The project has broad test + benchmark coverage across 59 distinct requirement I
 
 ### Scanner Evidence Snapshot
 
-| Metric                      | Value                      |
-| --------------------------- | -------------------------- |
-| Distinct Requirements (IDs) | 59                         |
-| TESTED entries              | 443                        |
-| BENCHED entries             | 229                        |
-| IMPL entries                | 7                          |
-| STUB entries                | 6                          |
-| REMOVED entries             | 0                          |
-| MISSING entries             | 0                          |
-| Parse Errors                | 1 (invalid STATUS=PARTIAL) |
+| Metric                      | Value                       |
+| --------------------------- | --------------------------- |
+| Distinct Requirements (IDs) | 59                          |
+| TESTED entries              | 443                         |
+| BENCHED entries             | 229                         |
+| IMPL entries                | 7                           |
+| STUB entries                | 6                           |
+| REMOVED entries             | 0                           |
+| MISSING entries             | 0                           |
+| Parse Errors                | 0 (all STATUS tokens valid) |
 
 Freshness: All TESTED/BENCHED UPDATED dates are within 60‑day window (no STALE flags). Should any exceed 60 days, they must be visually flagged here without altering CANARY tags.
 

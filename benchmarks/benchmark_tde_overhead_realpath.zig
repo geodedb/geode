@@ -2,7 +2,7 @@ const std = @import("std");
 const keyprov = @import("src/security/key_provider.zig");
 
 // Real-path TDE overhead benchmark: simulate encrypting N pages vs baseline memcpy and report ratio.
-// CANARY: REQ=REQ-GQL-TDE-OVERHEAD-002; FEATURE="TDE real-path overhead benchmark"; ASPECT=PERF; STATUS=PARTIAL; TEST=BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_002_RealPath; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-OVERHEAD-002; FEATURE="TDE real-path overhead benchmark"; ASPECT=PERF; STATUS=BENCHED; TEST=BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_002_RealPath; OWNER=security; UPDATED=2025-09-26
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

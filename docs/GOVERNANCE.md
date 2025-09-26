@@ -3,6 +3,7 @@
 This document consolidates all automation steps, guard scripts, and policies ensuring that Geode's documentation and implementation evidence (**CANARY** system) remain synchronized and drift-resistant.
 
 **v0.16.0 Updates:**
+
 - All compile-time feature flags removed from governance checks
 - Status tracking via generated `status.csv` (never hand-edited)
 - New tools: `no_feature_flags_check.py`, `status_generate.py`, `canary_check.py`
@@ -51,6 +52,16 @@ All critical checks are composed in `scripts/governance_ci.zig` and runnable via
 | `badge_generation`        | Generates SVG evidence coverage badge (`badges/evidence.svg`).                   | `scripts/generate_badges.zig`         |
 | `trend_append`            | Appends latest counts into historical log `badges/history.jsonl`.                | `scripts/governance_trend_append.zig` |
 | `badge_staleness`         | Ensures evidence badge freshness vs `status.json` `generated_at`.                | `scripts/badge_staleness_guard.zig`   |
+
+### Mandatory Verify Step
+
+All CI acceptance and local release qualification MUST execute the strict verify command referencing the canonical GAP analysis path:
+
+```bash
+./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
+```
+
+Any earlier documentation referring to `--verify GAP_ANALYSIS.md` (without `docs/`) is obsolete. PRs missing this step in their acceptance or pipeline scripts SHOULD be updated before merge. This prevents silent path drift that would otherwise yield false negatives (scanner unable to open file) while appearing successful.
 
 ## Variance Envelope Guard
 

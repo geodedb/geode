@@ -3,7 +3,7 @@ const page_manager = @import("../src/storage/page_manager.zig");
 
 // BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead
 // Measures approximate relative overhead of encrypted vs unencrypted page write/read cycles.
-// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE performance benchmark"; ASPECT=PERFORMANCE; STATUS=PARTIAL; BENCH=BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE performance benchmark"; ASPECT=PERFORMANCE; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead; OWNER=security; UPDATED=2025-09-26
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

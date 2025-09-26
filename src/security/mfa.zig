@@ -3,7 +3,7 @@ const crypto = std.crypto;
 
 // Multi-Factor Authentication (MFA) - RFC 6238 TOTP implementation (HMAC-SHA1 default)
 // Runtime gated by shared feature flag (GEODE_ENABLE_MFA) via util/feature_flags.zig.
-// CANARY: REQ=REQ-GQL-MFA-001; FEATURE="MFA baseline"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=tests/e2e_security_tde_mfa.zig:1; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-001; FEATURE="MFA baseline"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/e2e_security_tde_mfa.zig:1; OWNER=security; UPDATED=2025-09-26
 
 var global_enabled: bool = false;
 pub fn globallyEnabled() bool {

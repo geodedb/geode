@@ -7,7 +7,7 @@ pub const seed = @import("cost_seed.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDetailed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=CalibrationEntries; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelCalibrationEntries; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONBiasFactors; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors; OWNER=planner; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONRecursive; STATUS=PARTIAL; TEST=tests/e2e_explain_recursive.zig:1; OWNER=planner; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONRecursive; STATUS=IMPL; TEST=tests/e2e_explain_recursive.zig:1; OWNER=planner; UPDATED=2025-09-26
 
 fn buildOpsJson(allocator: std.mem.Allocator, schema_name: []const u8, ops: []const seed.OpDescriptor) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;

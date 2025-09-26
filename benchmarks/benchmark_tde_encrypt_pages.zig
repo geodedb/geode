@@ -5,7 +5,7 @@ const storage_crypto = @import("../src/storage/crypto.zig");
 // benchmark_tde_encrypt_pages.zig
 // Real encryption benchmark invoking PageCrypto.encryptPage for a sequence of synthetic pages.
 // Measures mean per-page encryption latency and approximate throughput.
-// CANARY: REQ=REQ-GQL-SEC-TDE-OVERHEAD-001; FEATURE="TDEEncryptBenchmark"; ASPECT=BENCH; STATUS=PARTIAL; BENCH=BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-SEC-TDE-OVERHEAD-001; FEATURE="TDEEncryptBenchmark"; ASPECT=BENCH; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001; OWNER=security; UPDATED=2025-09-26
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

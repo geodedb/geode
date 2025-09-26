@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // Key Provider abstraction (skeleton) enabling pluggable key sources (static env, future KMS/HSM).
-// CANARY: REQ=REQ-GQL-TDE-003; FEATURE="Key provider abstraction"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-003; FEATURE="Key provider abstraction"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic; OWNER=security; UPDATED=2025-09-26
 
 pub const ProviderType = enum {
     StaticEnv,
@@ -139,9 +139,9 @@ fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) void {
     out.* = dig;
 }
 
-// CANARY: REQ=REQ-GQL-TDE-005; FEATURE="ExternalKmsStub"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-005; FEATURE="ExternalKmsStub"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub; OWNER=security; UPDATED=2025-09-26
 
-// CANARY: REQ=REQ-GQL-TDE-004; FEATURE="MockKMSProvider"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_004_MockKMS; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-004; FEATURE="MockKMSProvider"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_004_MockKMS; OWNER=security; UPDATED=2025-09-26
 
 // Basic static env provider unit test placeholder (ensures graceful null when unset)
 // (Full CANARY test added via tests harness referencing this module.)

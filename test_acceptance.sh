@@ -49,4 +49,15 @@ echo "Test 8: Generate status.csv..."
 python3 tools/status_generate.py --repo . --out docs/status.csv || exit 1
 echo
 
+# Test 9: Governance strict verify (CANARY scanner)
+echo "Test 9: Governance strict verify..."
+if [ ! -x ./bin/canaryscan ]; then
+	if [ -f tools/canaryscan/main.go ] || grep -q "package main" tools/canaryscan/*.go 2>/dev/null; then
+		echo "Building canary scanner (go build)..."
+		go build -o ./bin/canaryscan ./tools/canaryscan 2>/dev/null || true
+	fi
+fi
+./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict || exit 2
+echo
+
 echo "=== All Acceptance Tests Passed ==="

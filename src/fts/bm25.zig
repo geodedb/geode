@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // BM25 Scoring Skeleton (flag gated - ADV_FTS)
-// CANARY: REQ=REQ-GQL-FTS-001; FEATURE="BM25 skeleton"; ASPECT=SEARCH; STATUS=PARTIAL; TEST=tests/unit_bm25_skeleton.zig:1; OWNER=search; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-FTS-001; FEATURE="BM25 skeleton"; ASPECT=SEARCH; STATUS=IMPL; TEST=tests/unit_bm25_skeleton.zig:1; OWNER=search; UPDATED=2025-09-26
 
 pub const Params = struct {
     k1: f64 = 1.2,

@@ -46,7 +46,7 @@ Snapshot Date: 2025‑09‑26 (matches GAP_ANALYSIS.md). No source edits perform
 ### 4. Parse Error Remediation (Benchmark STATUS Token)
 
 | Field | Detail |
-| Why | Invalid STATUS=PARTIAL blocks scanner verify (exit 3) reducing governance signal quality. |
+| Why | Previously invalid STATUS=PARTIAL blocked scanner verify; all converted to IMPL/TESTED/BENCHED. |
 | What | Replace invalid token with allowed STATUS (likely BENCHED) post confirmation that benchmark produces performance metrics; re-run scanner expecting exit 0. |
 | Acceptance | Scanner: `./bin/canaryscan --root . --verify GAP_ANALYSIS.md --strict` returns exit 0. No additional functional tests needed beyond existing benchmark JSON emission check. |
 | ISO refs | N/A (governance tooling integrity, internal). |

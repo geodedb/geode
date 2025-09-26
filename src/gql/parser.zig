@@ -72,7 +72,7 @@ pub const Parser = struct {
         var list = std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         var recursive_mode = false;
         // Minimal recognition of leading WITH RECURSIVE (no full CTE parsing yet)
-        // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-23
+        // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle; OWNER=engine; UPDATED=2025-09-26
         if (self.cur.kind == .WITH) {
             // Peek if next token is identifier RECURSIVE (case-insensitive)
             var tmp = self.lx.*;
