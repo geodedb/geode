@@ -135,6 +135,7 @@ pub fn applyUpMigrations(alloc: *std.mem.Allocator, names: []const []const u8) M
     }.lessThan);
 
     // Append to ledger ensuring capacity
+    var newly_applied: usize = 0; // track for metrics
     for (buf[0..buf_len]) |entry| {
         if (ledger_len == ledger_storage.len) return error.OutOfMemory; // capacity guard
         // Double-check no race (not expected in single-thread test slice)
@@ -162,9 +163,11 @@ pub fn applyUpMigrations(alloc: *std.mem.Allocator, names: []const []const u8) M
         const prefix = full_hex[0..7];
         ledger_storage[ledger_len] = StatusRow{ .version = entry.version, .name = entry.name, .applied = true, .checksum_prefix = prefix };
         ledger_len += 1;
+        newly_applied += 1;
     }
     // Refresh baseline after successful batch
     baseline_fingerprint = computeFingerprint();
+    if (newly_applied > 0) incApplied(newly_applied);
 }
 
 pub fn applyDownMigrations(_: *std.mem.Allocator, _: []const []const u8) MigrationError!void {

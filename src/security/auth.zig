@@ -27,6 +27,8 @@ pub const User = struct {
     is_superuser: bool,
     mfa_enabled: bool,
     mfa_secret: ?[]const u8,
+    // Single-use recovery codes (strings) consumed on successful use. Optional.
+    recovery_codes: ?std.ArrayList([]const u8) = null,
     attributes: std.StringHashMap([]const u8),
 };
 
@@ -94,7 +96,7 @@ pub const Operation = enum { select, insert, update, delete, all };
 pub const RowLevelPolicy = struct { id: PolicyId, name: []const u8, table: []const u8, operation: Operation, using_clause: []const u8, check_clause: ?[]const u8, roles: []const RoleId, enabled: bool };
 
 // ---- MFA Admin Policy ----
-// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole; OWNER=security; UPDATED=2025-09-26
 pub const MfaScope = enum { user, role, attribute };
 pub const MfaConditionType = enum {
     match_any_role,
@@ -131,7 +133,7 @@ pub const Session = struct {
     // High-assurance / step-up metadata. Null when no recent MFA elevation.
     last_mfa_ts: ?i64, // timestamp of last successful MFA event applied to this session
     elevation_expires_at: ?i64, // boundary after which high-assurance privileges lapse
-    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_007_StepUpMeta; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
 };
 pub const PasswordPolicy = struct {
     min_length: usize,
@@ -212,19 +214,19 @@ pub const AuditLog = struct {
         try self.append(.row_policy_created, 0, "Row policy created: {} - {s}", .{ policy_id, name });
     }
     // MFA audit events
-    // CANARY: REQ=REQ-GQL-MFA-004; FEATURE="MFA challenge issued"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_004_Issued; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-004; FEATURE="MFA challenge issued"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_004_IssuedFlow; OWNER=security; UPDATED=2025-09-26
     pub fn logMfaChallengeIssued(self: *AuditLog, user_id: UserId, method: []const u8) !void {
         try self.append(.mfa_challenge_issued, user_id, "MFA challenge issued method={s}", .{method});
     }
-    // CANARY: REQ=REQ-GQL-MFA-005; FEATURE="MFA challenge success"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_005_Success; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-005; FEATURE="MFA challenge success"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_005_SuccessFlow|TestCANARY_REQ_GQL_MFA_005_SuccessFlow_complete; OWNER=security; UPDATED=2025-09-26
     pub fn logMfaChallengeSuccess(self: *AuditLog, user_id: UserId, method: []const u8) !void {
         try self.append(.mfa_challenge_success, user_id, "MFA challenge success method={s}", .{method});
     }
-    // CANARY: REQ=REQ-GQL-MFA-006; FEATURE="MFA challenge failure"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_006_Failure; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-006; FEATURE="MFA challenge failure"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_006_FailureFlow; OWNER=security; UPDATED=2025-09-26
     pub fn logMfaChallengeFailure(self: *AuditLog, user_id: UserId, method: []const u8, reason: []const u8) !void {
         try self.append(.mfa_challenge_failure, user_id, "MFA challenge failure method={s} reason={s}", .{ method, reason });
     }
-    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="MFA recovery code used"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_007_RecoveryAudit; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="MFA recovery code used"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_007_RecoveryAudit|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse; OWNER=security; UPDATED=2025-09-26
     pub fn logMfaRecoveryCodeUsed(self: *AuditLog, user_id: UserId) !void {
         try self.append(.mfa_challenge_success, user_id, "MFA recovery code consumed", .{});
     }
@@ -518,7 +520,7 @@ pub const SecurityManager = struct {
     /// Returns true when a privileged action requires a fresh step-up (MFA) before proceeding.
     /// Placeholder policy: if action appears "admin" or "write" and no unexpired elevation.
     /// Future: integrate per-action sensitivity levels & policy engine.
-    /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire; OWNER=security; UPDATED=2025-09-26
+    /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
     pub fn requireStepUp(self: *Self, token: []const u8, action: []const u8) bool {
         const s = self.sessions.get(token) orelse return true; // unknown session => demand step-up / re-auth
         const now = std.time.milliTimestamp();
@@ -535,7 +537,7 @@ pub const SecurityManager = struct {
 
     /// Marks the session as having completed a successful step-up (MFA) for a bounded lifetime.
     /// lifetime_ms: duration the elevation should remain valid.
-    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_009_StepUpMark; OWNER=security; UPDATED=2025-09-26
+    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
     pub fn markStepUp(self: *Self, token: []const u8, lifetime_ms: i64) !void {
         var s = self.sessions.getPtr(token) orelse return error.InvalidSession;
         const now = std.time.milliTimestamp();
@@ -627,7 +629,7 @@ pub const SecurityManager = struct {
         return true;
     }
     // Create user helper
-    // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
     pub fn createUserDetailed(self: *Self, username: []const u8, email: []const u8, password: []const u8, is_superuser: bool) !UserId {
         const id = @as(UserId, @intCast(self.users.count() + 1));
         const attrs = std.StringHashMap([]const u8).init(self.allocator);
@@ -714,7 +716,7 @@ pub const SecurityManager = struct {
     // ---- Authentication ----
     // Basic password authentication. Returns session token if successful and MFA not required or already satisfied.
     // If MFA required, returns error.MFARequired after logging issuance.
-    // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
     pub fn authenticate(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
         // Locate user
         var user_opt: ?*User = null;
@@ -744,10 +746,10 @@ pub const SecurityManager = struct {
     // Complete authentication with MFA code after password stage.
     // Expects that authenticate returned error.MFARequired previously.
     // Returns a new session token on success.
-    // CANARY: REQ=REQ-GQL-AUTH-003; FEATURE="MFA authentication"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_AUTH_003_AuthMFA; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-AUTH-003; FEATURE="MFA authentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_003_AuthMFA; OWNER=security; UPDATED=2025-09-26
     // Enhanced to allow either a TOTP code (code param) or a recovery code (if code==0 and recovery_code provided).
     // Recovery codes are single-use; upon successful use it is removed and audited.
-    // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse; OWNER=security; UPDATED=2025-09-26
     pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
         var user_opt: ?*User = null;
         var it = self.users.iterator();

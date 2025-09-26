@@ -8,10 +8,10 @@ const crypto = std.crypto;
 //   {"op":"Generate"} -> {"status":"OK","envelope":{...}}
 //   {"op":"Unwrap","envelope":{...}} -> {"status":"OK","plaintext":"<64 hex>"}
 // Errors -> {"status":"ERR","code":"AuthenticationFailed"}
-// This is a development scaffold; no auth, single connection, single stream.
-// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate; OWNER=security; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub; OWNER=security; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap; OWNER=security; UPDATED=2025-09-26
+// This is a development scaffold; now includes minimal token auth (header field) on each request.
+// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect; OWNER=security; UPDATED=2025-09-26
 
 pub const Envelope = struct {
     version: u8 = 1,
@@ -101,6 +101,8 @@ pub const Server = struct {
     prng: Prng,
     auth_token: ?[]const u8 = null,
     attestation_hash: [32]u8 = [_]u8{0} ** 32,
+    // Ephemeral Ed25519 key pair created on auth token set (test scope, could be rotated with token)
+    attest_keypair: ?std.crypto.sign.Ed25519.KeyPair = null,
 
     pub fn init(allocator: std.mem.Allocator, seed: u64) Server {
         var prng = Prng.init(seed);
@@ -111,11 +113,18 @@ pub const Server = struct {
 
     pub fn setAuthToken(self: *Server, tok: []const u8) void {
         self.auth_token = tok;
-        // derive attestation hash (placeholder: sha256 over token + kek prefix)
+        // derive attestation hash (sha256 over token + kek prefix)
         var h = std.crypto.hash.sha2.Sha256.init(.{});
         h.update(tok);
         h.update(self.kek[0..16]);
         h.final(&self.attestation_hash);
+        // Generate a fresh ephemeral Ed25519 key pair deterministically from a random seed so
+        // tests are reproducible if we ever choose to expose the seed (currently we don't).
+        // Zig 0.15.1 Ed25519 API: KeyPair.generateDeterministic(seed) and kp.sign(msg, null)
+        var seed: [32]u8 = undefined;
+        std.crypto.random.bytes(&seed);
+        const attest_kp = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch unreachable;
+        self.attest_keypair = attest_kp;
     }
 
     fn wrap(self: *Server, plaintext: [32]u8) Envelope {
@@ -159,9 +168,11 @@ pub const RemoteKmsServer = struct {
         const n = try stream.read(buf);
         if (n == 0) return;
         const req = buf[0..n];
-        // Simple auth: expect "auth":"<token>" if token set
+        // Simple auth: expect field "auth":"<token>" if token configured
         if (self.server.auth_token) |tok| {
-            if (std.mem.indexOf(u8, req, tok) == null) {
+            // naive check: token must appear and be preceded by "auth":"
+            const pos = std.mem.indexOf(u8, req, tok);
+            if (pos == null or std.mem.indexOf(u8, req, "\"auth\":\"") == null) {
                 try stream.writeAll("{\"status\":\"ERR\",\"code\":\"AuthenticationFailed\"}\n");
                 return;
             }
@@ -195,9 +206,23 @@ pub const RemoteKmsServer = struct {
             const w = out.writer(self.allocator);
             try w.writeAll("{\"status\":\"OK\",\"plaintext\":\"");
             for (plain) |b| try w.print("{x:0>2}", .{b});
-            try w.writeAll("\",\"attestation\":\"");
+            try w.writeAll(",\"attestation\":{\"hash\":\"");
             for (self.server.attestation_hash) |b| try w.print("{x:0>2}", .{b});
-            try w.writeAll("\"}\n");
+            try w.writeAll(",\"pub\":\"");
+            const kp = self.server.attest_keypair.?;
+            for (kp.public_key.toBytes()) |b| try w.print("{x:0>2}", .{b});
+            // Sign message: domain tag + hash (plaintext excluded for simplicity)
+            const domain = "GEODE-KMS-ATTEST-UNWRAP";
+            const msg_len = domain.len + self.server.attestation_hash.len;
+            var msg = try self.allocator.alloc(u8, msg_len);
+            defer self.allocator.free(msg);
+            std.mem.copyForwards(u8, msg[0..domain.len], domain);
+            std.mem.copyForwards(u8, msg[domain.len..msg_len], &self.server.attestation_hash);
+            const sig = kp.sign(msg, null) catch unreachable;
+            try w.writeAll(",\"sig\":\"");
+            const sig_bytes = sig.toBytes();
+            for (sig_bytes) |b| try w.print("{x:0>2}", .{b});
+            try w.writeAll("\"}}\n");
             try stream.writeAll(out.items);
         } else if (std.mem.indexOf(u8, req, "PrivUnwrap")) |_| {
             // privileged unwrap same as unwrap but explicit op; enforce token already checked
@@ -222,9 +247,22 @@ pub const RemoteKmsServer = struct {
             var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
             defer out.deinit(self.allocator);
             const w = out.writer(self.allocator);
-            try w.writeAll("{\"status\":\"OK\",\"attestation\":\"");
+            try w.writeAll("{\"status\":\"OK\",\"attestation\":{\"hash\":\"");
             for (self.server.attestation_hash) |b| try w.print("{x:0>2}", .{b});
-            try w.writeAll("\"}\n");
+            try w.writeAll(",\"pub\":\"");
+            const kp2 = self.server.attest_keypair.?;
+            for (kp2.public_key.toBytes()) |b| try w.print("{x:0>2}", .{b});
+            const domain2 = "GEODE-KMS-ATTEST";
+            const msg2_len = domain2.len + self.server.attestation_hash.len;
+            var msg2 = try self.allocator.alloc(u8, msg2_len);
+            defer self.allocator.free(msg2);
+            std.mem.copyForwards(u8, msg2[0..domain2.len], domain2);
+            std.mem.copyForwards(u8, msg2[domain2.len..msg2_len], &self.server.attestation_hash);
+            const sig2 = kp2.sign(msg2, null) catch unreachable;
+            try w.writeAll(",\"sig\":\"");
+            const sig2_bytes = sig2.toBytes();
+            for (sig2_bytes) |b| try w.print("{x:0>2}", .{b});
+            try w.writeAll("\"}}\n");
             try stream.writeAll(out.items);
         } else {
             try stream.writeAll("{\"status\":\"ERR\",\"code\":\"BadOp\"}\n");
@@ -242,6 +280,7 @@ pub const RemoteKmsServer = struct {
 pub const RemoteKmsClient = struct {
     allocator: std.mem.Allocator,
     quic_client: quic.QuicClient,
+    auth_token: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) RemoteKmsClient {
         return .{ .allocator = allocator, .quic_client = quic.QuicClient.init(allocator) };
@@ -251,10 +290,22 @@ pub const RemoteKmsClient = struct {
         try self.quic_client.connect(host, port);
     }
 
+    pub fn setAuthToken(self: *RemoteKmsClient, tok: []const u8) void {
+        self.auth_token = tok;
+    }
+
+    fn authPrefix(self: *RemoteKmsClient) []const u8 {
+        return if (self.auth_token) |t| t else "";
+    }
+
     pub fn generate(self: *RemoteKmsClient) !Envelope {
         var stream = try self.quic_client.getStream();
         defer stream.deinit();
-        try stream.writeAll("{\"op\":\"Generate\"}\n");
+        if (self.auth_token) |_| {
+            try stream.writeAll("{\"op\":\"Generate\",\"auth\":\"");
+            try stream.writeAll(self.auth_token.?);
+            try stream.writeAll("\"}\n");
+        } else try stream.writeAll("{\"op\":\"Generate\"}\n");
         var buf = try self.allocator.alloc(u8, 512);
         defer self.allocator.free(buf);
         const n = try stream.read(buf);
@@ -273,7 +324,13 @@ pub const RemoteKmsClient = struct {
         var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
         defer out.deinit(self.allocator);
         const w = out.writer(self.allocator);
-        try w.writeAll("{\"op\":\"Unwrap\",\"envelope\":");
+        if (self.auth_token) |_| {
+            try w.writeAll("{\"op\":\"Unwrap\",\"auth\":\"");
+            try w.writeAll(self.auth_token.?);
+            try w.writeAll("\",\"envelope\":");
+        } else {
+            try w.writeAll("{\"op\":\"Unwrap\",\"envelope\":");
+        }
         try envelopeToJson(env, w);
         try w.writeAll("}\n");
         try stream.writeAll(out.items);
@@ -299,7 +356,13 @@ pub const RemoteKmsClient = struct {
         var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
         defer out.deinit(self.allocator);
         const w = out.writer(self.allocator);
-        try w.writeAll("{\"op\":\"PrivUnwrap\",\"envelope\":");
+        if (self.auth_token) |_| {
+            try w.writeAll("{\"op\":\"PrivUnwrap\",\"auth\":\"");
+            try w.writeAll(self.auth_token.?);
+            try w.writeAll("\",\"envelope\":");
+        } else {
+            try w.writeAll("{\"op\":\"PrivUnwrap\",\"envelope\":");
+        }
         try envelopeToJson(env, w);
         try w.writeAll("}\n");
         try stream.writeAll(out.items);
@@ -321,17 +384,45 @@ pub const RemoteKmsClient = struct {
     pub fn attest(self: *RemoteKmsClient) ![32]u8 {
         var stream = try self.quic_client.getStream();
         defer stream.deinit();
-        try stream.writeAll("{\"op\":\"Attest\"}\n");
+        if (self.auth_token) |_| {
+            try stream.writeAll("{\"op\":\"Attest\",\"auth\":\"");
+            try stream.writeAll(self.auth_token.?);
+            try stream.writeAll("\"}\n");
+        } else try stream.writeAll("{\"op\":\"Attest\"}\n");
         var buf = try self.allocator.alloc(u8, 256);
         defer self.allocator.free(buf);
         const n = try stream.read(buf);
         const resp = buf[0..n];
-        const apos = std.mem.indexOf(u8, resp, "\"attestation\":\"") orelse return error.InvalidResponse;
-        const start = apos + 16;
+        const hpos = std.mem.indexOf(u8, resp, "\"hash\":\"") orelse return error.InvalidResponse;
+        const pubpos = std.mem.indexOf(u8, resp, "\"pub\":\"") orelse return error.InvalidResponse;
+        const sigpos = std.mem.indexOf(u8, resp, "\"sig\":\"") orelse return error.InvalidResponse;
         var hash: [32]u8 = undefined;
+        var pub_key: [32]u8 = undefined;
+        var sig: [64]u8 = undefined; // Ed25519 signature length
         var i: usize = 0;
+        var start = hpos + 9;
         while (i < 32) : (i += 1) hash[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
+        i = 0;
+        start = pubpos + 8;
+        while (i < 32) : (i += 1) pub_key[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
+        i = 0;
+        start = sigpos + 8;
+        while (i < 64) : (i += 1) sig[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
+        if (!verifyAttestation(pub_key, hash, sig, false)) return error.InvalidResponse;
         return hash;
+    }
+
+    pub fn verifyAttestation(pub_key: [32]u8, hash: [32]u8, sig: [64]u8, is_unwrap: bool) bool {
+        const domain_attest = if (is_unwrap) "GEODE-KMS-ATTEST-UNWRAP" else "GEODE-KMS-ATTEST";
+        const msg_len = domain_attest.len + hash.len;
+        var msg = std.heap.page_allocator.alloc(u8, msg_len) catch return false;
+        defer std.heap.page_allocator.free(msg);
+        std.mem.copyForwards(u8, msg[0..domain_attest.len], domain_attest);
+        std.mem.copyForwards(u8, msg[domain_attest.len..msg_len], &hash);
+        const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(pub_key) catch return false;
+        const signature = std.crypto.sign.Ed25519.Signature.fromBytes(sig);
+        signature.verify(msg, pk) catch return false;
+        return true;
     }
 };
 

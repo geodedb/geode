@@ -4862,7 +4862,7 @@ fn evalExprToPropertyValue(_: std.mem.Allocator, expr: geode.ast.Expr) graph_exe
     };
 }
 
-// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-26
 test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
     const expect = std.testing.expect;
     try expect(!paginationStreamScaffold(10, 0));

@@ -1,11 +1,11 @@
 const std = @import("std");
 const mvcc_adv = @import("mvcc_adv");
 const range_tracker = @import("range_tracker");
-// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_TxnCommit; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_TxnCommit; OWNER=engine; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SSIPhantomPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=engine; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=PredicateRangeDetection; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_023_PhantomDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-025; FEATURE="Transactions/MVCC"; ASPECT=WriteSkewDetection; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_025_WriteSkewDetection; BENCH=BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=PredicateRangeDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-025; FEATURE="Transactions/MVCC"; ASPECT=WriteSkewDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_025_WriteSkewDetection; BENCH=BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope; OWNER=txn; UPDATED=2025-09-26
 
 pub const TxnId = u64;
 
@@ -490,7 +490,7 @@ pub const Manager = struct {
     }
 
     // Register an explicit key range [low, high] for phantom detection.
-    // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-22
+    // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-26
     pub fn rangeRead(self: *Manager, txn: *Txn, low: []const u8, high: []const u8) !void {
         if (!self.phantom_enabled) return;
         if (self.rtracker) |*rt| try rt.register(txn.id, low, high);

@@ -37,7 +37,7 @@ fn tdeEnabled() bool {
 // Page encryption strategy wrapper. Abstracts conditional AES-GCM encryption for data pages.
 // Layout when encrypted: [nonce(12)][tag(16)][ciphertext(page_size bytes)]
 // Plain (unencrypted) pages remain exactly page_size bytes.
-// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE page encryption"; ASPECT=STORAGE; STATUS=IMPL; TEST=tests/e2e_security_tde_mfa.zig:1; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE page encryption"; ASPECT=STORAGE; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig:1|tests/unit_tde_crypto.zig:1; OWNER=security; UPDATED=2025-09-26
 
 pub const Overhead = NonceBytes + TagBytes; // 28
 

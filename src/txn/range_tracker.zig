@@ -16,7 +16,7 @@ pub const RangeTracker = struct {
     allocator: std.mem.Allocator,
     map: std.AutoHashMap(u64, std.ArrayList(Entry)), // txn_id -> ranges
 
-    // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=IMPL; OWNER=txn; UPDATED=2025-09-22
+    // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; OWNER=txn; UPDATED=2025-09-26
 
     pub fn init(ally: std.mem.Allocator) RangeTracker {
         return .{ .allocator = ally, .map = std.AutoHashMap(u64, std.ArrayList(Entry)).init(ally) };

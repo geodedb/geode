@@ -9,7 +9,7 @@ const rls_tests = @import("tests/canary_rls_abac.zig");
 // Compute mean, p95, coefficient of variation (cv), and trimmed cv (5% each tail).
 // Threshold target (General): cv<=0.35, p95/mean<=3.0 (initial non-enforced unless RLS_ABAC_ENFORCE=1).
 //
-// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=VarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_080_RlsAbacVarianceEnvelope; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=VarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_080_RlsAbacVarianceEnvelope; OWNER=security; UPDATED=2025-09-26
 
 const Policy = rls_tests.Policy;
 

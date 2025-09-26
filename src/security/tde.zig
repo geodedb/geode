@@ -4,7 +4,7 @@ const flags_mod = @import("../util/feature_flags.zig");
 
 // Transparent Data Encryption (TDE) minimal AES-256-GCM implementation.
 // Runtime gated by GEODE_ENABLE_TDE or test override via enableForTests().
-// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/e2e_security_tde_mfa.zig:1; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1; OWNER=security; UPDATED=2025-09-26
 
 pub const KeyStatus = struct {
     loaded: bool,

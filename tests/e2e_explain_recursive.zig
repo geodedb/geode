@@ -24,3 +24,16 @@ test "recursive explain emits nested child chain" {
     }
     try testing.expect(count == 2);
 }
+
+test "TestCANARY_REQ_GQL_075_ExplainJSONRecursive" {
+    var ops = [_]seed.OpDescriptor{
+        .{ .kind = .Scan },
+        .{ .kind = .Filter, .selectivity = 0.25 },
+        .{ .kind = .Join },
+    };
+    const json = try cost_explain.explainRecursive(testing.allocator, &ops);
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"child\"") != null);
+    // Validate last object closes properly
+    try testing.expect(json[json.len - 1] == '}');
+}

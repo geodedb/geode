@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-26T17:23:06.852086646Z",
+  "generated_at": "2025-09-26T20:17:09.141423873Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -127,7 +127,7 @@
           ],
           "benches": [],
           "owner": "planner",
-          "updated": "2025-09-20"
+          "updated": "2025-09-26"
         },
         {
           "feature": "Pagination Policy Override",
@@ -170,7 +170,7 @@
           ],
           "benches": [],
           "owner": "planner",
-          "updated": "2025-09-23"
+          "updated": "2025-09-26"
         },
         {
           "feature": "PaginationExecutionStreaming",
@@ -1305,7 +1305,7 @@
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-20"
+          "updated": "2025-09-26"
         },
         {
           "feature": "Transactions/MVCC",
@@ -1683,7 +1683,7 @@
             "BenchmarkCANARY_REQ_GQL_016_PathPrune"
           ],
           "owner": "planner",
-          "updated": "2025-09-20"
+          "updated": "2025-09-26"
         },
         {
           "feature": "Variable Length Path Expand",
@@ -3420,6 +3420,22 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomDetection"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "PredicateRangeDetection",
+          "status": "BENCHED",
+          "files": [
             "tests/canary_txn_phantom_anomaly.zig"
           ],
           "tests": [
@@ -3433,19 +3449,20 @@
         },
         {
           "feature": "MVCC Phantom Prevention",
-          "aspect": "PredicateRangeDetection",
+          "aspect": "RangeTracker",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "src/txn/manager.zig",
+            "src/txn/range_tracker.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomDetection"
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
           ],
           "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope"
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
           "owner": "txn",
-          "updated": "2025-09-21"
+          "updated": "2025-09-26"
         },
         {
           "feature": "MVCC Phantom Prevention",
@@ -3469,23 +3486,6 @@
             "tests/canary_txn_phantom_range.zig"
           ],
           "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "MVCC Phantom Prevention",
-          "aspect": "RangeTracker",
-          "status": "BENCHED",
-          "files": [
-            "src/txn/manager.zig",
-            "src/txn/range_tracker.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
-          ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
@@ -3693,7 +3693,7 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "src/planner/enumerator.zig"
+            "tests/canary_planner_enumerator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
@@ -3709,7 +3709,7 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "tests/canary_planner_enumerator.zig"
+            "src/planner/enumerator.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
@@ -3846,7 +3846,8 @@
           "aspect": "Archive",
           "status": "TESTED",
           "files": [
-            "src/distributed/federation_latency_aggregate.zig"
+            "src/distributed/federation_latency_aggregate.zig",
+            "tests/test_federation_latency_aggregates.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_FedLatencyArchive"
@@ -3860,7 +3861,8 @@
           "aspect": "MultiRun",
           "status": "TESTED",
           "files": [
-            "src/distributed/federation_latency_aggregate.zig"
+            "src/distributed/federation_latency_aggregate.zig",
+            "tests/test_federation_latency_aggregates.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_FedLatencyMultiRun"
@@ -3874,7 +3876,8 @@
           "aspect": "RobustStats",
           "status": "TESTED",
           "files": [
-            "src/distributed/federation_latency_aggregate.zig"
+            "src/distributed/federation_latency_aggregate.zig",
+            "tests/test_federation_latency_aggregates.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_FedLatencyRobustStats"
@@ -3888,7 +3891,8 @@
           "aspect": "SchemaValidation",
           "status": "TESTED",
           "files": [
-            "src/distributed/federation_latency_aggregate.zig"
+            "src/distributed/federation_latency_aggregate.zig",
+            "tests/test_federation_latency_aggregates.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_FedLatencySchemaValidation"
@@ -3902,7 +3906,8 @@
           "aspect": "Streak",
           "status": "TESTED",
           "files": [
-            "src/distributed/federation_latency_aggregate.zig"
+            "src/distributed/federation_latency_aggregate.zig",
+            "tests/test_federation_latency_aggregates.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_FedLatencyStreak"
@@ -3916,12 +3921,27 @@
           "aspect": "Summary",
           "status": "TESTED",
           "files": [
-            "src/distributed/federation_latency_aggregate.zig"
+            "src/distributed/federation_latency_aggregate.zig",
+            "tests/test_federation_latency_aggregates.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_FedLatencySummary"
           ],
           "benches": [],
+          "owner": "federation",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "FederationLatencyAggregates",
+          "aspect": "VarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_federation_latency_aggregate_variance.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope"
+          ],
           "owner": "federation",
           "updated": "2025-09-26"
         },
@@ -4124,7 +4144,7 @@
           "aspect": "WriteSkewDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_write_skew.zig"
+            "src/txn/manager.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_025_WriteSkewDetection"
@@ -4133,14 +4153,14 @@
             "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope"
           ],
           "owner": "txn",
-          "updated": "2025-09-21"
+          "updated": "2025-09-26"
         },
         {
           "feature": "Transactions/MVCC",
           "aspect": "WriteSkewDetection",
           "status": "BENCHED",
           "files": [
-            "src/txn/manager.zig"
+            "tests/canary_txn_write_skew.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_025_WriteSkewDetection"
@@ -4271,20 +4291,6 @@
         {
           "feature": "WAL Compaction",
           "aspect": "CorruptPageRecoveryLatency",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_recovery_corrupt_latency.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
-          ],
-          "owner": "storage",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "WAL Compaction",
-          "aspect": "CorruptPageRecoveryLatency",
           "status": "TESTED",
           "files": [
             "tests/canary_recovery_corrupt_latency.zig"
@@ -4293,6 +4299,20 @@
             "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
           ],
           "benches": [],
+          "owner": "storage",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "WAL Compaction",
+          "aspect": "CorruptPageRecoveryLatency",
+          "status": "BENCHED",
+          "files": [
+            "tests/canary_recovery_corrupt_latency.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
+          ],
           "owner": "storage",
           "updated": "2025-09-22"
         },
@@ -6941,20 +6961,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/txn/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/txn/mvcc_adv/predictive_skew_filter.zig"
@@ -6965,6 +6971,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/txn/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -7168,20 +7188,6 @@
           "aspect": "QUICListener",
           "status": "TESTED",
           "files": [
-            "src/transport/quic.zig"
-          ],
-          "tests": [
-            "e2e_quic_startup"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-25"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICListener",
-          "status": "TESTED",
-          "files": [
             "tests/canary_quic.zig"
           ],
           "tests": [
@@ -7190,6 +7196,20 @@
           "benches": [],
           "owner": "wire",
           "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICListener",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig"
+          ],
+          "tests": [
+            "e2e_quic_startup"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-25"
         },
         {
           "feature": "Network Transport",
@@ -7649,23 +7669,12 @@
           "aspect": "ExplainJSONRecursive",
           "status": "TESTED",
           "files": [
-            "src/planner/cost_explain.zig"
-          ],
-          "tests": [
-            "tests/e2e_explain_recursive.zig:1"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "ExplainJSONRecursive",
-          "status": "TESTED",
-          "files": [
+            "src/planner/cost_explain.zig",
             "tests/e2e_explain_recursive.zig"
           ],
-          "tests": [],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_ExplainJSONRecursive"
+          ],
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-26"
@@ -7845,27 +7854,15 @@
         {
           "feature": "RecursiveExecution",
           "aspect": "ParserRecognition",
-          "status": "STUB",
-          "files": [
-            "src/gql/ast.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_079_ParserRecognition"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "RecursiveExecution",
-          "aspect": "ParserRecognition",
           "status": "TESTED",
           "files": [
+            "src/gql/ast.zig",
             "src/gql/parser.zig",
             "tests/canary_parser_recursive_negative_cycle.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle"
+            "TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle",
+            "TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle|TestCANARY_REQ_GQL_079_ParserRecognition"
           ],
           "benches": [],
           "owner": "engine",
@@ -7921,7 +7918,7 @@
             "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope"
           ],
           "owner": "ops",
-          "updated": "2025-09-26"
+          "updated": "2025-09-26 // superseded by unified benchmark (see MetricsRegistryVarianceUnified)"
         },
         {
           "feature": "Monitoring",
@@ -8342,20 +8339,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/auth.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_AUTH_002_AuthPassword"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "Password authentication",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
+            "src/security/auth.zig",
             "tests/test_auth_mfa_flows.zig"
           ],
           "tests": [
@@ -8375,20 +8359,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/auth.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_AUTH_003_AuthMFA"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "MFA authentication",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
+            "src/security/auth.zig",
             "tests/test_auth_mfa_flows.zig"
           ],
           "tests": [
@@ -8411,7 +8382,7 @@
             "src/security/auth.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_AUTH_004_Recovery"
+            "TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse"
           ],
           "benches": [],
           "owner": "security",
@@ -8479,11 +8450,9 @@
           "aspect": "INFRA",
           "status": "TESTED",
           "files": [
-            "src/util/feature_flags.zig"
+            "tests/unit_feature_flags.zig"
           ],
-          "tests": [
-            "tests/unit_feature_flags.zig:1"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "core",
           "updated": "2025-09-26"
@@ -8493,9 +8462,11 @@
           "aspect": "INFRA",
           "status": "TESTED",
           "files": [
-            "tests/unit_feature_flags.zig"
+            "src/util/feature_flags.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/unit_feature_flags.zig:1"
+          ],
           "benches": [],
           "owner": "core",
           "updated": "2025-09-26"
@@ -8619,22 +8590,11 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
+            "src/security/auth.zig",
             "tests/test_mfa_policies.zig"
           ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "MFA admin policy",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "src/security/auth.zig"
-          ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval"
+            "TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole"
           ],
           "benches": [],
           "owner": "security",
@@ -8650,20 +8610,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/auth.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_MFA_004_Issued"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "MFA challenge issued",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
+            "src/security/auth.zig",
             "tests/test_auth_mfa_flows.zig"
           ],
           "tests": [
@@ -8683,24 +8630,12 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
+            "src/security/auth.zig",
             "tests/test_auth_mfa_flows.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_005_SuccessFlow"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "MFA challenge success",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "src/security/auth.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_MFA_005_Success"
+            "TestCANARY_REQ_GQL_MFA_005_SuccessFlow",
+            "TestCANARY_REQ_GQL_MFA_005_SuccessFlow|TestCANARY_REQ_GQL_MFA_005_SuccessFlow_complete"
           ],
           "benches": [],
           "owner": "security",
@@ -8716,24 +8651,11 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
+            "src/security/auth.zig",
             "tests/test_auth_mfa_flows.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_MFA_006_FailureFlow"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "MFA challenge failure",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "src/security/auth.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_MFA_006_Failure"
           ],
           "benches": [],
           "owner": "security",
@@ -8752,7 +8674,7 @@
             "src/security/auth.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_007_RecoveryAudit"
+            "TestCANARY_REQ_GQL_MFA_007_RecoveryAudit|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse"
           ],
           "benches": [],
           "owner": "security",
@@ -8766,7 +8688,7 @@
             "src/security/auth.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_007_StepUpMeta"
+            "TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow"
           ],
           "benches": [],
           "owner": "security",
@@ -8825,6 +8747,37 @@
           "tests": [
             "TestCANARY_REQ_GQL_MFA_010_ElevationTTL"
           ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-MFA-POLICY-001",
+      "features": [
+        {
+          "feature": "MfaPolicyEngine",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "MfaPolicyEngine",
+          "aspect": "SECURITY",
+          "status": "IMPL",
+          "files": [
+            "tests/test_mfa_policies.zig"
+          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
@@ -9017,7 +8970,7 @@
       "features": [
         {
           "feature": "TDEEncryptBenchmark",
-          "aspect": "BENCH",
+          "aspect": "PERFORMANCE",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_tde_encrypt_pages.zig"
@@ -9026,6 +8979,60 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001"
           ],
+          "owner": "security",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-SEC-UNWRAP-001",
+      "features": [
+        {
+          "feature": "PrivilegedUnwrapPath",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/kms_remote.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "PrivilegedUnwrapPath",
+          "aspect": "TEST",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_remote_kms.zig",
+            "tests/test_remote_kms_unwrap_attest.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap",
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-SEC-ZEROIZE-001",
+      "features": [
+        {
+          "feature": "SecretsZeroization",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/secure_mem.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_SEC_ZEROIZE_001_Basic"
+          ],
+          "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
         }
@@ -9042,7 +9049,7 @@
             "src/security/tde.zig"
           ],
           "tests": [
-            "tests/e2e_security_tde_mfa.zig:1"
+            "tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1"
           ],
           "benches": [],
           "owner": "security",
@@ -9070,7 +9077,7 @@
             "src/storage/page_encryption.zig"
           ],
           "tests": [
-            "tests/e2e_security_tde_mfa.zig:1"
+            "tests/e2e_security_tde_mfa.zig:1|tests/unit_tde_crypto.zig:1"
           ],
           "benches": [],
           "owner": "security",
@@ -9195,6 +9202,62 @@
       ]
     },
     {
+      "id": "REQ-GQL-TDE-ATTEST-001",
+      "features": [
+        {
+          "feature": "RemoteKmsAttestation",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/kms_remote.zig",
+            "tests/test_remote_kms_attestation.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify",
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "RemoteKmsAttestation",
+          "aspect": "TEST",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_remote_kms.zig",
+            "tests/test_remote_kms_unwrap_attest.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub",
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-TDE-BACKUP-KEY-001",
+      "features": [
+        {
+          "feature": "KeyBackupHandling",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/backup_key_envelope.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-TDE-EXT-KMS-001",
       "features": [
         {
@@ -9231,14 +9294,28 @@
       "id": "REQ-GQL-TDE-EXT-KMS-REMOTE-001",
       "features": [
         {
+          "feature": "RemoteKMSAuthGuard",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "tests/test_remote_kms_auth_negative.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        },
+        {
           "feature": "RemoteKMSPrototype",
           "aspect": "SECURITY",
-          "status": "STUB",
+          "status": "TESTED",
           "files": [
             "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate"
+            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative"
           ],
           "benches": [],
           "owner": "security",
@@ -9249,6 +9326,7 @@
           "aspect": "TEST",
           "status": "TESTED",
           "files": [
+            "tests/canary_remote_kms.zig",
             "tests/test_external_kms_remote.zig"
           ],
           "tests": [
@@ -9256,6 +9334,39 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-TDE-OLTP-PERF-001",
+      "features": [
+        {
+          "feature": "TDEOlptOverheadValidation",
+          "aspect": "PERFORMANCE",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_tde_oltp_overhead.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001"
+          ],
+          "owner": "perf",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "TDEOlptOverheadValidation",
+          "aspect": "PERFORMANCE",
+          "status": "TESTED",
+          "files": [
+            "tests/test_tde_oltp_overhead_threshold.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold"
+          ],
+          "benches": [],
+          "owner": "perf",
           "updated": "2025-09-26"
         }
       ]
@@ -9358,11 +9469,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 207,
-      "IMPL": 6,
+      "BENCHED": 209,
+      "IMPL": 7,
       "REMOVED": 1,
-      "STUB": 6,
-      "TESTED": 396
+      "STUB": 4,
+      "TESTED": 399
     },
     "by_aspect": {
       "API": 7,
@@ -9396,7 +9507,7 @@
       "Archive": 1,
       "AuditLogging": 1,
       "AvgVarianceEnvelope": 1,
-      "BENCH": 2,
+      "BENCH": 1,
       "BFS": 2,
       "Backpressure": 1,
       "BackpressureAdaptive": 1,
@@ -9493,7 +9604,7 @@
       "ExplainJSONBiasFactors": 1,
       "ExplainJSONDetailed": 1,
       "ExplainJSONDynamicAlpha": 1,
-      "ExplainJSONRecursive": 2,
+      "ExplainJSONRecursive": 1,
       "ExplainProtocolBasic": 1,
       "ExplainProtocolCalibrated": 1,
       "FailureInjection": 1,
@@ -9597,7 +9708,7 @@
       "OrderingKeyBuild": 1,
       "OrderingPerf": 1,
       "PERF": 3,
-      "PERFORMANCE": 1,
+      "PERFORMANCE": 4,
       "PageRank": 1,
       "PageRankVarianceEnvelope": 1,
       "PaginationExecutionStreaming": 1,
@@ -9607,7 +9718,7 @@
       "PaginationPrefetchVarianceEnvelope": 1,
       "PagingEvents": 1,
       "Parser": 3,
-      "ParserRecognition": 2,
+      "ParserRecognition": 1,
       "PartialRollbackMechanism": 1,
       "PathCacheCore": 1,
       "PathCacheDegreeBucketDiscrimination": 1,
@@ -9741,7 +9852,7 @@
       "RewriteHookPipelineIntegration": 1,
       "RobustStats": 1,
       "SEARCH": 2,
-      "SECURITY": 31,
+      "SECURITY": 32,
       "SSIPhantomPrevention": 2,
       "SSIPhantomPreventionVariance": 1,
       "STORAGE": 2,
@@ -9766,7 +9877,7 @@
       "StubImplAudit": 1,
       "Summary": 1,
       "TDERotationVarianceEnvelope": 1,
-      "TEST": 10,
+      "TEST": 12,
       "TXN": 1,
       "TarjanSCC": 1,
       "Telemetry": 1,
@@ -9789,7 +9900,7 @@
       "UnweightedBFSPaths": 2,
       "VarianceConfigHelper": 1,
       "VarianceConfigStats": 1,
-      "VarianceEnvelope": 2,
+      "VarianceEnvelope": 3,
       "VarianceEnvelopeGuard": 1,
       "WALFlushBatchVarianceEnvelope": 1,
       "WALIOThrottleVarianceEnvelope": 1,
