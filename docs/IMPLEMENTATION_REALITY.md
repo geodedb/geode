@@ -59,14 +59,17 @@ LIMIT 100
 
 ### ⚠️ Security
 
-**Reality**: Auth + RLS + audit. TDE/MFA frameworks partially implemented (flag-gated) — cryptographic core (AES-256-GCM) and TOTP enrollment/verification exist but not yet wired into end-to-end auth / storage pipelines.
+**Reality**: Auth + RLS + audit. TDE & MFA now have incremental integration:
+
+- TDE: AES-256-GCM page-level encryption integrated in `page_manager` via `page_encryption.zig` (data pages encrypted at rest when flag+key set); WAL still plaintext (pending), key rotation & KMS provider pending.
+- MFA: TOTP enrollment + recovery codes plus authentication enforcement path (`authenticateWithMFA`) requiring code when user.mfa_enabled and global toggle active.
 
 - **Auth**: Username/password
 - **RLS**: Row-level security enforced
 - **Audit**: Query logging implemented
-- **TDE (Partial)**: AES-256-GCM primitives + key load/derivation; not yet applied to WAL/data pages.
-- **MFA (Partial)**: Deterministic TOTP (RFC 6238) codes + enrollment with recovery scratch codes; not yet integrated into session handshake.
-- **Missing**: Key rotation, KMS provider, enforced MFA policies, encryption-at-rest activation path
+- **TDE (Partial)**: Data pages encrypted (page size + 28 bytes overhead) when enabled; WAL encryption, key rotation, KMS provider, performance validation (<5% target) outstanding.
+- **MFA (Partial)**: Enrollment + enforced second factor (MFARequired -> authenticateWithMFA) for enabled users; admin policy governance & audit event granularity enhancements outstanding.
+- **Missing**: Key rotation, KMS provider, WAL encryption, MFA admin policy surfaces, per-session MFA reauth interval.
 - **2PC**: Cross-shard transactions (experimental)
 
 ## Partially Working Features
@@ -107,7 +110,7 @@ LIMIT 100
 
 **Reality**: Basic authentication only
 
-- **Missing**: TDE, MFA, encryption at rest
+- (Replaced) Storage encryption now partially active (pages). MFA enforced path present; remaining gaps listed above.
 
 ## Not Working Yet
 

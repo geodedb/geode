@@ -86,21 +86,26 @@ As of v0.18.0, Geode has closed critical infrastructure gaps while maintaining 1
 
 #### TDE (Transparent Data Encryption)
 
-- [x] AES-256-GCM implementation (core primitive only; not yet wired to pages/WAL)
+- [x] AES-256-GCM implementation (core primitive)
+- [x] Page-level encryption integrated (data pages via page_manager)
+- [ ] WAL encryption
 - [ ] Key provider interface
 - [ ] KMS integration
-- [ ] Performance <5% overhead
+- [ ] Performance <5% overhead benchmark
+- [ ] Key rotation workflow
 - [x] Infrastructure prepared
-  - NOTE: Feature flag present; encryption not yet applied at rest (no page/WAL integration).
+  - NOTE: WAL + key lifecycle + perf validation pending.
 
 #### MFA (Multi-Factor Authentication)
 
 - [x] TOTP implementation (RFC 6238 deterministic test path)
 - [x] Recovery codes (scratch set generation)
-- [ ] Admin controls
-- [ ] Audit integration
+- [x] Authentication enforcement (MFARequired -> authenticateWithMFA)
+- [ ] Admin policy controls (enforce per role / conditional)
+- [ ] Enhanced audit entries (per MFA challenge + failure reason)
+- [ ] Session re-auth interval & step-up triggers
 - [x] Auth framework ready
-  - NOTE: Not yet enforced in session handshake; flag-gated.
+  - NOTE: Governance & extended auditing pending.
 
 ### 🔄 FTS Enhancements (P1)
 

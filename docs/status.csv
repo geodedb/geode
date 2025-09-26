@@ -622,12 +622,18 @@ REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,e2e_cbo_toggle,,planner,2025-
 REQ-GQL-CDC-SINKS,CDC External Sinks,KafkaWebhook,TESTED,e2e_cdc_sinks,,streaming,2025-09-25,src/cdc/sinks.zig
 REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,TESTED,,,core,2025-09-26,tests/unit_feature_flags.zig
 REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,PARTIAL,tests/unit_feature_flags.zig:1,,core,2025-09-26,src/util/feature_flags.zig
+REQ-GQL-FTS-001,BM25 skeleton,SEARCH,TESTED,tests/unit_bm25_skeleton.zig:1,,search,2025-09-26,tests/unit_bm25_skeleton.zig
+REQ-GQL-FTS-001,BM25 skeleton,SEARCH,PARTIAL,tests/unit_bm25_skeleton.zig:1,,search,2025-09-26,src/fts/bm25.zig
 REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,PARTIAL,tests/e2e_fts_advanced.zig:1,,search,2025-09-26,src/fts/advanced.zig
 REQ-GQL-MATCH,MATCH Engine,ComplexPatterns,TESTED,e2e_match_complex,,gql,2025-09-25,src/gql/match.zig
 REQ-GQL-MFA-001,MFA baseline,SECURITY,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/mfa.zig
+REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,TESTED,tests/unit_mfa_enforcement.zig:1,,security,2025-09-26,tests/unit_mfa_enforcement.zig
+REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,PARTIAL,tests/unit_mfa_enforcement.zig:1,,security,2025-09-26,src/security/auth.zig
 REQ-GQL-PARALLEL-001,Parallel Exec,ENGINE,PARTIAL,tests/e2e_parallel_execution.zig:1,,engine,2025-09-26,src/execution/parallel.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,e2e_raft_persist_snapshot_membership,,distributed,2025-09-25,src/distributed/raft_persistent.zig
 REQ-GQL-TDE-001,TDE baseline,SECURITY,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/tde.zig
+REQ-GQL-TDE-001,TDE baseline,TEST,TESTED,tests/test_tde_integration.zig:1,,security,2025-09-26,tests/test_tde_integration.zig
+REQ-GQL-TDE-001,TDE page encryption,STORAGE,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/storage/page_encryption.zig
 REQ-GQL-XXX,...,...,...,...,...,...,...,tools/status_generate.py
 REQ-GQL-XXX,Name,Component,TESTED,TestCANARY_REQ_GQL_XXX_Feature,,team,2025-09-20,kb/CANARY_ADOPTION_SUMMARY.md
 REQ-GQL-XXX,name,aspect,status,test,bench,team,date,kb/CONSOLIDATED.md

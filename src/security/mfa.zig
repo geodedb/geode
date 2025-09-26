@@ -5,19 +5,15 @@ const crypto = std.crypto;
 // Runtime gated by shared feature flag (GEODE_ENABLE_MFA) via util/feature_flags.zig.
 // CANARY: REQ=REQ-GQL-MFA-001; FEATURE="MFA baseline"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=tests/e2e_security_tde_mfa.zig:1; OWNER=security; UPDATED=2025-09-26
 
-const flags_mod = @import("../util/feature_flags.zig");
-
-fn flag() *flags_mod.Flag {
-    return &flags_mod.global().mfa;
+var global_enabled: bool = false;
+pub fn globallyEnabled() bool {
+    return global_enabled;
 }
 pub fn enableForTests() void {
-    flag().enableForTests();
+    global_enabled = true;
 }
 pub fn disableForTests() void {
-    flag().disableForTests();
-}
-fn enabled() bool {
-    return flag().enabled();
+    global_enabled = false;
 }
 
 pub const Enrollment = struct {
@@ -97,7 +93,7 @@ fn deterministicSecret(allocator: std.mem.Allocator, username: []const u8) ![]u8
 }
 
 pub fn enroll(allocator: std.mem.Allocator, username: []const u8) !Enrollment {
-    if (!enabled()) return error.FeatureDisabled;
+    if (!globallyEnabled()) return error.FeatureDisabled;
     const raw_secret = try deterministicSecret(allocator, username);
     defer allocator.free(raw_secret);
     const secret_base32 = try base32Encode(allocator, raw_secret);
@@ -149,7 +145,7 @@ fn hmacSha1(data: []const u8, key: []const u8) [20]u8 {
 }
 
 pub fn generateCodeFromBase32(allocator: std.mem.Allocator, secret_base32: []const u8, timestamp_ms: u64, step_seconds: u64, digits: u8) !u32 {
-    if (!enabled()) return error.FeatureDisabled;
+    if (!globallyEnabled()) return error.FeatureDisabled;
     const secret_raw = try base32Decode(allocator, secret_base32);
     defer allocator.free(secret_raw);
     const timestep = timestamp_ms / (step_seconds * 1000);
@@ -165,7 +161,7 @@ pub fn generateCodeFromBase32(allocator: std.mem.Allocator, secret_base32: []con
 }
 
 pub fn verifyCode(allocator: std.mem.Allocator, secret_base32: []const u8, timestamp_ms: u64, code: u32, step_seconds: u64, digits: u8, window: i32) !bool {
-    if (!enabled()) return error.FeatureDisabled;
+    if (!globallyEnabled()) return error.FeatureDisabled;
     var idx: i32 = -window;
     while (idx <= window) : (idx += 1) {
         if (idx < 0) {

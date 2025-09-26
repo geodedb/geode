@@ -15,17 +15,18 @@
 
 1. **Transparent Data Encryption (TDE)**
 
-   - (Partial in v0.18) AES-256-GCM primitive + key load (flag gated)
-   - Integrate with page/WAL encryption
+   - (Progress) AES-256-GCM primitive + page-level encryption integrated (flag gated)
+   - WAL encryption (pending)
    - Key provider interface (KMS ready design)
-   - Performance target: <5% overhead
+   - Performance target: <5% overhead (benchmark pending)
    - Backup/restore key handling
+   - Key rotation & KMS integration
 
 2. **Multi-Factor Authentication (MFA)**
-   - (Partial in v0.18) TOTP + recovery scratch codes (flag gated)
-   - Admin policy controls & enforcement
-   - Audit logging integration
-   - Session handshake enforcement
+   - (Progress) TOTP + recovery scratch codes + session enforcement path (authenticateWithMFA)
+   - Admin policy controls & enforcement (pending)
+   - Expanded audit logging (per MFA challenge) (pending)
+   - Step-up & re-auth policies (pending)
 
 ### P1 - Performance & Scale
 

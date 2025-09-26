@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
+// Local MFA module (no external feature_flag dependency)
+const mfa = @import("mfa.zig");
 
 // Core user management
 pub const UserId = u64;
@@ -330,6 +332,12 @@ pub const SecurityManager = struct {
             return error.InvalidCredentials;
         }
 
+        // MFA enforcement: if global flag enabled and user has MFA, require second factor
+        if (mfa.globallyEnabled() and u.mfa_enabled) {
+            // Do not create session yet; signal requirement
+            return error.MFARequired;
+        }
+
         // Update last login
         u.last_login = std.time.milliTimestamp();
 
@@ -340,6 +348,54 @@ pub const SecurityManager = struct {
         // Audit log
         try self.audit_log.logSuccessfulLogin(u.id, username);
 
+        return u;
+    }
+
+    /// Authenticate including MFA code when required. If MFA not required behaves like authenticate.
+    /// CANARY: REQ=REQ-GQL-MFA-002; FEATURE="MFA authentication enforcement"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=tests/unit_mfa_enforcement.zig:1; OWNER=security; UPDATED=2025-09-26
+    pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: ?u32) !*User {
+        // First attempt base authentication (may return MFARequired)
+        const base = self.authenticate(username, password) catch |e| switch (e) {
+            error.MFARequired => null, // proceed to MFA path
+            else => return e,
+        };
+
+        if (base) |u| {
+            // No MFA required; already authenticated.
+            return u;
+        }
+
+        // At this point MFA is required.
+        if (code == null) return error.MFAVerificationFailed; // missing code
+
+        // Lookup user again (password already verified earlier)
+        var found: ?*User = null;
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
+                found = entry.value_ptr;
+                break;
+            }
+        }
+        const u = found orelse return error.InvalidCredentials;
+
+        const secret = u.mfa_secret orelse return error.MFASecretMissing;
+
+        // Verify provided TOTP code (current +/-1 step)
+        const now_ms: u64 = @intCast(std.time.milliTimestamp());
+        // Enable MFA module temporarily if test harness disabled (should rely on flag otherwise)
+        if (!mfa.globallyEnabled()) return error.MFAVerificationFailed;
+        const ok = mfa.verifyCode(self.allocator, secret, now_ms, code.?, 30, 6, 1) catch |mferr| switch (mferr) {
+            error.FeatureDisabled => false,
+            else => return mferr,
+        };
+        if (!ok) return error.MFAVerificationFailed;
+
+        // Success: create session & audit
+        u.last_login = std.time.milliTimestamp();
+        const session_token = try self.createSession(u.id);
+        _ = session_token;
+        try self.audit_log.logSuccessfulLogin(u.id, username);
         return u;
     }
 

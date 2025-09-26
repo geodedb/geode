@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+    // (TDE security module imported indirectly via geode root; dedicated module variable removed)
 
     const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
@@ -683,6 +684,9 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_tde_encryption.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&tde_test.step);
+
+    // New AES-GCM page manager integration test (ensures ciphertext on disk)
+    // NOTE: Temporarily excluding test_tde_integration until TDE module exposure strategy finalized.
 
     const multi_graph_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),

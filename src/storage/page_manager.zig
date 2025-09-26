@@ -1,5 +1,9 @@
 const std = @import("std");
 const iface = @import("interface.zig");
+// Access TDE functions via lazy import to avoid module duplication when page_manager is also imported through root module.
+const have_tde = true; // placeholder (TDE accessed via higher layer)
+// We can't reference tde symbol directly if not present; functions wrapped below.
+// Provide small adapter namespace resolved at runtime when encryption flag active.
 
 // Phase‑0 slotted page + in‑memory PageManager (no WAL / persistence yet).
 // Layout (page_size = 4096 default):
@@ -198,6 +202,7 @@ pub const PageManager = struct {
     next_page_id: u32 = 0,
     enc_enabled: bool = false,
     enc_key: [32]u8 = undefined,
+    enc_use_aes_gcm: bool = false,
 
     pub fn init(ally: std.mem.Allocator) PageManager {
         return .{
@@ -209,6 +214,7 @@ pub const PageManager = struct {
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
+            .enc_use_aes_gcm = false,
         };
     }
 
@@ -222,13 +228,33 @@ pub const PageManager = struct {
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
+            .enc_use_aes_gcm = false,
         };
     }
 
     fn loadEncConfig(self: *PageManager) void {
         self.enc_enabled = false;
+        self.enc_use_aes_gcm = false;
         // Only enable for persistent mode
         if (self.base_path == null) return;
+        // Prefer new TDE module if runtime flag + key present
+        const tde_key = std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch null;
+        if (tde_key) |raw| {
+            if (raw.len == 64) {
+                // Accept key presence as enable; dedicated validation occurs in tde encrypt/decrypt
+                self.enc_enabled = true;
+                self.enc_use_aes_gcm = true;
+                var i: usize = 0;
+                while (i < 32) : (i += 1) {
+                    const hi = std.fmt.charToDigit(raw[i * 2], 16) catch break;
+                    const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch break;
+                    self.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
+                }
+            }
+            self.allocator.free(raw);
+            if (self.enc_enabled) return;
+        }
+        // Legacy XOR path (deprecated) for backward compatibility
         if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_ENCRYPTION")) |v| {
             defer self.allocator.free(v);
             if (std.mem.eql(u8, v, "on")) self.enc_enabled = true;
@@ -383,14 +409,25 @@ pub const PageManager = struct {
         var p = self.asPage(index);
         p.recomputeChecksum();
         if (self.enc_enabled) {
-            const tmp = try self.allocator.alloc(u8, self.page_size);
-            defer self.allocator.free(tmp);
-            @memcpy(tmp, self.pages.items[index]);
-            Enc.xorcrypt(&self.enc_key, @intCast(index), tmp);
-            try file.writeAll(tmp);
-        } else {
-            try file.writeAll(self.pages.items[index]);
-        }
+            if (self.enc_use_aes_gcm) {
+                // New AES-GCM strategy via page_encryption wrapper.
+                const page_enc = @import("page_encryption.zig");
+                const original = self.pages.items[index];
+                const encrypted = try page_enc.encryptForWrite(self.allocator, index, original);
+                defer {
+                    // Free if buffer is different from original (we allocated it).
+                    if (encrypted.ptr != original.ptr) self.allocator.free(encrypted);
+                }
+                try file.writeAll(encrypted);
+            } else {
+                // Legacy XOR path (deprecated, retained for backward compatibility / migration).
+                const tmp = try self.allocator.alloc(u8, self.page_size);
+                defer self.allocator.free(tmp);
+                @memcpy(tmp, self.pages.items[index]);
+                Enc.xorcrypt(&self.enc_key, @intCast(index), tmp);
+                try file.writeAll(tmp);
+            }
+        } else try file.writeAll(self.pages.items[index]);
         try file.sync();
     }
 
@@ -400,23 +437,54 @@ pub const PageManager = struct {
         defer self.allocator.free(path);
         var file = try dir.openFile(path, .{});
         defer file.close();
-        const mem = try self.allocator.alloc(u8, self.page_size);
-        const got = try file.readAll(mem);
-        if (got != self.page_size) return error.ShortRead;
-        if (self.enc_enabled) {
-            Enc.xorcrypt(&self.enc_key, @intCast(index), mem);
+        const file_size = try file.getEndPos();
+        // Encrypted (AES-GCM) pages store Overhead + page_size. Legacy XOR keeps same size.
+        var raw: []u8 = undefined;
+        if (file_size == self.page_size or file_size == self.page_size + 28) { // 28 = nonce + tag (page_encryption.Overhead)
+            raw = try self.allocator.alloc(u8, file_size);
+        } else {
+            return error.UnexpectedSize;
         }
-        // verify checksum
-        var p = Page{ .buf = mem };
+        const got = try file.readAll(raw);
+        if (got != raw.len) return error.ShortRead;
+        var final_page_buf: []u8 = raw;
+        if (self.enc_enabled) {
+            if (self.enc_use_aes_gcm) {
+                if (raw.len == self.page_size + 28) {
+                    const page_enc = @import("page_encryption.zig");
+                    // Attempt decrypt; on failure propagate error after cleanup.
+                    const plain = page_enc.decryptAfterRead(self.allocator, index, raw, self.page_size) catch |e| {
+                        self.allocator.free(raw);
+                        return e;
+                    };
+                    // raw holds encrypted buffer; free it, adopt plain
+                    self.allocator.free(raw);
+                    final_page_buf = plain;
+                } else if (raw.len != self.page_size) {
+                    self.allocator.free(raw);
+                    return error.UnexpectedSize;
+                }
+            } else {
+                // Legacy XOR: expect exact page_size
+                if (raw.len != self.page_size) {
+                    self.allocator.free(raw);
+                    return error.UnexpectedSize;
+                }
+                Enc.xorcrypt(&self.enc_key, @intCast(index), raw);
+            }
+        }
+        var p = Page{ .buf = final_page_buf };
         if (!p.verifyChecksum()) {
             const stored_checksum = p.storedChecksum();
             const calculated_checksum = p.calculateChecksum();
             std.log.err("Page checksum mismatch in {s}: stored=0x{X:0>8}, calculated=0x{X:0>8}, page_size={d}", .{ path, stored_checksum, calculated_checksum, self.page_size });
             const corruption_ratio = self.analyzeCorruption(&p);
             std.log.err("Corruption analysis: {d:.2}% of page appears corrupted", .{corruption_ratio * 100.0});
+            // Free buffer before error to avoid leak
+            self.allocator.free(final_page_buf);
             return error.PageChecksumMismatch;
         }
-        try self.pages.append(self.allocator, mem);
+        try self.pages.append(self.allocator, final_page_buf);
     }
 
     fn analyzeCorruption(self: *PageManager, page: *const Page) f64 {
