@@ -10,6 +10,7 @@ const rls_tests = @import("tests/canary_rls_abac.zig");
 // Threshold target (General): cv<=0.35, p95/mean<=3.0 (initial non-enforced unless RLS_ABAC_ENFORCE=1).
 //
 // CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=VarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_080_RlsAbacVarianceEnvelope; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=TailLatencyP999Envelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_080_RlsAbacTailP999; OWNER=security; UPDATED=2025-09-26
 
 const Policy = rls_tests.Policy;
 
@@ -27,7 +28,7 @@ fn enforce(policies: []const Policy, label: []const u8, attr: []const u8) bool {
     return false;
 }
 
-const Metrics = struct { iterations: usize, mean_ns: f128, p95_ns: u64, cv: f128, trim_cv: f128, p95_mean_ratio: f128 };
+const Metrics = struct { iterations: usize, mean_ns: f128, p95_ns: u64, p999_ns: u64, cv: f128, trim_cv: f128, p95_mean_ratio: f128, p999_mean_ratio: f128 };
 
 fn sample(ally: std.mem.Allocator, policies: []const Policy, iterations: usize) ![]u64 {
     var times = try ally.alloc(u64, iterations);
@@ -62,8 +63,11 @@ fn computeMetrics(samples: []u64) Metrics {
     const stdev = std.math.sqrt(variance);
     const cv = stdev / mean_f;
     const p95_idx = (samples.len * 95) / 100;
+    const p999_idx = (samples.len * 999) / 1000;
     const p95 = samples[if (p95_idx == 0) 0 else p95_idx - 1];
+    const p999 = samples[if (p999_idx == 0) 0 else p999_idx - 1];
     const p95_mean_ratio = @as(f128, @floatFromInt(p95)) / mean_f;
+    const p999_mean_ratio = @as(f128, @floatFromInt(p999)) / mean_f;
 
     const trim_each = samples.len * 5 / 100;
     const start = trim_each;
@@ -87,7 +91,7 @@ fn computeMetrics(samples: []u64) Metrics {
     const trim_std = std.math.sqrt(trim_var);
     const trim_cv = trim_std / trim_mean;
 
-    return Metrics{ .iterations = samples.len, .mean_ns = mean_f, .p95_ns = p95, .cv = cv, .trim_cv = trim_cv, .p95_mean_ratio = p95_mean_ratio };
+    return Metrics{ .iterations = samples.len, .mean_ns = mean_f, .p95_ns = p95, .p999_ns = p999, .cv = cv, .trim_cv = trim_cv, .p95_mean_ratio = p95_mean_ratio, .p999_mean_ratio = p999_mean_ratio };
 }
 
 pub fn runRlsAbacVariance() !void {
@@ -107,8 +111,10 @@ pub fn runRlsAbacVariance() !void {
     try w.print("\"iterations\":{},", .{m.iterations});
     try w.print("\"mean_ns\":{d},", .{m.mean_ns});
     try w.print("\"p95_ns\":{},", .{m.p95_ns});
+    try w.print("\"p999_ns\":{},", .{m.p999_ns});
     try w.print("\"p95_mean_ratio\":{d:.4},", .{m.p95_mean_ratio});
     try w.print("\"cv\":{d:.6},", .{m.cv});
+    try w.print("\"p999_mean_ratio\":{d:.4},", .{m.p999_mean_ratio});
     try w.print("\"trim_cv\":{d:.6}", .{m.trim_cv});
     try w.writeAll("}\n");
     const line = fbs.getWritten();

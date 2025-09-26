@@ -16,7 +16,7 @@ const fed_flag = @import("src/distributed/federation_flag.zig");
 // BENCH PROMOTION NOTE: When criteria satisfied in CI with stabilization enabled and multiple
 // consecutive runs show stability, change STATUS=IMPL -> BENCHED in CANARY line (update UPDATED date)
 // and remove gating reliance such that FED_LATENCY_ENFORCE=1 becomes default in governance harness.
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope; OWNER=federation; UPDATED=2025-09-26
 
 fn simulateConsistencyCheck(keys_a: []const []const u8, dirs_a: []const bool, keys_b: []const []const u8, dirs_b: []const bool) bool {
     // Returns true if mismatch would be detected (dir, key length/content difference).

@@ -67,12 +67,12 @@ const Prng = struct {
     s1: u64,
     fn init(seed: u64) @This() {
         var z = seed +% 0x9E3779B97F4A7C15;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
         const s0 = z ^ (z >> 31);
         z +%= 0x9E3779B97F4A7C15;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
         const s1 = z ^ (z >> 31);
         return .{ .s0 = s0, .s1 = s1 };
     }
@@ -83,7 +83,7 @@ const Prng = struct {
         self.s1 = std.math.rotl(u64, s1, 36);
         return result;
     }
-    fn bytes(self: *@This(), out: []u8) void {
+    pub fn bytes(self: *@This(), out: []u8) void {
         var i: usize = 0;
         var r: u64 = 0;
         while (i < out.len) : (i += 1) {
@@ -127,7 +127,7 @@ pub const Server = struct {
         self.attest_keypair = attest_kp;
     }
 
-    fn wrap(self: *Server, plaintext: [32]u8) Envelope {
+    pub fn wrap(self: *Server, plaintext: [32]u8) Envelope {
         var nonce: [12]u8 = undefined;
         self.prng.bytes(&nonce);
         var ct: [32]u8 = undefined;
@@ -136,7 +136,7 @@ pub const Server = struct {
         return .{ .nonce = nonce, .tag = tag, .ct = ct };
     }
 
-    fn unwrap(self: *Server, env: Envelope) ![32]u8 {
+    pub fn unwrap(self: *Server, env: Envelope) ![32]u8 {
         var out: [32]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.decrypt(&out, &env.ct, env.tag, &.{}, env.nonce, self.kek) catch return error.AuthenticationFailed;
         return out;

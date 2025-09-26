@@ -4,6 +4,7 @@ const std = @import("std");
 // Thresholds (General): CV<=0.25, p95/mean<=2.8 (initial). Trimmed metrics optional.
 //
 // CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=MetricsRegistryVarianceUnified; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified; OWNER=ops; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-081; FEATURE="Monitoring"; ASPECT=TailLatencyP999Envelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryTailP999; OWNER=ops; UPDATED=2025-09-26
 
 pub fn runMonitoringVarianceUnified() !void {
     const iterations = 48;
@@ -42,8 +43,11 @@ pub fn runMonitoringVarianceUnified() !void {
         }
     }.lt);
     const p95_idx = (samples.len * 95) / 100;
+    const p999_idx = (samples.len * 999) / 1000;
     const p95 = samples[if (p95_idx == 0) 0 else p95_idx - 1];
+    const p999 = samples[if (p999_idx == 0) 0 else p999_idx - 1];
     const p95_mean_ratio = @as(f128, @floatFromInt(p95)) / mean_f;
+    const p999_mean_ratio = @as(f128, @floatFromInt(p999)) / mean_f;
     // trimmed
     const trim_each = samples.len * 5 / 100;
     const start = trim_each;
@@ -73,6 +77,7 @@ pub fn runMonitoringVarianceUnified() !void {
     try w.print("\"iterations\":{},", .{iterations});
     try w.print("\"cv\":{d:.6},", .{cv});
     try w.print("\"p95_mean_ratio\":{d:.4},", .{p95_mean_ratio});
+    try w.print("\"p999_mean_ratio\":{d:.4},", .{p999_mean_ratio});
     try w.print("\"trim_cv\":{d:.6}", .{trim_cv});
     try w.writeAll("}\n");
     const line = fbs.getWritten();

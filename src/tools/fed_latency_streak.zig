@@ -12,7 +12,7 @@ const std = @import("std");
 // Fields: current_streak, longest_streak, eligible (bool), last_summary_reason (string),
 //         last_fail_mask (int), last_timestamp (if present), total_records.
 // Minimal parser: looks for '"promotion_ready":true/false' and numeric '"max_cv":'.
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateStreak; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateStreak; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedMismatchLatencyAggregateStreak; OWNER=federation; UPDATED=2025-09-26
 
 fn parseBool(field: []const u8, line: []const u8) ?bool {
     if (std.mem.indexOf(u8, line, field)) |idx| {

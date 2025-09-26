@@ -471,6 +471,22 @@ pub fn build(b: *std.Build) void {
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     test_step.dependOn(&remote_kms_tests.step);
 
+    // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
+    const remote_kms_hardening_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms_hardening.zig"), .target = target, .optimize = optimize }) });
+    remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    remote_kms_hardening_tests.root_module.addImport("vendor_quic", vendor_quic_mod);
+    remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    test_step.dependOn(&remote_kms_hardening_tests.step);
+
+    // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
+    const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
+    remote_kms_concurrency_bench.root_module.addImport("transport/quic", transport_quic_mod);
+    remote_kms_concurrency_bench.root_module.addImport("vendor_quic", vendor_quic_mod);
+    remote_kms_concurrency_bench.root_module.addImport("security/kms_remote", kms_remote_mod);
+    b.installArtifact(remote_kms_concurrency_bench);
+    const run_remote_kms_concurrency_bench = b.addRunArtifact(remote_kms_concurrency_bench);
+    test_step.dependOn(&run_remote_kms_concurrency_bench.step);
+
     // CDC enhanced streaming module (diagnostics, malformed WAL tracking)
     const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("cdc_enhanced", cdc_enhanced_mod);

@@ -11,9 +11,9 @@ const std = @import("std");
 //   FED_LATENCY_AGG_REQUIRE (0/1)        : if 1 and promotion_ready=false, exit non-zero.
 //   FED_LATENCY_BENCH_PATH  (optional)   : override path to benchmark executable.
 // Output: single JSON line summarizing runs.
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateMultiRun; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateRobustStats; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateArchive; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateMultiRun; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedMismatchLatencyAggregateMultiRun; OWNER=federation; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateRobustStats; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedMismatchLatencyAggregateRobustStats; OWNER=federation; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateArchive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedMismatchLatencyAggregateArchive; OWNER=federation; UPDATED=2025-09-26
 
 const RunMetrics = struct {
     mean_ns: f128 = 0,

@@ -8,7 +8,7 @@ const std = @import("std");
 // Env:
 //   FED_LATENCY_FORMAT=txt  -> emit human readable summary instead of JSON diagnostics
 //   FED_VALIDATE_STRICT=1   -> treat missing optional fields as errors
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateSchemaValidation; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateSchemaValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedMismatchLatencyAggregateSchemaValidation; OWNER=federation; UPDATED=2025-09-26
 
 const RequiredField = struct { name: []const u8 };
 const NumericField = struct { name: []const u8 };

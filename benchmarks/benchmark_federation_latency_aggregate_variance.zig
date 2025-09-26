@@ -9,12 +9,16 @@ const agg = @import("src/distributed/federation_latency_aggregate.zig");
 // Threshold class: General (cv<=0.30, p95/mean<=2.2). Trimmed stability aids
 // promotion but not enforced initially. Outlier ratio: <=0.18 target.
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=VarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_024_FedLatencyAggregatorVarianceEnvelope; OWNER=federation; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=VarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope; OWNER=federation; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=RobustStatsP99; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope; OWNER=federation; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=TailLatencyP999Envelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateTailP999; OWNER=federation; UPDATED=2025-09-26
 
 const Metrics = struct {
     iterations: usize,
     cv: f128,
     p95_mean_ratio: f128,
+    p99_mean_ratio: f128,
+    p999_mean_ratio: f128,
     trim_cv: f128,
     passes: usize,
     outlier_ratio: f128,
@@ -59,8 +63,14 @@ fn computeMetrics(samples: []u64) Metrics {
         }
     }.lt);
     const p95_index = (samples.len * 95) / 100;
+    const p99_index = (samples.len * 99) / 100;
+    const p999_index = (samples.len * 999) / 1000;
     const p95 = samples[if (p95_index == 0) 0 else p95_index - 1];
+    const p99 = samples[if (p99_index == 0) 0 else p99_index - 1];
+    const p999 = samples[if (p999_index == 0) 0 else p999_index - 1];
     const p95_mean_ratio = @as(f128, @floatFromInt(p95)) / mean_f;
+    const p99_mean_ratio = @as(f128, @floatFromInt(p99)) / mean_f;
+    const p999_mean_ratio = @as(f128, @floatFromInt(p999)) / mean_f;
     const trim_each = samples.len * 5 / 100;
     const start = trim_each;
     const end = samples.len - trim_each;
@@ -84,7 +94,7 @@ fn computeMetrics(samples: []u64) Metrics {
     const trim_cv = trim_std / trim_mean;
     const outliers = start + (samples.len - end);
     const outlier_ratio = @as(f128, @floatFromInt(outliers)) / @as(f128, @floatFromInt(samples.len));
-    return Metrics{ .iterations = samples.len, .cv = cv, .p95_mean_ratio = p95_mean_ratio, .trim_cv = trim_cv, .passes = 1, .outlier_ratio = outlier_ratio };
+    return Metrics{ .iterations = samples.len, .cv = cv, .p95_mean_ratio = p95_mean_ratio, .p99_mean_ratio = p99_mean_ratio, .p999_mean_ratio = p999_mean_ratio, .trim_cv = trim_cv, .passes = 1, .outlier_ratio = outlier_ratio };
 }
 
 pub fn runFedLatencyAggregatorVariance() !void {
@@ -103,12 +113,14 @@ pub fn runFedLatencyAggregatorVariance() !void {
     try w.print("\"iterations\":{},", .{m.iterations});
     try w.print("\"cv\":{d:.6},", .{m.cv});
     try w.print("\"p95_mean_ratio\":{d:.4},", .{m.p95_mean_ratio});
+    try w.print("\"p99_mean_ratio\":{d:.4},", .{m.p99_mean_ratio});
+    try w.print("\"p999_mean_ratio\":{d:.4},", .{m.p999_mean_ratio});
     try w.print("\"trim_cv\":{d:.6},", .{m.trim_cv});
     try w.print("\"outlier_ratio\":{d:.6}", .{m.outlier_ratio});
     try w.writeAll("}\n");
     const line = fbs.getWritten();
     _ = try std.posix.write(std.posix.STDOUT_FILENO, line);
-    if (m.cv > 0.30 or m.p95_mean_ratio > 2.2) {
+    if (m.cv > 0.30 or m.p95_mean_ratio > 2.2 or m.p99_mean_ratio > 2.8) {
         if (std.posix.getenv("FED_AGG_ENFORCE")) |v| if (v.len > 0 and v[0] == '1') return error.AggregateVarianceEnvelopeBreached;
     }
 }

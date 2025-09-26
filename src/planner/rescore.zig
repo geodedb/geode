@@ -9,7 +9,7 @@ const cost_model = @import("cost_model.zig");
 // compare structural vs refined costs side-by-side. A follow-up slice may persist
 // refined costs back into a plan cache.
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCandidateRescoringIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanCandidateRescoringIntegration; OWNER=planner; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCandidateRescoringIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanCandidateRescoringIntegration; OWNER=planner; UPDATED=2025-09-26
 pub const RescoreResult = struct {
     structural_best_index: ?usize,
     refined_best_index: ?usize,

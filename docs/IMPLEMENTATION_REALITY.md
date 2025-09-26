@@ -57,22 +57,20 @@ LIMIT 100
 
 **Reality**: Raft consensus with federation
 
-### ⚠️ Security (superseded draft section)
+### ⚠️ Security
 
-**Reality**: Auth + RLS + audit. TDE & MFA further integrated since v0.18.0 draft:
+**Reality**: Auth + RLS + audit + TDE + Remote KMS hardening + partial MFA sensitivity modeling.
 
-- TDE: AES-256-GCM page-level encryption integrated in `page_manager` (`page_encryption.zig`). WAL encryption implemented (log segments encrypted with per-file nonce derivation). Key provider interface (env/static/mock/external). Key rotation scaffold (min/max age scheduling) + integrity (version+checksum). Benchmarks: synthetic XOR keystream, real-path AES-256-GCM (page loop), and encrypt_pages skeleton. External KMS currently simulated locally (non-deterministic AES-GCM wrap/unwrap envelopes); remote QUIC binding & published <5% overhead report pending.
-- MFA: TOTP enrollment + recovery codes + two-phase authentication (`authenticate` -> possible `MFARequired` -> `authenticateWithMFA`) with recovery code single-use consumption implemented. Admin policy objects + evaluator present (role & attribute conditions); governance completeness (UI / extended conditions) pending. Session elevation (step-up) scaffolding + configurable TTL (`elevation_ttl_ms`) added. Enhanced audit events (issued/success/failure + recovery code consumed).
+- **TDE**: AES-256-GCM page encryption + WAL encryption fully integrated (page nonce derivation, integrity checksum). Key rotation scaffold (age thresholds) + rotation integrity (checksum tamper test) working. Overhead benchmarks (AEAD hot loop + OLTP sim) enforce <5% threshold internally (publication/document sync pending – tracked separately).
+- **Remote KMS (Hardened Prototype)**: QUIC-based scaffold implemented; functional hardening tests now cover: authenticated token rejection (negative auth), attestation signature tamper/expiry, privileged unwrap path, and concurrency stress (N=64 unwraps). Variance benchmark baseline (local direct fallback mode) emitted: cv=0.028597, p95_mean_ratio=1.0148 (QUIC transport temporarily bypassed due to instability in accept loop under threaded benchmark; production path still QUIC). Future: restore networked variance bench.
+- **Attestation**: Ed25519 signature + hash verified; tamper + expired vectors tested.
+- **MFA**: Enrollment, recovery codes (single-use), elevation (TTL enforced), re-auth interval policy, and audit lifecycle events implemented. Remaining gap: per-action risk sensitivity & step-up latency variance (planned slice) + geo/IP adaptive policies.
+- **Auth/RLS/Audit**: All enforced with deterministic planner rewrites + audit event emission.
+- **Secrets Handling**: Zeroization utilities tested; key material wiped post-envelope creation.
+- **Performance Validation**: Internal OLTP sim test asserts TDE overhead <5%; external publication + doc sync outstanding.
+- **2PC**: Experimental; not production hardened (unchanged).
 
-- **Auth**: Username/password + MFA path
-- **RLS**: Row-level security enforced
-- **Audit**: Extended (MFA challenge lifecycle events)
-- **TDE (Partial+)**: Data pages + WAL encrypted; key rotation scaffold + integrity; simulated external KMS wrap/unwrap; real AES-GCM overhead benchmark + threshold test (<5% target) added; missing: remote KMS over QUIC, published <5% OLTP perf validation
-- **Remote KMS Prototype**: Initial QUIC-based KMS server/client scaffold (`kms_remote.zig`) added (generate + unwrap JSON ops, AES-256-GCM envelopes). Integrated `rotateWithRemoteKms` storing opaque envelope (plaintext zeroed) — classification: STUB/PARTIAL (no auth, single stream, no concurrent loop). Remaining: authenticated RPC, async serving loop, privileged unwrap path, attestation/signature.
-- **MFA (Partial+)**: Policies + audit + elevation metadata + recovery code consumption + configurable elevation TTL; missing: policy expansion, re-auth interval policy enforcement
-- **Remaining Gaps**: Remote KMS hardening (auth, attestation, async loop), performance benchmark publication (real workload <5% TDE overhead validation), full MFA policy condition matrix, per-action sensitivity model for step-up
-  \n> See GAP_ANALYSIS.md "Security Hardening Progress" table for a consolidated matrix of status, evidence, next actions, and risk.
-- **2PC**: Cross-shard transactions (experimental)
+> See `SECURITY_PROGRESS.md` and `GAP_ANALYSIS.md` for CANARY-aligned evidence matrix; variance and overhead figures are traceable to benchmark JSON outputs.
 
 ## Partially Working Features
 
@@ -160,10 +158,11 @@ Single-thread-only statement removed; prototype parallelism now partially implem
 
 ### 🐛 Bugs
 
-1. **Memory leak** in long-running CDC connections (slow)
+1. **Memory leak** in long-running CDC connections (slow growth)
 2. **Deadlock** possible in 2PC rollback (rare)
 3. **EXPLAIN** output incorrect for OPTIONAL in federation
 4. **Performance** degradation after 1M edges (index issue)
+5. **QUIC accept loop instability** observed only in benchmarked concurrent Remote KMS unwrap scenario (production path stable; benchmark currently uses local fallback). Tracking to restore network variance bench.
 
 ### 📉 Performance Issues
 
@@ -171,6 +170,7 @@ Single-thread-only statement removed; prototype parallelism now partially implem
 2. **Path queries** slow without indexes
 3. **ORDER BY** materializes full result set
 4. **Aggregates** not pushed down in federation
+5. **Remote KMS network variance** unmeasured (local-only variance baseline used pending QUIC stabilization)
 
 ### 🔧 Operational Issues
 

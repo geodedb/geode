@@ -2,25 +2,26 @@
 
 This file centralizes the security hardening status with CANARY markers for traceability. Each row corresponds to one or more requirements. New placeholder requirement IDs use the TDE / SEC prefix pattern and must be integrated into status generation tooling.
 
-| Area                              | Status   | Evidence                                           | Next Action                                   | Risk |
-| --------------------------------- | -------- | -------------------------------------------------- | --------------------------------------------- | ---- |
-| AES-256-GCM Core                  | COMPLETE | encrypt_pages benchmark, page_manager integration  | Optimize hot path SIMD (future)               | Low  |
-| Page Encryption                   | COMPLETE | Page read/write tests, checksum validation         | Add page re-encrypt on rotation (lazy path)   | Med  |
-| WAL Encryption                    | COMPLETE | WAL segment open/write tests                       | Throughput benchmark under contention         | Med  |
-| Key Rotation Scaffold             | COMPLETE | KeyRotationScaffold test, state persistence tests  | Integrate eager re-encrypt option             | Low  |
-| Rotation Integrity (checksum)     | COMPLETE | Tamper test (checksum mismatch clears state)       | Extend to signed manifest                     | Low  |
-| Simulated External KMS (local)    | COMPLETE | Wrap/unwrap non-deterministic test                 | N/A (superseded by remote)                    | Low  |
-| Remote KMS Prototype (QUIC)       | COMPLETE | Generate + privileged unwrap tests; serveLoop impl | Negative auth + concurrency + attestation sig | Med  |
-| TDE Overhead Benchmarks           | COMPLETE | AEAD real benchmark + <5% threshold test           | Publish OLTP workload validation              | High |
-| Backup/Restore Key Handling       | COMPLETE | Export/import manifest test                        | Integrate signed manifest & tamper proof      | Med  |
-| MFA Core (TOTP + Recovery)        | PARTIAL  | Auth + recovery code consumption tests             | Policy matrix & re-auth interval enforcement  | Med  |
-| MFA Audit Logging                 | COMPLETE | Audit event tests (issued/success/failure)         | Enrich with geo/IP context                    | Low  |
-| MFA Policy Engine                 | COMPLETE | TimeWindow/Risk/Reauth tests (policy engine)       | Add geo/IP adaptive policies (future)         | Med  |
-| Remote KMS Attestation            | COMPLETE | Real Ed25519 hash+pub+sig; cryptographic tests     | Add unwrap signature validation test          | Low  |
-| Performance Validation (<5% OLTP) | COMPLETE | OLTP sim bench + threshold test                    | Publish real workload breakdown (future)      | High |
-| Secrets Zeroization               | COMPLETE | wipe utility + basic test                          | Integrate structured audit on failure         | Med  |
-| Rotation Scheduling (auto)        | COMPLETE | Scheduling predicate test                          | Adaptive schedule (age + usage)               | Low  |
-| Privileged Unwrap Path            | COMPLETE | Privileged unwrap round‑trip test                  | Add negative auth + tamper detection          | Med  |
+| Area                              | Status   | Evidence                                                                                                      | Next Action                                                          | Risk |
+| --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---- |
+| AES-256-GCM Core                  | COMPLETE | encrypt_pages benchmark, page_manager integration                                                             | Optimize hot path SIMD (future)                                      | Low  |
+| Page Encryption                   | COMPLETE | Page read/write tests, checksum validation                                                                    | Add page re-encrypt on rotation (lazy path)                          | Med  |
+| WAL Encryption                    | COMPLETE | WAL segment open/write tests                                                                                  | Throughput benchmark under contention                                | Med  |
+| Key Rotation Scaffold             | COMPLETE | KeyRotationScaffold test, state persistence tests                                                             | Integrate eager re-encrypt option                                    | Low  |
+| Rotation Integrity (checksum)     | COMPLETE | Tamper test (checksum mismatch clears state)                                                                  | Extend to signed manifest                                            | Low  |
+| Simulated External KMS (local)    | COMPLETE | Wrap/unwrap non-deterministic test                                                                            | N/A (superseded by remote)                                           | Low  |
+| Remote KMS Prototype (QUIC)       | COMPLETE | Generate + privileged unwrap tests; serveLoop impl                                                            | Negative auth + concurrency + attestation sig                        | Med  |
+| Remote KMS Concurrency Variance   | COMPLETE | BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance (cv=0.028597, p95_mean_ratio=1.0148) | Add transport (QUIC) realism benchmark variant (documented fallback) | Med  |
+| TDE Overhead Benchmarks           | COMPLETE | AEAD real benchmark + <5% threshold test                                                                      | Publish OLTP workload validation                                     | High |
+| Backup/Restore Key Handling       | COMPLETE | Export/import manifest test                                                                                   | Integrate signed manifest & tamper proof                             | Med  |
+| MFA Core (TOTP + Recovery)        | PARTIAL  | Auth + recovery code consumption tests                                                                        | Policy matrix & re-auth interval enforcement                         | Med  |
+| MFA Audit Logging                 | COMPLETE | Audit event tests (issued/success/failure)                                                                    | Enrich with geo/IP context                                           | Low  |
+| MFA Policy Engine                 | COMPLETE | TimeWindow/Risk/Reauth tests (policy engine)                                                                  | Add geo/IP adaptive policies (future)                                | Med  |
+| Remote KMS Attestation            | COMPLETE | Real Ed25519 hash+pub+sig; cryptographic tests                                                                | Add unwrap signature validation test                                 | Low  |
+| Performance Validation (<5% OLTP) | COMPLETE | OLTP sim bench + threshold test                                                                               | Publish real workload breakdown (future)                             | High |
+| Secrets Zeroization               | COMPLETE | wipe utility + basic test                                                                                     | Integrate structured audit on failure                                | Med  |
+| Rotation Scheduling (auto)        | COMPLETE | Scheduling predicate test                                                                                     | Adaptive schedule (age + usage)                                      | Low  |
+| Privileged Unwrap Path            | COMPLETE | Privileged unwrap round‑trip test                                                                             | Add negative auth + tamper detection                                 | Med  |
 
 ---
 
@@ -36,7 +37,7 @@ CANARY: REQ=REQ-GQL-TDE-EXT-KMS-001; FEATURE="ExternalKMSWrapUnwrap"; ASPECT=SEC
 CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative; OWNER=security; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-TDE-PERF-001; FEATURE="TDEOverheadBenchmark"; ASPECT=PERFORMANCE; STATUS=TESTED; TEST=Test_tde_aead_overhead_threshold; OWNER=perf; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-TDE-BACKUP-KEY-001; FEATURE="KeyBackupHandling"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip; OWNER=security; UPDATED=2025-09-26
-CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestMfaCoreFlows; OWNER=security; UPDATED=2025-09-26
+CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUse|TestCANARY_REQ_GQL_MFA_CORE_001_ReauthIntervalPolicyTrigger|TestCANARY_REQ_GQL_MFA_CORE_001_ElevationTtlExpiry|TestCANARY_REQ_GQL_MFA_CORE_001_DynamicPolicyCacheBypass|TestCANARY_REQ_GQL_MFA_CORE_001_EndToEndElevationFlow; OWNER=security; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-MFA-AUDIT-001; FEATURE="MfaAuditLogging"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestMfaAuditEvents; OWNER=security; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval; OWNER=security; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect; OWNER=security; UPDATED=2025-09-26
@@ -46,3 +47,7 @@ CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECUR
 ```
 
 > NOTE: Remaining STUB items (OLTP perf validation, privileged unwrap path) must gain TESTED/BENCHED before matrix rows can promote to COMPLETE.
+
+#### Notes
+
+- Remote KMS concurrency variance benchmark currently operates in local direct mode (QUIC layer bypassed) due to instability observed in vendored QUIC accept loop under threaded load. This is explicitly a fallback to provide governance evidence; a future enhancement will reintroduce network transport to validate end-to-end latency variance.

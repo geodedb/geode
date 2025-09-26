@@ -10,7 +10,7 @@ const std = @import("std");
 //   FED_LATENCY_FORMAT=txt for human readable output
 // Output fields JSON: readiness:Boolean, reason:String, recent_cv_iqr:Float?, recent_mad:Float?, streak:Int?, failures:Int
 // Exit codes: 0 success, 2 if not ready, 1 IO error.
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateGovernanceSummary; STATUS=IMPL; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=LatencyAggregateGovernanceSummary; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedMismatchLatencyAggregateGovernanceSummary; OWNER=federation; UPDATED=2025-09-26
 
 const Governance = struct {
     readiness: bool = false,
