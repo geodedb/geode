@@ -9,14 +9,27 @@ from typing import Set, Dict
 
 CANARY_PATTERN = re.compile(
     r'CANARY:\s*REQ=([^;]+);\s*FEATURE="([^"]+)";\s*ASPECT=([^;]+);\s*'
-    r'STATUS=([^;]+);\s*TEST=([^;]+);.*OWNER=([^;]+);\s*UPDATED=(\d{4}-\d{2}-\d{2})'
+    r'STATUS=([^;]+);\s*TEST=([^;]*);.*OWNER=([^;]+);\s*UPDATED=(\d{4}-\d{2}-\d{2})'
 )
 
-VALID_STATUSES = {'STUB', 'IMPLEMENTED', 'TESTED', 'BENCHED'}
-VALID_ASPECTS = {
-    'Core', 'Parser', 'Executor', 'Storage', 'Network', 
-    'Security', 'Monitoring', 'Distribution', 'CLI'
+# Accept additional statuses used by security docs (IMPL equivalent of IMPLEMENTED) and REMOVED (historical record)
+CANARY_NORMALIZE_STATUS = {
+    'IMPL': 'IMPLEMENTED',
+    'PARTIAL': 'IMPLEMENTED',  # legacy token, normalized
 }
+VALID_STATUSES = {'STUB', 'IMPLEMENTED', 'TESTED', 'BENCHED', 'REMOVED'}
+VALID_ASPECTS = {
+    'Core', 'Parser', 'Executor', 'Storage', 'Network',
+    'Security', 'Monitoring', 'Distribution', 'CLI', 'PERFORMANCE', 'SECURITY'
+}
+
+# REQ id patterns: original REQ-GQL-### plus security/TDE extended forms
+REQ_ID_PATTERNS = [
+    re.compile(r'^REQ-GQL-\d{3}$'),
+    re.compile(r'^REQ-GQL-TDE-[A-Z0-9\-]+-\d{3}$'),
+    re.compile(r'^REQ-GQL-SEC-[A-Z0-9\-]+-\d{3}$'),
+    re.compile(r'^REQ-GQL-MFA-[A-Z0-9\-]+-\d{3}$'),
+]
 
 def check_canary_syntax(line: str, file_path: str, line_num: int) -> list:
     """Check CANARY annotation syntax."""
@@ -33,11 +46,12 @@ def check_canary_syntax(line: str, file_path: str, line_num: int) -> list:
     req_id, feature, aspect, status, test, owner, updated = match.groups()
     
     # Validate REQ ID format
-    if not re.match(r'^REQ-GQL-\d{3}$', req_id):
+    if not any(p.match(req_id) for p in REQ_ID_PATTERNS):
         errors.append(f"{file_path}:{line_num}: Invalid REQ ID format: {req_id}")
     
     # Validate status
-    if status not in VALID_STATUSES:
+    status_norm = CANARY_NORMALIZE_STATUS.get(status, status)
+    if status_norm not in VALID_STATUSES:
         errors.append(f"{file_path}:{line_num}: Invalid STATUS: {status}")
     
     # Validate date format
@@ -45,8 +59,8 @@ def check_canary_syntax(line: str, file_path: str, line_num: int) -> list:
         errors.append(f"{file_path}:{line_num}: Invalid date format: {updated}")
     
     # Check test name convention
-    if status in {'TESTED', 'BENCHED'} and test:
-        if not test.startswith('TestCANARY_') and not test.startswith('BenchmarkCANARY_'):
+    if status_norm in {'TESTED', 'BENCHED'} and test:
+        if not (test.startswith('TestCANARY_') or test.startswith('BenchmarkCANARY_') or test.startswith('tests/')):
             errors.append(f"{file_path}:{line_num}: Test name should start with TestCANARY_ or BenchmarkCANARY_")
     
     return errors

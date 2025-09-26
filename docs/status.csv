@@ -665,7 +665,9 @@ REQ-GQL-MFA-009,Session step-up mark,SECURITY,IMPL,TestCANARY_REQ_GQL_MFA_009_St
 REQ-GQL-MFA-010,ConfigurableElevationTTL,TEST,TESTED,TestCANARY_REQ_GQL_MFA_010_ElevationTTL,,security,2025-09-26,tests/test_session_elevation_policy.zig
 REQ-GQL-MFA-AUDIT-001,MfaAuditLogging,SECURITY,TESTED,TestMfaAuditEvents,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,IMPL,TestMfaCoreFlows,,security,2025-09-26,docs/SECURITY_PROGRESS.md
-REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,IMPL,TestMfaPolicyEvaluator,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,IMPL,,,security,2025-09-26,tests/test_mfa_policies.zig
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval,,security,2025-09-26,src/security/auth.zig
 REQ-GQL-PARALLEL-001,Parallel Exec,ENGINE,IMPL,tests/e2e_parallel_execution.zig:1,,engine,2025-09-26,src/execution/parallel.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,e2e_raft_persist_snapshot_membership,,distributed,2025-09-25,src/distributed/raft_persistent.zig
 REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,SECURITY,TESTED,tests/test_key_rotation.zig,,security,2025-09-26,docs/SECURITY_PROGRESS.md
@@ -680,8 +682,11 @@ REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,TestCANARY_
 REQ-GQL-SEC-KEYROT-STATE-CHK-001,KeyRotationStateChecksum,SECURITY,TESTED,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_CHK_001,,security,2025-09-26,tests/test_key_rotation_checksum.zig
 REQ-GQL-SEC-KMS-001,KMSProviderScaffold,SECURITY,STUB,tests/test_kms_scaffold.zig,,security,2025-09-26,src/security/kms.zig
 REQ-GQL-SEC-TDE-OVERHEAD-001,TDEEncryptBenchmark,BENCH,BENCHED,,BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001,security,2025-09-26,benchmarks/benchmark_tde_encrypt_pages.zig
-REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,STUB,NONE,,security,2025-09-26,docs/SECURITY_PROGRESS.md
-REQ-GQL-SEC-ZEROIZE-001,SecretsZeroization,SECURITY,STUB,NONE,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,TESTED,TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,IMPL,TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap,,security,2025-09-26,src/security/kms_remote.zig
+REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,TEST,TESTED,TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap,,security,2025-09-26,tests/canary_remote_kms.zig
+REQ-GQL-SEC-ZEROIZE-001,SecretsZeroization,SECURITY,TESTED,TestCANARY_REQ_GQL_SEC_ZEROIZE_001_Basic,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-SEC-ZEROIZE-001,SecretsZeroization,SECURITY,TESTED,TestCANARY_REQ_GQL_SEC_ZEROIZE_001_Basic,,security,2025-09-26,src/security/secure_mem.zig
 REQ-GQL-TDE-001,TDE baseline,SECURITY,IMPL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/tde.zig
 REQ-GQL-TDE-001,TDE baseline,TEST,TESTED,tests/test_tde_integration.zig:1,,security,2025-09-26,tests/test_tde_integration.zig
 REQ-GQL-TDE-001,TDE page encryption,STORAGE,IMPL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/storage/page_encryption.zig
@@ -692,14 +697,18 @@ REQ-GQL-TDE-003,Key provider abstraction,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_00
 REQ-GQL-TDE-004,MockKMSProvider,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-004,MockKMSProvider,TEST,TESTED,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-005,ExternalKmsStub,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub,,security,2025-09-26,src/security/key_provider.zig
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,STUB,NONE,,security,2025-09-26,docs/SECURITY_PROGRESS.md
-REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,STUB,NONE,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26,src/security/kms_remote.zig
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26,tests/canary_remote_kms.zig
+REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip,,security,2025-09-26,src/security/backup_key_envelope.zig
 REQ-GQL-TDE-CORE-001,AES256GcmPrimitive,SECURITY,TESTED,Benchmark_encrypt_pages,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap,,security,2025-09-26,src/security/external_kms_client.zig
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,TEST,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap,,security,2025-09-26,tests/test_external_kms_provider.zig
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,docs/SECURITY_PROGRESS.md
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,STUB,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,src/security/kms_remote.zig
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,src/security/kms_remote.zig
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,tests/canary_remote_kms.zig
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,tests/test_external_kms_remote.zig
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,STUB,NONE,,perf,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,STUB,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2025-09-26,tests/benchmark_tde_overhead_smoke.zig

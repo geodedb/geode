@@ -1,5 +1,5 @@
 const std = @import("std");
-const quic = @import("../transport/quic.zig");
+const quic = @import("transport/quic");
 const crypto = std.crypto;
 
 // kms_remote.zig
@@ -9,7 +9,9 @@ const crypto = std.crypto;
 //   {"op":"Unwrap","envelope":{...}} -> {"status":"OK","plaintext":"<64 hex>"}
 // Errors -> {"status":"ERR","code":"AuthenticationFailed"}
 // This is a development scaffold; no auth, single connection, single stream.
-// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=STUB; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap; OWNER=security; UPDATED=2025-09-26
 
 pub const Envelope = struct {
     version: u8 = 1,
@@ -20,13 +22,17 @@ pub const Envelope = struct {
 };
 
 fn envelopeToJson(env: Envelope, w: anytype) !void {
-    try w.print("{\"version\":{d},\"alg\":\"{s}\",\"nonce\":\"", .{ env.version, env.alg });
+    try w.writeAll("{\"version\":");
+    try w.print("{d}", .{env.version});
+    try w.writeAll(",\"alg\":\"");
+    try w.writeAll(env.alg);
+    try w.writeAll("\",\"nonce\":\"");
     for (env.nonce) |b| try w.print("{x:0>2}", .{b});
-    try w.print("\",\"tag\":\"", .{});
+    try w.writeAll("\",\"tag\":\"");
     for (env.tag) |b| try w.print("{x:0>2}", .{b});
-    try w.print("\",\"ct\":\"", .{});
+    try w.writeAll("\",\"ct\":\"");
     for (env.ct) |b| try w.print("{x:0>2}", .{b});
-    try w.print("\"}", .{});
+    try w.writeAll("\"}");
 }
 
 fn parseHexByte(slice: []const u8) u8 {
@@ -56,21 +62,65 @@ fn parseEnvelope(json: []const u8) !Envelope {
     return env;
 }
 
+const Prng = struct {
+    s0: u64,
+    s1: u64,
+    fn init(seed: u64) @This() {
+        var z = seed +% 0x9E3779B97F4A7C15;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+        const s0 = z ^ (z >> 31);
+        z +%= 0x9E3779B97F4A7C15;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+        const s1 = z ^ (z >> 31);
+        return .{ .s0 = s0, .s1 = s1 };
+    }
+    fn next(self: *@This()) u64 {
+        const result = self.s0 +% self.s1;
+        const s1 = self.s1 ^ self.s0;
+        self.s0 = std.math.rotl(u64, self.s0, 55) ^ s1 ^ (s1 << 14);
+        self.s1 = std.math.rotl(u64, s1, 36);
+        return result;
+    }
+    fn bytes(self: *@This(), out: []u8) void {
+        var i: usize = 0;
+        var r: u64 = 0;
+        while (i < out.len) : (i += 1) {
+            if (i % 8 == 0) r = self.next();
+            const shift: u6 = @intCast((i % 8) * 8);
+            const val = r >> shift;
+            out[i] = @as(u8, @truncate(val));
+        }
+    }
+};
+
 pub const Server = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8,
-    prng: std.rand.DefaultPrng,
+    prng: Prng,
+    auth_token: ?[]const u8 = null,
+    attestation_hash: [32]u8 = [_]u8{0} ** 32,
 
     pub fn init(allocator: std.mem.Allocator, seed: u64) Server {
-        var prng = std.rand.DefaultPrng.init(seed);
+        var prng = Prng.init(seed);
         var kek: [32]u8 = undefined;
-        prng.random().bytes(&kek);
-        return .{ .allocator = allocator, .kek = kek, .prng = prng };
+        prng.bytes(&kek);
+        return .{ .allocator = allocator, .kek = kek, .prng = prng }; // auth_token set later
+    }
+
+    pub fn setAuthToken(self: *Server, tok: []const u8) void {
+        self.auth_token = tok;
+        // derive attestation hash (placeholder: sha256 over token + kek prefix)
+        var h = std.crypto.hash.sha2.Sha256.init(.{});
+        h.update(tok);
+        h.update(self.kek[0..16]);
+        h.final(&self.attestation_hash);
     }
 
     fn wrap(self: *Server, plaintext: [32]u8) Envelope {
         var nonce: [12]u8 = undefined;
-        self.prng.random().bytes(&nonce);
+        self.prng.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &plaintext, &.{}, nonce, self.kek);
@@ -109,17 +159,24 @@ pub const RemoteKmsServer = struct {
         const n = try stream.read(buf);
         if (n == 0) return;
         const req = buf[0..n];
+        // Simple auth: expect "auth":"<token>" if token set
+        if (self.server.auth_token) |tok| {
+            if (std.mem.indexOf(u8, req, tok) == null) {
+                try stream.writeAll("{\"status\":\"ERR\",\"code\":\"AuthenticationFailed\"}\n");
+                return;
+            }
+        }
         if (std.mem.indexOf(u8, req, "Generate")) |_| {
             // create random plaintext key then wrap
             var plain: [32]u8 = undefined;
-            self.server.prng.random().bytes(&plain);
+            self.server.prng.bytes(&plain);
             const env = self.server.wrap(plain);
-            var out = std.ArrayList(u8).init(self.allocator);
-            defer out.deinit();
-            const w = out.writer();
-            try w.print("{\"status\":\"OK\",\"envelope\":", .{});
+            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            defer out.deinit(self.allocator);
+            const w = out.writer(self.allocator);
+            try w.writeAll("{\"status\":\"OK\",\"envelope\":");
             try envelopeToJson(env, w);
-            try w.print("}\n", .{});
+            try w.writeAll("}\n");
             try stream.writeAll(out.items);
         } else if (std.mem.indexOf(u8, req, "Unwrap")) |_| {
             // find envelope object start
@@ -133,15 +190,51 @@ pub const RemoteKmsServer = struct {
                 },
                 else => return,
             };
-            var out = std.ArrayList(u8).init(self.allocator);
-            defer out.deinit();
-            const w = out.writer();
-            try w.print("{\"status\":\"OK\",\"plaintext\":\"", .{});
+            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            defer out.deinit(self.allocator);
+            const w = out.writer(self.allocator);
+            try w.writeAll("{\"status\":\"OK\",\"plaintext\":\"");
             for (plain) |b| try w.print("{x:0>2}", .{b});
-            try w.print("\"}\n", .{});
+            try w.writeAll("\",\"attestation\":\"");
+            for (self.server.attestation_hash) |b| try w.print("{x:0>2}", .{b});
+            try w.writeAll("\"}\n");
+            try stream.writeAll(out.items);
+        } else if (std.mem.indexOf(u8, req, "PrivUnwrap")) |_| {
+            // privileged unwrap same as unwrap but explicit op; enforce token already checked
+            const env_pos = std.mem.indexOf(u8, req, "{\"version\"") orelse return;
+            const env_slice = req[env_pos .. n - 1];
+            const env = parseEnvelope(env_slice) catch return;
+            const plain = self.server.unwrap(env) catch |e| switch (e) {
+                error.AuthenticationFailed => {
+                    try stream.writeAll("{\"status\":\"ERR\",\"code\":\"AuthenticationFailed\"}\n");
+                    return;
+                },
+                else => return,
+            };
+            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            defer out.deinit(self.allocator);
+            const w = out.writer(self.allocator);
+            try w.writeAll("{\"status\":\"OK\",\"plaintext\":\"");
+            for (plain) |b| try w.print("{x:0>2}", .{b});
+            try w.writeAll("\",\"privileged\":true}\n");
+            try stream.writeAll(out.items);
+        } else if (std.mem.indexOf(u8, req, "Attest")) |_| {
+            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            defer out.deinit(self.allocator);
+            const w = out.writer(self.allocator);
+            try w.writeAll("{\"status\":\"OK\",\"attestation\":\"");
+            for (self.server.attestation_hash) |b| try w.print("{x:0>2}", .{b});
+            try w.writeAll("\"}\n");
             try stream.writeAll(out.items);
         } else {
             try stream.writeAll("{\"status\":\"ERR\",\"code\":\"BadOp\"}\n");
+        }
+    }
+
+    pub fn serveLoop(self: *RemoteKmsServer, iterations: usize) !void {
+        var i: usize = 0;
+        while (i < iterations) : (i += 1) {
+            try self.serveOnce();
         }
     }
 };
@@ -177,12 +270,12 @@ pub const RemoteKmsClient = struct {
     pub fn unwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
         var stream = try self.quic_client.getStream();
         defer stream.deinit();
-        var out = std.ArrayList(u8).init(self.allocator);
-        defer out.deinit();
-        const w = out.writer();
-        try w.print("{\"op\":\"Unwrap\",\"envelope\":", .{});
+        var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        defer out.deinit(self.allocator);
+        const w = out.writer(self.allocator);
+        try w.writeAll("{\"op\":\"Unwrap\",\"envelope\":");
         try envelopeToJson(env, w);
-        try w.print("}\n", .{});
+        try w.writeAll("}\n");
         try stream.writeAll(out.items);
         var buf = try self.allocator.alloc(u8, 512);
         defer self.allocator.free(buf);
@@ -199,19 +292,47 @@ pub const RemoteKmsClient = struct {
         }
         return error.InvalidResponse;
     }
+
+    pub fn privUnwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
+        var stream = try self.quic_client.getStream();
+        defer stream.deinit();
+        var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        defer out.deinit(self.allocator);
+        const w = out.writer(self.allocator);
+        try w.writeAll("{\"op\":\"PrivUnwrap\",\"envelope\":");
+        try envelopeToJson(env, w);
+        try w.writeAll("}\n");
+        try stream.writeAll(out.items);
+        var buf = try self.allocator.alloc(u8, 512);
+        defer self.allocator.free(buf);
+        const n = try stream.read(buf);
+        const resp = buf[0..n];
+        if (std.mem.indexOf(u8, resp, "\"privileged\":true")) |_| {
+            const ppos = std.mem.indexOf(u8, resp, "\"plaintext\":\"") orelse return error.InvalidResponse;
+            const start = ppos + 13;
+            var plain: [32]u8 = undefined;
+            var i: usize = 0;
+            while (i < 32) : (i += 1) plain[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
+            return plain;
+        }
+        return error.InvalidResponse;
+    }
+
+    pub fn attest(self: *RemoteKmsClient) ![32]u8 {
+        var stream = try self.quic_client.getStream();
+        defer stream.deinit();
+        try stream.writeAll("{\"op\":\"Attest\"}\n");
+        var buf = try self.allocator.alloc(u8, 256);
+        defer self.allocator.free(buf);
+        const n = try stream.read(buf);
+        const resp = buf[0..n];
+        const apos = std.mem.indexOf(u8, resp, "\"attestation\":\"") orelse return error.InvalidResponse;
+        const start = apos + 16;
+        var hash: [32]u8 = undefined;
+        var i: usize = 0;
+        while (i < 32) : (i += 1) hash[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
+        return hash;
+    }
 };
 
-// Basic tests
-test "remote kms generate and unwrap" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var server = RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
-    // Use ephemeral port 8765 for test
-    try server.start(8765);
-    var client = RemoteKmsClient.init(gpa.allocator());
-    try client.connect("127.0.0.1", 8765);
-    // For scaffold we directly write then have server accept after a short delay
-    // NOTE: Real implementation would run server loop concurrently.
-    // Generate
-    // (We cannot easily interleave without async; skip functional assertion until loop added.)
-}
+// (Tests moved to tests/canary_remote_kms.zig)

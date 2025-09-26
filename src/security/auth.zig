@@ -96,8 +96,28 @@ pub const RowLevelPolicy = struct { id: PolicyId, name: []const u8, table: []con
 // ---- MFA Admin Policy ----
 // CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval; OWNER=security; UPDATED=2025-09-26
 pub const MfaScope = enum { user, role, attribute };
-pub const MfaConditionType = enum { match_any_role, match_all_roles, user_attribute_equals, always };
-pub const MfaAdminPolicy = struct { id: u64, enabled: bool = true, scope: MfaScope = .user, roles: []const RoleId = &[_]RoleId{}, condition: MfaConditionType = .always, attribute_key: ?[]const u8 = null, attribute_value: ?[]const u8 = null };
+pub const MfaConditionType = enum {
+    match_any_role,
+    match_all_roles,
+    user_attribute_equals,
+    always,
+    time_window, // active only within [time_start_minute, time_end_minute]
+    risk_score_min, // requires user attribute "risk_score" >= risk_min_score
+    reauth_interval_elapsed, // requires re-auth if last_mfa_ts older than reauth_interval_ms
+};
+pub const MfaAdminPolicy = struct {
+    id: u64,
+    enabled: bool = true,
+    scope: MfaScope = .user,
+    roles: []const RoleId = &[_]RoleId{},
+    condition: MfaConditionType = .always,
+    attribute_key: ?[]const u8 = null,
+    attribute_value: ?[]const u8 = null,
+    time_start_minute: ?u16 = null, // minutes since midnight UTC
+    time_end_minute: ?u16 = null,
+    risk_min_score: ?u8 = null,
+    reauth_interval_ms: ?i64 = null,
+};
 
 // ---- Environment / Session / Password Policy ----
 pub const EnvironmentInfo = struct { timestamp: i64, ip_address: []const u8, user_agent: []const u8, location: ?[]const u8, device_id: ?[]const u8 };
@@ -265,17 +285,36 @@ pub const SecurityManager = struct {
         self.mfa_require_cache.clearRetainingCapacity();
         try self.audit_log.logMfaPolicyAdded(p.id, p.enabled);
     }
+    // Backwards-compatible simple evaluation (no session/env context). Uses current time and null session.
     pub fn evaluateMfaPolicies(self: *Self, u: *User) bool {
+        return self.evaluateMfaPoliciesAdvanced(u, null, std.time.milliTimestamp());
+    }
+
+    // Extended evaluation considering dynamic conditions (time window, risk, reauth interval).
+    // CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval; OWNER=security; UPDATED=2025-09-26
+    pub fn evaluateMfaPoliciesAdvanced(self: *Self, u: *User, session: ?*Session, now_ms: i64) bool {
         if (self.mfa_policies.items.len == 0) return false;
-        if (self.mfa_require_cache.get(u.id)) |v| return v;
+        // Dynamic conditions invalidate cache; detect presence.
+        var has_dynamic = false;
+        for (self.mfa_policies.items) |p| switch (p.condition) {
+            .time_window, .risk_score_min, .reauth_interval_elapsed => has_dynamic = true,
+            else => {},
+        };
+        if (!has_dynamic) {
+            if (self.mfa_require_cache.get(u.id)) |v| return v;
+        }
         var require = false;
         var user_role_ids: []RoleId = &[_]RoleId{};
         if (self.rbac.user_roles.get(u.id)) |rl| user_role_ids = rl.items;
+        // Attempt to parse risk score from user attribute "risk_score" if needed.
+        var risk_score: ?u8 = null;
         for (self.mfa_policies.items) |p| {
             if (!p.enabled) continue;
-            switch (p.condition) {
-                .always => require = true,
-                .match_any_role => for (user_role_ids) |rid| {
+            const cond = p.condition;
+            if (cond == .always) {
+                require = true;
+            } else if (cond == .match_any_role) {
+                for (user_role_ids) |rid| {
                     for (p.roles) |pr| {
                         if (rid == pr) {
                             require = true;
@@ -283,37 +322,71 @@ pub const SecurityManager = struct {
                         }
                     }
                     if (require) break;
-                },
-                .match_all_roles => {
-                    var all = true;
-                    for (p.roles) |pr| {
-                        var found = false;
-                        for (user_role_ids) |rid| {
-                            if (rid == pr) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            all = false;
+                }
+            } else if (cond == .match_all_roles) {
+                var all = true;
+                for (p.roles) |pr| {
+                    var found = false;
+                    for (user_role_ids) |rid| {
+                        if (rid == pr) {
+                            found = true;
                             break;
                         }
                     }
-                    if (all and p.roles.len > 0) require = true;
-                },
-                .user_attribute_equals => {
-                    if (p.attribute_key) |k| {
-                        if (p.attribute_value) |v| {
-                            if (u.attributes.get(k)) |val| {
-                                if (std.mem.eql(u8, val, v)) require = true;
-                            }
+                    if (!found) {
+                        all = false;
+                        break;
+                    }
+                }
+                if (all and p.roles.len > 0) require = true;
+            } else if (cond == .user_attribute_equals) {
+                if (p.attribute_key) |k| {
+                    if (p.attribute_value) |v| {
+                        if (u.attributes.get(k)) |val| {
+                            if (std.mem.eql(u8, val, v)) require = true;
                         }
                     }
-                },
+                }
+            } else if (cond == .time_window) {
+                if (p.time_start_minute) |start| {
+                    if (p.time_end_minute) |end| {
+                        const minutes_per_day: i64 = 24 * 60;
+                        const ms_per_min: i64 = 60 * 1000;
+                        const minutes_since_epoch: i64 = @divTrunc(now_ms, ms_per_min);
+                        const minute_of_day: u16 = @as(u16, @intCast(@mod(minutes_since_epoch, minutes_per_day)));
+                        if (start <= end) {
+                            if (minute_of_day >= start and minute_of_day <= end) require = true;
+                        } else {
+                            if (minute_of_day >= start or minute_of_day <= end) require = true;
+                        }
+                    }
+                }
+            } else if (cond == .risk_score_min) {
+                if (risk_score == null) {
+                    if (u.attributes.get("risk_score")) |rs| {
+                        const parsed = std.fmt.parseInt(u8, rs, 10) catch 0;
+                        risk_score = parsed;
+                    } else risk_score = 0;
+                }
+                if (p.risk_min_score) |thr| {
+                    if (risk_score orelse 0 >= thr) require = true;
+                }
+            } else if (cond == .reauth_interval_elapsed) {
+                if (session) |s| {
+                    if (p.reauth_interval_ms) |intv| {
+                        if (s.last_mfa_ts) |last| {
+                            if (now_ms - last >= intv) require = true;
+                        } else {
+                            require = true; // no MFA yet
+                        }
+                    }
+                } else {
+                    if (p.reauth_interval_ms != null) require = true;
+                }
             }
             if (require) break;
         }
-        self.mfa_require_cache.put(u.id, require) catch {};
+        if (!has_dynamic) self.mfa_require_cache.put(u.id, require) catch {};
         return require;
     }
 

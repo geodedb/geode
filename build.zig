@@ -460,6 +460,17 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
     geoded_exe.root_module.addImport("log/logger.zig", logging_mod);
 
+    // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
+    const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });
+    remote_kms_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    remote_kms_tests.root_module.addImport("vendor_quic", vendor_quic_mod);
+    // Expose kms_remote server/client module under alias security/kms_remote
+    const kms_remote_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms_remote.zig"), .target = target, .optimize = optimize });
+    // kms_remote depends on transport/quic
+    kms_remote_mod.addImport("transport/quic", transport_quic_mod);
+    remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    test_step.dependOn(&remote_kms_tests.step);
+
     // CDC enhanced streaming module (diagnostics, malformed WAL tracking)
     const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("cdc_enhanced", cdc_enhanced_mod);
