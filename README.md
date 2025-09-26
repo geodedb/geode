@@ -20,9 +20,11 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 - **☁️ S3 Cloud Backups**: Full + incremental with multipart uploads, checksums, resumable transfers, point-in-time recovery
 - **🔔 CDC Webhook Hardening**: Custom HTTP headers, exponential backoff retries, idempotency keys, dead letter queue with metrics
 - **📊 CBO Small-N Calibration**: Bias corrections for <100 row datasets, guardrails preventing >10% regression, decision logging (GEODE_ENABLE_CBO=1)
-- **🔐 Security Foundation**: TDE and MFA infrastructure prepared (v0.19 activation)
-- **🔍 FTS Enhancement Ready**: Phrase queries and highlighting framework (v0.19 activation)
-- **⚡ Parallel Execution Ready**: Thread pool infrastructure (v0.19 activation)
+- **🔐 Security Foundation**: TDE (AES-256-GCM core primitive) & MFA (TOTP + recovery codes) partially implemented behind flags (full integration v0.19)
+- **🔍 FTS Partial**: Phrase / proximity / highlight primitives behind feature flag (scoring + analyzers v0.19)
+- **⚡ Parallel Execution Partial**: Basic thread pool + deterministic ordered `parallelMap` (additional operators v0.19)
+- **🧮 2PC Scaffolding**: Coordinator/participant state machines (experimental, flag gated)
+- **📈 Graph Analytics Stubs**: Community detection & centrality placeholder APIs (deterministic)
 
 ### Previous v0.17.0 Features
 
@@ -36,16 +38,19 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 ## Breaking Changes from v0.17.0
 
 ### 1. Federation Requirements
+
 - Sharded deployments should prepare for federation (disabled by default)
 - Global ORDER BY now possible across shards
 - Clients may see new EXPLAIN format with distributed plan trees
 
 ### 2. Backup Strategy
+
 - S3 backup commands replace local-only backups for production
 - New CLI: `geode backup --dest s3://bucket/prefix --mode full|incremental`
 - Raft snapshots now used as consistency anchors
 
 ### 3. CDC Configuration
+
 - Webhook sinks support custom headers (auth tokens, routing)
 - DLQ configuration recommended for production
 - Idempotency keys automatically generated
@@ -53,11 +58,13 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 ## Quick Start
 
 ### Docker (Recommended)
+
 ```bash
 docker run -p 8443:8443 geode:v0.18.0
 ```
 
 ### Build from Source
+
 ```bash
 # Requires Zig 0.15.1
 git clone https://github.com/your-org/geode.git
@@ -72,6 +79,7 @@ make build
 ```
 
 ### Enable New Features
+
 ```bash
 # Distributed Federation (read-only queries across shards)
 export GEODE_ENABLE_FEDERATION=1
@@ -89,6 +97,7 @@ geode backup --dest s3://my-bucket/backups --mode full
 ## Architecture
 
 ### Core Components
+
 - **Query Engine**: ISO GQL parser, planner, executor with distributed federation
 - **Storage**: MVCC, WAL/ARIES, page management, S3 backup integration
 - **Distributed**: Raft consensus, 2PC transactions, coordinator-worker federation
@@ -98,18 +107,21 @@ geode backup --dest s3://my-bucket/backups --mode full
 ### New in v0.18.0
 
 #### Distributed Query Federation
+
 - Scatter-gather pattern with global merge operations
 - Per-shard Top-K with final merge for exact results
 - Deterministic pagination preserving ISO semantics
 - Failure handling with proper error propagation
 
 #### S3 Backup Architecture
+
 - Multipart uploads for files >5MB with checksums
 - Incremental chains tracked via parent relationships
 - Non-intrusive read-only snapshots
 - Throttled I/O to minimize impact
 
 #### CDC Webhook Reliability
+
 - Exponential backoff with jitter
 - Idempotency keys prevent duplicates
 - Dead letter queue with configurable retention
@@ -118,12 +130,14 @@ geode backup --dest s3://my-bucket/backups --mode full
 ## Performance
 
 ### v0.18.0 Benchmarks
+
 - **Federation**: 50K rows/sec merge across 3 shards
 - **S3 Backup**: 100MB/s upload with multipart
 - **CDC Delivery**: 10K events/sec with retries
 - **CBO Small-N**: <10% overhead, prevents 90% of bad plans
 
 ### Resource Usage
+
 - **Federation**: +50MB RAM per active distributed query
 - **S3 Backups**: Throttled to 50% I/O capacity
 - **CDC Webhooks**: Bounded queue (10K events max)
@@ -132,12 +146,14 @@ geode backup --dest s3://my-bucket/backups --mode full
 ## Testing
 
 ### Coverage Statistics
+
 - **14 new E2E tests** in v0.18.0
 - **71/71 tests passing**
 - **0% untested claimed features** (enforced by status generator)
 - All features have CANARY markers with test evidence
 
 ### Test Categories
+
 - Unit tests: Core logic validation
 - Integration tests: Component interaction
 - E2E tests: Full stack validation
@@ -146,6 +162,7 @@ geode backup --dest s3://my-bucket/backups --mode full
 ## Configuration
 
 ### Environment Variables
+
 ```bash
 # Federation
 GEODE_ENABLE_FEDERATION=1      # Enable distributed queries (default: 0)
@@ -153,6 +170,20 @@ GEODE_ENABLE_FEDERATION=1      # Enable distributed queries (default: 0)
 # Optimizer
 GEODE_ENABLE_CBO=1             # Enable cost-based optimizer (default: 0)
 GEODE_TRACE_OPTIMIZER=1        # Enable optimizer decision logging
+
+# Security (stubs)
+GEODE_ENABLE_TDE=1             # Transparent Data Encryption placeholder
+GEODE_TDE_KEY=<64 hex chars>   # 32-byte key (hex) for TDE placeholder
+GEODE_ENABLE_MFA=1             # Enable MFA TOTP placeholder
+
+# Distributed writes (experimental scaffolding)
+GEODE_ENABLE_DISTRIBUTED_WRITES=1  # 2PC coordinator/participant stubs
+
+# Advanced Full Text Search
+GEODE_ENABLE_ADVANCED_FTS=1    # Phrase/proximity/highlight stubs
+
+# Parallel execution
+GEODE_ENABLE_PARALLEL=1        # Thread pool + ordered barrier + parallelMap (prototype)
 
 # S3 Backups (via CLI)
 AWS_ACCESS_KEY_ID=xxx
@@ -166,6 +197,7 @@ CDC_WEBHOOK_RETRY_MAX=5
 ```
 
 ### CLI Examples
+
 ```bash
 # Distributed query (automatic with federation enabled)
 geodec "MATCH (n) RETURN n ORDER BY n.id LIMIT 100"
@@ -175,8 +207,9 @@ geode backup --dest s3://my-bucket/backups --mode full
 geode backup --dest s3://my-bucket/backups --mode incremental --parent <backup-id>
 geode restore --source s3://my-bucket/backups --backup-id <id> --target /data
 
-# EXPLAIN with distributed plan
+# EXPLAIN with distributed & recursive plan forms
 geodec "EXPLAIN MATCH (n) RETURN n ORDER BY n.id LIMIT 10"
+geodec "EXPLAIN RECURSIVE MATCH (n) RETURN n LIMIT 5"   # experimental recursive JSON form
 ```
 
 ## Documentation
@@ -190,37 +223,45 @@ geodec "EXPLAIN MATCH (n) RETURN n ORDER BY n.id LIMIT 10"
 ## Known Limitations
 
 ### Federation
+
 - Read-only queries (writes not distributed)
 - No cross-shard transactions yet
 - Global secondary indexes not supported
 
 ### S3 Backups
+
 - Maximum file size: 100GB per backup
 - S3-compatible APIs only (no native Azure/GCS)
 
 ### CDC
+
 - Maximum batch size: 10,000 events
 - DLQ not persistent across restarts
 
 ### CBO
+
 - Limited to single-node optimization
 - No histogram support for custom types
 
 ## Roadmap (v0.19)
 
 ### Security Hardening
+
 - **TDE**: AES-256 for data files + WAL
 - **MFA**: TOTP-based authentication
 
 ### FTS Enhancements
+
 - Phrase queries with proximity
 - Highlighting with fragments
 - Pluggable analyzers
 
 ### Multi-threaded Execution
-- Thread pool for operators
-- Intra-query parallelism
-- Fair scheduling
+
+- Thread pool for operators (prototype completed)
+- `parallelMap` deterministic operator (ordering preserved)
+- Expand / Filter / Join parallelism (planned)
+- Fair scheduling & work stealing (planned)
 
 ## Contributing
 

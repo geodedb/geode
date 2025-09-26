@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
-    
+
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
 
@@ -688,6 +688,23 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&multi_graph_test.step);
+
+    // Newly added scaffold acceptance tests (runtime-flag gated components)
+    const e2e_security_tde_mfa_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_security_tde_mfa.zig"), .target = target, .optimize = optimize }) });
+    e2e_security_tde_mfa_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&e2e_security_tde_mfa_test.step);
+    const e2e_fts_advanced_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_fts_advanced.zig"), .target = target, .optimize = optimize }) });
+    e2e_fts_advanced_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&e2e_fts_advanced_test.step);
+    const e2e_parallel_execution_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_parallel_execution.zig"), .target = target, .optimize = optimize }) });
+    e2e_parallel_execution_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&e2e_parallel_execution_test.step);
+    const e2e_cbo_v0_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_cbo_v0.zig"), .target = target, .optimize = optimize }) });
+    e2e_cbo_v0_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&e2e_cbo_v0_test.step);
+    const e2e_graph_algos_new_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_graph_algos_new.zig"), .target = target, .optimize = optimize }) });
+    e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&e2e_graph_algos_new_test.step);
 
     // Add unit tests for new modules
     const crypto_test = b.addTest(.{

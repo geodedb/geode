@@ -100,6 +100,14 @@ pub const gpu = struct {
     pub const flagger = @import("gpu/flagger.zig");
 };
 
+// Runtime-flag gated scaffold stub re-exports for acceptance tests
+pub const tde_stub = @import("security/tde.zig");
+pub const mfa_stub = @import("security/mfa.zig");
+pub const fts_advanced_stub = @import("fts/advanced.zig");
+pub const parallel_exec_stub = @import("execution/parallel.zig");
+pub const cbo_api_stub = @import("planner/cbo.zig");
+pub const graph_algos_stub = @import("graph/algorithms.zig");
+
 // Distributed consensus primitives (Raft) for tests/benchmarks
 // (Removed distributed.raft re-export to avoid duplicate module inclusion with separate distributed module import)
 

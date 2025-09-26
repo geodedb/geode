@@ -7,6 +7,7 @@ pub const seed = @import("cost_seed.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDetailed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=CalibrationEntries; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelCalibrationEntries; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONBiasFactors; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONRecursive; STATUS=PARTIAL; TEST=tests/e2e_explain_recursive.zig:1; OWNER=planner; UPDATED=2025-09-26
 
 fn buildOpsJson(allocator: std.mem.Allocator, schema_name: []const u8, ops: []const seed.OpDescriptor) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
@@ -53,6 +54,43 @@ fn buildOpsJson(allocator: std.mem.Allocator, schema_name: []const u8, ops: []co
 
 pub fn explainChain(allocator: std.mem.Allocator, ops: []const seed.OpDescriptor) ![]u8 {
     return buildOpsJson(allocator, "cost_explain.v1", ops);
+}
+
+/// Build a synthetic recursive tree form for demonstration: wraps linear chain into a
+/// right-deep nested structure {"schema":"cost_explain.recursive.v1","root":{node}}
+/// where each node = {idx,kind,est_rows,cost,child?:node}.
+pub fn explainRecursive(allocator: std.mem.Allocator, ops: []const seed.OpDescriptor) ![]u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    errdefer buf.deinit();
+    const cfg = seed.EstimatorConfig{};
+    var prev_est: ?seed.CardinalityEstimate = null;
+    try buf.appendSlice("{\"schema\":\"cost_explain.recursive.v1\",\"root\":");
+    var i: usize = 0;
+    while (i < ops.len) : (i += 1) {
+        const op = ops[i];
+        const children_slice: []const seed.CardinalityEstimate = if (prev_est) |pe| &[_]seed.CardinalityEstimate{pe} else &[_]seed.CardinalityEstimate{};
+        const est_card = seed.estimate(op, children_slice, cfg);
+        prev_est = est_card;
+        try buf.appendSlice("{\"idx\":");
+        try buf.writer().print("{}", .{i});
+        try buf.appendSlice(",\"kind\":\"");
+        try buf.appendSlice(@tagName(op.kind));
+        try buf.appendSlice("\",\"est_rows\":");
+        try buf.writer().print("{d}", .{@as(i64, @intFromFloat(@floor(est_card.rows)))});
+        const op_cost = seed.cost(op, est_card, cfg).total();
+        try buf.appendSlice(",\"cost\":");
+        try buf.writer().print("{d}", .{@as(i64, @intFromFloat(@floor(op_cost)))});
+        if (i < ops.len - 1) {
+            try buf.appendSlice(",\"child\":");
+        }
+    }
+    // close nested objects
+    if (ops.len > 0) {
+        var c: usize = 0;
+        while (c < ops.len) : (c += 1) try buf.appendSlice("}");
+    }
+    try buf.appendSlice("}");
+    return buf.toOwnedSlice();
 }
 
 pub fn explainChainWithCalibration(allocator: std.mem.Allocator, ops: []const seed.OpDescriptor, actual_rows: ?[]const f64, reg: ?*anyopaque) ![]u8 {

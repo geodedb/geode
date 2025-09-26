@@ -580,6 +580,8 @@ REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONBiasFactors,TESTED,TestCANARY
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDetailed,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed,,planner,2025-09-22,tests/cost_model_explain_json_detailed.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDetailed,TESTED,TestCANARY_REQ_GQL_075_CostModelExplainJSONDetailed,,planner,2025-09-22,src/planner/cost_explain.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONDynamicAlpha,TESTED,TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha,,planner,2025-09-22,test_cost_model_explain_v4.zig
+REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONRecursive,TESTED,,,planner,2025-09-26,tests/e2e_explain_recursive.zig
+REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONRecursive,PARTIAL,tests/e2e_explain_recursive.zig:1,,planner,2025-09-26,src/planner/cost_explain.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainProtocolBasic,TESTED,TestCANARY_REQ_GQL_075_ExplainProtocolBasic,,planner,2025-09-22,tests/e2e_protocol.zig
 REQ-GQL-075,Cost Model Enumeration Seed,ExplainProtocolCalibrated,TESTED,TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated,,planner,2025-09-22,tests/e2e_protocol.zig
 REQ-GQL-075,Cost Model Enumeration Seed,PlannerAdaptiveBiasApplication,TESTED,TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication,,planner,2025-09-22,test_cost_model_planner_bias_application.zig
@@ -614,11 +616,18 @@ REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,TESTED,TestCANARY_REQ_GQL_086_Txn
 REQ-GQL-090,StreamingTelemetry,PagingEvents,TESTED,TestCANARY_REQ_GQL_090_TelemetryPagingPull,,wire,2025-09-23,tests/e2e_protocol_more.zig
 REQ-GQL-091,Client Server Arg Passthrough,CliErgonomics,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,tests/e2e_client_server_arg_passthrough.zig
 REQ-GQL-091,Client Server Arg Passthrough,Docs,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
+REQ-GQL-2PC-001,Distributed 2PC,TXN,STUB,tests/e2e_2pc_distributed.zig:1,,txn,2025-09-26,src/txn/two_phase_commit.zig
 REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,e2e_graph_algorithms,,graph,2025-09-25,src/graph/builtin_algorithms.zig
 REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,e2e_cbo_toggle,,planner,2025-09-25,src/planner/cbo.zig
 REQ-GQL-CDC-SINKS,CDC External Sinks,KafkaWebhook,TESTED,e2e_cdc_sinks,,streaming,2025-09-25,src/cdc/sinks.zig
+REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,TESTED,,,core,2025-09-26,tests/unit_feature_flags.zig
+REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,PARTIAL,tests/unit_feature_flags.zig:1,,core,2025-09-26,src/util/feature_flags.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,PARTIAL,tests/e2e_fts_advanced.zig:1,,search,2025-09-26,src/fts/advanced.zig
 REQ-GQL-MATCH,MATCH Engine,ComplexPatterns,TESTED,e2e_match_complex,,gql,2025-09-25,src/gql/match.zig
+REQ-GQL-MFA-001,MFA baseline,SECURITY,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/mfa.zig
+REQ-GQL-PARALLEL-001,Parallel Exec,ENGINE,PARTIAL,tests/e2e_parallel_execution.zig:1,,engine,2025-09-26,src/execution/parallel.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,e2e_raft_persist_snapshot_membership,,distributed,2025-09-25,src/distributed/raft_persistent.zig
+REQ-GQL-TDE-001,TDE baseline,SECURITY,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/tde.zig
 REQ-GQL-XXX,...,...,...,...,...,...,...,tools/status_generate.py
 REQ-GQL-XXX,Name,Component,TESTED,TestCANARY_REQ_GQL_XXX_Feature,,team,2025-09-20,kb/CANARY_ADOPTION_SUMMARY.md
 REQ-GQL-XXX,name,aspect,status,test,bench,team,date,kb/CONSOLIDATED.md
