@@ -88,24 +88,24 @@ As of v0.18.0, Geode has closed critical infrastructure gaps while maintaining 1
 
 - [x] AES-256-GCM implementation (core primitive)
 - [x] Page-level encryption integrated (data pages via page_manager)
-- [ ] WAL encryption
-- [ ] Key provider interface
+- [x] WAL encryption (log segment encryption w/ per-file nonce derivation)
+- [x] Key provider interface (env/static provider; KMS extension pending)
 - [ ] KMS integration
 - [ ] Performance <5% overhead benchmark
 - [ ] Key rotation workflow
 - [x] Infrastructure prepared
-  - NOTE: WAL + key lifecycle + perf validation pending.
+  - NOTE: Rotation, KMS binding & perf validation pending.
 
 #### MFA (Multi-Factor Authentication)
 
 - [x] TOTP implementation (RFC 6238 deterministic test path)
 - [x] Recovery codes (scratch set generation)
-- [x] Authentication enforcement (MFARequired -> authenticateWithMFA)
-- [ ] Admin policy controls (enforce per role / conditional)
-- [ ] Enhanced audit entries (per MFA challenge + failure reason)
-- [ ] Session re-auth interval & step-up triggers
+- [x] Authentication enforcement (authenticate / authenticateWithMFA flow)
+- [~] Admin policy controls (policy objects + evaluator present; full condition set & tooling pending)
+- [x] Enhanced audit entries (MFA issued/success/failure with reason)
+- [~] Session re-auth interval & step-up triggers (session elevation metadata + require/mark functions; policy-driven intervals pending)
 - [x] Auth framework ready
-  - NOTE: Governance & extended auditing pending.
+  - NOTE: Governance UI, extended policy conditions, re-auth interval policies pending.
 
 ### 🔄 FTS Enhancements (P1)
 

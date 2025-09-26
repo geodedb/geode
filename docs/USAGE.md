@@ -38,13 +38,10 @@
 
 ### Distributed Query Federation
 
-Enable federation for distributed queries across shards:
+Federated query execution across shards is always enabled (no flag required):
 
 ```bash
-# Enable federation (disabled by default)
-export GEODE_ENABLE_FEDERATION=1
-
-# Queries automatically distributed
+# Queries automatically consider federation
 ./geodec "MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 100"
 
 # View distributed plan
@@ -84,9 +81,9 @@ webhooks:
   - name: primary
     endpoint: https://api.example.com/webhook
     headers:
-      Authorization: "Bearer ${WEBHOOK_TOKEN}"
-      X-Tenant-ID: "tenant-123"
-      X-Environment: "production"
+      Authorization: 'Bearer ${WEBHOOK_TOKEN}'
+      X-Tenant-ID: 'tenant-123'
+      X-Environment: 'production'
     retry:
       max_attempts: 5
       base_delay_ms: 100
@@ -97,21 +94,17 @@ webhooks:
       retention_hours: 168
     idempotency:
       enabled: true
-      header: "X-Idempotency-Key"
+      header: 'X-Idempotency-Key'
 ```
 
 ### Cost-Based Optimizer
 
-Enable and configure the CBO:
+Cost-Based Optimizer (always enabled):
 
 ```bash
-# Enable CBO (disabled by default)
-export GEODE_ENABLE_CBO=1
-
-# Enable optimizer tracing
+# Optional: trace decisions
 export GEODE_TRACE_OPTIMIZER=1
 
-# View optimizer decisions
 ./geodec "EXPLAIN (VERBOSE) MATCH (n) RETURN n"
 ```
 
@@ -193,37 +186,37 @@ DELETE p
 ```yaml
 # geode.yaml
 server:
-  listen: "0.0.0.0:8443"
-  data_dir: "/var/lib/geode"
-  
+  listen: '0.0.0.0:8443'
+  data_dir: '/var/lib/geode'
+
 tls:
-  cert: "/etc/geode/cert.pem"
-  key: "/etc/geode/key.pem"
+  cert: '/etc/geode/cert.pem'
+  key: '/etc/geode/key.pem'
   auto_generate: true
 
 storage:
   page_size: 8192
-  cache_size: "1GB"
-  wal_dir: "/var/lib/geode/wal"
-  
+  cache_size: '1GB'
+  wal_dir: '/var/lib/geode/wal'
+
 federation:
-  enabled: false
+  # (Always active) Configuration focuses on shard endpoints
   coordinator: true
   shards:
-    - id: "shard1"
-      endpoint: "node1.cluster:8443"
-    - id: "shard2"  
-      endpoint: "node2.cluster:8443"
+    - id: 'shard1'
+      endpoint: 'node1.cluster:8443'
+    - id: 'shard2'
+      endpoint: 'node2.cluster:8443'
 
 optimizer:
-  enabled: false
+  # Enable/disable removed; only tuning parameters remain
   small_n_threshold: 100
   trace: false
 
 backup:
   s3:
-    bucket: "geode-backups"
-    prefix: "prod"
+    bucket: 'geode-backups'
+    prefix: 'prod'
     retention_days: 30
 ```
 
@@ -235,13 +228,9 @@ GEODE_DATA_DIR=/var/lib/geode
 GEODE_LOG_LEVEL=info
 GEODE_LOG_FORMAT=json
 
-# Federation
-GEODE_ENABLE_FEDERATION=0
+# Federation & Optimizer no longer require enable flags
 GEODE_FEDERATION_ROLE=coordinator
-
-# Optimizer
-GEODE_ENABLE_CBO=0
-GEODE_TRACE_OPTIMIZER=0
+GEODE_TRACE_OPTIMIZER=0   # Tracing still optional
 
 # S3 Backup
 AWS_ACCESS_KEY_ID=xxx
@@ -300,11 +289,9 @@ geode_backup_duration_ms
 
 ### Common Issues
 
-#### Federation Not Working
-```bash
-# Check federation is enabled
-echo $GEODE_ENABLE_FEDERATION  # Should be 1
+#### Federation Troubleshooting
 
+```bash
 # Verify shard connectivity
 geodec "CALL system.federation.status()"
 
@@ -313,6 +300,7 @@ grep "federation" /var/log/geode/geode.log
 ```
 
 #### S3 Backup Failures
+
 ```bash
 # Test S3 connectivity
 aws s3 ls s3://my-bucket/backups/
@@ -325,6 +313,7 @@ aws s3api put-object --bucket my-bucket --key test.txt --body test.txt
 ```
 
 #### CDC Webhook Issues
+
 ```bash
 # Check webhook endpoint
 curl -X POST https://api.example.com/webhook -H "Authorization: Bearer token"
@@ -337,11 +326,9 @@ geodec "CALL system.cdc.metrics()"
 ```
 
 #### Performance Problems
-```bash
-# Check if CBO is causing issues
-export GEODE_ENABLE_CBO=0
 
-# View query plan
+```bash
+# View query plan for insight
 geodec "EXPLAIN (ANALYZE) <your-query>"
 
 # Check system resources

@@ -1,41 +1,55 @@
 const std = @import("std");
+const crypto = std.crypto; // AES‑GCM for WAL encryption (aligned with page-level TDE)
 // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=CorruptPageRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecovery; OWNER=storage; UPDATED=2025-09-20
 // Page manager imported via build alias to avoid relative path escaping module root.
 const storage = @import("storage_page_manager");
 
-// Lightweight stream-cipher placeholder to satisfy at-rest encryption (target: AES‑256‑GCM).
-// Ensures unreadability without key; deterministic per stream_id (page id or LSN).
-const Enc = struct {
-    fn mul_alpha(t: *[16]u8) void {
-        const carry: u8 = t.*[0] >> 7;
-        var i: usize = 15;
-        while (i > 0) : (i -= 1) t.*[i] = (t.*[i] << 1) | (t.*[i - 1] >> 7);
-        t.*[0] <<= 1;
-        if (carry != 0) t.*[15] ^= 0x87;
+// WAL encryption wrapper: AES-256-GCM per record (nonce: 12 bytes derived from LSN + payload len).
+// Layout when encrypted: [nonce(12)][tag(16)][ciphertext]. Header payload length = 28 + plaintext_len.
+// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="WAL encryption"; ASPECT=STORAGE; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_TDE_002_WalEncryptionRoundTrip; OWNER=security; UPDATED=2025-09-26
+const WalEnc = struct {
+    pub const NonceBytes: usize = 12;
+    pub const TagBytes: usize = 16;
+    pub const Overhead: usize = NonceBytes + TagBytes; // 28
+
+    fn deriveNonce(lsn: u64, plain_len: usize) [NonceBytes]u8 {
+        var n: [NonceBytes]u8 = undefined;
+        // First 8 bytes = LSN little-endian
+        std.mem.writeInt(u64, n[0..8], lsn, .little);
+        // Last 4 bytes = wyhash(payload length) truncated (stable for same size)
+        const h = std.hash.Wyhash.hash(0, std.mem.asBytes(&@as(u32, @intCast(plain_len))));
+        std.mem.writeInt(u32, n[8..12], @as(u32, @intCast(h & 0xFFFFFFFF)), .little);
+        return n;
     }
-    fn tweak(stream_id: u64, counter: u64) [16]u8 {
-        var tw: [16]u8 = undefined;
-        var i: usize = 0;
-        while (i < 8) : (i += 1) tw[i] = @as(u8, @intCast((stream_id >> @as(u6, @intCast(8 * i))) & 0xFF));
-        i = 0;
-        while (i < 8) : (i += 1) tw[8 + i] = @as(u8, @intCast((counter >> @as(u6, @intCast(8 * i))) & 0xFF));
-        return tw;
+
+    pub fn encrypt(ally: std.mem.Allocator, key: *const [32]u8, lsn: u64, plaintext: []const u8) ![]u8 {
+        var nonce = deriveNonce(lsn, plaintext.len);
+        var tag: [TagBytes]u8 = undefined;
+        const aad = std.mem.asBytes(&lsn); // minimal AAD: LSN number
+        const ct = try ally.alloc(u8, plaintext.len);
+        crypto.aead.aes_gcm.Aes256Gcm.encrypt(ct, &tag, plaintext, aad, nonce, key.*);
+        const out = try ally.alloc(u8, Overhead + ct.len);
+        @memcpy(out[0..NonceBytes], &nonce);
+        @memcpy(out[NonceBytes .. NonceBytes + TagBytes], &tag);
+        @memcpy(out[NonceBytes + TagBytes ..], ct);
+        ally.free(ct);
+        return out; // caller owns
     }
-    fn keystreamBlock(key: *const [32]u8, t: *[16]u8, out: *[16]u8) void {
-        var i: usize = 0;
-        while (i < 16) : (i += 1) out.*[i] = key[i] ^ key[16 + i] ^ t.*[i];
-    }
-    pub fn xorcrypt(key: *const [32]u8, stream_id: u64, buf: []u8) void {
-        var T = tweak(stream_id, 0);
-        var ks: [16]u8 = undefined;
-        var i: usize = 0;
-        while (i < buf.len) : (i += 16) {
-            keystreamBlock(key, &T, &ks);
-            const n = if (i + 16 <= buf.len) 16 else buf.len - i;
-            var k: usize = 0;
-            while (k < n) : (k += 1) buf[i + k] ^= ks[k];
-            mul_alpha(&T);
-        }
+
+    pub fn decrypt(ally: std.mem.Allocator, key: *const [32]u8, lsn: u64, enc: []u8) ![]u8 {
+        if (enc.len < Overhead) return error.CorruptCiphertext;
+        var nonce: [NonceBytes]u8 = undefined;
+        var tag: [TagBytes]u8 = undefined;
+        @memcpy(&nonce, enc[0..NonceBytes]);
+        @memcpy(&tag, enc[NonceBytes .. NonceBytes + TagBytes]);
+        const ciphertext = enc[Overhead..];
+        const aad = std.mem.asBytes(&lsn);
+        const out = try ally.alloc(u8, ciphertext.len);
+        crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ciphertext, tag, aad, nonce, key.*) catch {
+            ally.free(out);
+            return error.DecryptFailed;
+        };
+        return out;
     }
 };
 
@@ -308,15 +322,13 @@ pub const Wal = struct {
             header[0] = @intFromEnum(rec.typ);
             std.mem.writeInt(u64, header[1..9], rec.txn_id, .little);
             var payload_buf = rec.payload;
-            var tmp_owned: []u8 = &.{};
-            defer if (tmp_owned.len != 0) self.ally.free(tmp_owned);
+            var enc_owned: []u8 = &.{};
+            defer if (enc_owned.len != 0) self.ally.free(enc_owned);
             if (self.enc_enabled and rec.payload.len > 0) {
-                tmp_owned = try self.ally.alloc(u8, rec.payload.len);
-                @memcpy(tmp_owned, rec.payload);
-                Enc.xorcrypt(&self.enc_key, rec.lsn.value, tmp_owned);
-                payload_buf = tmp_owned;
+                enc_owned = try WalEnc.encrypt(self.ally, &self.enc_key, rec.lsn.value, rec.payload);
+                payload_buf = enc_owned;
             }
-            std.mem.writeInt(u32, header[9..13], @intCast(payload_buf.len), .little);
+            std.mem.writeInt(u32, header[9..13], @intCast(payload_buf.len), .little); // may be plaintext or encrypted length
             std.mem.writeInt(u64, header[13..21], rec.lsn.value, .little);
             std.mem.writeInt(u64, header[21..29], rec.prev_lsn, .little);
             std.mem.writeInt(u32, header[29..33], 0, .little); // zero before checksum
@@ -583,7 +595,14 @@ pub const Wal = struct {
             if (sent_val != 0xEC0DDBAD) break; // torn write or corruption
             // Decrypt payload if enabled
             if (self.enc_enabled and payload_slice.len > 0) {
-                Enc.xorcrypt(&self.enc_key, lsn_v, payload_slice);
+                // Decrypt into fresh buffer; free encrypted slice afterwards.
+                const dec = WalEnc.decrypt(self.ally, &self.enc_key, lsn_v, payload_slice) catch {
+                    // If decryption fails treat as corruption/truncated tail.
+                    if (payload_slice.len > 0) self.ally.free(payload_slice);
+                    break;
+                };
+                if (payload_slice.len > 0) self.ally.free(payload_slice);
+                payload_slice = dec;
             }
             var entry = try txn_map.getOrPut(txn_id);
             if (!entry.found_existing) entry.value_ptr.* = .{ .committed = false, .last_lsn = 0 };

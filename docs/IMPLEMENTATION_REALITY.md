@@ -57,19 +57,19 @@ LIMIT 100
 
 **Reality**: Raft consensus with federation
 
-### ⚠️ Security
+### ⚠️ Security (superseded draft section)
 
-**Reality**: Auth + RLS + audit. TDE & MFA now have incremental integration:
+**Reality**: Auth + RLS + audit. TDE & MFA further integrated since v0.18.0 draft:
 
-- TDE: AES-256-GCM page-level encryption integrated in `page_manager` via `page_encryption.zig` (data pages encrypted at rest when flag+key set); WAL still plaintext (pending), key rotation & KMS provider pending.
-- MFA: TOTP enrollment + recovery codes plus authentication enforcement path (`authenticateWithMFA`) requiring code when user.mfa_enabled and global toggle active.
+- TDE: AES-256-GCM page-level encryption integrated in `page_manager` (`page_encryption.zig`). WAL encryption now implemented (log segments encrypted with per-file nonce derivation). Key provider interface landed (env/static). Key rotation scaffold (min/max age scheduling) + encryption benchmarks (overhead sim + encrypt_pages skeleton) present; external KMS binding & real-path performance validation (<5% overhead) pending.
+- MFA: TOTP enrollment + recovery codes + two-phase authentication (`authenticate` -> possible `MFARequired` -> `authenticateWithMFA`) with recovery code single-use consumption implemented. Admin policy objects + evaluator present (role & attribute conditions); governance completeness (UI / extended conditions) pending. Session elevation (step-up) scaffolding + configurable TTL (`elevation_ttl_ms`) added. Enhanced audit events (issued/success/failure + recovery code consumed).
 
-- **Auth**: Username/password
+- **Auth**: Username/password + MFA path
 - **RLS**: Row-level security enforced
-- **Audit**: Query logging implemented
-- **TDE (Partial)**: Data pages encrypted (page size + 28 bytes overhead) when enabled; WAL encryption, key rotation, KMS provider, performance validation (<5% target) outstanding.
-- **MFA (Partial)**: Enrollment + enforced second factor (MFARequired -> authenticateWithMFA) for enabled users; admin policy governance & audit event granularity enhancements outstanding.
-- **Missing**: Key rotation, KMS provider, WAL encryption, MFA admin policy surfaces, per-session MFA reauth interval.
+- **Audit**: Extended (MFA challenge lifecycle events)
+- **TDE (Partial+)**: Data pages + WAL encrypted; key rotation scaffold (interfaces + scheduling) & benchmark skeletons present; missing: external KMS, real-path perf validation (<5% target)
+- **MFA (Partial+)**: Policies + audit + elevation metadata + recovery code consumption + configurable elevation TTL; missing: policy expansion, re-auth interval policy enforcement
+- **Missing**: External KMS integration, performance benchmark publication (real path), full MFA policy condition matrix, per-action sensitivity model for step-up
 - **2PC**: Cross-shard transactions (experimental)
 
 ## Partially Working Features
@@ -184,14 +184,13 @@ LIMIT 100
 ## Configuration That Actually Works
 
 ```bash
-# These environment variables actually do something
-GEODE_ENABLE_FEDERATION=1     # Enables distributed queries
-GEODE_ENABLE_CBO=1            # Enables optimizer (risky)
-GEODE_TRACE_OPTIMIZER=1       # Logs decisions (verbose)
+# Environment variables of interest (legacy feature toggles removed; features always on)
+GEODE_TRACE_OPTIMIZER=1       # Still respected: emits optimizer decision trace
 
-# These are checked but not fully implemented
-GEODE_ENABLE_TDE=1            # Prepared but not active
-GEODE_ENABLE_MFA=1            # Framework only
+# TDE activation now depends solely on supplying a disk key (GEODE_DISK_KEY_HEX) rather than a boolean flag.
+GEODE_DISK_KEY_HEX=<64 hex chars>   # Enables page+WAL encryption when present
+
+# MFA requires no enabling flag; configure policies/users directly.
 
 # S3 backup (actually works)
 AWS_ACCESS_KEY_ID=xxx

@@ -1,27 +1,9 @@
 const std = @import("std");
 
-// Parallel execution thread pool (minimal implementation for Zig 0.15.1).
-// Runtime gated by GEODE_ENABLE_PARALLEL or test override (enableForTests()).
+// Parallel execution thread pool (always enabled; feature flags removed).
 // CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=PARTIAL; TEST=tests/e2e_parallel_execution.zig:1; OWNER=engine; UPDATED=2025-09-26
 
-var test_override_enabled = std.atomic.Value(bool).init(false);
-
-fn runtimeEnabled() bool {
-    // Ignore allocation error => treat as disabled
-    return std.process.hasEnvVar(std.heap.page_allocator, "GEODE_ENABLE_PARALLEL") catch false;
-}
-
-fn effectiveEnabled() bool {
-    return runtimeEnabled() or test_override_enabled.load(.acquire);
-}
-
-pub fn enableForTests() void {
-    test_override_enabled.store(true, .release);
-}
-
-pub fn disableForTests() void {
-    test_override_enabled.store(false, .release);
-}
+// Legacy helpers removed; always active.
 
 pub const JobFn = *const fn (ctx: ?*anyopaque) void;
 pub const Job = struct { func: JobFn, ctx: ?*anyopaque };
@@ -83,11 +65,10 @@ pub const Pool = struct {
     cond: std.Thread.Condition = .{},
     shutdown: bool = false,
     active_jobs: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    enabled: bool = false,
+    enabled: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, worker_count: usize) !Pool {
-        var pool: Pool = .{ .allocator = allocator, .queue = .{}, .enabled = effectiveEnabled() };
-        if (!pool.enabled) return pool; // inert (disabled) pool
+        var pool: Pool = .{ .allocator = allocator, .queue = .{}, .enabled = true };
 
         const count = if (worker_count == 0) 1 else worker_count;
         pool.threads = try allocator.alloc(std.Thread, count);
@@ -99,7 +80,7 @@ pub const Pool = struct {
     }
 
     pub fn submit(self: *Pool, job: Job) !void {
-        if (!self.enabled) return error.FeatureDisabled;
+        // Always enabled; accept job.
         self.mutex.lock();
         defer self.mutex.unlock();
         try self.queue.append(self.allocator, job);

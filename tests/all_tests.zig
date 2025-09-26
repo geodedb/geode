@@ -12,6 +12,7 @@ const _e2e_mvcc_phantom = @import("e2e_protocol_mvcc_phantom.zig");
 const _e2e_sort_spill = @import("e2e_protocol_sort_spill.zig");
 const _e2e_wal_skip_ratio = @import("e2e_wal_skip_ratio.zig");
 const _e2e_protocol_wal_skip_ratio = @import("e2e_protocol_wal_skip_ratio.zig");
+const _unit_wal_encryption_round_trip = @import("unit_wal_encryption_round_trip.zig");
 const _e2e_protocol_groupby_hashagg = @import("e2e_protocol_groupby_hashagg.zig");
 const _e2e_protocol_txn_baseline = @import("e2e_protocol_txn_baseline.zig");
 const _e2e_setops_intersect_except = @import("e2e_setops_intersect_except.zig");

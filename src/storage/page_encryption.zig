@@ -31,7 +31,7 @@ fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
 }
 
 fn tdeEnabled() bool {
-    return std.process.hasEnvVar(std.heap.page_allocator, "GEODE_ENABLE_TDE") catch false;
+    return true;
 }
 
 // Page encryption strategy wrapper. Abstracts conditional AES-GCM encryption for data pages.
@@ -42,8 +42,7 @@ fn tdeEnabled() bool {
 pub const Overhead = NonceBytes + TagBytes; // 28
 
 pub fn shouldEncrypt() bool {
-    if (!tdeEnabled()) return false;
-    // Key presence check (len==64 hex) is deferred to encrypt path; lightweight probe here.
+    // Always attempt encryption if key present; feature flags removed.
     return std.process.hasEnvVar(std.heap.page_allocator, "GEODE_TDE_KEY") catch false;
 }
 

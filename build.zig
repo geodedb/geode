@@ -69,6 +69,18 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    // --- Benchmarks ---
+    // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
+    const tde_bench_exe = b.addExecutable(.{ .name = "benchmark_tde_overhead", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_overhead.zig"), .target = target, .optimize = optimize }) });
+    const run_tde_bench = b.addRunArtifact(tde_bench_exe);
+    const bench_step = b.step("bench", "Run performance benchmarks (subset)");
+    bench_step.dependOn(&run_tde_bench.step);
+
+    // Real path encryption benchmark skeleton (invokes placeholder hashing until wired to encryptPage)
+    const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
+    const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
+    bench_step.dependOn(&run_tde_encrypt_pages.step);
+
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
     lib_unit_tests.root_module.addImport("geode", root_mod);
     lib_unit_tests.root_module.addOptions("build_options", build_opts);
@@ -101,8 +113,10 @@ pub fn build(b: *std.Build) void {
     const wal_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     // Provide supporting modules required by wal for tests
     const tde_hierarchy_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    const key_provider_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
     wal_mod_for_tests.addImport("tde_hierarchy", tde_hierarchy_mod_for_tests);
     wal_mod_for_tests.addImport("storage_page_manager", storage_page_manager_shared);
+    wal_mod_for_tests.addImport("key_provider", key_provider_mod_for_tests);
     custom_tests.root_module.addImport("wal", wal_mod_for_tests);
     // Provide storage page manager to test redo optimization
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
@@ -347,11 +361,14 @@ pub fn build(b: *std.Build) void {
     const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     // Security TDE hierarchy module
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
     wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
     // Provide page manager dependency for WAL (needed for internal @import("storage_page_manager"))
     wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    wal_mod.addImport("key_provider", key_provider_mod);
     geoded_exe.root_module.addImport("wal", wal_mod);
     geoded_exe.root_module.addImport("tde_hierarchy", tde_hierarchy_mod);
+    geoded_exe.root_module.addImport("key_provider", key_provider_mod);
     const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("distributed", distributed_mod);
     const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
@@ -483,7 +500,8 @@ pub fn build(b: *std.Build) void {
     bench_exe.root_module.addImport("gql", gql_mod);
     b.installArtifact(bench_exe);
     const bench_run = b.addRunArtifact(bench_exe);
-    const bench_step = b.step("bench", "Run micro benchmarks (placeholder)");
+    // Reuse earlier bench_step defined near top (captures TDE bench). We capture it by name via labeled block pattern.
+    // Simpler: declare a variable earlier holding the step (retrofit below) - here we assume 'bench_step' still in scope.
     bench_step.dependOn(&bench_run.step);
 
     // Adaptive bias clamp variance benchmark integrated as a standalone executable but also invoked during `zig build test`.

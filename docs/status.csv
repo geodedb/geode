@@ -618,6 +618,13 @@ REQ-GQL-091,Client Server Arg Passthrough,CliErgonomics,TESTED,TestCANARY_REQ_GQ
 REQ-GQL-091,Client Server Arg Passthrough,Docs,TESTED,TestCANARY_REQ_GQL_091_ClientServerArgPassthrough,,client,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-2PC-001,Distributed 2PC,TXN,STUB,tests/e2e_2pc_distributed.zig:1,,txn,2025-09-26,src/txn/two_phase_commit.zig
 REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,e2e_graph_algorithms,,graph,2025-09-25,src/graph/builtin_algorithms.zig
+REQ-GQL-AUTH-001,User creation,SECURITY,PARTIAL,TestCANARY_REQ_GQL_AUTH_001_CreateUser,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_002_AuthPassword,,security,2025-09-26,tests/test_auth_mfa_flows.zig
+REQ-GQL-AUTH-002,Password authentication,SECURITY,PARTIAL,TestCANARY_REQ_GQL_AUTH_002_AuthPassword,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_003_AuthMFA,,security,2025-09-26,tests/test_auth_mfa_flows.zig
+REQ-GQL-AUTH-003,MFA authentication,SECURITY,PARTIAL,TestCANARY_REQ_GQL_AUTH_003_AuthMFA,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-004,MFA recovery code,SECURITY,PARTIAL,TestCANARY_REQ_GQL_AUTH_004_Recovery,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-004,MFA recovery code,TEST,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recovery,,security,2025-09-26,tests/test_recovery_codes.zig
 REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,e2e_cbo_toggle,,planner,2025-09-25,src/planner/cbo.zig
 REQ-GQL-CDC-SINKS,CDC External Sinks,KafkaWebhook,TESTED,e2e_cdc_sinks,,streaming,2025-09-25,src/cdc/sinks.zig
 REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,TESTED,,,core,2025-09-26,tests/unit_feature_flags.zig
@@ -628,12 +635,41 @@ REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,PARTIAL,tests/e2e_fts_advanced.zig:1,,sea
 REQ-GQL-MATCH,MATCH Engine,ComplexPatterns,TESTED,e2e_match_complex,,gql,2025-09-25,src/gql/match.zig
 REQ-GQL-MFA-001,MFA baseline,SECURITY,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/mfa.zig
 REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,TESTED,tests/unit_mfa_enforcement.zig:1,,security,2025-09-26,tests/unit_mfa_enforcement.zig
-REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,PARTIAL,tests/unit_mfa_enforcement.zig:1,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,,,security,2025-09-26,tests/test_mfa_policies.zig
+REQ-GQL-MFA-003,MFA admin policy,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-004,MFA challenge issued,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_004_IssuedFlow,,security,2025-09-26,tests/test_auth_mfa_flows.zig
+REQ-GQL-MFA-004,MFA challenge issued,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_004_Issued,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-005,MFA challenge success,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_005_SuccessFlow,,security,2025-09-26,tests/test_auth_mfa_flows.zig
+REQ-GQL-MFA-005,MFA challenge success,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_005_Success,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_006_FailureFlow,,security,2025-09-26,tests/test_auth_mfa_flows.zig
+REQ-GQL-MFA-006,MFA challenge failure,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_006_Failure,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-007,MFA recovery code used,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_007_RecoveryAudit,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-007,Session step-up metadata,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_007_StepUpMeta,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire,,security,2025-09-26,tests/test_session_step_up.zig
+REQ-GQL-MFA-008,Session step-up requirement,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_008_StepUpRequire,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_009_StepUpMark,,security,2025-09-26,tests/test_session_step_up.zig
+REQ-GQL-MFA-009,Session step-up mark,SECURITY,PARTIAL,TestCANARY_REQ_GQL_MFA_009_StepUpMark,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-010,ConfigurableElevationTTL,TEST,TESTED,TestCANARY_REQ_GQL_MFA_010_ElevationTTL,,security,2025-09-26,tests/test_session_elevation_policy.zig
 REQ-GQL-PARALLEL-001,Parallel Exec,ENGINE,PARTIAL,tests/e2e_parallel_execution.zig:1,,engine,2025-09-26,src/execution/parallel.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,e2e_raft_persist_snapshot_membership,,distributed,2025-09-25,src/distributed/raft_persistent.zig
+REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,SECURITY,STUB,tests/test_key_rotation.zig,,security,2025-09-26,src/security/key_rotation.zig
+REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,TEST,TESTED,tests/test_key_rotation.zig,,security,2025-09-26,src/security/key_rotation.zig
+REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,TEST,TESTED,TestCANARY_REQ_GQL_SEC_KEYROT_002_Schedule,,security,2025-09-26,tests/test_key_rotation_schedule.zig
+REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,SECURITY,PARTIAL,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave,,security,2025-09-26,src/security/key_rotation.zig
+REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave,,security,2025-09-26,tests/test_key_rotation_persistence.zig
+REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_NoFile,,security,2025-09-26,tests/test_key_rotation_persistence.zig
+REQ-GQL-SEC-KMS-001,KMSProviderScaffold,SECURITY,STUB,tests/test_kms_scaffold.zig,,security,2025-09-26,src/security/kms.zig
+REQ-GQL-SEC-TDE-OVERHEAD-001,TDEEncryptBenchmark,BENCH,PARTIAL,,BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001,security,2025-09-26,benchmarks/benchmark_tde_encrypt_pages.zig
 REQ-GQL-TDE-001,TDE baseline,SECURITY,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/security/tde.zig
 REQ-GQL-TDE-001,TDE baseline,TEST,TESTED,tests/test_tde_integration.zig:1,,security,2025-09-26,tests/test_tde_integration.zig
 REQ-GQL-TDE-001,TDE page encryption,STORAGE,PARTIAL,tests/e2e_security_tde_mfa.zig:1,,security,2025-09-26,src/storage/page_encryption.zig
+REQ-GQL-TDE-001,TDE performance benchmark,PERFORMANCE,PARTIAL,,BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead,security,2025-09-26,benchmarks/benchmark_tde_overhead.zig
+REQ-GQL-TDE-002,WAL encryption,STORAGE,PARTIAL,TestCANARY_REQ_GQL_TDE_002_WalEncryptionRoundTrip,,security,2025-09-26,src/wal/wal.zig
+REQ-GQL-TDE-002,WAL encryption,TEST,TESTED,,,security,2025-09-26,tests/unit_wal_encryption_round_trip.zig
+REQ-GQL-TDE-003,Key provider abstraction,SECURITY,PARTIAL,TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic,,security,2025-09-26,src/security/key_provider.zig
+REQ-GQL-TDE-004,MockKMSProvider,SECURITY,PARTIAL,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
+REQ-GQL-TDE-004,MockKMSProvider,TEST,TESTED,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
+REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,STUB,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2025-09-26,tests/benchmark_tde_overhead_smoke.zig
 REQ-GQL-XXX,...,...,...,...,...,...,...,tools/status_generate.py
 REQ-GQL-XXX,Name,Component,TESTED,TestCANARY_REQ_GQL_XXX_Feature,,team,2025-09-20,kb/CANARY_ADOPTION_SUMMARY.md
 REQ-GQL-XXX,name,aspect,status,test,bench,team,date,kb/CONSOLIDATED.md

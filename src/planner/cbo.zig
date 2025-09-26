@@ -9,21 +9,14 @@ const planner = @import("../planner.zig");
 
 // CANARY: REQ=REQ-GQL-CBO; FEATURE="Cost Based Optimizer"; ASPECT=CoreEngine; STATUS=TESTED; TEST=e2e_cbo_toggle; OWNER=planner; UPDATED=2025-09-25
 
-var cbo_test_override = std.atomic.Value(bool).init(false);
-
-pub fn enableForTests() void {
-    cbo_test_override.store(true, .release);
-}
-pub fn disableForTests() void {
-    cbo_test_override.store(false, .release);
-}
+// Test override removed; CBO always enabled.
 
 pub const CostBasedOptimizer = struct {
     allocator: std.mem.Allocator,
     stats_registry: *StatsRegistry,
     cardinality_estimator: *CardinalityEstimator,
     cost_model: *CostModel,
-    enabled: bool = false,
+    enabled: bool = true,
 
     pub fn init(allocator: std.mem.Allocator) !CostBasedOptimizer {
         const stats = try allocator.create(StatsRegistry);
@@ -35,19 +28,12 @@ pub const CostBasedOptimizer = struct {
         const cost = try allocator.create(CostModel);
         cost.* = CostModel.init(allocator, card_est);
 
-        // Check environment variable or test override
-        const enabled_env = if (std.process.getEnvVarOwned(allocator, "GEODE_ENABLE_CBO")) |val| blk: {
-            defer allocator.free(val);
-            break :blk std.mem.eql(u8, val, "1");
-        } else |_| false;
-        const enabled = enabled_env or cbo_test_override.load(.acquire);
-
         return .{
             .allocator = allocator,
             .stats_registry = stats,
             .cardinality_estimator = card_est,
             .cost_model = cost,
-            .enabled = enabled,
+            .enabled = true,
         };
     }
 

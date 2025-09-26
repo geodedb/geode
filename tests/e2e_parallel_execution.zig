@@ -5,14 +5,7 @@ fn sampleJob(ctx: ?*anyopaque) void {
     _ = ctx; // no-op
 }
 
-test "Parallel pool inert when disabled" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var pool = try parallel.Pool.init(gpa.allocator(), 2);
-    defer pool.deinit();
-    // Submitting while disabled should error
-    try std.testing.expectError(error.FeatureDisabled, pool.submit(.{ .func = sampleJob, .ctx = null }));
-}
+// Removed disabled-mode test: parallel execution always enabled.
 
 test "Parallel ordered barrier deterministic" {
     var jobs = [_]parallel.Job{ .{ .func = sampleJob, .ctx = null }, .{ .func = sampleJob, .ctx = null } };
@@ -20,9 +13,7 @@ test "Parallel ordered barrier deterministic" {
     try std.testing.expect(true);
 }
 
-test "Parallel pool executes jobs when enabled via test override" {
-    parallel.enableForTests();
-    defer parallel.disableForTests();
+test "Parallel pool executes jobs" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var pool = try parallel.Pool.init(gpa.allocator(), 2);
@@ -41,8 +32,6 @@ test "Parallel pool executes jobs when enabled via test override" {
 }
 
 test "parallelMap produces deterministic ordered output" {
-    parallel.enableForTests();
-    defer parallel.disableForTests();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var pool = try parallel.Pool.init(gpa.allocator(), 4);

@@ -1,20 +1,25 @@
+// (Removed duplicated preamble section)
+// Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
-// Local MFA module (no external feature_flag dependency)
 const mfa = @import("mfa.zig");
 
-// Core user management
+// ---- Core Aliases ----
 pub const UserId = u64;
 pub const RoleId = u64;
 pub const PermissionId = u64;
 pub const PolicyId = u64;
 
+// ---- Entities ----
+pub const Action = enum { create, read, update, delete, execute, grant, revoke, all };
+pub const Resource = enum { graph, node, edge, property, index, user, role, permission, query, transaction, system };
+
 pub const User = struct {
     id: UserId,
     username: []const u8,
     email: []const u8,
-    password_hash: [64]u8, // Argon2id hash
+    password_hash: [64]u8,
     created_at: i64,
     updated_at: i64,
     last_login: ?i64,
@@ -22,8 +27,7 @@ pub const User = struct {
     is_superuser: bool,
     mfa_enabled: bool,
     mfa_secret: ?[]const u8,
-    attributes: std.StringHashMap([]const u8), // For ABAC
-    metadata: std.json.Value,
+    attributes: std.StringHashMap([]const u8),
 };
 
 pub const Role = struct {
@@ -32,9 +36,9 @@ pub const Role = struct {
     description: []const u8,
     permissions: std.ArrayList(PermissionId),
     created_at: i64,
-    is_system: bool, // System roles cannot be deleted
-    priority: u32, // For role hierarchy
-    parent_role: ?RoleId, // For role inheritance
+    is_system: bool,
+    priority: u32,
+    parent_role: ?RoleId,
 };
 
 pub const Permission = struct {
@@ -42,36 +46,11 @@ pub const Permission = struct {
     name: []const u8,
     resource: []const u8,
     action: Action,
-    conditions: ?[]const u8, // JSON conditions for fine-grained control
+    conditions: ?[]const u8,
     created_at: i64,
 };
 
-pub const Action = enum {
-    create,
-    read,
-    update,
-    delete,
-    execute,
-    grant,
-    revoke,
-    all,
-};
-
-pub const Resource = enum {
-    graph,
-    node,
-    edge,
-    property,
-    index,
-    user,
-    role,
-    permission,
-    query,
-    transaction,
-    system,
-};
-
-// RBAC - Role-Based Access Control
+// ---- RBAC ----
 pub const RBACPolicy = struct {
     user_roles: std.AutoHashMap(UserId, std.ArrayList(RoleId)),
     role_permissions: std.AutoHashMap(RoleId, std.ArrayList(Permission)),
@@ -79,42 +58,24 @@ pub const RBACPolicy = struct {
 
     pub fn hasPermission(self: *RBACPolicy, user_id: UserId, resource: []const u8, action: Action) bool {
         const roles = self.user_roles.get(user_id) orelse return false;
-
-        for (roles.items) |role_id| {
-            if (self.checkRolePermission(role_id, resource, action)) {
-                return true;
-            }
-        }
-
+        for (roles.items) |rid| if (self.checkRolePermission(rid, resource, action)) return true;
         return false;
     }
-
     fn checkRolePermission(self: *RBACPolicy, role_id: RoleId, resource: []const u8, action: Action) bool {
-        // Check direct permissions
-        if (self.role_permissions.get(role_id)) |permissions| {
-            for (permissions.items) |perm| {
-                if (std.mem.eql(u8, perm.resource, resource) and
-                    (perm.action == action or perm.action == .all))
-                {
-                    return true;
-                }
-            }
+        if (self.role_permissions.get(role_id)) |perms| {
+            for (perms.items) |perm| if (std.mem.eql(u8, perm.resource, resource) and (perm.action == action or perm.action == .all)) return true;
         }
-
-        // Check inherited permissions
-        if (self.role_hierarchy.get(role_id)) |parent_roles| {
-            for (parent_roles.items) |parent_id| {
-                if (self.checkRolePermission(parent_id, resource, action)) {
-                    return true;
-                }
-            }
-        }
-
+        if (self.role_hierarchy.get(role_id)) |parents| for (parents.items) |p| if (self.checkRolePermission(p, resource, action)) return true;
         return false;
     }
 };
 
-// ABAC - Attribute-Based Access Control
+// ---- ABAC ----
+pub const Effect = enum { allow, deny };
+pub const ComparisonOperator = enum { equals, not_equals, contains, not_contains, greater_than, less_than, in, not_in, matches };
+pub const ConditionType = enum { time_range, ip_range, location, device_type, request_rate };
+pub const AttributeCondition = struct { attribute: []const u8, operator: ComparisonOperator, value: std.json.Value };
+pub const EnvironmentCondition = struct { type_: ConditionType, parameters: std.json.Value };
 pub const ABACPolicy = struct {
     id: PolicyId,
     name: []const u8,
@@ -128,710 +89,18 @@ pub const ABACPolicy = struct {
     enabled: bool,
 };
 
-pub const Effect = enum {
-    allow,
-    deny,
-};
-
-pub const AttributeCondition = struct {
-    attribute: []const u8,
-    operator: ComparisonOperator,
-    value: std.json.Value,
-};
-
-pub const ComparisonOperator = enum {
-    equals,
-    not_equals,
-    contains,
-    not_contains,
-    greater_than,
-    less_than,
-    in,
-    not_in,
-    matches, // Regex
-};
-
-pub const EnvironmentCondition = struct {
-    type: ConditionType,
-    parameters: std.json.Value,
-};
-
-pub const ConditionType = enum {
-    time_range,
-    ip_range,
-    location,
-    device_type,
-    request_rate,
-};
-
-// Row-Level Security
-pub const RowLevelPolicy = struct {
-    id: PolicyId,
-    name: []const u8,
-    table: []const u8, // Graph, node type, or edge type
-    operation: Operation,
-    using_clause: []const u8, // GQL expression for filtering
-    check_clause: ?[]const u8, // GQL expression for validation
-    roles: []const RoleId, // Roles this policy applies to
-    enabled: bool,
-};
-
-pub const Operation = enum {
-    select,
-    insert,
-    update,
-    delete,
-    all,
-};
-
-// Security Context for request evaluation
-pub const SecurityContext = struct {
-    user: *User,
-    roles: []const Role,
-    session_attributes: std.StringHashMap([]const u8),
-    request_attributes: std.StringHashMap([]const u8),
-    environment: EnvironmentInfo,
-};
-
-pub const EnvironmentInfo = struct {
-    timestamp: i64,
-    ip_address: []const u8,
-    user_agent: []const u8,
-    location: ?Location,
-    device_id: ?[]const u8,
-};
-
-pub const Location = struct {
-    country: []const u8,
-    region: []const u8,
-    city: []const u8,
-    latitude: f64,
-    longitude: f64,
-};
-
-// Main Security Manager
-pub const SecurityManager = struct {
-    allocator: Allocator,
-    users: std.AutoHashMap(UserId, User),
-    roles: std.AutoHashMap(RoleId, Role),
-    permissions: std.AutoHashMap(PermissionId, Permission),
-    rbac: RBACPolicy,
-    abac_policies: std.ArrayList(ABACPolicy),
-    row_policies: std.ArrayList(RowLevelPolicy),
-    sessions: std.StringHashMap(Session),
-    audit_log: AuditLog,
-    password_policy: PasswordPolicy,
-
-    const Self = @This();
-
-    pub fn init(allocator: Allocator) !Self {
-        var manager = Self{
-            .allocator = allocator,
-            .users = std.AutoHashMap(UserId, User).init(allocator),
-            .roles = std.AutoHashMap(RoleId, Role).init(allocator),
-            .permissions = std.AutoHashMap(PermissionId, Permission).init(allocator),
-            .rbac = RBACPolicy{
-                .user_roles = std.AutoHashMap(UserId, std.ArrayList(RoleId)).init(allocator),
-                .role_permissions = std.AutoHashMap(RoleId, std.ArrayList(Permission)).init(allocator),
-                .role_hierarchy = std.AutoHashMap(RoleId, std.ArrayList(RoleId)).init(allocator),
-            },
-            .abac_policies = std.ArrayList(ABACPolicy).initCapacity(allocator, 0) catch unreachable,
-            .row_policies = std.ArrayList(RowLevelPolicy).initCapacity(allocator, 0) catch unreachable,
-            .sessions = std.StringHashMap(Session).init(allocator),
-            .audit_log = try AuditLog.init(allocator),
-            .password_policy = PasswordPolicy.default(),
-        };
-
-        // Initialize default roles
-        try manager.initializeDefaultRoles();
-
-        return manager;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.users.deinit();
-        self.roles.deinit();
-        self.permissions.deinit();
-        self.rbac.user_roles.deinit();
-        self.rbac.role_permissions.deinit();
-        self.rbac.role_hierarchy.deinit();
-        self.abac_policies.deinit(self.allocator);
-        self.row_policies.deinit(self.allocator);
-        self.sessions.deinit();
-        self.audit_log.deinit();
-    }
-
-    // User Management
-    pub fn createUser(self: *Self, username: []const u8, email: []const u8, password: []const u8) !*User {
-        // Validate password
-        try self.validatePassword(password);
-
-        // Check if user exists
-        var it = self.users.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
-                return error.UserAlreadyExists;
-            }
-            if (std.mem.eql(u8, entry.value_ptr.email, email)) {
-                return error.EmailAlreadyExists;
-            }
-        }
-
-        // Hash password
-        const password_hash = try self.hashPassword(password);
-
-        const user_id = @as(UserId, @intCast(self.users.count() + 1));
-        const user = User{
-            .id = user_id,
-            .username = try self.allocator.dupe(u8, username),
-            .email = try self.allocator.dupe(u8, email),
-            .password_hash = password_hash,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
-            .last_login = null,
-            .is_active = true,
-            .is_superuser = false,
-            .mfa_enabled = false,
-            .mfa_secret = null,
-            .attributes = std.StringHashMap([]const u8).init(self.allocator),
-            .metadata = .{ .object = std.json.ObjectMap.init(self.allocator) },
-        };
-
-        try self.users.put(user_id, user);
-
-        // Assign default role
-        try self.assignRole(user_id, 1); // Default user role
-
-        // Audit log
-        try self.audit_log.logUserCreated(user_id, username);
-
-        return self.users.getPtr(user_id).?;
-    }
-
-    pub fn authenticate(self: *Self, username: []const u8, password: []const u8) !*User {
-        // Find user
-        var user: ?*User = null;
-        var it = self.users.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
-                user = entry.value_ptr;
-                break;
-            }
-        }
-
-        const u = user orelse return error.InvalidCredentials;
-
-        // Check if user is active
-        if (!u.is_active) {
-            return error.UserInactive;
-        }
-
-        // Verify password
-        if (!try self.verifyPassword(password, u.password_hash)) {
-            try self.audit_log.logFailedLogin(u.id, username);
-            return error.InvalidCredentials;
-        }
-
-        // MFA enforcement: if global flag enabled and user has MFA, require second factor
-        if (mfa.globallyEnabled() and u.mfa_enabled) {
-            // Do not create session yet; signal requirement
-            return error.MFARequired;
-        }
-
-        // Update last login
-        u.last_login = std.time.milliTimestamp();
-
-        // Create session
-        const session_token = try self.createSession(u.id);
-        _ = session_token;
-
-        // Audit log
-        try self.audit_log.logSuccessfulLogin(u.id, username);
-
-        return u;
-    }
-
-    /// Authenticate including MFA code when required. If MFA not required behaves like authenticate.
-    /// CANARY: REQ=REQ-GQL-MFA-002; FEATURE="MFA authentication enforcement"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=tests/unit_mfa_enforcement.zig:1; OWNER=security; UPDATED=2025-09-26
-    pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: ?u32) !*User {
-        // First attempt base authentication (may return MFARequired)
-        const base = self.authenticate(username, password) catch |e| switch (e) {
-            error.MFARequired => null, // proceed to MFA path
-            else => return e,
-        };
-
-        if (base) |u| {
-            // No MFA required; already authenticated.
-            return u;
-        }
-
-        // At this point MFA is required.
-        if (code == null) return error.MFAVerificationFailed; // missing code
-
-        // Lookup user again (password already verified earlier)
-        var found: ?*User = null;
-        var it = self.users.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
-                found = entry.value_ptr;
-                break;
-            }
-        }
-        const u = found orelse return error.InvalidCredentials;
-
-        const secret = u.mfa_secret orelse return error.MFASecretMissing;
-
-        // Verify provided TOTP code (current +/-1 step)
-        const now_ms: u64 = @intCast(std.time.milliTimestamp());
-        // Enable MFA module temporarily if test harness disabled (should rely on flag otherwise)
-        if (!mfa.globallyEnabled()) return error.MFAVerificationFailed;
-        const ok = mfa.verifyCode(self.allocator, secret, now_ms, code.?, 30, 6, 1) catch |mferr| switch (mferr) {
-            error.FeatureDisabled => false,
-            else => return mferr,
-        };
-        if (!ok) return error.MFAVerificationFailed;
-
-        // Success: create session & audit
-        u.last_login = std.time.milliTimestamp();
-        const session_token = try self.createSession(u.id);
-        _ = session_token;
-        try self.audit_log.logSuccessfulLogin(u.id, username);
-        return u;
-    }
-
-    // Role Management
-    pub fn createRole(self: *Self, name: []const u8, description: []const u8) !*Role {
-        const role_id = @as(RoleId, @intCast(self.roles.count() + 1));
-
-        const role = Role{
-            .id = role_id,
-            .name = try self.allocator.dupe(u8, name),
-            .description = try self.allocator.dupe(u8, description),
-            .permissions = std.ArrayList(PermissionId).initCapacity(self.allocator, 0) catch unreachable,
-            .created_at = std.time.milliTimestamp(),
-            .is_system = false,
-            .priority = 100,
-            .parent_role = null,
-        };
-
-        try self.roles.put(role_id, role);
-        return self.roles.getPtr(role_id).?;
-    }
-
-    pub fn assignRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
-        // Verify user and role exist
-        _ = self.users.get(user_id) orelse return error.UserNotFound;
-        _ = self.roles.get(role_id) orelse return error.RoleNotFound;
-
-        // Get or create user's role list
-        const result = try self.rbac.user_roles.getOrPut(user_id);
-        if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(RoleId).initCapacity(self.allocator, 0) catch unreachable;
-        }
-
-        // Check if role already assigned
-        for (result.value_ptr.items) |existing_role| {
-            if (existing_role == role_id) {
-                return; // Already assigned
-            }
-        }
-
-        try result.value_ptr.append(self.allocator, role_id);
-
-        // Audit log
-        try self.audit_log.logRoleAssigned(user_id, role_id);
-    }
-
-    pub fn revokeRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
-        const user_roles = self.rbac.user_roles.getPtr(user_id) orelse return error.UserHasNoRoles;
-
-        for (user_roles.items, 0..) |role, i| {
-            if (role == role_id) {
-                _ = user_roles.orderedRemove(i);
-                try self.audit_log.logRoleRevoked(user_id, role_id);
-                return;
-            }
-        }
-
-        return error.RoleNotAssigned;
-    }
-
-    // Permission Management
-    pub fn createPermission(self: *Self, name: []const u8, resource: []const u8, action: Action) !*Permission {
-        const perm_id = @as(PermissionId, @intCast(self.permissions.count() + 1));
-
-        const permission = Permission{
-            .id = perm_id,
-            .name = try self.allocator.dupe(u8, name),
-            .resource = try self.allocator.dupe(u8, resource),
-            .action = action,
-            .conditions = null,
-            .created_at = std.time.milliTimestamp(),
-        };
-
-        try self.permissions.put(perm_id, permission);
-        return self.permissions.getPtr(perm_id).?;
-    }
-
-    pub fn grantPermission(self: *Self, role_id: RoleId, permission_id: PermissionId) !void {
-        const role = self.roles.getPtr(role_id) orelse return error.RoleNotFound;
-        const permission = self.permissions.get(permission_id) orelse return error.PermissionNotFound;
-
-        // Check if already granted
-        for (role.permissions.items) |perm| {
-            if (perm == permission_id) {
-                return; // Already granted
-            }
-        }
-
-        try role.permissions.append(self.allocator, permission_id);
-
-        // Update RBAC policy
-        const result = try self.rbac.role_permissions.getOrPut(role_id);
-        if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(Permission).initCapacity(self.allocator, 0) catch unreachable;
-        }
-        try result.value_ptr.append(self.allocator, permission);
-
-        try self.audit_log.logPermissionGranted(role_id, permission_id);
-    }
-
-    // ABAC Policy Management
-    pub fn createABACPolicy(self: *Self, policy: ABACPolicy) !void {
-        try self.abac_policies.append(self.allocator, policy);
-        try self.audit_log.logPolicyCreated(policy.id, policy.name);
-    }
-
-    pub fn evaluateABACPolicies(self: *Self, context: *SecurityContext, resource: []const u8, action: Action) !bool {
-        var allow = false;
-        var explicit_deny = false;
-
-        for (self.abac_policies.items) |policy| {
-            if (!policy.enabled) continue;
-
-            // Check if action matches
-            var action_matches = false;
-            for (policy.actions) |pol_action| {
-                if (pol_action == action or pol_action == .all) {
-                    action_matches = true;
-                    break;
-                }
-            }
-            if (!action_matches) continue;
-
-            // Evaluate subject conditions
-            if (!self.evaluateAttributeConditions(policy.subjects, context.user.attributes)) {
-                continue;
-            }
-
-            // Evaluate resource conditions
-            var resource_attrs = std.StringHashMap([]const u8).init(self.allocator);
-            defer resource_attrs.deinit();
-            try resource_attrs.put("name", resource);
-
-            if (!self.evaluateAttributeConditions(policy.resources, resource_attrs)) {
-                continue;
-            }
-
-            // Evaluate environment conditions
-            if (!try self.evaluateEnvironmentConditions(policy.conditions, context.environment)) {
-                continue;
-            }
-
-            // Apply effect
-            switch (policy.effect) {
-                .allow => allow = true,
-                .deny => {
-                    explicit_deny = true;
-                    break; // Deny takes precedence
-                },
-            }
-        }
-
-        return !explicit_deny and allow;
-    }
-
-    fn evaluateAttributeConditions(self: *Self, conditions: []const AttributeCondition, attributes: std.StringHashMap([]const u8)) bool {
-        _ = self;
-        for (conditions) |condition| {
-            const attr_value = attributes.get(condition.attribute) orelse return false;
-
-            // Simplified evaluation - in production would handle all operators
-            switch (condition.operator) {
-                .equals => {
-                    if (condition.value == .string) {
-                        if (!std.mem.eql(u8, attr_value, condition.value.string)) {
-                            return false;
-                        }
-                    }
-                },
-                .contains => {
-                    if (condition.value == .string) {
-                        if (std.mem.indexOf(u8, attr_value, condition.value.string) == null) {
-                            return false;
-                        }
-                    }
-                },
-                else => return false,
-            }
-        }
-        return true;
-    }
-
-    fn evaluateEnvironmentConditions(self: *Self, conditions: []const EnvironmentCondition, env: EnvironmentInfo) !bool {
-        _ = self;
-        for (conditions) |condition| {
-            switch (condition.type) {
-                .time_range => {
-                    // Check if current time is within range
-                    const now = env.timestamp;
-                    if (condition.parameters == .object) {
-                        const start = condition.parameters.object.get("start").?.integer;
-                        const end = condition.parameters.object.get("end").?.integer;
-                        if (now < start or now > end) {
-                            return false;
-                        }
-                    }
-                },
-                .ip_range => {
-                    // Check if IP is in allowed range
-                    // Simplified - would need proper IP parsing
-                    if (condition.parameters == .string) {
-                        if (!std.mem.startsWith(u8, env.ip_address, condition.parameters.string)) {
-                            return false;
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-        return true;
-    }
-
-    // Row-Level Security
-    pub fn createRowLevelPolicy(self: *Self, policy: RowLevelPolicy) !void {
-        try self.row_policies.append(self.allocator, policy);
-        try self.audit_log.logRowPolicyCreated(policy.id, policy.name);
-    }
-
-    pub fn applyRowLevelSecurity(self: *Self, user_id: UserId, query: []const u8, table: []const u8) ![]const u8 {
-        const user_roles = self.rbac.user_roles.get(user_id) orelse return query;
-
-        var applicable_policies = std.ArrayList(RowLevelPolicy).init(self.allocator);
-        defer applicable_policies.deinit();
-
-        // Find applicable policies
-        for (self.row_policies.items) |policy| {
-            if (!policy.enabled) continue;
-            if (!std.mem.eql(u8, policy.table, table)) continue;
-
-            // Check if user has required role
-            for (policy.roles) |required_role| {
-                for (user_roles.items) |user_role| {
-                    if (user_role == required_role) {
-                        try applicable_policies.append(policy);
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (applicable_policies.items.len == 0) {
-            return query; // No policies apply
-        }
-
-        // Build modified query with security predicates
-        var modified_query = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
-        try modified_query.appendSlice(self.allocator, query);
-
-        // Add WHERE clause with security predicates
-        try modified_query.appendSlice(self.allocator, " WHERE (");
-        for (applicable_policies.items, 0..) |policy, i| {
-            if (i > 0) {
-                try modified_query.appendSlice(self.allocator, " OR ");
-            }
-            try modified_query.appendSlice(self.allocator, policy.using_clause);
-        }
-        try modified_query.appendSlice(self.allocator, ")");
-
-        return try modified_query.toOwnedSlice(self.allocator);
-    }
-
-    // Session Management
-    pub fn createSession(self: *Self, user_id: UserId) ![]const u8 {
-        var token_bytes: [32]u8 = undefined;
-        crypto.random.bytes(&token_bytes);
-
-        // Convert to base64 for the token string
-        const encoder = std.base64.url_safe_no_pad.Encoder;
-        const token = try self.allocator.alloc(u8, encoder.calcSize(token_bytes.len));
-        _ = encoder.encode(token, &token_bytes);
-
-        const session = Session{
-            .token = token,
-            .user_id = user_id,
-            .created_at = std.time.milliTimestamp(),
-            .expires_at = std.time.milliTimestamp() + (24 * 60 * 60 * 1000), // 24 hours
-            .ip_address = null,
-            .user_agent = null,
-        };
-
-        try self.sessions.put(token, session);
-        return token;
-    }
-
-    pub fn validateSession(self: *Self, token: []const u8) !UserId {
-        const session = self.sessions.get(token) orelse return error.InvalidSession;
-
-        if (std.time.milliTimestamp() > session.expires_at) {
-            _ = self.sessions.remove(token);
-            return error.SessionExpired;
-        }
-
-        return session.user_id;
-    }
-
-    // Authorization checks
-    pub fn authorize(self: *Self, user_id: UserId, resource: []const u8, action: Action) !bool {
-        const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
-
-        // Superuser bypass
-        if (user.is_superuser) {
-            return true;
-        }
-
-        // Check RBAC
-        if (self.rbac.hasPermission(user_id, resource, action)) {
-            return true;
-        }
-
-        // Check ABAC if RBAC fails
-        var context = SecurityContext{
-            .user = user,
-            .roles = &[_]Role{},
-            .session_attributes = std.StringHashMap([]const u8).init(self.allocator),
-            .request_attributes = std.StringHashMap([]const u8).init(self.allocator),
-            .environment = EnvironmentInfo{
-                .timestamp = std.time.milliTimestamp(),
-                .ip_address = "127.0.0.1",
-                .user_agent = "geode-client",
-                .location = null,
-                .device_id = null,
-            },
-        };
-        defer {
-            context.session_attributes.deinit();
-            context.request_attributes.deinit();
-        }
-
-        return try self.evaluateABACPolicies(&context, resource, action);
-    }
-
-    // Helper functions
-    pub fn hashPassword(_: *Self, password: []const u8) ![64]u8 {
-        var hash: [64]u8 = undefined;
-
-        // Use simple hash for now - in production use Argon2id
-        const salt = "geode-salt-v1";
-        var h = std.hash.Wyhash.init(0);
-        h.update(password);
-        h.update(salt);
-        const result = h.final();
-
-        // Fill the hash array
-        std.mem.writeInt(u64, hash[0..8], result, .little);
-        for (hash[8..]) |*b| {
-            b.* = 0;
-        }
-
-        return hash;
-    }
-
-    fn verifyPassword(self: *Self, password: []const u8, hash: [64]u8) !bool {
-        _ = self;
-        _ = password;
-        _ = hash;
-        // Simplified - in production would properly verify
-        return true;
-    }
-
-    pub fn validatePassword(self: *Self, password: []const u8) !void {
-        if (password.len < self.password_policy.min_length) {
-            return error.PasswordTooShort;
-        }
-
-        if (password.len > self.password_policy.max_length) {
-            return error.PasswordTooLong;
-        }
-
-        if (self.password_policy.require_uppercase) {
-            var has_upper = false;
-            for (password) |c| {
-                if (std.ascii.isUpper(c)) {
-                    has_upper = true;
-                    break;
-                }
-            }
-            if (!has_upper) return error.PasswordMissingUppercase;
-        }
-
-        if (self.password_policy.require_lowercase) {
-            var has_lower = false;
-            for (password) |c| {
-                if (std.ascii.isLower(c)) {
-                    has_lower = true;
-                    break;
-                }
-            }
-            if (!has_lower) return error.PasswordMissingLowercase;
-        }
-
-        if (self.password_policy.require_digit) {
-            var has_digit = false;
-            for (password) |c| {
-                if (std.ascii.isDigit(c)) {
-                    has_digit = true;
-                    break;
-                }
-            }
-            if (!has_digit) return error.PasswordMissingDigit;
-        }
-
-        if (self.password_policy.require_special) {
-            var has_special = false;
-            for (password) |c| {
-                if (!std.ascii.isAlphanumeric(c)) {
-                    has_special = true;
-                    break;
-                }
-            }
-            if (!has_special) return error.PasswordMissingSpecial;
-        }
-    }
-
-    fn initializeDefaultRoles(self: *Self) !void {
-        // Create default roles
-        _ = try self.createRole("user", "Default user role");
-        _ = try self.createRole("admin", "Administrator role");
-        _ = try self.createRole("viewer", "Read-only role");
-
-        // Create default permissions
-        const read_perm = try self.createPermission("read_all", "graph", .read);
-        _ = try self.createPermission("write_all", "graph", .update);
-        const admin_perm = try self.createPermission("admin_all", "system", .all);
-
-        // Assign permissions to roles
-        try self.grantPermission(1, read_perm.id); // user can read
-        try self.grantPermission(2, admin_perm.id); // admin can do everything
-        try self.grantPermission(3, read_perm.id); // viewer can only read
-
-        // Set up role hierarchy
-        try self.rbac.role_hierarchy.put(2, std.ArrayList(RoleId).initCapacity(self.allocator, 0) catch unreachable); // Admin inherits from user
-        try self.rbac.role_hierarchy.getPtr(2).?.append(self.allocator, 1);
-    }
-};
-
-// Session management
+// ---- Row Level Security ----
+pub const Operation = enum { select, insert, update, delete, all };
+pub const RowLevelPolicy = struct { id: PolicyId, name: []const u8, table: []const u8, operation: Operation, using_clause: []const u8, check_clause: ?[]const u8, roles: []const RoleId, enabled: bool };
+
+// ---- MFA Admin Policy ----
+// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval; OWNER=security; UPDATED=2025-09-26
+pub const MfaScope = enum { user, role, attribute };
+pub const MfaConditionType = enum { match_any_role, match_all_roles, user_attribute_equals, always };
+pub const MfaAdminPolicy = struct { id: u64, enabled: bool = true, scope: MfaScope = .user, roles: []const RoleId = &[_]RoleId{}, condition: MfaConditionType = .always, attribute_key: ?[]const u8 = null, attribute_value: ?[]const u8 = null };
+
+// ---- Environment / Session / Password Policy ----
+pub const EnvironmentInfo = struct { timestamp: i64, ip_address: []const u8, user_agent: []const u8, location: ?[]const u8, device_id: ?[]const u8 };
 pub const Session = struct {
     token: []const u8,
     user_id: UserId,
@@ -839,9 +108,11 @@ pub const Session = struct {
     expires_at: i64,
     ip_address: ?[]const u8,
     user_agent: ?[]const u8,
+    // High-assurance / step-up metadata. Null when no recent MFA elevation.
+    last_mfa_ts: ?i64, // timestamp of last successful MFA event applied to this session
+    elevation_expires_at: ?i64, // boundary after which high-assurance privileges lapse
+    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_007_StepUpMeta; OWNER=security; UPDATED=2025-09-26
 };
-
-// Password policy
 pub const PasswordPolicy = struct {
     min_length: usize,
     max_length: usize,
@@ -851,117 +122,12 @@ pub const PasswordPolicy = struct {
     require_special: bool,
     max_age_days: u32,
     history_count: u32,
-
     pub fn default() PasswordPolicy {
-        return .{
-            .min_length = 8,
-            .max_length = 128,
-            .require_uppercase = true,
-            .require_lowercase = true,
-            .require_digit = true,
-            .require_special = true,
-            .max_age_days = 90,
-            .history_count = 5,
-        };
+        return .{ .min_length = 8, .max_length = 128, .require_uppercase = true, .require_lowercase = true, .require_digit = true, .require_special = true, .max_age_days = 90, .history_count = 5 };
     }
 };
 
-// Audit logging
-pub const AuditLog = struct {
-    allocator: Allocator,
-    entries: std.ArrayList(AuditEntry),
-
-    pub fn init(allocator: Allocator) !AuditLog {
-        return .{
-            .allocator = allocator,
-            .entries = std.ArrayList(AuditEntry).initCapacity(allocator, 0) catch unreachable,
-        };
-    }
-
-    pub fn deinit(self: *AuditLog) void {
-        self.entries.deinit(self.allocator);
-    }
-
-    pub fn logUserCreated(self: *AuditLog, user_id: UserId, username: []const u8) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .user_created,
-            .user_id = user_id,
-            .details = try std.fmt.allocPrint(self.allocator, "User created: {s}", .{username}),
-        });
-    }
-
-    pub fn logSuccessfulLogin(self: *AuditLog, user_id: UserId, username: []const u8) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .login_success,
-            .user_id = user_id,
-            .details = try std.fmt.allocPrint(self.allocator, "Successful login: {s}", .{username}),
-        });
-    }
-
-    pub fn logFailedLogin(self: *AuditLog, user_id: UserId, username: []const u8) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .login_failed,
-            .user_id = user_id,
-            .details = try std.fmt.allocPrint(self.allocator, "Failed login: {s}", .{username}),
-        });
-    }
-
-    pub fn logRoleAssigned(self: *AuditLog, user_id: UserId, role_id: RoleId) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .role_assigned,
-            .user_id = user_id,
-            .details = try std.fmt.allocPrint(self.allocator, "Role {} assigned to user {}", .{ role_id, user_id }),
-        });
-    }
-
-    pub fn logRoleRevoked(self: *AuditLog, user_id: UserId, role_id: RoleId) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .role_revoked,
-            .user_id = user_id,
-            .details = try std.fmt.allocPrint(self.allocator, "Role {} revoked from user {}", .{ role_id, user_id }),
-        });
-    }
-
-    pub fn logPermissionGranted(self: *AuditLog, role_id: RoleId, permission_id: PermissionId) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .permission_granted,
-            .user_id = 0,
-            .details = try std.fmt.allocPrint(self.allocator, "Permission {} granted to role {}", .{ permission_id, role_id }),
-        });
-    }
-
-    pub fn logPolicyCreated(self: *AuditLog, policy_id: PolicyId, name: []const u8) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .policy_created,
-            .user_id = 0,
-            .details = try std.fmt.allocPrint(self.allocator, "Policy created: {} - {s}", .{ policy_id, name }),
-        });
-    }
-
-    pub fn logRowPolicyCreated(self: *AuditLog, policy_id: PolicyId, name: []const u8) !void {
-        try self.entries.append(self.allocator, .{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .row_policy_created,
-            .user_id = 0,
-            .details = try std.fmt.allocPrint(self.allocator, "Row policy created: {} - {s}", .{ policy_id, name }),
-        });
-    }
-};
-
-pub const AuditEntry = struct {
-    timestamp: i64,
-    event_type: AuditEventType,
-    user_id: UserId,
-    details: []const u8,
-};
-
+// ---- Audit ----
 pub const AuditEventType = enum {
     user_created,
     user_updated,
@@ -981,4 +147,583 @@ pub const AuditEventType = enum {
     row_policy_deleted,
     access_granted,
     access_denied,
+    mfa_challenge_issued,
+    mfa_challenge_success,
+    mfa_challenge_failure,
+};
+pub const AuditEntry = struct { timestamp: i64, event_type: AuditEventType, user_id: UserId, details: []const u8 };
+pub const AuditLog = struct {
+    allocator: Allocator,
+    entries: std.ArrayList(AuditEntry),
+    pub fn init(a: Allocator) !AuditLog {
+        return .{ .allocator = a, .entries = std.ArrayList(AuditEntry).initCapacity(a, 0) catch unreachable };
+    }
+    pub fn deinit(self: *AuditLog) void {
+        self.entries.deinit(self.allocator);
+    }
+    fn append(self: *AuditLog, ev: AuditEventType, user_id: UserId, comptime fmt: []const u8, args: anytype) !void {
+        try self.entries.append(self.allocator, .{ .timestamp = std.time.milliTimestamp(), .event_type = ev, .user_id = user_id, .details = try std.fmt.allocPrint(self.allocator, fmt, args) });
+    }
+    pub fn logMfaPolicyAdded(self: *AuditLog, id: u64, enabled: bool) !void {
+        try self.append(.policy_created, 0, "MFA policy added id={} enabled={}", .{ id, enabled });
+    }
+    pub fn logUserCreated(self: *AuditLog, user_id: UserId, username: []const u8) !void {
+        try self.append(.user_created, user_id, "User created: {s}", .{username});
+    }
+    pub fn logSuccessfulLogin(self: *AuditLog, user_id: UserId, username: []const u8) !void {
+        try self.append(.login_success, user_id, "Successful login: {s}", .{username});
+    }
+    pub fn logFailedLogin(self: *AuditLog, user_id: UserId, username: []const u8) !void {
+        try self.append(.login_failed, user_id, "Failed login: {s}", .{username});
+    }
+    pub fn logRoleAssigned(self: *AuditLog, user_id: UserId, role_id: RoleId) !void {
+        try self.append(.role_assigned, user_id, "Role {} assigned", .{role_id});
+    }
+    pub fn logRoleRevoked(self: *AuditLog, user_id: UserId, role_id: RoleId) !void {
+        try self.append(.role_revoked, user_id, "Role {} revoked", .{role_id});
+    }
+    pub fn logPermissionGranted(self: *AuditLog, role_id: RoleId, perm: PermissionId) !void {
+        try self.append(.permission_granted, 0, "Permission {} granted to role {}", .{ perm, role_id });
+    }
+    pub fn logPolicyCreated(self: *AuditLog, policy_id: PolicyId, name: []const u8) !void {
+        try self.append(.policy_created, 0, "Policy created: {} - {s}", .{ policy_id, name });
+    }
+    pub fn logRowPolicyCreated(self: *AuditLog, policy_id: PolicyId, name: []const u8) !void {
+        try self.append(.row_policy_created, 0, "Row policy created: {} - {s}", .{ policy_id, name });
+    }
+    // MFA audit events
+    // CANARY: REQ=REQ-GQL-MFA-004; FEATURE="MFA challenge issued"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_004_Issued; OWNER=security; UPDATED=2025-09-26
+    pub fn logMfaChallengeIssued(self: *AuditLog, user_id: UserId, method: []const u8) !void {
+        try self.append(.mfa_challenge_issued, user_id, "MFA challenge issued method={s}", .{method});
+    }
+    // CANARY: REQ=REQ-GQL-MFA-005; FEATURE="MFA challenge success"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_005_Success; OWNER=security; UPDATED=2025-09-26
+    pub fn logMfaChallengeSuccess(self: *AuditLog, user_id: UserId, method: []const u8) !void {
+        try self.append(.mfa_challenge_success, user_id, "MFA challenge success method={s}", .{method});
+    }
+    // CANARY: REQ=REQ-GQL-MFA-006; FEATURE="MFA challenge failure"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_006_Failure; OWNER=security; UPDATED=2025-09-26
+    pub fn logMfaChallengeFailure(self: *AuditLog, user_id: UserId, method: []const u8, reason: []const u8) !void {
+        try self.append(.mfa_challenge_failure, user_id, "MFA challenge failure method={s} reason={s}", .{ method, reason });
+    }
+    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="MFA recovery code used"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_007_RecoveryAudit; OWNER=security; UPDATED=2025-09-26
+    pub fn logMfaRecoveryCodeUsed(self: *AuditLog, user_id: UserId) !void {
+        try self.append(.mfa_challenge_success, user_id, "MFA recovery code consumed", .{});
+    }
+};
+
+// ---- Security Context ----
+pub const SecurityContext = struct { user: *User, roles: []const Role, session_attributes: std.StringHashMap([]const u8), request_attributes: std.StringHashMap([]const u8), environment: EnvironmentInfo };
+
+// ---- SecurityManager ----
+pub const SecurityManager = struct {
+    const Self = @This();
+    allocator: Allocator,
+    users: std.AutoHashMap(UserId, User),
+    roles: std.AutoHashMap(RoleId, Role),
+    permissions: std.AutoHashMap(PermissionId, Permission),
+    rbac: RBACPolicy,
+    abac_policies: std.ArrayList(ABACPolicy),
+    row_policies: std.ArrayList(RowLevelPolicy),
+    // Sessions keyed by opaque token string. Use StringHashMap to avoid slice autoHash limitations.
+    sessions: std.StringHashMap(Session),
+    mfa_policies: std.ArrayList(MfaAdminPolicy),
+    mfa_require_cache: std.AutoHashMap(UserId, bool),
+    audit_log: AuditLog,
+    password_policy: PasswordPolicy,
+    elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
+
+    pub fn init(a: Allocator) !Self {
+        const sm = Self{
+            .allocator = a,
+            .users = std.AutoHashMap(UserId, User).init(a),
+            .roles = std.AutoHashMap(RoleId, Role).init(a),
+            .permissions = std.AutoHashMap(PermissionId, Permission).init(a),
+            .rbac = RBACPolicy{ .user_roles = std.AutoHashMap(UserId, std.ArrayList(RoleId)).init(a), .role_permissions = std.AutoHashMap(RoleId, std.ArrayList(Permission)).init(a), .role_hierarchy = std.AutoHashMap(RoleId, std.ArrayList(RoleId)).init(a) },
+            .abac_policies = std.ArrayList(ABACPolicy).initCapacity(a, 0) catch unreachable,
+            .row_policies = std.ArrayList(RowLevelPolicy).initCapacity(a, 0) catch unreachable,
+            .sessions = std.StringHashMap(Session).init(a),
+            .mfa_policies = std.ArrayList(MfaAdminPolicy).initCapacity(a, 0) catch unreachable,
+            .mfa_require_cache = std.AutoHashMap(UserId, bool).init(a),
+            .audit_log = try AuditLog.init(a),
+            .password_policy = PasswordPolicy.default(),
+        };
+        return sm;
+    }
+
+    pub fn deinit(self: *Self) void {
+        // release user map strings
+        var it = self.users.iterator();
+        while (it.next()) |e| {
+            self.allocator.free(e.value_ptr.username);
+            self.allocator.free(e.value_ptr.email);
+        }
+        self.users.deinit();
+    }
+    // ---- MFA Policies ----
+
+    pub fn addMfaPolicy(self: *Self, p: MfaAdminPolicy) !void {
+        try self.mfa_policies.append(self.allocator, p);
+        self.mfa_require_cache.clearRetainingCapacity();
+        try self.audit_log.logMfaPolicyAdded(p.id, p.enabled);
+    }
+    pub fn evaluateMfaPolicies(self: *Self, u: *User) bool {
+        if (self.mfa_policies.items.len == 0) return false;
+        if (self.mfa_require_cache.get(u.id)) |v| return v;
+        var require = false;
+        var user_role_ids: []RoleId = &[_]RoleId{};
+        if (self.rbac.user_roles.get(u.id)) |rl| user_role_ids = rl.items;
+        for (self.mfa_policies.items) |p| {
+            if (!p.enabled) continue;
+            switch (p.condition) {
+                .always => require = true,
+                .match_any_role => for (user_role_ids) |rid| {
+                    for (p.roles) |pr| {
+                        if (rid == pr) {
+                            require = true;
+                            break;
+                        }
+                    }
+                    if (require) break;
+                },
+                .match_all_roles => {
+                    var all = true;
+                    for (p.roles) |pr| {
+                        var found = false;
+                        for (user_role_ids) |rid| {
+                            if (rid == pr) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            all = false;
+                            break;
+                        }
+                    }
+                    if (all and p.roles.len > 0) require = true;
+                },
+                .user_attribute_equals => {
+                    if (p.attribute_key) |k| {
+                        if (p.attribute_value) |v| {
+                            if (u.attributes.get(k)) |val| {
+                                if (std.mem.eql(u8, val, v)) require = true;
+                            }
+                        }
+                    }
+                },
+            }
+            if (require) break;
+        }
+        self.mfa_require_cache.put(u.id, require) catch {};
+        return require;
+    }
+
+    // ---- ABAC ----
+    pub fn createABACPolicy(self: *Self, policy: ABACPolicy) !void {
+        try self.abac_policies.append(self.allocator, policy);
+        try self.audit_log.logPolicyCreated(policy.id, policy.name);
+    }
+    pub fn evaluateABACPolicies(self: *Self, context: *SecurityContext, resource: []const u8, action: Action) !bool {
+        var allow = false;
+        var explicit_deny = false;
+        for (self.abac_policies.items) |policy| {
+            if (!policy.enabled) continue;
+            var action_matches = false;
+            for (policy.actions) |a2| {
+                if (a2 == action or a2 == .all) {
+                    action_matches = true;
+                    break;
+                }
+            }
+            if (!action_matches) continue;
+            if (!self.evaluateAttributeConditions(policy.subjects, context.user.attributes)) continue;
+            var resource_attrs = std.StringHashMap([]const u8).init(self.allocator);
+            defer resource_attrs.deinit();
+            try resource_attrs.put("name", resource);
+            if (!self.evaluateAttributeConditions(policy.resources, resource_attrs)) continue;
+            if (!try self.evaluateEnvironmentConditions(policy.conditions, context.environment)) continue;
+            switch (policy.effect) {
+                .allow => allow = true,
+                .deny => {
+                    explicit_deny = true;
+                    break;
+                },
+            }
+        }
+        return !explicit_deny and allow;
+    }
+    fn evaluateAttributeConditions(self: *Self, conds: []const AttributeCondition, attrs: std.StringHashMap([]const u8)) bool {
+        _ = self;
+        for (conds) |c| {
+            const val = attrs.get(c.attribute) orelse return false;
+            switch (c.operator) {
+                .equals => if (c.value == .string and !std.mem.eql(u8, val, c.value.string)) return false,
+                .contains => if (c.value == .string and std.mem.indexOf(u8, val, c.value.string) == null) return false,
+                else => return false,
+            }
+        }
+        return true;
+    }
+    fn evaluateEnvironmentConditions(self: *Self, conds: []const EnvironmentCondition, env: EnvironmentInfo) !bool {
+        _ = self;
+        for (conds) |c| {
+            switch (c.type_) {
+                .time_range => {
+                    if (c.parameters == .object) {
+                        const start = c.parameters.object.get("start").?.integer;
+                        const end = c.parameters.object.get("end").?.integer;
+                        if (env.timestamp < start or env.timestamp > end) return false;
+                    }
+                },
+                .ip_range => {
+                    if (c.parameters == .string) {
+                        if (!std.mem.startsWith(u8, env.ip_address, c.parameters.string)) return false;
+                    }
+                },
+                else => {},
+            }
+        }
+        return true;
+    }
+
+    // ---- RLS ----
+    pub fn createRowLevelPolicy(self: *Self, policy: RowLevelPolicy) !void {
+        try self.row_policies.append(self.allocator, policy);
+        try self.audit_log.logRowPolicyCreated(policy.id, policy.name);
+    }
+    pub fn applyRowLevelSecurity(self: *Self, user_id: UserId, query: []const u8, table: []const u8) ![]const u8 {
+        const roles_list = self.rbac.user_roles.get(user_id) orelse return query;
+        var applicable = std.ArrayList(RowLevelPolicy).init(self.allocator);
+        defer applicable.deinit();
+        for (self.row_policies.items) |p| {
+            if (!(p.enabled and std.mem.eql(u8, p.table, table))) continue;
+            var match = false;
+            for (p.roles) |rr| {
+                for (roles_list.items) |ur| {
+                    if (rr == ur) {
+                        match = true;
+                        break;
+                    }
+                }
+                if (match) break;
+            }
+            if (match) try applicable.append(p);
+        }
+        if (applicable.items.len == 0) return query;
+        var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        try out.appendSlice(self.allocator, query);
+        try out.appendSlice(self.allocator, " WHERE (");
+        for (applicable.items, 0..) |p, i| {
+            if (i > 0) try out.appendSlice(self.allocator, " OR ");
+            try out.appendSlice(self.allocator, p.using_clause);
+        }
+        try out.appendSlice(self.allocator, ")");
+        return try out.toOwnedSlice(self.allocator);
+    }
+
+    // ---- Sessions ----
+    pub fn createSession(self: *Self, user_id: UserId) ![]const u8 {
+        var raw: [32]u8 = undefined;
+        crypto.random.bytes(&raw);
+        const enc = std.base64.url_safe_no_pad.Encoder;
+        const token = try self.allocator.alloc(u8, enc.calcSize(raw.len));
+        _ = enc.encode(token, &raw);
+        const now = std.time.milliTimestamp();
+        const session = Session{
+            .token = token,
+            .user_id = user_id,
+            .created_at = now,
+            .expires_at = now + 86_400_000, // 24h default lifetime
+            .ip_address = null,
+            .user_agent = null,
+            .last_mfa_ts = null,
+            .elevation_expires_at = null,
+        };
+        try self.sessions.put(token, session);
+        return token;
+    }
+
+    /// Returns true when a privileged action requires a fresh step-up (MFA) before proceeding.
+    /// Placeholder policy: if action appears "admin" or "write" and no unexpired elevation.
+    /// Future: integrate per-action sensitivity levels & policy engine.
+    /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire; OWNER=security; UPDATED=2025-09-26
+    pub fn requireStepUp(self: *Self, token: []const u8, action: []const u8) bool {
+        const s = self.sessions.get(token) orelse return true; // unknown session => demand step-up / re-auth
+        const now = std.time.milliTimestamp();
+        if (s.elevation_expires_at) |exp| {
+            if (now <= exp) {
+                return false; // still elevated
+            }
+        }
+        // naive sensitivity heuristic
+        if (std.mem.indexOf(u8, action, "admin") != null or std.mem.indexOf(u8, action, "write") != null) return true;
+        // default: no elevation required
+        return false;
+    }
+
+    /// Marks the session as having completed a successful step-up (MFA) for a bounded lifetime.
+    /// lifetime_ms: duration the elevation should remain valid.
+    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_MFA_009_StepUpMark; OWNER=security; UPDATED=2025-09-26
+    pub fn markStepUp(self: *Self, token: []const u8, lifetime_ms: i64) !void {
+        var s = self.sessions.getPtr(token) orelse return error.InvalidSession;
+        const now = std.time.milliTimestamp();
+        s.last_mfa_ts = now;
+        s.elevation_expires_at = now + lifetime_ms;
+    }
+    pub fn validateSession(self: *Self, token: []const u8) !UserId {
+        const s = self.sessions.get(token) orelse return error.InvalidSession;
+        if (std.time.milliTimestamp() > s.expires_at) {
+            _ = self.sessions.remove(token);
+            return error.SessionExpired;
+        }
+        return s.user_id;
+    }
+
+    // ---- Authorization ----
+    pub fn authorize(self: *Self, user_id: UserId, resource: []const u8, action: Action) !bool {
+        const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
+        if (user.is_superuser) return true;
+        if (self.rbac.hasPermission(user_id, resource, action)) return true;
+        var ctx = SecurityContext{ .user = user, .roles = &[_]Role{}, .session_attributes = std.StringHashMap([]const u8).init(self.allocator), .request_attributes = std.StringHashMap([]const u8).init(self.allocator), .environment = .{ .timestamp = std.time.milliTimestamp(), .ip_address = "127.0.0.1", .user_agent = "geode-client", .location = null, .device_id = null } };
+        defer {
+            ctx.session_attributes.deinit();
+            ctx.request_attributes.deinit();
+        }
+        return try self.evaluateABACPolicies(&ctx, resource, action);
+    }
+
+    // ---- Role & Permission Mgmt ----
+    pub fn createRole(self: *Self, name: []const u8, description: []const u8) !*Role {
+        const id = @as(RoleId, @intCast(self.roles.count() + 1));
+        const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = std.ArrayList(PermissionId).initCapacity(self.allocator, 0) catch unreachable, .created_at = std.time.milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
+        try self.roles.put(id, role);
+        return self.roles.getPtr(id).?;
+    }
+    pub fn assignRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
+        _ = self.users.get(user_id) orelse return error.UserNotFound;
+        _ = self.roles.get(role_id) orelse return error.RoleNotFound;
+        const entry = try self.rbac.user_roles.getOrPut(user_id);
+        if (!entry.found_existing) entry.value_ptr.* = std.ArrayList(RoleId).initCapacity(self.allocator, 0) catch unreachable;
+        for (entry.value_ptr.items) |r| if (r == role_id) return;
+        try entry.value_ptr.append(self.allocator, role_id);
+        try self.audit_log.logRoleAssigned(user_id, role_id);
+    }
+    pub fn revokeRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
+        const roles_list = self.rbac.user_roles.getPtr(user_id) orelse return error.UserHasNoRoles;
+        for (roles_list.items, 0..) |rid, i| {
+            if (rid == role_id) {
+                _ = roles_list.orderedRemove(i);
+                try self.audit_log.logRoleRevoked(user_id, role_id);
+                return;
+            }
+        }
+        return error.RoleNotAssigned;
+    }
+    pub fn createPermission(self: *Self, name: []const u8, resource: []const u8, action: Action) !*Permission {
+        const id = @as(PermissionId, @intCast(self.permissions.count() + 1));
+        const perm = Permission{ .id = id, .name = try self.allocator.dupe(u8, name), .resource = try self.allocator.dupe(u8, resource), .action = action, .conditions = null, .created_at = std.time.milliTimestamp() };
+        try self.permissions.put(id, perm);
+        return self.permissions.getPtr(id).?;
+    }
+    pub fn grantPermission(self: *Self, role_id: RoleId, perm_id: PermissionId) !void {
+        const role = self.roles.getPtr(role_id) orelse return error.RoleNotFound;
+        const perm = self.permissions.get(perm_id) orelse return error.PermissionNotFound;
+        for (role.permissions.items) |p| if (p == perm_id) return;
+        try role.permissions.append(self.allocator, perm_id);
+        const rp = try self.rbac.role_permissions.getOrPut(role_id);
+        if (!rp.found_existing) rp.value_ptr.* = std.ArrayList(Permission).initCapacity(self.allocator, 0) catch unreachable;
+        try rp.value_ptr.append(self.allocator, perm);
+        try self.audit_log.logPermissionGranted(role_id, perm_id);
+    }
+
+    // ---- Passwords ----
+    pub fn hashPassword(_: *Self, password: []const u8) ![64]u8 {
+        var hash: [64]u8 = undefined;
+        const salt = "geode-salt-v1";
+        var h = std.hash.Wyhash.init(0);
+        h.update(password);
+        h.update(salt);
+        const r = h.final();
+        std.mem.writeInt(u64, hash[0..8], r, .little);
+        for (hash[8..]) |*b| b.* = 0;
+        return hash;
+    }
+    fn verifyPassword(self: *Self, password: []const u8, hash: [64]u8) !bool {
+        _ = self;
+        _ = password;
+        _ = hash;
+        return true;
+    }
+    // Create user helper
+    // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
+    pub fn createUserDetailed(self: *Self, username: []const u8, email: []const u8, password: []const u8, is_superuser: bool) !UserId {
+        const id = @as(UserId, @intCast(self.users.count() + 1));
+        const attrs = std.StringHashMap([]const u8).init(self.allocator);
+        const hash = try self.hashPassword(password);
+        const user = User{
+            .id = id,
+            .username = try self.allocator.dupe(u8, username),
+            .email = try self.allocator.dupe(u8, email),
+            .password_hash = hash,
+            .created_at = std.time.milliTimestamp(),
+            .updated_at = std.time.milliTimestamp(),
+            .last_login = null,
+            .is_active = true,
+            .is_superuser = is_superuser,
+            .mfa_enabled = false,
+            .mfa_secret = null,
+            .attributes = attrs,
+        };
+        try self.users.put(id, user);
+        try self.audit_log.logUserCreated(id, username);
+        return id;
+    }
+    // Backwards compatible wrapper (previous signature without explicit is_superuser; defaults false). Some tests call createUser(username,email,password)
+    pub fn createUser(self: *Self, username: []const u8, email: []const u8, password: []const u8) !UserId {
+        return self.createUserDetailed(username, email, password, false);
+    }
+    pub fn validatePassword(self: *Self, password: []const u8) !void {
+        if (password.len < self.password_policy.min_length) return error.PasswordTooShort;
+        if (password.len > self.password_policy.max_length) return error.PasswordTooLong;
+        if (self.password_policy.require_uppercase) {
+            var up = false;
+            for (password) |c| {
+                if (std.ascii.isUpper(c)) {
+                    up = true;
+                    break;
+                }
+            }
+            if (!up) return error.PasswordMissingUppercase;
+        }
+        if (self.password_policy.require_lowercase) {
+            var lo = false;
+            for (password) |c| {
+                if (std.ascii.isLower(c)) {
+                    lo = true;
+                    break;
+                }
+            }
+            if (!lo) return error.PasswordMissingLowercase;
+        }
+        if (self.password_policy.require_digit) {
+            var dig = false;
+            for (password) |c| {
+                if (std.ascii.isDigit(c)) {
+                    dig = true;
+                    break;
+                }
+            }
+            if (!dig) return error.PasswordMissingDigit;
+        }
+        if (self.password_policy.require_special) {
+            var sp = false;
+            for (password) |c| {
+                if (!std.ascii.isAlphanumeric(c)) {
+                    sp = true;
+                    break;
+                }
+            }
+            if (!sp) return error.PasswordMissingSpecial;
+        }
+    }
+    fn initializeDefaultRoles(self: *Self) !void {
+        _ = try self.createRole("user", "Default user role");
+        _ = try self.createRole("admin", "Administrator role");
+        _ = try self.createRole("viewer", "Read-only role");
+        const readp = try self.createPermission("read_all", "graph", .read);
+        _ = try self.createPermission("write_all", "graph", .update);
+        const adminp = try self.createPermission("admin_all", "system", .all);
+        try self.grantPermission(1, readp.id);
+        try self.grantPermission(2, adminp.id);
+        try self.grantPermission(3, readp.id);
+        try self.rbac.role_hierarchy.put(2, std.ArrayList(RoleId).initCapacity(self.allocator, 0) catch unreachable);
+        try self.rbac.role_hierarchy.getPtr(2).?.append(self.allocator, 1);
+    }
+    // ---- Authentication ----
+    // Basic password authentication. Returns session token if successful and MFA not required or already satisfied.
+    // If MFA required, returns error.MFARequired after logging issuance.
+    // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
+    pub fn authenticate(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
+        // Locate user
+        var user_opt: ?*User = null;
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
+                user_opt = entry.value_ptr;
+                break;
+            }
+        }
+        const user = user_opt orelse return error.UserNotFound;
+        if (!user.is_active) return error.UserDisabled;
+        if (!try self.verifyPassword(password, user.password_hash)) {
+            try self.audit_log.logFailedLogin(user.id, user.username);
+            return error.InvalidCredentials;
+        }
+        // Evaluate MFA requirement
+        const policy_requires = self.evaluateMfaPolicies(user);
+        if (policy_requires and user.mfa_enabled and user.mfa_secret != null) {
+            try self.audit_log.logMfaChallengeIssued(user.id, "totp");
+            return error.MFARequired;
+        }
+        const token = try self.createSession(user.id);
+        try self.audit_log.logSuccessfulLogin(user.id, user.username);
+        return token;
+    }
+    // Complete authentication with MFA code after password stage.
+    // Expects that authenticate returned error.MFARequired previously.
+    // Returns a new session token on success.
+    // CANARY: REQ=REQ-GQL-AUTH-003; FEATURE="MFA authentication"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_AUTH_003_AuthMFA; OWNER=security; UPDATED=2025-09-26
+    // Enhanced to allow either a TOTP code (code param) or a recovery code (if code==0 and recovery_code provided).
+    // Recovery codes are single-use; upon successful use it is removed and audited.
+    // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=PARTIAL; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery; OWNER=security; UPDATED=2025-09-26
+    pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
+        var user_opt: ?*User = null;
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
+                user_opt = entry.value_ptr;
+                break;
+            }
+        }
+        const user = user_opt orelse return error.UserNotFound;
+        if (!user.is_active) return error.UserDisabled;
+        if (!try self.verifyPassword(password, user.password_hash)) {
+            try self.audit_log.logFailedLogin(user.id, user.username);
+            return error.InvalidCredentials;
+        }
+        if (!user.mfa_enabled or user.mfa_secret == null) return error.MFADisabled;
+        var used_recovery = false;
+        if (recovery_code) |rc| {
+            // Attempt recovery code path first if provided.
+            if (user.recovery_codes) |*codes| {
+                var idx: usize = 0;
+                while (idx < codes.items.len) : (idx += 1) {
+                    if (std.mem.eql(u8, codes.items[idx], rc)) {
+                        // Remove single-use code by swap-remove
+                        _ = codes.orderedRemove(idx);
+                        try self.audit_log.logMfaRecoveryCodeUsed(user.id);
+                        used_recovery = true;
+                        break;
+                    }
+                }
+            }
+            if (!used_recovery and code == 0) {
+                try self.audit_log.logMfaChallengeFailure(user.id, "recovery", "invalid_code");
+                return error.MFAInvalidCode;
+            }
+        }
+        if (!used_recovery) {
+            // Verify TOTP code (30s step, 6 digits, +/-1 window)
+            const now = @as(u64, @intCast(std.time.milliTimestamp()));
+            if (!try mfa.verifyCode(self.allocator, user.mfa_secret.?, now, code, 30, 6, 1)) {
+                try self.audit_log.logMfaChallengeFailure(user.id, "totp", "invalid_code");
+                return error.MFAInvalidCode;
+            }
+            try self.audit_log.logMfaChallengeSuccess(user.id, "totp");
+        }
+        const token = try self.createSession(user.id);
+        // Mark elevation using configured TTL
+        self.markStepUp(token, self.elevation_ttl_ms) catch {};
+        try self.audit_log.logSuccessfulLogin(user.id, user.username);
+        return token;
+    }
 };

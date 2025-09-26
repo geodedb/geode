@@ -8,7 +8,7 @@
 
 - **Complete MATCH Engine**: Complex patterns, nested OPTIONAL, filtered variable-length paths
 - **DML Operations**: INSERT/UPDATE/DELETE for nodes/edges with RLS enforcement
-- **Cost-Based Optimizer v1**: Statistics, cardinality estimation, join reordering (GEODE_ENABLE_CBO=1)
+- **Cost-Based Optimizer v1**: Statistics, cardinality estimation, join reordering (always on; legacy GEODE_ENABLE_CBO removed)
 - **CDC External Sinks**: Kafka and Webhook with at-least-once delivery, retry, DLQ
 - **Raft Persistence**: Durable log, snapshots, compaction, dynamic membership
 - **Graph Algorithms**: shortestPath() and pageRank() as GQL functions
@@ -101,7 +101,7 @@ Counts originate from the CANARY scanner (`status.csv` authoritative) and are cr
 **QUIC+TLS is mandatory** - no TCP fallback:
 
 ```json
-{"component":"transport","transport":"quic","tls":"true","port":8443}
+{ "component": "transport", "transport": "quic", "tls": "true", "port": 8443 }
 ```
 
 If certificates don't exist in `certs/`, they are auto-generated with secure permissions (0600).
@@ -118,6 +118,7 @@ Full multi-process Raft implementation:
 ```
 
 Features:
+
 - Automatic leader election (randomized 150-300ms timeout)
 - Log replication with quorum commit
 - Automatic failover on leader failure
@@ -135,7 +136,7 @@ Row-level security is enforced via planner rewrite:
 SELECT * FROM employees;
 
 -- After RLS rewrite (automatic)
-SELECT * FROM employees WHERE tenant_id = current_tenant() 
+SELECT * FROM employees WHERE tenant_id = current_tenant()
   AND department IN (SELECT dept FROM user_permissions WHERE user_id = current_user());
 ```
 
@@ -163,6 +164,7 @@ REFRESH MATERIALIZED VIEW sales_summary;
 ```
 
 Features:
+
 - Complete refresh (full recomputation)
 - Incremental refresh (CDC-based delta application)
 - Single-flight locking (prevents concurrent refreshes)
@@ -182,6 +184,7 @@ zig build -Drelease-safe  # Everything included
 ```
 
 Runtime kill-switches (non-transport features only):
+
 ```bash
 export GEODE_DISABLE_RLS=1          # Testing only
 export GEODE_MV_REFRESH_INTERVAL=60 # Seconds

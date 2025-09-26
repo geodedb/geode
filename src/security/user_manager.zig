@@ -51,7 +51,7 @@ pub const UserManager = struct {
 
     pub fn createUser(self: *Self, request: CreateUserRequest) !CreateUserResponse {
         // Create the user
-        const user = try self.security_manager.createUser(
+        const user_id = try self.security_manager.createUser(
             request.username,
             request.email,
             request.password,
@@ -71,7 +71,7 @@ pub const UserManager = struct {
                 }
 
                 if (role_id) |id| {
-                    try self.security_manager.assignRole(user.id, id);
+                    try self.security_manager.assignRole(user_id, id);
                 }
             }
         }
@@ -82,7 +82,8 @@ pub const UserManager = struct {
                 var attr_it = attrs.object.iterator();
                 while (attr_it.next()) |entry| {
                     if (entry.value_ptr.* == .string) {
-                        try user.attributes.put(
+                        const user_ptr = self.security_manager.users.getPtr(user_id).?;
+                        try user_ptr.attributes.put(
                             try self.allocator.dupe(u8, entry.key_ptr.*),
                             try self.allocator.dupe(u8, entry.value_ptr.string),
                         );
@@ -93,15 +94,17 @@ pub const UserManager = struct {
 
         // Set metadata if provided
         if (request.metadata) |meta| {
-            user.metadata = meta;
+            // Metadata field removed from auth.User in current schema; ignore or store elsewhere (TODO).
+            _ = meta;
         }
 
         // Persist to storage
-        try self.persistUser(user.*);
+        const user_ptr2 = self.security_manager.users.getPtr(user_id).?;
+        try self.persistUser(user_ptr2.*);
 
         // Build response
         var response_roles = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
-        if (self.security_manager.rbac.user_roles.get(user.id)) |user_roles| {
+        if (self.security_manager.rbac.user_roles.get(user_id)) |user_roles| {
             for (user_roles.items) |role_id| {
                 if (self.security_manager.roles.get(role_id)) |role| {
                     try response_roles.append(self.allocator, role.name);
@@ -110,10 +113,10 @@ pub const UserManager = struct {
         }
 
         return CreateUserResponse{
-            .user_id = user.id,
-            .username = user.username,
-            .email = user.email,
-            .created_at = user.created_at,
+            .user_id = user_id,
+            .username = self.security_manager.users.getPtr(user_id).?.username,
+            .email = self.security_manager.users.getPtr(user_id).?.email,
+            .created_at = self.security_manager.users.getPtr(user_id).?.created_at,
             .roles = try response_roles.toOwnedSlice(self.allocator),
         };
     }
@@ -170,7 +173,7 @@ pub const UserManager = struct {
         }
 
         if (request.metadata) |meta| {
-            user.metadata = meta;
+            _ = meta; // metadata deprecated
         }
 
         user.updated_at = std.time.milliTimestamp();

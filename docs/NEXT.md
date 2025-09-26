@@ -16,35 +16,37 @@
 1. **Transparent Data Encryption (TDE)**
 
    - (Progress) AES-256-GCM primitive + page-level encryption integrated (flag gated)
-   - WAL encryption (pending)
-   - Key provider interface (KMS ready design)
+   - WAL encryption (landed)
+   - Key provider interface (landed; env/static provider, KMS extension pending)
    - Performance target: <5% overhead (benchmark pending)
-   - Backup/restore key handling
-   - Key rotation & KMS integration
+   - Backup/restore key handling (design drafting)
+   - Key rotation scaffold (landed: key_registry interfaces; scheduling logic w/ min/max age)
+   - KMS integration (pending)
+   - Performance target: <5% overhead (benchmarks: overhead sim + encrypt_pages skeleton; real path wiring pending)
 
 2. **Multi-Factor Authentication (MFA)**
-   - (Progress) TOTP + recovery scratch codes + session enforcement path (authenticateWithMFA)
-   - Admin policy controls & enforcement (pending)
-   - Expanded audit logging (per MFA challenge) (pending)
-   - Step-up & re-auth policies (pending)
+   - (Progress) TOTP + recovery scratch codes + authentication path (authenticate / authenticateWithMFA incl. recovery code consumption)
+   - Admin policy controls & enforcement (partial: policy objects + evaluator; governance UI & full conditions pending)
+   - Expanded audit logging (MFA issued/success/failure + recovery code consumption)
+   - Step-up & re-auth policies (partial scaffolding: session elevation metadata + requireStepUp/markStepUp)
 
 ### P1 - Performance & Scale
 
-3. **Full-Text Search Enhancements**
+1. **Full-Text Search Enhancements**
 
    - (Partial in v0.18) Phrase, proximity, basic highlighting (flag gated)
    - Pluggable analyzers (language-specific)
    - BM25 scoring & ranking
    - Fragment configuration & multi-field support
 
-4. **Multi-threaded Query Execution**
+2. **Multi-threaded Query Execution**
 
    - (Partial in v0.18) Thread pool + deterministic ordered parallelMap
    - Expand to Expand/Filter/Join operators
    - Work-stealing + adaptive chunk sizing
    - Determinism guarantees for ordered queries
 
-5. **Distributed Write Path**
+3. **Distributed Write Path**
    - Federation for INSERT/UPDATE/DELETE
    - Cross-shard transaction coordination
    - Conflict resolution strategies
@@ -52,14 +54,14 @@
 
 ### P2 - Developer Experience
 
-6. **Schema Evolution**
+1. **Schema Evolution**
 
    - Online DDL operations
    - Backward-compatible migrations
    - Version tracking
    - Rollback capabilities
 
-7. **Query Performance Insights**
+2. **Query Performance Insights**
    - Query plan cache statistics
    - Slow query log with analysis
    - Index recommendations
