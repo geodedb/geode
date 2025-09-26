@@ -17,7 +17,9 @@ pub const RotationPolicy = struct {
 pub const DataKeyRef = struct {
     id: u64, // monotonically increasing key identifier (LSN anchor)
     created_unix_epoch: i64,
-    material: [32]u8, // 256-bit AES key material
+    material: [32]u8, // 256-bit AES key material (plaintext in memory)
+    envelope_json: ?[]u8 = null, // wrapped key envelope (KMS) if present (owned by registry allocator)
+    is_wrapped: bool = false,
 };
 
 pub const RotationEvent = struct {
@@ -33,13 +35,27 @@ pub const KeyRegistry = struct {
     history: std.ArrayList(DataKeyRef),
     // persisted state path (optional)
     state_path: ?[]const u8 = null,
+    kms_seed: ?u64 = null, // deterministic seed for simulated external KMS
+    remote_kms_host: ?[]const u8 = null,
+    remote_kms_port: ?u16 = null,
 
     pub fn init(allocator: *std.mem.Allocator) KeyRegistry {
-        return .{ .allocator = allocator, .history = std.ArrayList(DataKeyRef).init(allocator), .state_path = null };
+        return .{ .allocator = allocator, .history = std.ArrayList(DataKeyRef).init(allocator), .state_path = null, .kms_seed = null, .remote_kms_host = null, .remote_kms_port = null };
     }
 
     pub fn deinit(self: *KeyRegistry) void {
+        // free any envelope json slices
+        for (self.history.items) |*ref| if (ref.envelope_json) |ej| self.allocator.free(ej);
         self.history.deinit();
+    }
+
+    pub fn setKmsSeed(self: *KeyRegistry, seed: u64) void {
+        self.kms_seed = seed;
+    }
+
+    pub fn setRemoteKms(self: *KeyRegistry, host: []const u8, port: u16) void {
+        self.remote_kms_host = host;
+        self.remote_kms_port = port;
     }
 
     pub fn loadActiveDataKey(self: *KeyRegistry) !DataKeyRef {
@@ -52,6 +68,8 @@ pub const KeyRegistry = struct {
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
             .created_unix_epoch = std.time.timestamp(),
             .material = undefined,
+            .envelope_json = null,
+            .is_wrapped = false,
         };
         r.bytes(&key.material);
         try self.history.append(key);
@@ -68,6 +86,8 @@ pub const KeyRegistry = struct {
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
             .created_unix_epoch = std.time.timestamp(),
             .material = undefined,
+            .envelope_json = null,
+            .is_wrapped = false,
         };
         r.bytes(&key.material);
         try self.history.append(key);
@@ -75,13 +95,69 @@ pub const KeyRegistry = struct {
         return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = std.time.timestamp(), .method = .manual };
     }
 
+    pub fn rotateWithKms(self: *KeyRegistry) !RotationEvent {
+        if (self.kms_seed == null) return error.KmsNotConfigured;
+        const old = self.active;
+        var prng = std.rand.DefaultPrng.init(self.kms_seed.? ^ @as(u64, @intCast(self.history.items.len + 1)) * 0x9E3779B97F4A7C15);
+        var plaintext: [32]u8 = undefined;
+        prng.random().bytes(&plaintext);
+        // simulate KMS wrap using external_kms_client deterministic seed (kms_seed)
+        const kms = @import("external_kms_client.zig");
+        var client = kms.Client.init(self.allocator.*, self.kms_seed.?);
+        const env = try client.wrap(plaintext);
+        const env_json = try kms.envelopeToJson(env, self.allocator.*);
+        const key_ref: DataKeyRef = .{
+            .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
+            .created_unix_epoch = std.time.timestamp(),
+            .material = plaintext,
+            .envelope_json = env_json,
+            .is_wrapped = true,
+        };
+        try self.history.append(key_ref);
+        self.active = key_ref;
+        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key_ref.id, .ts = std.time.timestamp(), .method = .manual };
+    }
+
+    pub fn rotateWithRemoteKms(self: *KeyRegistry) !RotationEvent {
+        if (self.remote_kms_host == null or self.remote_kms_port == null) return error.RemoteKmsNotConfigured;
+        const host = self.remote_kms_host.?;
+        const port = self.remote_kms_port.?;
+        const kms_remote = @import("kms_remote.zig");
+        var client = kms_remote.RemoteKmsClient.init(self.allocator.*);
+        // Best-effort connect; propagate error if fails
+        try client.connect(host, port);
+        // Request generate envelope
+        const env = try client.generate();
+        // We cannot unwrap remotely without plaintext; for now treat ct as opaque and store envelope only.
+        // Mark is_wrapped=true and leave material zeroed (future: request plaintext via privileged unwrap).
+        const zero: [32]u8 = [_]u8{0} ** 32;
+        var env_json_buf = std.ArrayList(u8).init(self.allocator.*);
+        defer env_json_buf.deinit();
+        try env_json_buf.writer().print("{", .{}); // minimal re-serialization using external client helpers would be better; reuse envelopeToJson path via external client module for consistency in future
+        // For brevity, reuse kms_remote internal printer by reconstructing JSON (lossless enough for test)
+        env_json_buf.clearRetainingCapacity();
+        // Simpler: call external_kms_client.envelopeToJson since schema same
+        const ekc = @import("external_kms_client.zig");
+        const env_json = try ekc.envelopeToJson(.{ .nonce = env.nonce, .tag = env.tag, .ct = env.ct, .version = env.version, .alg = env.alg }, self.allocator.*);
+        const key_ref: DataKeyRef = .{ .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1, .created_unix_epoch = std.time.timestamp(), .material = zero, .envelope_json = env_json, .is_wrapped = true };
+        try self.history.append(key_ref);
+        self.active = key_ref;
+        return .{ .old_id = 0, .new_id = key_ref.id, .ts = std.time.timestamp(), .method = .manual };
+    }
+
     pub fn saveState(self: *KeyRegistry, path: []const u8) !void {
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         var w = file.writer();
-        // Compute checksum over concatenated materials (simple SHA-256 then first 16 hex chars)
+        // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
         var h = std.crypto.hash.sha2.Sha256.init(.{});
-        for (self.history.items) |entry| h.update(&entry.material);
+        for (self.history.items) |entry| {
+            if (entry.is_wrapped and entry.envelope_json) |ej| {
+                h.update(ej);
+            } else {
+                h.update(&entry.material);
+            }
+        }
         var digest: [32]u8 = undefined;
         h.final(&digest);
         var checksum_buf: [16]u8 = undefined;
@@ -101,9 +177,15 @@ pub const KeyRegistry = struct {
         var i: usize = 0;
         while (i < self.history.items.len) : (i += 1) {
             const hist_entry = self.history.items[i];
-            try w.print("    {\"id\":{},\"created\":{},\"material_hex\":\"", .{ hist_entry.id, hist_entry.created_unix_epoch });
-            for (hist_entry.material) |b| try w.print("{x:0>2}", .{b});
-            try w.print("\"}}{s}\n", .{if (i + 1 == self.history.items.len) "" else ","});
+            if (hist_entry.is_wrapped and hist_entry.envelope_json) |ej| {
+                try w.print("    {\"id\":{},\"created\":{},\"envelope\":", .{ hist_entry.id, hist_entry.created_unix_epoch });
+                // envelope JSON already object; write raw
+                try w.print("{s}}}{s}\n", .{ ej, if (i + 1 == self.history.items.len) "" else "," });
+            } else {
+                try w.print("    {\"id\":{},\"created\":{},\"material_hex\":\"", .{ hist_entry.id, hist_entry.created_unix_epoch });
+                for (hist_entry.material) |b| try w.print("{x:0>2}", .{b});
+                try w.print("\"}}{s}\n", .{if (i + 1 == self.history.items.len) "" else ","});
+            }
         }
         try w.print("  ]\n}}\n", .{});
     }
@@ -130,7 +212,7 @@ pub const KeyRegistry = struct {
                 if (!std.mem.startsWith(u8, tail, "null")) {
                     const id_val = std.fmt.parseInt(u64, tail, 10) catch continue;
                     // active will be resolved after reading history
-                    self.active = .{ .id = id_val, .created_unix_epoch = 0, .material = [_]u8{0} ** 32 };
+                    self.active = .{ .id = id_val, .created_unix_epoch = 0, .material = [_]u8{0} ** 32, .envelope_json = null, .is_wrapped = false };
                 }
             } else if (std.mem.indexOf(u8, line, "\"checksum\"")) |_| {
                 // extract checksum hex (first 32 hex chars representing 16 bytes)
@@ -178,9 +260,49 @@ pub const KeyRegistry = struct {
                         while (k < 32) : (k += 1) {
                             material[k] = std.fmt.parseInt(u8, hex_slice[k * 2 .. k * 2 + 2], 16) catch 0;
                         }
-                        const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material };
+                        const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = null, .is_wrapped = false };
                         try self.history.append(entry);
                     }
+                } else if (std.mem.indexOf(u8, line, "\"envelope\"")) |_| {
+                    // expect envelope JSON starts after : and may span single line
+                    const id_colon = std.mem.indexOfScalarPos(u8, line, idx2, ':') orelse continue;
+                    var after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
+                    const id_end = std.mem.indexOfScalar(u8, after, ',') orelse continue;
+                    const id_slice = after[0..id_end];
+                    const id_parsed = std.fmt.parseInt(u64, id_slice, 10) catch continue;
+                    const created_pos = std.mem.indexOf(u8, line, "\"created\"") orelse continue;
+                    const created_colon = std.mem.indexOfScalarPos(u8, line, created_pos, ':') orelse continue;
+                    var created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
+                    const created_end = std.mem.indexOfScalar(u8, created_after, ',') orelse continue;
+                    const created_slice = created_after[0..created_end];
+                    const created_parsed = std.fmt.parseInt(i64, created_slice, 10) catch continue;
+                    // envelope raw JSON object assumed to follow "envelope":{ ... }}
+                    const env_start = std.mem.indexOf(u8, line, "{\"version\"") orelse continue;
+                    const env_end = std.mem.lastIndexOfScalar(u8, line, '}') orelse continue;
+                    const env_slice = line[env_start .. env_end + 1];
+                    const env_copy = try self.allocator.alloc(u8, env_slice.len);
+                    std.mem.copy(u8, env_copy, env_slice);
+                    // unwrap if kms_seed configured
+                    var material: [32]u8 = [_]u8{0} ** 32;
+                    var wrapped_flag = true;
+                    if (self.kms_seed) |seed| {
+                        const kms = @import("external_kms_client.zig");
+                        var client = kms.Client.init(self.allocator.*, seed);
+                        const parsed = kms.envelopeFromJson(env_slice) catch {
+                            wrapped_flag = false; // mark invalid
+                            continue;
+                        };
+                        const plain = client.unwrap(parsed) catch {
+                            wrapped_flag = false;
+                            continue;
+                        };
+                        material = plain;
+                    } else {
+                        // KMS not configured; leave material zero; caller must unwrap later
+                        wrapped_flag = true;
+                    }
+                    const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = env_copy, .is_wrapped = wrapped_flag };
+                    try self.history.append(entry);
                 }
             }
         }
@@ -196,7 +318,9 @@ pub const KeyRegistry = struct {
         if (have_checksum) {
             // verify checksum matches current history
             var h2 = std.crypto.hash.sha2.Sha256.init(.{});
-            for (self.history.items) |entry| h2.update(&entry.material);
+            for (self.history.items) |entry| {
+                if (entry.is_wrapped and entry.envelope_json) |ej| h2.update(ej) else h2.update(&entry.material);
+            }
             var digest2: [32]u8 = undefined;
             h2.final(&digest2);
             var mismatch = false;

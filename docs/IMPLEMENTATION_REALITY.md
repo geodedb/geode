@@ -61,15 +61,17 @@ LIMIT 100
 
 **Reality**: Auth + RLS + audit. TDE & MFA further integrated since v0.18.0 draft:
 
-- TDE: AES-256-GCM page-level encryption integrated in `page_manager` (`page_encryption.zig`). WAL encryption now implemented (log segments encrypted with per-file nonce derivation). Key provider interface landed (env/static). Key rotation scaffold (min/max age scheduling) + encryption benchmarks (overhead sim + encrypt_pages skeleton) present; external KMS binding & real-path performance validation (<5% overhead) pending.
+- TDE: AES-256-GCM page-level encryption integrated in `page_manager` (`page_encryption.zig`). WAL encryption implemented (log segments encrypted with per-file nonce derivation). Key provider interface (env/static/mock/external). Key rotation scaffold (min/max age scheduling) + integrity (version+checksum). Benchmarks: synthetic XOR keystream, real-path AES-256-GCM (page loop), and encrypt_pages skeleton. External KMS currently simulated locally (non-deterministic AES-GCM wrap/unwrap envelopes); remote QUIC binding & published <5% overhead report pending.
 - MFA: TOTP enrollment + recovery codes + two-phase authentication (`authenticate` -> possible `MFARequired` -> `authenticateWithMFA`) with recovery code single-use consumption implemented. Admin policy objects + evaluator present (role & attribute conditions); governance completeness (UI / extended conditions) pending. Session elevation (step-up) scaffolding + configurable TTL (`elevation_ttl_ms`) added. Enhanced audit events (issued/success/failure + recovery code consumed).
 
 - **Auth**: Username/password + MFA path
 - **RLS**: Row-level security enforced
 - **Audit**: Extended (MFA challenge lifecycle events)
-- **TDE (Partial+)**: Data pages + WAL encrypted; key rotation scaffold (interfaces + scheduling) & benchmark skeletons present; missing: external KMS, real-path perf validation (<5% target)
+- **TDE (Partial+)**: Data pages + WAL encrypted; key rotation scaffold + integrity; simulated external KMS wrap/unwrap; real AES-GCM overhead benchmark + threshold test (<5% target) added; missing: remote KMS over QUIC, published <5% OLTP perf validation
+- **Remote KMS Prototype**: Initial QUIC-based KMS server/client scaffold (`kms_remote.zig`) added (generate + unwrap JSON ops, AES-256-GCM envelopes). Integrated `rotateWithRemoteKms` storing opaque envelope (plaintext zeroed) — classification: STUB/PARTIAL (no auth, single stream, no concurrent loop). Remaining: authenticated RPC, async serving loop, privileged unwrap path, attestation/signature.
 - **MFA (Partial+)**: Policies + audit + elevation metadata + recovery code consumption + configurable elevation TTL; missing: policy expansion, re-auth interval policy enforcement
-- **Missing**: External KMS integration, performance benchmark publication (real path), full MFA policy condition matrix, per-action sensitivity model for step-up
+- **Remaining Gaps**: Remote KMS hardening (auth, attestation, async loop), performance benchmark publication (real workload <5% TDE overhead validation), full MFA policy condition matrix, per-action sensitivity model for step-up
+  \n> See GAP_ANALYSIS.md "Security Hardening Progress" table for a consolidated matrix of status, evidence, next actions, and risk.
 - **2PC**: Cross-shard transactions (experimental)
 
 ## Partially Working Features

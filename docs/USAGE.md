@@ -34,11 +34,11 @@
 ./geodec --format txt "RETURN 1 AS x"
 ```
 
-## New v0.18.0 Features
+## Feature Overview (Current State)
 
-### Distributed Query Federation
+### Distributed Query Federation (Always On)
 
-Federated query execution across shards is always enabled (no flag required):
+Federated query execution across shards is always enabled:
 
 ```bash
 # Queries automatically consider federation
@@ -97,9 +97,9 @@ webhooks:
       header: 'X-Idempotency-Key'
 ```
 
-### Cost-Based Optimizer
+### Cost-Based Optimizer (Always On)
 
-Cost-Based Optimizer (always enabled):
+The optimizer runs by default; enable tracing for diagnostics:
 
 ```bash
 # Optional: trace decisions
@@ -220,7 +220,7 @@ backup:
     retention_days: 30
 ```
 
-### Environment Variables
+### Environment Variables (Updated Set)
 
 ```bash
 # Core settings
@@ -228,9 +228,11 @@ GEODE_DATA_DIR=/var/lib/geode
 GEODE_LOG_LEVEL=info
 GEODE_LOG_FORMAT=json
 
-# Federation & Optimizer no longer require enable flags
-GEODE_FEDERATION_ROLE=coordinator
-GEODE_TRACE_OPTIMIZER=0   # Tracing still optional
+# Optimizer tracing (functional without flag)
+GEODE_TRACE_OPTIMIZER=1   # Optional
+
+# Transparent Data Encryption
+GEODE_DISK_KEY_HEX=<64 hex chars>   # Provide to ensure encrypted pages/WAL on new data
 
 # S3 Backup
 AWS_ACCESS_KEY_ID=xxx

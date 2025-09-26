@@ -94,12 +94,37 @@ As of v0.18.0, Geode has closed critical infrastructure gaps while maintaining 1
 - [x] Key rotation state persistence (save/load) tests added
 - [x] Overhead benchmarks (encrypt_pages + smoke ratio benchmark)
 - [x] Real-path synthetic overhead benchmark (XOR keystream sim)
-- [x] ExternalKms stub (deterministic digest) for future wrapping path
+- [x] ExternalKms local simulated wrap/unwrap (AES-256-GCM non-deterministic envelopes)
 - [x] Rotation state v1 (version + checksum integrity validation)
-- [ ] External KMS integration (real remote binding)
+- [x] Real AEAD benchmark (per-page AES-256-GCM vs memcpy) for overhead ratio + threshold test guard (<5%)
+- [~] Remote KMS integration (QUIC prototype: generate + unwrap; pending auth, attestation, async loop)
 - [ ] <5% overhead validated on real workload
 - [ ] Backup/restore key handling design finalization
   - NOTE: Remaining focuses: external KMS + performance validation + backup key workflow.
+
+##### Security Hardening Progress
+
+| Area                              | Status   | Evidence (CANARY / Tests)                         | Next Action                                            | Risk |
+| --------------------------------- | -------- | ------------------------------------------------- | ------------------------------------------------------ | ---- |
+| AES-256-GCM Core                  | COMPLETE | encrypt_pages benchmark, page_manager integration | Optimize hot path SIMD (future)                        | Low  |
+| Page Encryption                   | COMPLETE | Page read/write tests, checksum validation        | Add page re-encrypt on rotation (lazy path)            | Med  |
+| WAL Encryption                    | COMPLETE | WAL segment open/write tests                      | Throughput benchmark under contention                  | Med  |
+| Key Rotation Scaffold             | COMPLETE | KeyRotationScaffold test, state persistence tests | Integrate eager re-encrypt option                      | Low  |
+| Rotation Integrity (checksum)     | COMPLETE | Tamper test (checksum mismatch clears state)      | Extend to signed manifest                              | Low  |
+| Simulated External KMS (local)    | COMPLETE | Wrap/unwrap non-deterministic test                | N/A (superseded by remote)                             | Low  |
+| Remote KMS Prototype (QUIC)       | PARTIAL  | Remote generate/rotate test                       | Add auth (mTLS / token), async serve loop, attestation | High |
+| TDE Overhead Benchmarks           | COMPLETE | AEAD real benchmark + <5% threshold test          | Publish OLTP workload validation                       | High |
+| Backup/Restore Key Handling       | PENDING  | N/A                                               | Design envelope export/import semantics                | Med  |
+| MFA Core (TOTP + Recovery)        | PARTIAL  | Auth + recovery code consumption tests            | Policy matrix & re-auth interval enforcement           | Med  |
+| MFA Audit Logging                 | COMPLETE | Audit event tests (issued/success/failure)        | Enrich with geo/IP context                             | Low  |
+| MFA Policy Engine                 | PARTIAL  | Evaluator unit tests                              | Expand condition set (time-of-day, risk score)         | Med  |
+| Remote KMS Attestation            | PENDING  | N/A                                               | Envelope signing + verification                        | High |
+| Performance Validation (<5% OLTP) | PENDING  | Synthetic benchmark only                          | Run representative OLTP suite & publish report         | High |
+| Secrets Zeroization               | PENDING  | N/A                                               | Introduce explicit wipe & audit for failures           | Med  |
+| Rotation Scheduling (auto)        | COMPLETE | Scheduling predicate test                         | Add adaptive schedule based on key age+usage           | Low  |
+| Privileged Unwrap Path            | PENDING  | N/A                                               | Implement secure unwrap via remote KMS with auth       | High |
+
+Refer to `SECURITY_PROGRESS.md` for full CANARY markers and requirement IDs.
 
 #### MFA (Multi-Factor Authentication)
 

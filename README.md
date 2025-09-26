@@ -12,19 +12,19 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 - **58 IMPLEMENTED aspects** (integration complete, tests pending)
 - **0 STUB aspects** (all previously stubbed features now implemented)
 
-## What's New in v0.18.0
+## What's New / Current State (post v0.18.0 with ongoing hardening)
 
 ### Infrastructure & Reliability Release
 
-- **🌐 Distributed Query Federation**: Coordinator-worker scatter/gather with global ORDER BY, distributed Top-K, deterministic pagination across shards (GEODE_ENABLE_FEDERATION=1)
-- **☁️ S3 Cloud Backups**: Full + incremental with multipart uploads, checksums, resumable transfers, point-in-time recovery
-- **🔔 CDC Webhook Hardening**: Custom HTTP headers, exponential backoff retries, idempotency keys, dead letter queue with metrics
-- **📊 CBO Small-N Calibration**: Bias corrections for <100 row datasets, guardrails preventing >10% regression, decision logging (GEODE_ENABLE_CBO=1)
-- **🔐 Security Foundation**: TDE (AES-256-GCM core primitive) & MFA (TOTP + recovery codes) partially implemented behind flags (full integration v0.19)
-- **🔍 FTS Partial**: Phrase / proximity / highlight primitives behind feature flag (scoring + analyzers v0.19)
-- **⚡ Parallel Execution Partial**: Basic thread pool + deterministic ordered `parallelMap` (additional operators v0.19)
-- **🧮 2PC Scaffolding**: Coordinator/participant state machines (experimental, flag gated)
-- **📈 Graph Analytics Stubs**: Community detection & centrality placeholder APIs (deterministic)
+- **🌐 Distributed Query Federation**: Always-on coordinator/worker scatter‑gather with global ORDER BY, distributed Top‑K, deterministic pagination (flag requirement removed).
+- **☁️ S3 Cloud Backups**: Full + incremental (multipart, checksums, resumable, PIT recovery) production‑ready.
+- **🔔 CDC Webhook Hardening**: Headers, retries with backoff+jitter, DLQ, idempotency, metrics.
+- **📊 CBO Small-N Calibration**: Bias corrections + guardrails always active; decision tracing via `GEODE_TRACE_OPTIMIZER` only.
+- **🔐 Security Hardening (In‑Progress)**: TDE (AES‑256‑GCM page + WAL encryption) integrated; key rotation (state+checksum) + local & simulated external wrap/unwrap + remote QUIC KMS prototype (generate/unwrap) landing. MFA (TOTP + recovery codes + elevation metadata) partially complete; policy matrix expansion pending.
+- **🔍 FTS Partial**: Phrase / proximity / highlighting primitives loaded by default; analyzers + BM25 scoring forthcoming.
+- **⚡ Parallel Execution Prototype**: Thread pool + deterministic ordered `parallelMap`; expansion to Expand/Filter/Join operators planned.
+- **🧮 2PC / Distributed Writes**: Experimental scaffolding only (not enabled for prod writes yet).
+- **📈 Graph Analytics**: `shortestPath`, `pageRank` stable; broader algorithm suite deferred.
 
 ### Previous v0.17.0 Features
 
@@ -78,17 +78,20 @@ make build
 ./zig-out/bin/geodec "MATCH (n) RETURN n LIMIT 10"
 ```
 
-### Enable New Features
+### Feature Activation Notes
+
+Most capabilities previously guarded by environment toggles are now always initialized. Remaining knobs focus on configuration or diagnostics:
 
 ```bash
-# Distributed Federation (read-only queries across shards)
-export GEODE_ENABLE_FEDERATION=1
+# Optional optimizer decision tracing
+export GEODE_TRACE_OPTIMIZER=1
 
-# Cost-Based Optimizer with small-N calibration
-export GEODE_ENABLE_CBO=1
-export GEODE_TRACE_OPTIMIZER=1  # Optional: decision logging
+# Transparent Data Encryption: provide disk key material (enables page+WAL encryption if not already supplied)
+export GEODE_DISK_KEY_HEX=<64 hex chars>
 
-# S3 Backups
+# MFA requires user provisioning only (no enable flag)
+
+# S3 credentials for backup/restore
 export AWS_ACCESS_KEY_ID=your-key
 export AWS_SECRET_ACCESS_KEY=your-secret
 geode backup --dest s3://my-bucket/backups --mode full
@@ -161,39 +164,27 @@ geode backup --dest s3://my-bucket/backups --mode full
 
 ## Configuration
 
-### Environment Variables
+### Environment Variables (Current Set)
 
 ```bash
-# Federation
-GEODE_ENABLE_FEDERATION=1      # Enable distributed queries (default: 0)
+# Core
+GEODE_DATA_DIR=/var/lib/geode
+GEODE_LOG_LEVEL=info
+GEODE_LOG_FORMAT=json
 
-# Optimizer
-GEODE_ENABLE_CBO=1             # Enable cost-based optimizer (default: 0)
-GEODE_TRACE_OPTIMIZER=1        # Enable optimizer decision logging
+# Optimizer tracing (optimizer itself always on)
+GEODE_TRACE_OPTIMIZER=1
 
-# Security (stubs)
-GEODE_ENABLE_TDE=1             # Transparent Data Encryption placeholder
-GEODE_TDE_KEY=<64 hex chars>   # 32-byte key (hex) for TDE placeholder
-GEODE_ENABLE_MFA=1             # Enable MFA TOTP placeholder
+# TDE (supply to ensure encryption on new deployments)
+GEODE_DISK_KEY_HEX=<64 hex chars>
 
-# Distributed writes (experimental scaffolding)
-GEODE_ENABLE_DISTRIBUTED_WRITES=1  # 2PC coordinator/participant stubs
-
-# Advanced Full Text Search
-GEODE_ENABLE_ADVANCED_FTS=1    # Phrase/proximity/highlight stubs
-
-# Parallel execution
-GEODE_ENABLE_PARALLEL=1        # Thread pool + ordered barrier + parallelMap (prototype)
-
-# S3 Backups (via CLI)
+# S3 backup targets
 AWS_ACCESS_KEY_ID=xxx
 AWS_SECRET_ACCESS_KEY=yyy
 AWS_REGION=us-east-1
 
-# CDC Webhooks (via config)
+# Optional CDC headers config (example)
 CDC_WEBHOOK_HEADERS="Authorization:Bearer token,X-Tenant-ID:123"
-CDC_WEBHOOK_DLQ_SIZE=10000
-CDC_WEBHOOK_RETRY_MAX=5
 ```
 
 ### CLI Examples
@@ -243,25 +234,9 @@ geodec "EXPLAIN RECURSIVE MATCH (n) RETURN n LIMIT 5"   # experimental recursive
 - Limited to single-node optimization
 - No histogram support for custom types
 
-## Roadmap (v0.19)
+### Near-Term Roadmap Focus
 
-### Security Hardening
-
-- **TDE**: AES-256 for data files + WAL
-- **MFA**: TOTP-based authentication
-
-### FTS Enhancements
-
-- Phrase queries with proximity
-- Highlighting with fragments
-- Pluggable analyzers
-
-### Multi-threaded Execution
-
-- Thread pool for operators (prototype completed)
-- `parallelMap` deterministic operator (ordering preserved)
-- Expand / Filter / Join parallelism (planned)
-- Fair scheduling & work stealing (planned)
+Security hardening (remote KMS auth & attestation, MFA policy expansion), FTS analyzers + BM25 scoring, parallel execution across more operators, and write path federation remain the principal active tracks for the upcoming release cycle.
 
 ## Contributing
 

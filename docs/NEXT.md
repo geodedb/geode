@@ -19,9 +19,11 @@
    - Key provider interface (env/static + MockKMS deterministic test provider) landed
    - Key rotation: scaffold + persistence (save/load state) + scheduling logic implemented
    - Overhead benchmarks: encrypt_pages benchmark + smoke benchmark (ratio emission) + real-path synthetic benchmark (XOR keystream simulation) landed
-   - ExternalKms stub (deterministic digest of endpoint+api key) added (placeholder for real remote binding)
+   - ExternalKms local simulated wrap/unwrap (non-deterministic AES-256-GCM envelopes)
+   - Remote KMS QUIC prototype (generate + unwrap) landed; next: auth, attestation, async loop
    - Rotation state v1 adds version + checksum integrity (tamper → state ignored)
-   - Pending: Real External KMS network binding & wrap/unwrap, backup/restore key handling design finalization, AEAD real-path overhead validation <5%
+   - Real AEAD overhead benchmark added (AES-256-GCM per-page vs memcpy) + threshold test (<5%) for regression guard
+   - Pending: Remote KMS authentication & attestation, backup/restore key handling design finalization, published AEAD overhead validation <5% with representative OLTP workload
    - Target: Publish reproducible perf report (<5% OLTP overhead) and integrate true KMS wrap/unwrap tests (non-deterministic) beyond mock
 
 2. **Multi-Factor Authentication (MFA)**
