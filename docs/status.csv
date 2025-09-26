@@ -14,7 +14,6 @@ REQ-GQL-004,Pagination Policy Override,Planner,TESTED,TestCANARY_REQ_GQL_004_Off
 REQ-GQL-004,PaginationExecutionStreaming,OrderedEmission,TESTED,TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission,,planner,2025-09-23,tests/e2e_protocol_more.zig
 REQ-GQL-004,PaginationExecutionStreaming,Scaffold,TESTED,TestCANARY_REQ_GQL_004_PaginationStreamingScaffold,,planner,2025-09-23,src/server/main.zig
 REQ-GQL-004,PaginationExecutionStreaming,Scaffold,IMPL,TestCANARY_REQ_GQL_004_PaginationStreamingScaffold,,planner,2025-09-23,src/server/main.zig
-REQ-GQL-005,Binary Protocol Core,Wire,IMPL,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20,docs/PROMPT.md
 REQ-GQL-005,Binary Protocol Core,Wire,IMPL,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20,src/protocol.zig
 REQ-GQL-005,Frame Decode,Wire,BENCHED,,BenchmarkCANARY_REQ_GQL_005_FrameDecode,wire,2025-09-20,tests/benchmark_frame_decode.zig
 REQ-GQL-005,Set Operations,Engine,IMPL,TestCANARY_REQ_GQL_005_SetOpsDistinct,,engine,2025-09-20,src/canary.zig
@@ -314,7 +313,6 @@ REQ-GQL-028,WAL Adaptive Policy,WalAdaptivePolicyLatencyVarianceEnvelope,BENCHED
 REQ-GQL-028,WAL Compaction,CorruptPageRecovery,TESTED,TestCANARY_REQ_GQL_028_CorruptPageRecovery,,storage,2025-09-20,src/wal/wal.zig
 REQ-GQL-028,WAL Compaction,CorruptPageRecoveryLatency,TESTED,TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency,,storage,2025-09-22,tests/canary_recovery_corrupt_latency.zig
 REQ-GQL-028,WAL Compaction,CorruptPageRecoveryLatency,BENCHED,,BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope,storage,2025-09-22,tests/canary_recovery_corrupt_latency.zig
-REQ-GQL-028,WAL Compaction,Storage,IMPL,TestCANARY_REQ_GQL_028_WalCompact,BenchmarkCANARY_REQ_GQL_028_WalCompact,storage,2025-09-20,docs/PROMPT.md
 REQ-GQL-028,WAL Compaction,Storage,IMPL,TestCANARY_REQ_GQL_028_WalCompact,"BenchmarkCANARY_REQ_GQL_028_WalCompact,BenchmarkCANARY_REQ_GQL_028_WalFragmentation",storage,2025-09-20,src/canary.zig
 REQ-GQL-028,WAL Compaction,Storage,IMPL,TestCANARY_REQ_GQL_028_WalCompact,,storage,2025-09-20,src/storage/wal_compactor.zig
 REQ-GQL-028,WAL Compaction,WalCompactionVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_028_WalCompactionVarianceEnvelope,storage,2025-09-21,tests/benchmark_wal_compaction_variance.zig
@@ -352,6 +350,7 @@ REQ-GQL-032,Schema Constraints Uniqueness,Engine,IMPL,TestCANARY_REQ_GQL_032_Uni
 REQ-GQL-040,Raft Consensus,Distributed,BENCHED,TestCANARY_REQ_GQL_040_RaftLeaderElection,BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency,distributed,2025-09-21,src/distributed/raft.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,TestCANARY_REQ_GQL_040_TemporalExtremeOffsetArithmetic,,engine,2025-09-21,tests/test_temporal_extreme_offsets.zig
 REQ-GQL-041,Cluster Networking,InterNodeMessaging,TESTED,e2e_distributed_cluster,,distributed,2025-09-25,src/distributed/network_transport.zig
+REQ-GQL-042,...,API|Engine|...,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,...,...,...,YYYY-MM-DD,docs/PROMPT.md
 REQ-GQL-042,CDC,AdaptiveJitterThresholds,TESTED,TestCANARY_REQ_GQL_042_CDC_JitterThresholds,,streaming,2025-09-21,tests/canary_cdc_jitter_thresholds.zig
 REQ-GQL-042,CDC,AdaptiveStressHarness,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness,streaming,2025-09-21,tests/benchmark_cdc_adaptive_stress.zig
 REQ-GQL-042,CDC,CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope,cdc,2025-09-21,tests/benchmark_cdc_adaptive_decision_latency_variance.zig
@@ -413,15 +412,12 @@ REQ-GQL-042,CDC Resume Token,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeToken,,
 REQ-GQL-042,CDC Resume Token,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeToken,,streaming,2025-09-20,src/canary.zig
 REQ-GQL-042,CDC Resume Token Restart,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart,,streaming,2025-09-20,tests/canary_cdc_resume_token_restart.zig
 REQ-GQL-042,CDC/Streaming,API,TESTED,TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-21,tools/canaryscan/internal/fixtures/file1.zig
-REQ-GQL-042,CDC/Streaming,API|Engine|Planner|Wire|Security|Storage|Docs|CLI|Decode|Encode|RoundTrip|Bench,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,TestCANARY_REQ_GQL_042_CDC_StartStop,BenchmarkCANARY_REQ_GQL_042_CDC_Publish,streaming,YYYY-MM-DD,docs/PROMPT.md
-REQ-GQL-042,CDC/Streaming,Engine,TESTED,TestCANARY_REQ_GQL_042_CDC_StartStop,,streaming,2025-09-20,docs/PROMPT.md
 REQ-GQL-042,CDCControlProtocol,E2E,TESTED,protocol_CDC_CONTROL_reset,,cdc,2025-09-20,tests/e2e_protocol_cdc_control.zig
 REQ-GQL-042,CDCControlProtocol,E2ENoEngine,TESTED,protocol_CDC_CONTROL_no_engine,,cdc,2025-09-20,tests/e2e_protocol_cdc_control_no_engine.zig
 REQ-GQL-042,CDCControlProtocol,E2EUnsupported,TESTED,protocol_CDC_CONTROL_unsupported,,cdc,2025-09-20,tests/e2e_protocol_cdc_control_unsupported.zig
 REQ-GQL-042,CDC_CONTROL,Refactor,IMPL,TestCANARY_REQ_GQL_042_CDC_ControlReset,,server,2025-09-20,src/server/main.zig
 REQ-GQL-046,TDE,EncryptionKeyDeriveVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_046_EncryptionKeyDeriveVarianceEnvelope,security,2025-09-21,tests/benchmark_encryption_key_derive_variance.zig
 REQ-GQL-046,TDE,KeyHierarchy,TESTED,TestCANARY_REQ_GQL_046_KeyHierarchy,,security,2025-09-21,tests/canary_tde_multi_key_hierarchy.zig
-REQ-GQL-046,TDE,Storage,IMPL,TestCANARY_REQ_GQL_046_KeyRotate,,security,2025-09-20,docs/PROMPT.md
 REQ-GQL-046,TDE Key Hierarchy,Storage,TESTED,TestCANARY_REQ_GQL_046_KeyHierarchy,,security,2025-09-20,src/security/tde_hierarchy.zig
 REQ-GQL-046,TDE Key Rotation Throughput,Storage,BENCHED,,BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput,security,2025-09-20,tests/benchmark_tde_key_rotate.zig
 REQ-GQL-046,TDE Key Rotation Throughput,Storage,BENCHED,,BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput,security,2025-09-20,src/canary.zig

@@ -1,225 +1,106 @@
-# NEXT.md - Geode Development Roadmap
+# NEXT.md
+
+Actionable slices derived strictly from current CANARY evidence. Each slice targets a gap (IMPL/STUB), a parse error, or consolidation of multiple overlapping BENCHED entries into policy/tests. Columns: Why | What | Acceptance | ISO refs | Deps | Scope | DRI | Target Date.
+
+Snapshot Date: 2025‑09‑26 (matches GAP_ANALYSIS.md). No source edits performed. Future work requires adding or updating CANARY tags in code (out of scope here).
+
+## Slices (Backlog)
+
+### 1. Federation Latency Aggregates (REQ-GQL-024 / LatencyAggregate\*)
+
+| Field       | Detail                                                                                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Why         | Six IMPL aspects (Archive/GovernanceSummary/MultiRun/RobustStats/SchemaValidation/Streak) lack TESTED/BENCHED evidence; risk of silent drift in mismatch diagnostics.                                  |
+| What        | Add unit + integration tests generating synthetic federation mismatch events; implement variance envelope benchmark for aggregate streak & schema validation.                                          |
+| Acceptance  | Tests: TestCANARY_REQ_GQL_024_FederationLatencyAggregate{Archive,Summary,MultiRun,RobustStats,SchemaValidation,Streak}; Bench: BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope. |
+| ISO refs    | GQL ordering & diagnostics propagation (§16.16–16.19 for ordered emission relevance).                                                                                                                  |
+| Deps        | Existing federation mismatch benchmarks & protocol tests.                                                                                                                                              |
+| Scope       | ~500 LOC tests + 1 benchmark harness.                                                                                                                                                                  |
+| DRI         | federation-team                                                                                                                                                                                        |
+| Target Date | 2025-10-15                                                                                                                                                                                             |
+
+### 2. Migration Engine STUB Cleanup (REQ-GQL-087 / multiple STUB aspects)
+
+| Field | Detail |
+| Why | Four STUB aspects (CliParityStatusCommand, DownReversalSafety, DriftPolicyOutcomeStrict, ObservabilityMetrics, PlanDryRunIntegrity) block governance verify from claiming higher maturity. |
+| What | Implement CLI status parity test scaffolding; add safety invariants tests for down reversal; produce metrics export test; create dry-run integrity checksum test. |
+| Acceptance | Tests: TestCANARY*REQ_GQL_087*{CliParityStatusCommand,DownReversalSafety,DriftPolicyOutcomeStrict,ObservabilityMetrics,PlanDryRunIntegrity}. All move to TESTED. |
+| ISO refs | Conformance & diagnostics reliability mapping (§23). |
+| Deps | Existing migration ledger schema tests. |
+| Scope | 5 focused tests (~350 LOC). |
+| DRI | migration-team |
+| Target Date | 2025-10-10 |
+
+### 3. Cost Model Enumeration Seed IMPL Reduction (REQ-GQL-075 / remaining IMPL entry)
+
+| Field | Detail |
+| Why | One IMPL aspect remains (AdaptiveEstimatorBias in cost_seed.zig) alongside TESTED/BENCHED peers; risk of uneven bias calibration across enumerations. |
+| What | Promote to TESTED via deterministic calibration scenario test comparing expected bias correction deltas vs reported factors. |
+| Acceptance | New test: TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity. |
+| ISO refs | Query optimization semantics (ISO GQL execution model). |
+| Deps | Existing bias persistence & dynamic alpha tests. |
+| Scope | Single test ~120 LOC. |
+| DRI | planner-team |
+| Target Date | 2025-10-05 |
+
+### 4. Parse Error Remediation (Benchmark STATUS Token)
+
+| Field | Detail |
+| Why | Invalid STATUS=PARTIAL blocks scanner verify (exit 3) reducing governance signal quality. |
+| What | Replace invalid token with allowed STATUS (likely BENCHED) post confirmation that benchmark produces performance metrics; re-run scanner expecting exit 0. |
+| Acceptance | Scanner: `./bin/canaryscan --root . --verify GAP_ANALYSIS.md --strict` returns exit 0. No additional functional tests needed beyond existing benchmark JSON emission check. |
+| ISO refs | N/A (governance tooling integrity, internal). |
+| Deps | Security team confirmation that benchmark scope matches BENCHED semantics. |
+| Scope | 1-line tag fix (separate PR). |
+| DRI | security-team |
+| Target Date | 2025-09-29 |
+
+### 5. Recursive Execution Parser STUB (REQ-GQL-079 / ParserRecognition STUB)
+
+| Field | Detail |
+| Why | Mixed TESTED + STUB entries for ParserRecognition create inconsistent maturity signal. |
+| What | Add unit test covering negative + cycle detection path ensuring parser gracefully rejects unsupported recursive constructs outside allowed bounds. |
+| Acceptance | Test: TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycleBound. STUB entry removed (auto-promoted to TESTED). |
+| ISO refs | Recursive CTE / pattern recognition (§14 execution of recursive queries). |
+| Deps | Existing cycle guard tests. |
+| Scope | ~150 LOC test. |
+| DRI | engine-team |
+| Target Date | 2025-10-03 |
+
+### 6. RLS/ABAC Hardening Follow-up (REQ-GQL-080)
+
+| Field | Detail |
+| Why | Current tests cover enforcement/policy cache/catalog; missing stress + variance bench to quantify overhead. |
+| What | Introduce benchmark measuring authorization filter latency variance across mixed label/property queries; add negative test for policy cache invalidation race. |
+| Acceptance | Bench: BenchmarkCANARY_REQ_GQL_080_RlsAbacEnforcementVarianceEnvelope. Test: TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace. |
+| ISO refs | Security & data access semantics (authorization aspects). |
+| Deps | Existing enforcement hook tests. |
+| Scope | 1 benchmark + 1 test (~220 LOC). |
+| DRI | security-team |
+| Target Date | 2025-10-12 |
+
+### 7. Monitoring Variance Consolidation (REQ-GQL-081)
+
+| Field | Detail |
+| Why | Duplicate BENCHED entries for MetricsRegistryVarianceEnvelope; desire a single canonical envelope test & bench simplifying governance diffs. |
+| What | Deprecate duplicate bench files by merging into unified variance harness; add test asserting single registration path. (Source change required later; tracked here only.) |
+| Acceptance | Bench: BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified. Test: TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified. |
+| ISO refs | N/A (operational, not language). |
+| Deps | Existing variance benchmarks. |
+| Scope | Refactor bench harness + 1 test (~180 LOC). |
+| DRI | ops-team |
+| Target Date | 2025-10-18 |
+
+## Governance Notes
+
+- All slices map to existing REQ IDs; no speculative IDs introduced.
+- Target Dates are short horizon (<30 days) to maintain freshness guard compliance.
+- Future slices should be appended not modified; historical changes tracked in VCS.
+
+## Removed Legacy Sections
+
+Previous marketing roadmap, multi‑year projections, and generic goals were removed because they are not directly verifiable via CANARY evidence. Strategic planning can live in a separate high‑level document outside the governance‑verified scope.
 
-## Current Version: v0.18.0 (Released)
+---
 
-### ✅ Delivered in v0.18.0
-
-- **Distributed Query Federation** - Coordinator-worker with global ORDER BY
-- **S3 Cloud Backups** - Full + incremental with multipart uploads
-- **CDC Webhook Hardening** - Headers, retries, DLQ, idempotency
-- **CBO Small-N Calibration** - Bias fixes for <100 row datasets
-
-## Next Version: v0.19.0 (Q4 2024)
-
-### P0 - Security & Compliance
-
-1. **Transparent Data Encryption (TDE)**
-
-   - (Progress) AES-256-GCM primitive + page-level + WAL encryption integrated (always available; no runtime flag)
-   - Key provider interface (env/static + MockKMS deterministic test provider) landed
-   - Key rotation: scaffold + persistence (save/load state) + scheduling logic implemented
-   - Overhead benchmarks: encrypt_pages benchmark + smoke benchmark (ratio emission) + real-path synthetic benchmark (XOR keystream simulation) landed
-   - ExternalKms local simulated wrap/unwrap (non-deterministic AES-256-GCM envelopes)
-   - Remote KMS QUIC prototype (generate + unwrap) landed; next: auth, attestation, async loop
-   - Rotation state v1 adds version + checksum integrity (tamper → state ignored)
-   - Real AEAD overhead benchmark added (AES-256-GCM per-page vs memcpy) + threshold test (<5%) for regression guard
-   - Pending: Remote KMS authentication & attestation, backup/restore key handling design finalization, published AEAD overhead validation <5% with representative OLTP workload
-   - Target: Publish reproducible perf report (<5% OLTP overhead) and integrate true KMS wrap/unwrap tests (non-deterministic) beyond mock
-
-2. **Multi-Factor Authentication (MFA)**
-   - (Progress) TOTP + recovery codes + auth path operational (no enabling flag required)
-   - Admin policy controls & enforcement (partial: evaluator present; governance UI & extended conditions pending)
-   - Expanded audit logging (issued/success/failure + recovery code consumption)
-   - Step-up & re-auth policies (scaffolding present: elevation metadata + require/mark APIs)
-
-### P1 - Performance & Scale
-
-1. **Full-Text Search Enhancements**
-
-   - (Partial in v0.18) Phrase, proximity, basic highlighting (integrated; legacy flag removed)
-   - Pluggable analyzers (language-specific)
-   - BM25 scoring & ranking
-   - Fragment configuration & multi-field support
-
-2. **Multi-threaded Query Execution**
-
-   - (Partial in v0.18) Thread pool + deterministic ordered parallelMap (now always initialized; expansion to more operators pending)
-   - Expand to Expand/Filter/Join operators
-   - Work-stealing + adaptive chunk sizing
-   - Determinism guarantees for ordered queries
-
-3. **Distributed Write Path**
-   - Federation for INSERT/UPDATE/DELETE
-   - Cross-shard transaction coordination
-   - Conflict resolution strategies
-   - Global consistency guarantees
-
-### P2 - Developer Experience
-
-1. **Schema Evolution**
-
-   - Online DDL operations
-   - Backward-compatible migrations
-   - Version tracking
-   - Rollback capabilities
-
-2. **Query Performance Insights**
-   - Query plan cache statistics
-   - Slow query log with analysis
-   - Index recommendations
-   - Workload replay tools
-
-## Future Versions (2025+)
-
-### v0.20.0 - Cloud Native
-
-- **Kubernetes Operator**
-- **Cloud Storage Native** (beyond S3)
-- **Auto-scaling** based on workload
-- **Multi-region replication**
-
-### v0.21.0 - AI/ML Integration
-
-- **Vector Search** capabilities
-- **Graph Neural Network** support
-- **Embeddings** as first-class citizens
-- **ML model serving** within queries
-
-### v0.22.0 - Advanced Analytics
-
-- **Temporal Graphs** with time-travel
-- **Graph OLAP** operations
-- **Streaming Analytics** on CDC
-- **Approximate algorithms** for scale
-
-## Technical Debt & Maintenance
-
-### Ongoing Work
-
-- **Test Coverage**: Maintain 100% claimed feature coverage
-- **Performance**: Sub-linear scaling to 1B edges
-- **Documentation**: API references, tutorials, examples
-- **Client Libraries**: Python, Java, JavaScript SDKs
-
-### Infrastructure
-
-- **CI/CD**: Faster test runs (<5 min)
-- **Benchmarking**: Automated regression detection
-- **Release**: Semantic versioning, changelog automation
-- **Monitoring**: Built-in metrics, tracing, profiling
-
-## Research & Innovation
-
-### Active Research
-
-- **Incremental View Maintenance** algorithms
-- **Adaptive Query Optimization** with ML
-- **Graph Compression** techniques
-- **Differential Privacy** for graph queries
-
-### Standards Participation
-
-- ISO/IEC 39075 (GQL) working group
-- OpenCypher compatibility
-- Apache Arrow integration
-- GraphBLAS compliance
-
-## Community Roadmap
-
-### Developer Ecosystem
-
-- Plugin architecture for custom functions
-- Extension marketplace
-- Community operators library
-- Integration templates (Kafka, Spark, etc.)
-
-### Educational
-
-- Graph database course materials
-- Interactive tutorials
-- Certification program
-- Conference talks and workshops
-
-## Success Metrics
-
-### v0.19.0 Targets
-
-- TDE overhead: <5% on OLTP workload
-- MFA adoption: 50% of production deployments
-- FTS performance: 100K docs/sec indexing
-- Thread scaling: Linear to 8 cores
-
-### Long-term Goals
-
-- Market position: Top 5 graph databases
-- Community: 10K+ GitHub stars
-- Production: 100+ enterprise deployments
-- Performance: #1 in LDBC benchmarks
-
-## Decision Log
-
-### v0.18.0 Decisions
-
-- **Federation before sharding**: Read path first, write path in v0.19
-- **S3 before other clouds**: Most requested, others follow same pattern
-- **CBO off by default**: Stability over performance until v0.19
-- **No breaking changes**: Smooth upgrade path from v0.17
-
-### v0.19.0 Decisions (Proposed / Updated)
-
-- **TDE mandatory (post-hardening)**: Primitive landed early, full enable after page/WAL integration
-- **MFA optional**: Gradual rollout; enforcement phase gated by audit readiness
-- **Threading conservative**: Keep prototype opt-in until more operators parallelized
-- **Write federation experimental**: Remains flag-gated until conflict resolution validated
-- **Recursive EXPLAIN**: Keep experimental JSON form (tooling feedback before stabilization)
-
-## Dependencies
-
-### External
-
-- Zig 0.15.1 (considering 0.16.0 for v0.19)
-- QUIC library (vendored)
-- S3 SDK (minimal implementation)
-
-### Internal
-
-- Status generator (maintain 0% untested)
-- CANARY markers (full coverage)
-- Benchmark suite (no regressions)
-
-## Risk Management
-
-### v0.19.0 Risks
-
-1. **TDE Performance**: Mitigation - extensive benchmarking
-2. **Thread Safety**: Mitigation - race detector, stress tests
-3. **API Stability**: Mitigation - deprecation policy
-4. **Backward Compatibility**: Mitigation - upgrade tests
-
-### Contingency Plans
-
-- Feature flags for risky changes
-- Canary deployments
-- Rollback procedures
-- Performance escape hatches
-
-## Release Schedule
-
-- **v0.18.0**: ✅ Released (Sept 2024)
-- **v0.19.0**: Target Dec 2024
-- **v0.20.0**: Target Mar 2025
-- **v0.21.0**: Target Jun 2025
-
-## How to Contribute
-
-1. Check GitHub issues tagged "good first issue"
-2. Review the CONTRIBUTING.md guide
-3. Join Discord for discussion
-4. Submit PRs with tests and benchmarks
-5. Help with documentation and examples
-
-## Contact
-
-- GitHub: github.com/your-org/geode
-- Discord: discord.gg/geode
-- Email: [email protected]
+END OF FILE

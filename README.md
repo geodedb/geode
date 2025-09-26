@@ -6,11 +6,16 @@ Geode is an ISO/IEC 39075:2024 (GQL) compliant graph database written in Zig 0.1
 
 ![Evidence Coverage](badges/evidence.svg)
 
-- **470 tracked aspects** (requirements / features / bench targets from status.csv)
-- **348 TESTED aspects** (functional tests with exact output validation)
-- **64 BENCHED aspects** (performance / throughput / latency envelopes)
-- **58 IMPLEMENTED aspects** (integration complete, tests pending)
-- **0 STUB aspects** (all previously stubbed features now implemented)
+Evidence metrics now sourced directly from the latest successful `status.csv` (see `docs/GAP_ANALYSIS.md`). Figures below omit one current parse error (invalid STATUS token) and may change once corrected.
+
+- **59 distinct requirement IDs (REQ-GQL-###)**
+- **443 TESTED entries**
+- **229 BENCHED entries**
+- **7 IMPL entries**
+- **6 STUB entries**
+- **0 MISSING / 0 REMOVED entries observed**
+
+For the complete, unaggregated table (including duplicates per evidence token) and parse error disclosure, consult `docs/GAP_ANALYSIS.md`.
 
 ## What's New / Current State (post v0.18.0 with ongoing hardening)
 
