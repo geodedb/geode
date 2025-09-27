@@ -612,9 +612,8 @@ pub fn build(b: *std.Build) void {
     geodec_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
     geodec_exe.root_module.addImport("log/logger.zig", logging_mod);
-    b.installArtifact(geodec_exe);
-
-    test_step.dependOn(b.getInstallStep());
+    const geode_audit_verify = b.addExecutable(.{ .name = "geode-audit", .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize }) });
+    b.installArtifact(geode_audit_verify);
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
@@ -910,10 +909,8 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&rls_test.step);
 
-    const user_manager_test = b.addTest(.{
-        .root_module = user_manager_mod,
-    });
-    test_step.dependOn(&user_manager_test.step);
+    const audit_chain_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&audit_chain_tests.step);
 
     // Unicode UTF-16 / WTF-8 conversion canary tests
     const unicode_utf16_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_unicode_utf16.zig"), .target = target, .optimize = optimize }) });

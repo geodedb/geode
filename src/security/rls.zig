@@ -968,13 +968,14 @@ pub const AttributeBasedAccessControl = struct {
             // TODO: Implement attribute evaluation
             return true;
         }
+
     };
 
     pub fn init(allocator: Allocator) !AttributeBasedAccessControl {
         return AttributeBasedAccessControl{
             .allocator = allocator,
             .attribute_definitions = std.StringHashMap(AttributeDefinition).init(allocator),
-            .attribute_rules = try allocator.alloc(ABACAttributeRule, 0), // Empty slice
+            .attribute_rules = try allocator.alloc(ABACAttributeRule, 0),
             .attribute_evaluator = AttributeEvaluator{
                 .allocator = allocator,
                 .attribute_cache = std.StringHashMap(AttributeEvaluator.CachedAttribute).init(allocator),
@@ -1021,6 +1022,10 @@ pub const AuditLogger = struct {
         action: []const u8,
         result: Result,
         details: ?std.StringHashMap([]const u8),
+        seq_no: u64 = 0,
+        prev_hash: [32]u8 = [_]u8{0} ** 32,
+        event_hash: [32]u8 = [_]u8{0} ** 32,
+        signature: ?[64]u8 = null,
 
         pub const EventType = enum {
             authentication,
@@ -1054,6 +1059,39 @@ pub const AuditLogger = struct {
             partial,
             error_,
         };
+
+        pub fn writeCanonicalJson(writer: anytype, stream: []const u8, ev: *const AuditEvent) !void {
+            try writer.writeAll("{");
+            try writer.print("\"stream\":\"{s}\",", .{stream});
+            try writer.print("\"seq_no\":{},", .{ev.seq_no});
+            try writer.print("\"timestamp\":{}", .{ev.timestamp});
+            try writer.writeAll(",\"event_type\":");
+            try writer.print("\"{s}\"", .{@tagName(ev.event_type)});
+            try writer.writeAll(",\"actor\":");
+            try writer.print("\"user:{d}\"", .{@intFromEnum(ev.user_id)});
+            try writer.writeAll(",\"origin\":\"srv\"");
+            try writer.writeAll(",\"resource\":{");
+            try writer.print("\"type\":\"{s}\",\"id\":\"{s}\"", .{ ev.resource.type, ev.resource.id });
+            try writer.writeAll("}");
+            try writer.writeAll(",\"action\":");
+            try writer.print("\"{s}\"", .{ev.action});
+            try writer.writeAll(",\"result\":");
+            try writer.print("\"{s}\"", .{@tagName(ev.result)});
+            try writer.writeAll(",\"details\":null");
+            try writer.writeAll(",\"prev_hash\":\"");
+            for (ev.prev_hash) |b| try writer.print("{x:0>2}", .{b});
+            try writer.writeAll("\",");
+            try writer.writeAll("\"event_hash\":\"");
+            for (ev.event_hash) |b| try writer.print("{x:0>2}", .{b});
+            try writer.writeAll("\",");
+            try writer.writeAll("\"signature\":");
+            if (ev.signature) |sig| {
+                try writer.writeAll("\"");
+                for (sig) |b| try writer.print("{x:0>2}", .{b});
+                try writer.writeAll("\"");
+            } else try writer.writeAll("null");
+            try writer.writeAll("}");
+        }
     };
 
     pub fn init(allocator: Allocator, writer: LogWriter) !AuditLogger {
