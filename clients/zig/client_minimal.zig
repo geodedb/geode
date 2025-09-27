@@ -4,7 +4,7 @@ const geode = @import("geode"); // access unicode utilities
 // Minimal client for cross-compilation testing
 pub const Config = struct {
     host: []const u8 = "127.0.0.1",
-    port: u16 = 7567,
+    port: u16 = 8443,
 };
 
 pub const Client = struct {

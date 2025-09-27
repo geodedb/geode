@@ -8,19 +8,19 @@ import (
 )
 
 type Pool struct {
-	addr string
-	helloName string
-	helloVer string
-	conf string
-	pageSize int
-	max int
+	addr        string
+	helloName   string
+	helloVer    string
+	conf        string
+	pageSize    int
+	max         int
 	idleTimeout time.Duration
-	mu sync.Mutex
-	idle []*Conn
-	lastUsed map[*Conn]time.Time
-	created int
-	closing bool
-	cond *sync.Cond
+	mu          sync.Mutex
+	idle        []*Conn
+	lastUsed    map[*Conn]time.Time
+	created     int
+	closing     bool
+	cond        *sync.Cond
 }
 
 func NewPool(addr, helloName, helloVer, conf string, pageSize, max int, idleTimeout time.Duration) *Pool {
@@ -34,14 +34,20 @@ func (p *Pool) Acquire(ctx context.Context) (*Conn, error) {
 	jitter := func() { time.Sleep(time.Duration(5+time.Now().UnixNano()%5) * time.Millisecond) }
 	for {
 		p.mu.Lock()
-		if p.closing { p.mu.Unlock(); return nil, errors.New("pool closed") }
+		if p.closing {
+			p.mu.Unlock()
+			return nil, errors.New("pool closed")
+		}
 		// prune expired
 		if p.idleTimeout > 0 {
 			now := time.Now()
 			kept := p.idle[:0]
 			for _, c := range p.idle {
 				if lu, ok := p.lastUsed[c]; ok && now.Sub(lu) > p.idleTimeout {
-					_ = c.Close(); p.created--; delete(p.lastUsed, c); continue
+					_ = c.Close()
+					p.created--
+					delete(p.lastUsed, c)
+					continue
 				}
 				kept = append(kept, c)
 			}
@@ -59,11 +65,19 @@ func (p *Pool) Acquire(ctx context.Context) (*Conn, error) {
 			p.mu.Unlock()
 			db := &DB{addr: p.addr, pageSize: p.pageSize, helloName: p.helloName, helloVer: p.helloVer, conf: p.conf}
 			c, err := db.Connect(ctx)
-			if err != nil { p.mu.Lock(); p.created--; p.mu.Unlock(); return nil, err }
+			if err != nil {
+				p.mu.Lock()
+				p.created--
+				p.mu.Unlock()
+				return nil, err
+			}
 			return c, nil
 		}
 		// wait
-		if time.Now().After(deadline) { p.mu.Unlock(); return nil, errors.New("pool acquire timeout") }
+		if time.Now().After(deadline) {
+			p.mu.Unlock()
+			return nil, errors.New("pool acquire timeout")
+		}
 		p.cond.Wait()
 		p.mu.Unlock()
 		jitter()
@@ -71,19 +85,30 @@ func (p *Pool) Acquire(ctx context.Context) (*Conn, error) {
 }
 
 func (p *Pool) Release(c *Conn) {
-	if c == nil { return }
+	if c == nil {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closing { _ = c.Close(); p.created--; return }
-	if p.lastUsed != nil { p.lastUsed[c] = time.Now() }
+	if p.closing {
+		_ = c.Close()
+		p.created--
+		return
+	}
+	if p.lastUsed != nil {
+		p.lastUsed[c] = time.Now()
+	}
 	p.idle = append(p.idle, c)
 	p.cond.Signal()
 }
 
 func (p *Pool) Close() {
-	p.mu.Lock(); defer p.mu.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.closing = true
-	for _, c := range p.idle { _ = c.Close() }
+	for _, c := range p.idle {
+		_ = c.Close()
+	}
 	p.idle = nil
 	p.lastUsed = nil
 	p.created = 0

@@ -238,16 +238,16 @@ func TestTimeSeriesPoint(t *testing.T) {
 	// Test timestamp conversion
 	now := time.Now()
 	nowMs := now.UnixMilli()
-	
+
 	point := TimeSeriesPoint{
 		Timestamp: time.Unix(0, nowMs*1000000),
 		Value:     25.5,
 	}
-	
+
 	if point.Timestamp.UnixMilli() != nowMs {
 		t.Errorf("Timestamp conversion failed: got %d, want %d", point.Timestamp.UnixMilli(), nowMs)
 	}
-	
+
 	if point.Value != 25.5 {
 		t.Errorf("Value mismatch: got %f, want %f", point.Value, 25.5)
 	}
@@ -263,9 +263,9 @@ func TestTimeSeriesAggregation(t *testing.T) {
 		TSAggFirst,
 		TSAggLast,
 	}
-	
+
 	expected := []string{"avg", "sum", "min", "max", "count", "first", "last"}
-	
+
 	for i, agg := range aggregations {
 		if string(agg) != expected[i] {
 			t.Errorf("Aggregation %d: got %s, want %s", i, agg, expected[i])
@@ -279,9 +279,9 @@ func TestInterpolationMethod(t *testing.T) {
 		InterpolateStep,
 		InterpolateNearest,
 	}
-	
+
 	expected := []string{"linear", "step", "nearest"}
-	
+
 	for i, method := range methods {
 		if string(method) != expected[i] {
 			t.Errorf("Interpolation method %d: got %s, want %s", i, method, expected[i])

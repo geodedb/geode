@@ -44,18 +44,18 @@ type Permission struct {
 
 // RLSPolicy represents a Row-Level Security policy
 type RLSPolicy struct {
-	ID                int64             `json:"id"`
-	Name              string            `json:"name"`
-	Table             string            `json:"table"`
-	Graph             string            `json:"graph"`
-	Operation         string            `json:"operation"`
-	Permissive        bool              `json:"permissive"`
-	Roles             []int64           `json:"roles"`
-	UsingExpression   string            `json:"using_expr,omitempty"`
-	CheckExpression   string            `json:"check_expr,omitempty"`
-	Enabled           bool              `json:"enabled"`
-	DataClassification string           `json:"data_classification,omitempty"`
-	AuditLevel        string            `json:"audit_level"`
+	ID                 int64   `json:"id"`
+	Name               string  `json:"name"`
+	Table              string  `json:"table"`
+	Graph              string  `json:"graph"`
+	Operation          string  `json:"operation"`
+	Permissive         bool    `json:"permissive"`
+	Roles              []int64 `json:"roles"`
+	UsingExpression    string  `json:"using_expr,omitempty"`
+	CheckExpression    string  `json:"check_expr,omitempty"`
+	Enabled            bool    `json:"enabled"`
+	DataClassification string  `json:"data_classification,omitempty"`
+	AuditLevel         string  `json:"audit_level"`
 }
 
 // SessionInfo contains session information
@@ -79,28 +79,28 @@ func (a *AuthClient) Login(ctx context.Context, username, password string) (*Ses
 		"username": username,
 		"password": password,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return nil, fmt.Errorf("failed to send login request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read login response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return nil, fmt.Errorf("login failed: %s", msg)
 		}
 		return nil, fmt.Errorf("login failed with status: %s", status)
 	}
-	
+
 	result, ok := resp["result"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("invalid response format")
 	}
-	
+
 	session := &SessionInfo{}
 	if token, ok := result["token"].(string); ok {
 		session.Token = token
@@ -123,7 +123,7 @@ func (a *AuthClient) Login(ctx context.Context, username, password string) (*Ses
 			}
 		}
 	}
-	
+
 	return session, nil
 }
 
@@ -133,23 +133,23 @@ func (a *AuthClient) Logout(ctx context.Context, token string) error {
 		"type":  "AUTH_LOGOUT",
 		"token": token,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return fmt.Errorf("failed to send logout request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read logout response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return fmt.Errorf("logout failed: %s", msg)
 		}
 		return fmt.Errorf("logout failed with status: %s", status)
 	}
-	
+
 	return nil
 }
 
@@ -167,30 +167,30 @@ func (a *AuthClient) CreateUser(ctx context.Context, username, email, password s
 	if len(metadata) > 0 {
 		req["metadata"] = metadata
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return nil, fmt.Errorf("failed to send create user request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return nil, fmt.Errorf("create user failed: %s", msg)
 		}
 		return nil, fmt.Errorf("create user failed with status: %s", status)
 	}
-	
+
 	// Parse user from response
 	result, _ := resp["result"].(map[string]any)
 	user := &User{}
 	if data, err := json.Marshal(result); err == nil {
 		_ = json.Unmarshal(data, user)
 	}
-	
+
 	return user, nil
 }
 
@@ -200,23 +200,23 @@ func (a *AuthClient) DeleteUser(ctx context.Context, userID int64) error {
 		"type":    "AUTH_DELETE_USER",
 		"user_id": userID,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return fmt.Errorf("failed to send delete user request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return fmt.Errorf("delete user failed: %s", msg)
 		}
 		return fmt.Errorf("delete user failed with status: %s", status)
 	}
-	
+
 	return nil
 }
 
@@ -228,29 +228,29 @@ func (a *AuthClient) CreateRole(ctx context.Context, name, description string, p
 		"description": description,
 		"permissions": permissions,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return nil, fmt.Errorf("failed to send create role request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return nil, fmt.Errorf("create role failed: %s", msg)
 		}
 		return nil, fmt.Errorf("create role failed with status: %s", status)
 	}
-	
+
 	result, _ := resp["result"].(map[string]any)
 	role := &Role{}
 	if data, err := json.Marshal(result); err == nil {
 		_ = json.Unmarshal(data, role)
 	}
-	
+
 	return role, nil
 }
 
@@ -261,39 +261,39 @@ func (a *AuthClient) GrantPermission(ctx context.Context, roleID int64, permissi
 		"role_id":       roleID,
 		"permission_id": permissionID,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return fmt.Errorf("failed to send grant permission request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return fmt.Errorf("grant permission failed: %s", msg)
 		}
 		return fmt.Errorf("grant permission failed with status: %s", status)
 	}
-	
+
 	return nil
 }
 
 // CreateRLSPolicy creates a new Row-Level Security policy
 func (a *AuthClient) CreateRLSPolicy(ctx context.Context, policy *RLSPolicy) error {
 	req := map[string]any{
-		"type":      "RLS_CREATE_POLICY",
-		"name":      policy.Name,
-		"table":     policy.Table,
-		"graph":     policy.Graph,
-		"operation": policy.Operation,
+		"type":       "RLS_CREATE_POLICY",
+		"name":       policy.Name,
+		"table":      policy.Table,
+		"graph":      policy.Graph,
+		"operation":  policy.Operation,
 		"permissive": policy.Permissive,
-		"roles":     policy.Roles,
-		"enabled":   policy.Enabled,
+		"roles":      policy.Roles,
+		"enabled":    policy.Enabled,
 	}
-	
+
 	if policy.UsingExpression != "" {
 		req["using_expr"] = policy.UsingExpression
 	}
@@ -306,23 +306,23 @@ func (a *AuthClient) CreateRLSPolicy(ctx context.Context, policy *RLSPolicy) err
 	if policy.AuditLevel != "" {
 		req["audit_level"] = policy.AuditLevel
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return fmt.Errorf("failed to send create policy request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return fmt.Errorf("create policy failed: %s", msg)
 		}
 		return fmt.Errorf("create policy failed with status: %s", status)
 	}
-	
+
 	return nil
 }
 
@@ -333,23 +333,23 @@ func (a *AuthClient) EnableRLSPolicy(ctx context.Context, policyID int64, enable
 		"policy_id": policyID,
 		"enabled":   enable,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return fmt.Errorf("failed to send enable policy request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return fmt.Errorf("enable policy failed: %s", msg)
 		}
 		return fmt.Errorf("enable policy failed with status: %s", status)
 	}
-	
+
 	return nil
 }
 
@@ -361,28 +361,28 @@ func (a *AuthClient) CheckPermission(ctx context.Context, userID int64, resource
 		"resource": resource,
 		"action":   action,
 	}
-	
+
 	if err := a.conn.writeJSON(req); err != nil {
 		return false, fmt.Errorf("failed to send check permission request: %w", err)
 	}
-	
+
 	resp, err := a.conn.readJSON(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	if status, ok := resp["status"].(string); ok && status != "00000" {
 		if msg, ok := resp["message"].(string); ok {
 			return false, fmt.Errorf("check permission failed: %s", msg)
 		}
 		return false, fmt.Errorf("check permission failed with status: %s", status)
 	}
-	
+
 	result, ok := resp["result"].(map[string]any)
 	if !ok {
 		return false, fmt.Errorf("invalid response format")
 	}
-	
+
 	allowed, _ := result["allowed"].(bool)
 	return allowed, nil
 }

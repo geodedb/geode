@@ -15,8 +15,8 @@ type TimeSeriesPoint struct {
 
 // TimeSeriesResult represents the result of a time-series query
 type TimeSeriesResult struct {
-	SeriesID string            `json:"series_id"`
-	Points   []TimeSeriesPoint `json:"points"`
+	SeriesID string                 `json:"series_id"`
+	Points   []TimeSeriesPoint      `json:"points"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -68,19 +68,19 @@ func (q *TimeSeriesQueryBuilder) ValueAt(timestamp int64) string {
 
 // SampleBy downsamples the time series with aggregation
 func (q *TimeSeriesQueryBuilder) SampleBy(intervalMs int64, startTs int64, endTs int64, aggregation TimeSeriesAggregation) string {
-	return fmt.Sprintf("RETURN sample_by('%s', %d, %d, %d, '%s') AS result", 
+	return fmt.Sprintf("RETURN sample_by('%s', %d, %d, %d, '%s') AS result",
 		q.seriesKey, intervalMs, startTs, endTs, aggregation)
 }
 
 // Interpolate gets an interpolated value at a specific timestamp
 func (q *TimeSeriesQueryBuilder) Interpolate(timestamp int64, method InterpolationMethod) string {
-	return fmt.Sprintf("RETURN interpolate('%s', %d, '%s') AS result", 
+	return fmt.Sprintf("RETURN interpolate('%s', %d, '%s') AS result",
 		q.seriesKey, timestamp, method)
 }
 
 // MovingAverage calculates a moving average over the series
 func (q *TimeSeriesQueryBuilder) MovingAverage(windowMs int64, stepMs int64) string {
-	return fmt.Sprintf("RETURN moving_avg('%s', %d, %d) AS result", 
+	return fmt.Sprintf("RETURN moving_avg('%s', %d, %d) AS result",
 		q.seriesKey, windowMs, stepMs)
 }
 
@@ -99,7 +99,7 @@ func (q *TimeSeriesQueryBuilder) Derivative(order int) string {
 
 // TimeBucket aggregates data into time buckets
 func (q *TimeSeriesQueryBuilder) TimeBucket(bucketMs int64, startTs int64, endTs int64) string {
-	return fmt.Sprintf("RETURN time_bucket('%s', %d, %d, %d) AS result", 
+	return fmt.Sprintf("RETURN time_bucket('%s', %d, %d, %d) AS result",
 		q.seriesKey, bucketMs, startTs, endTs)
 }
 
@@ -108,7 +108,7 @@ func ParseTimeSeriesResult(v Value) (*TimeSeriesResult, error) {
 	if v.Kind != Object {
 		return nil, fmt.Errorf("expected object value for time-series result")
 	}
-	
+
 	// Handle single point result
 	if ts, ok := v.Obj["ts"]; ok {
 		timestamp := time.Unix(0, ts.Int*1000000) // Convert ms to ns
@@ -122,7 +122,7 @@ func ParseTimeSeriesResult(v Value) (*TimeSeriesResult, error) {
 				value = f
 			}
 		}
-		
+
 		return &TimeSeriesResult{
 			Points: []TimeSeriesPoint{{
 				Timestamp: timestamp,
@@ -130,7 +130,7 @@ func ParseTimeSeriesResult(v Value) (*TimeSeriesResult, error) {
 			}},
 		}, nil
 	}
-	
+
 	// Handle array of points
 	if result, ok := v.Obj["result"]; ok && result.Kind == Array {
 		points := make([]TimeSeriesPoint, 0, len(result.Arr))
@@ -138,16 +138,16 @@ func ParseTimeSeriesResult(v Value) (*TimeSeriesResult, error) {
 			if item.Kind != Object {
 				continue
 			}
-			
+
 			ts, hasTs := item.Obj["ts"]
 			if !hasTs {
 				continue
 			}
-			
+
 			timestamp := time.Unix(0, ts.Int*1000000)
 			value := float64(0)
 			hasValue := false
-			
+
 			// Try different value fields
 			for _, field := range []string{"value", "avg", "rate", "derivative"} {
 				if val, ok := item.Obj[field]; ok {
@@ -166,7 +166,7 @@ func ParseTimeSeriesResult(v Value) (*TimeSeriesResult, error) {
 					break
 				}
 			}
-			
+
 			// Only add points with non-null values
 			if hasValue {
 				points = append(points, TimeSeriesPoint{
@@ -175,12 +175,12 @@ func ParseTimeSeriesResult(v Value) (*TimeSeriesResult, error) {
 				})
 			}
 		}
-		
+
 		return &TimeSeriesResult{
 			Points: points,
 		}, nil
 	}
-	
+
 	return nil, fmt.Errorf("unable to parse time-series result")
 }
 
@@ -191,21 +191,21 @@ func (db *DB) QueryTimeSeries(ctx context.Context, query string) (*TimeSeriesRes
 		return nil, err
 	}
 	defer conn.Close()
-	
+
 	iter, err := conn.NewIterator(ctx, query, nil, db.pageSize)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	row, err := iter.Next()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if result, ok := row["result"]; ok {
 		return ParseTimeSeriesResult(result)
 	}
-	
+
 	// Try to parse the entire row as a time-series result
 	return ParseTimeSeriesResult(Value{Kind: Object, Obj: row})
 }
@@ -220,26 +220,26 @@ func (db *DB) InsertTimeSeriesData(ctx context.Context, seriesKey string, points
 			"value": p.Value,
 		}
 	}
-	
+
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	
+
 	// Create insertion query
 	query := fmt.Sprintf("CALL db.ts.insert('%s', '%s')", seriesKey, jsonData)
-	
+
 	conn, err := db.Connect(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	
+
 	iter, err := conn.NewIterator(ctx, query, nil, db.pageSize)
 	if err != nil {
 		return err
 	}
-	
+
 	// Consume any results
 	for {
 		_, err := iter.Next()

@@ -14,11 +14,17 @@ func StructScan[T any](row map[string]Value, dest *T) error {
 			fv := rv.Field(i)
 			switch v.Kind {
 			case Int:
-				if fv.Kind() == reflect.Int64 || fv.Kind() == reflect.Int { fv.SetInt(v.Int) }
+				if fv.Kind() == reflect.Int64 || fv.Kind() == reflect.Int {
+					fv.SetInt(v.Int)
+				}
 			case Bool:
-				if fv.Kind() == reflect.Bool { fv.SetBool(v.Bool) }
+				if fv.Kind() == reflect.Bool {
+					fv.SetBool(v.Bool)
+				}
 			case Str:
-				if fv.Kind() == reflect.String { fv.SetString(v.Str) }
+				if fv.Kind() == reflect.String {
+					fv.SetString(v.Str)
+				}
 			}
 		}
 	}

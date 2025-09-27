@@ -186,7 +186,7 @@ func (qb *QueryBuilder) WithParams(params map[string]interface{}) *QueryBuilder 
 // Build generates the final GQL query string
 func (qb *QueryBuilder) Build() string {
 	var parts []string
-	
+
 	for _, clause := range qb.clauses {
 		switch clause.typ {
 		case matchClause:
@@ -219,7 +219,7 @@ func (qb *QueryBuilder) Build() string {
 			parts = append(parts, fmt.Sprintf("GROUP BY %s", clause.content))
 		}
 	}
-	
+
 	return strings.Join(parts, "\n")
 }
 
@@ -260,11 +260,11 @@ func (pb *PatternBuilder) Node(variable, label string, properties ...map[string]
 	} else {
 		pattern = "("
 	}
-	
+
 	if label != "" {
 		pattern += fmt.Sprintf(":%s", label)
 	}
-	
+
 	if len(properties) > 0 && properties[0] != nil {
 		props := make([]string, 0)
 		for k, v := range properties[0] {
@@ -272,21 +272,21 @@ func (pb *PatternBuilder) Node(variable, label string, properties ...map[string]
 		}
 		pattern += fmt.Sprintf(" {%s}", strings.Join(props, ", "))
 	}
-	
+
 	pattern += ")"
-	
+
 	pb.elements = append(pb.elements, patternElement{
 		typ:     nodePattern,
 		content: pattern,
 	})
-	
+
 	return pb
 }
 
 // Edge adds an edge pattern
 func (pb *PatternBuilder) Edge(variable, typ string, direction EdgeDirection, properties ...map[string]interface{}) *PatternBuilder {
 	var pattern string
-	
+
 	switch direction {
 	case Outgoing:
 		pattern = "-"
@@ -295,18 +295,18 @@ func (pb *PatternBuilder) Edge(variable, typ string, direction EdgeDirection, pr
 	case Undirected:
 		pattern = "-"
 	}
-	
+
 	if variable != "" || typ != "" || len(properties) > 0 {
 		pattern += "["
-		
+
 		if variable != "" {
 			pattern += variable
 		}
-		
+
 		if typ != "" {
 			pattern += fmt.Sprintf(":%s", typ)
 		}
-		
+
 		if len(properties) > 0 && properties[0] != nil {
 			props := make([]string, 0)
 			for k, v := range properties[0] {
@@ -314,10 +314,10 @@ func (pb *PatternBuilder) Edge(variable, typ string, direction EdgeDirection, pr
 			}
 			pattern += fmt.Sprintf(" {%s}", strings.Join(props, ", "))
 		}
-		
+
 		pattern += "]"
 	}
-	
+
 	switch direction {
 	case Outgoing:
 		pattern += "->"
@@ -326,12 +326,12 @@ func (pb *PatternBuilder) Edge(variable, typ string, direction EdgeDirection, pr
 	case Undirected:
 		pattern += "-"
 	}
-	
+
 	pb.elements = append(pb.elements, patternElement{
 		typ:     edgePattern,
 		content: pattern,
 	})
-	
+
 	return pb
 }
 
@@ -472,7 +472,7 @@ func FindFriends(personName string, limit int) (string, map[string]interface{}) 
 		OrderBy("friend.age DESC").
 		Limit(limit).
 		WithParam("name", personName)
-	
+
 	return qb.Build(), qb.GetParams()
 }
 
@@ -488,7 +488,7 @@ func CreatePerson(name string, age int, company string) (string, map[string]inte
 			"age":     age,
 			"company": company,
 		})
-	
+
 	return qb.Build(), qb.GetParams()
 }
 
@@ -499,7 +499,7 @@ func FindShortestPath(person1, person2 string) (string, map[string]interface{}) 
 		Edge("", "KNOWS", Undirected).VariableLength(1, 6).
 		Node("b", "Person", map[string]interface{}{"name": "$person2"}).
 		Build()
-	
+
 	qb := NewQueryBuilder().
 		Match(fmt.Sprintf("path = %s", pattern)).
 		Return("path").
@@ -509,7 +509,7 @@ func FindShortestPath(person1, person2 string) (string, map[string]interface{}) 
 			"person1": person1,
 			"person2": person2,
 		})
-	
+
 	return qb.Build(), qb.GetParams()
 }
 
@@ -520,7 +520,7 @@ func ComplexQuery() string {
 		NotEquals("p.city", "'NYC'").
 		IsNotNull("p.email").
 		And()
-	
+
 	qb := NewQueryBuilder().
 		Match("(p:Person)").
 		Where(predicate).
@@ -536,6 +536,6 @@ func ComplexQuery() string {
 		GroupBy("p.name", "c.name").
 		OrderBy("total_spent DESC").
 		Limit(10)
-	
+
 	return qb.Build()
 }

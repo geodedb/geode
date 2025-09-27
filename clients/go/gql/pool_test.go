@@ -26,7 +26,10 @@ func TestPoolConcurrency(t *testing.T) { // part of pool tests
 		go func() {
 			defer wg.Done()
 			c, err := p.Acquire(ctx)
-			if err != nil { t.Errorf("acquire: %v", err); return }
+			if err != nil {
+				t.Errorf("acquire: %v", err)
+				return
+			}
 			// simple query
 			_, _, _ = c.Query(ctx, "RETURN 1 AS x", nil, 4)
 			p.Release(c)
@@ -37,8 +40,12 @@ func TestPoolConcurrency(t *testing.T) { // part of pool tests
 	close(conns)
 	// Count unique pointer addresses used
 	uniq := map[*Conn]struct{}{}
-	for c := range conns { uniq[c] = struct{}{} }
-	if len(uniq) > 3 { t.Fatalf("expected at most 3 connections, got %d", len(uniq)) }
+	for c := range conns {
+		uniq[c] = struct{}{}
+	}
+	if len(uniq) > 3 {
+		t.Fatalf("expected at most 3 connections, got %d", len(uniq))
+	}
 	p.Close()
 }
 
@@ -52,11 +59,15 @@ func TestPoolAcquireTimeout(t *testing.T) {
 	p := NewPool(addr, "gql-go", "0.1", "min", 32, 1, 10*time.Second)
 	ctx := context.Background()
 	c, err := p.Acquire(ctx)
-	if err != nil { t.Fatalf("first acquire: %v", err) }
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
 	// Close pool to force error on next acquire
 	p.Close()
 	c2, err := p.Acquire(ctx)
-	if err == nil || c2 != nil { t.Fatalf("expected error acquiring from closed pool") }
+	if err == nil || c2 != nil {
+		t.Fatalf("expected error acquiring from closed pool")
+	}
 	_ = c
 }
 
@@ -68,19 +79,27 @@ func TestPoolIdleTimeout(t *testing.T) {
 	addr := startQUIC(t)
 	p := NewPool(addr, "gql-go", "0.1", "min", 32, 2, 50*time.Millisecond)
 	ctx := context.Background()
-	c1, err := p.Acquire(ctx); if err != nil { t.Fatalf("acq1: %v", err) }
+	c1, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acq1: %v", err)
+	}
 	p.Release(c1)
 	time.Sleep(120 * time.Millisecond) // exceed idle timeout
-	c2, err := p.Acquire(ctx); if err != nil {
+	c2, err := p.Acquire(ctx)
+	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			// Retry: server may have died; restart and retry once
 			addr = startQUIC(t)
 			_ = addr
 			c2, err = p.Acquire(ctx)
 		}
-		if err != nil { t.Fatalf("acq2: %v", err) }
+		if err != nil {
+			t.Fatalf("acq2: %v", err)
+		}
 	}
-	if c1 == c2 { t.Fatalf("expected new connection after idle timeout prune") }
+	if c1 == c2 {
+		t.Fatalf("expected new connection after idle timeout prune")
+	}
 	p.Release(c2)
 	p.Close()
 }
