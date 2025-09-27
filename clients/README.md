@@ -49,6 +49,11 @@ Comprehensive client libraries for Geode graph database supporting all features 
 - **Arrays**: Nested arrays
 - **Objects**: Nested objects/maps
 - **Graph Types**: Nodes, edges, paths
+- **Network Types**: IpAddr, Subnet (CIDR), Mac addresses
+- **Geographic Types**: LatLon, LatLonAlt, Geometry (WKT/GeoJSON)
+- **Specialized Types**: Hash, Currency (ISO 4217), LanguageTag (BCP-47)
+- **Scientific Types**: Temperature, Pressure with units
+- **Vector Types**: VectorF32 for embeddings
 
 ## Go Client
 
@@ -252,6 +257,61 @@ try client.createRLSPolicy(
     name, table, graph, operation,
     using_expr, check_expr, roles
 );
+```
+
+### Extended Type Operations
+
+#### Go
+
+```go
+// Network types
+result, err := conn.Query(ctx, 
+    `RETURN IpAddr("192.168.1.1") AS ip, 
+            Subnet("10.0.0.0/8") AS subnet,
+            Mac("aa:bb:cc:dd:ee:ff") AS mac`,
+    nil, 100)
+
+// Geographic types  
+result, err := conn.Query(ctx,
+    `RETURN LatLon(51.5074, -0.1278) AS london,
+            distance_haversine($p1, $p2) AS dist`,
+    map[string]interface{}{
+        "p1": gql.LatLon{Lat: 0, Lon: 0},
+        "p2": gql.LatLon{Lat: 0, Lon: 1},
+    }, 100)
+
+// Vector similarity search
+result, err := conn.Query(ctx,
+    `MATCH (n:Document) 
+     WHERE vector_knn(n.embedding, $query, 10, "cosine")[0].score > 0.8
+     RETURN n`,
+    map[string]interface{}{
+        "query": []float32{0.1, 0.2, 0.3},
+    }, 100)
+```
+
+#### Zig
+
+```zig
+// Network types
+var iter = try client.query(
+    \\RETURN IpAddr("2001:db8::1") AS ipv6,
+    \\       ip_contains(Subnet("192.168.0.0/16"), IpAddr("192.168.1.1")) AS contains
+, null);
+
+// Geographic types
+const params = .{
+    .p1 = LatLon{ .lat = 51.5, .lon = -0.1 },
+};
+var iter = try client.query(
+    "RETURN distance_haversine($p1, LatLon(48.8566, 2.3522)) AS dist",
+    params);
+
+// Vector operations
+const embedding = [_]f32{0.1, 0.2, 0.3};
+var iter = try client.query(
+    "MATCH (n) WHERE vector_dot(n.embedding, $vec) > 0.5 RETURN n",
+    .{ .vec = embedding });
 ```
 
 ### Graph Operations

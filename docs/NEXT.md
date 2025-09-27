@@ -4,6 +4,19 @@ Actionable slices derived strictly from current CANARY evidence. Each slice targ
 
 Snapshot Date: 2025‑09‑26 (matches GAP_ANALYSIS.md). No source edits performed. Future work requires adding or updating CANARY tags in code (out of scope here).
 
+## Completed (v0.18.0)
+
+### Extended Type System Implementation ✅
+
+| Field       | Detail |
+| ----------- | ------ |
+| Why         | Core types limited to primitives; no native support for network, geographic, vector, or specialized domain types |
+| What        | Implemented 12 new first-class types with 40+ built-in functions and 3 persisted index types |
+| Completed   | - IpAddr, Subnet, Mac with Patricia trie indexing<br>- LatLon, Geometry with R-tree spatial indexing<br>- VectorF32 with HNSW similarity indexing<br>- Hash, Currency, LanguageTag, Temperature, Pressure types<br>- Full encode/decode, constructors, predicates |
+| Tests       | - tools/canary_main.zig (19 invariants)<br>- tools/cpa_accept_main.zig (18 acceptance criteria)<br>- tests/test_type_extensions.zig (15 unit tests) |
+| ISO refs    | Data types (§4.3-4.16), Built-in functions (§7), Value expressions (§9) |
+| Impact      | Enables domain-specific queries: IP containment, spatial search, vector similarity, multi-currency, i18n |
+
 ## Slices (Backlog)
 
 ### 1. Federation Latency Aggregates (REQ-GQL-024 / LatencyAggregate\*)

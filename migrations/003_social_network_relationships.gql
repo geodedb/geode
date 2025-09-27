@@ -1,0 +1,352 @@
+-- Migration: Social Network Relationships
+-- Version: 003
+-- Description: Creates relationships between users, posts, companies, and other entities
+-- Author: Geode Team
+-- Date: 2025-09-26
+-- Dependencies: 002_social_network_data.gql
+
+-- Create friendships and follows
+-- Core influencers have many followers
+MATCH (follower:User), (followed:User)
+WHERE follower.id IN ['user-1', 'user-2', 'user-3', 'user-4', 'user-5']
+  AND followed.id IN ['user-3', 'user-4']
+  AND follower <> followed
+CREATE (follower)-[:FOLLOWS {
+    since: timestamp('2021-01-01T00:00:00Z') + duration('P' + toString(rand() * 365) + 'D'),
+    notifications: rand() > 0.3
+}]->(followed);
+
+-- Create a follow network for regular users
+MATCH (u1:User), (u2:User)
+WHERE toInteger(substring(u1.id, 5)) > 5 
+  AND toInteger(substring(u2.id, 5)) > 5
+  AND u1 <> u2
+  AND rand() < 0.15  -- 15% chance of follow
+CREATE (u1)-[:FOLLOWS {
+    since: timestamp('2022-01-01T00:00:00Z') + duration('P' + toString(rand() * 730) + 'D'),
+    notifications: rand() > 0.5
+}]->(u2);
+
+-- Create mutual friendships among some users
+MATCH (u1:User), (u2:User)
+WHERE u1.id IN ['user-1', 'user-2', 'user-3', 'user-5']
+  AND u2.id IN ['user-1', 'user-2', 'user-3', 'user-5']
+  AND u1.id < u2.id  -- Avoid duplicates
+CREATE (u1)-[:FRIENDS_WITH {
+    since: timestamp('2020-06-01T00:00:00Z') + duration('P' + toString(rand() * 365) + 'D'),
+    closeness_score: 0.5 + (rand() * 0.5)
+}]->(u2);
+
+CREATE (u2)-[:FRIENDS_WITH {
+    since: timestamp('2020-06-01T00:00:00Z') + duration('P' + toString(rand() * 365) + 'D'),
+    closeness_score: 0.5 + (rand() * 0.5)
+}]->(u1);
+
+-- Create Groups
+CREATE (:Group {
+    id: 'group-1',
+    name: 'Graph Database Enthusiasts',
+    description: 'A community for graph database developers, researchers, and enthusiasts',
+    created_at: timestamp('2020-03-15T10:00:00Z'),
+    member_count: 0,
+    privacy: 'public',
+    rules: ['Be respectful', 'No spam', 'Stay on topic', 'Share knowledge'],
+    cover_image_hash: Hash('SHA3-256', 'group-1-cover')
+});
+
+CREATE (:Group {
+    id: 'group-2',
+    name: 'AI/ML Practitioners',
+    description: 'Share insights, papers, and code about machine learning',
+    created_at: timestamp('2019-08-20T14:30:00Z'),
+    member_count: 0,
+    privacy: 'public',
+    rules: ['Share sources', 'Constructive criticism only', 'No promotional content'],
+    cover_image_hash: Hash('SHA3-256', 'group-2-cover')
+});
+
+CREATE (:Group {
+    id: 'group-3',
+    name: 'Startup Founders Network',
+    description: 'Private network for startup founders and early employees',
+    created_at: timestamp('2021-01-10T09:00:00Z'),
+    member_count: 0,
+    privacy: 'private',
+    rules: ['Verified founders only', 'Confidentiality required', 'Help each other'],
+    cover_image_hash: Hash('SHA3-256', 'group-3-cover')
+});
+
+-- Add users to groups
+MATCH (u:User), (g:Group {id: 'group-1'})
+WHERE u.id IN ['user-1', 'user-2', 'user-3']
+CREATE (u)-[:MEMBER_OF {
+    joined_at: timestamp('2020-04-01T00:00:00Z') + duration('P' + toString(rand() * 365) + 'D'),
+    role: CASE u.id WHEN 'user-1' THEN 'admin' ELSE 'member' END
+}]->(g);
+
+MATCH (u:User), (g:Group {id: 'group-2'})
+WHERE u.id IN ['user-2', 'user-4']
+CREATE (u)-[:MEMBER_OF {
+    joined_at: timestamp('2020-01-01T00:00:00Z') + duration('P' + toString(rand() * 365) + 'D'),
+    role: CASE u.id WHEN 'user-2' THEN 'moderator' ELSE 'member' END
+}]->(g);
+
+MATCH (u:User), (g:Group {id: 'group-3'})
+WHERE u.id IN ['user-4', 'user-5']
+CREATE (u)-[:MEMBER_OF {
+    joined_at: timestamp('2021-02-01T00:00:00Z') + duration('P' + toString(rand() * 365) + 'D'),
+    role: 'member'
+}]->(g);
+
+-- Create Posts
+CREATE (:Post {
+    id: 'post-1',
+    content: 'Just deployed our new graph database cluster! The performance improvements with the new query optimizer are incredible 🚀 #GraphDB #Performance',
+    created_at: timestamp('2024-09-25T10:30:00Z'),
+    updated_at: null,
+    likes: 45,
+    shares: 12,
+    comments: 8,
+    content_vector: VectorF32([0.8, 0.7, 0.9, 0.6, 0.5, 0.4, 0.3, 0.2]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.85
+});
+
+CREATE (:Post {
+    id: 'post-2',
+    content: 'Machine learning models are only as good as the data they\'re trained on. Here\'s my latest blog post on data quality metrics: https://example.com/ml-data-quality',
+    created_at: timestamp('2024-09-24T14:15:00Z'),
+    updated_at: null,
+    likes: 128,
+    shares: 34,
+    comments: 19,
+    content_vector: VectorF32([0.7, 0.8, 0.6, 0.9, 0.4, 0.5, 0.2, 0.3]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.72
+});
+
+CREATE (:Post {
+    id: 'post-3',
+    content: 'Excited to announce that we\'re hiring! Looking for senior engineers to join our team at TechCorp. Experience with distributed systems is a plus.',
+    created_at: timestamp('2024-09-23T09:00:00Z'),
+    updated_at: timestamp('2024-09-23T09:30:00Z'),
+    likes: 256,
+    shares: 89,
+    comments: 42,
+    content_vector: VectorF32([0.6, 0.5, 0.8, 0.7, 0.3, 0.4, 0.9, 0.2]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.91
+});
+
+CREATE (:Post {
+    id: 'post-4',
+    content: 'The future of work is remote. Our team has been fully distributed for 3 years now, and productivity has never been higher. Here are the tools we use...',
+    created_at: timestamp('2024-09-22T16:45:00Z'),
+    updated_at: null,
+    likes: 89,
+    shares: 23,
+    comments: 31,
+    content_vector: VectorF32([0.5, 0.6, 0.7, 0.8, 0.2, 0.3, 0.4, 0.9]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.78
+});
+
+CREATE (:Post {
+    id: 'post-5',
+    content: 'Just launched my new design portfolio! Check it out and let me know what you think 🎨 https://emma-designs.example.com',
+    created_at: timestamp('2024-09-21T11:20:00Z'),
+    updated_at: null,
+    likes: 67,
+    shares: 15,
+    comments: 12,
+    content_vector: VectorF32([0.4, 0.9, 0.3, 0.8, 0.5, 0.6, 0.7, 0.2]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.88
+});
+
+-- Generate more posts
+UNWIND range(6, 25) AS i
+CREATE (:Post {
+    id: 'post-' + toString(i),
+    content: CASE i % 5
+        WHEN 0 THEN 'Working on an exciting new feature for our product. Can\'t wait to share more details! #BuildInPublic'
+        WHEN 1 THEN 'Great conference today! Met amazing people and learned about the latest trends in tech. #Networking'
+        WHEN 2 THEN 'Just published a new tutorial on graph algorithms. Link in bio! #Education #GraphTheory'
+        WHEN 3 THEN 'Thoughts on the latest developments in AI? I think we\'re approaching a paradigm shift. #AI #Future'
+        ELSE 'Coffee and code - the perfect morning combination ☕ 💻 #DeveloperLife #Coding'
+    END,
+    created_at: timestamp('2024-09-20T00:00:00Z') - duration('P' + toString(i) + 'D'),
+    updated_at: CASE WHEN i % 3 = 0 THEN timestamp('2024-09-20T00:00:00Z') - duration('P' + toString(i - 1) + 'D') ELSE null END,
+    likes: (i * 13) % 200,
+    shares: (i * 7) % 50,
+    comments: (i * 5) % 30,
+    content_vector: VectorF32([
+        (i % 10) / 10.0,
+        ((i * 2) % 10) / 10.0,
+        ((i * 3) % 10) / 10.0,
+        ((i * 4) % 10) / 10.0,
+        ((i * 5) % 10) / 10.0,
+        ((i * 6) % 10) / 10.0,
+        ((i * 7) % 10) / 10.0,
+        ((i * 8) % 10) / 10.0
+    ]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.5 + ((i % 5) * 0.1)
+});
+
+-- Connect posts to users
+MATCH (u:User {id: 'user-1'}), (p:Post {id: 'post-1'})
+CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-1'}]->(p);
+
+MATCH (u:User {id: 'user-2'}), (p:Post {id: 'post-2'})
+CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-2'}]->(p);
+
+MATCH (u:User {id: 'user-3'}), (p:Post {id: 'post-3'})
+CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-3'}]->(p);
+
+MATCH (u:User {id: 'user-4'}), (p:Post {id: 'post-4'})
+CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-4'}]->(p);
+
+MATCH (u:User {id: 'user-5'}), (p:Post {id: 'post-5'})
+CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-5'}]->(p);
+
+-- Distribute remaining posts among users
+MATCH (p:Post)
+WHERE NOT ((:User)-[:POSTED]->(p))
+WITH p, toInteger(substring(p.id, 5)) AS post_num
+MATCH (u:User {id: 'user-' + toString(6 + (post_num % 45))})
+CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-auto-' + toString(post_num)}]->(p);
+
+-- Create likes on posts
+MATCH (u:User), (p:Post)
+WHERE rand() < 0.3  -- 30% chance of like
+  AND NOT (u)-[:POSTED]->(p)  -- Don't like own posts
+CREATE (u)-[:LIKES {
+    timestamp: p.created_at + duration('PT' + toString(rand() * 86400) + 'S'),
+    reaction: CASE 
+        WHEN rand() < 0.6 THEN 'like'
+        WHEN rand() < 0.8 THEN 'love'
+        WHEN rand() < 0.9 THEN 'wow'
+        ELSE 'haha'
+    END
+}]->(p);
+
+-- Create comments on posts
+MATCH (u:User), (p:Post)
+WHERE rand() < 0.1  -- 10% chance of comment
+CREATE (u)-[:COMMENTED_ON {
+    content: CASE toInteger(rand() * 5)
+        WHEN 0 THEN 'Great post! Thanks for sharing.'
+        WHEN 1 THEN 'Interesting perspective. I\'d love to hear more about this.'
+        WHEN 2 THEN 'This is exactly what I needed to read today!'
+        WHEN 3 THEN 'Have you considered the alternative approach?'
+        ELSE 'Awesome work! Keep it up!'
+    END,
+    timestamp: p.created_at + duration('PT' + toString(rand() * 172800) + 'S'),
+    edited: rand() < 0.1
+}]->(p);
+
+-- Create shares of posts
+MATCH (u:User), (p:Post)
+WHERE rand() < 0.05  -- 5% chance of share
+  AND NOT (u)-[:POSTED]->(p)
+CREATE (u)-[:SHARED {
+    timestamp: p.created_at + duration('PT' + toString(rand() * 259200) + 'S'),
+    comment: CASE 
+        WHEN rand() < 0.3 THEN 'Worth reading!'
+        WHEN rand() < 0.6 THEN 'This is important.'
+        ELSE null
+    END
+}]->(p);
+
+-- Connect users to companies
+MATCH (u:User {id: 'user-1'}), (c:Company {id: 'comp-1'})
+CREATE (u)-[:WORKS_AT {
+    position: 'Senior Software Engineer',
+    department: 'Engineering',
+    start_date: date('2021-03-15'),
+    end_date: null,
+    is_current: true
+}]->(c);
+
+MATCH (u:User {id: 'user-2'}), (c:Company {id: 'comp-5'})
+CREATE (u)-[:WORKS_AT {
+    position: 'Lead Data Scientist',
+    department: 'Research',
+    start_date: date('2020-08-01'),
+    end_date: null,
+    is_current: true
+}]->(c);
+
+MATCH (u:User {id: 'user-3'}), (c:Company {id: 'comp-1'})
+CREATE (u)-[:WORKS_AT {
+    position: 'Product Manager',
+    department: 'Product',
+    start_date: date('2019-11-10'),
+    end_date: null,
+    is_current: true
+}]->(c);
+
+MATCH (u:User {id: 'user-4'}), (c:Company {id: 'comp-2'})
+CREATE (u)-[:WORKS_AT {
+    position: 'Investment Director',
+    department: 'Venture Capital',
+    start_date: date('2018-05-20'),
+    end_date: null,
+    is_current: true
+}]->(c);
+
+MATCH (u:User {id: 'user-5'}), (c:Company {id: 'comp-3'})
+CREATE (u)-[:WORKS_AT {
+    position: 'UX Design Lead',
+    department: 'Design',
+    start_date: date('2022-01-15'),
+    end_date: null,
+    is_current: true
+}]->(c);
+
+-- Connect users to locations
+MATCH (u:User {location: 'San Francisco'}), (l:Location {name: 'San Francisco'})
+CREATE (u)-[:LOCATED_IN {since: date('2020-01-01'), is_primary: true}]->(l);
+
+MATCH (u:User {location: 'New York'}), (l:Location {name: 'New York'})
+CREATE (u)-[:LOCATED_IN {since: date('2019-06-01'), is_primary: true}]->(l);
+
+MATCH (u:User {location: 'London'}), (l:Location {name: 'London'})
+CREATE (u)-[:LOCATED_IN {since: date('2018-03-15'), is_primary: true}]->(l);
+
+MATCH (u:User {location: 'Tokyo'}), (l:Location {name: 'Tokyo'})
+CREATE (u)-[:LOCATED_IN {since: date('2017-11-20'), is_primary: true}]->(l);
+
+MATCH (u:User {location: 'Berlin'}), (l:Location {name: 'Berlin'})
+CREATE (u)-[:LOCATED_IN {since: date('2021-02-10'), is_primary: true}]->(l);
+
+-- Connect companies to locations
+MATCH (c:Company), (l:Location)
+WHERE distance_haversine(c.headquarters, l.coordinates) < 50000  -- Within 50km
+CREATE (c)-[:LOCATED_IN {since: c.founded, is_primary: true}]->(l);
+
+-- Tag posts with topics
+MATCH (p:Post {id: 'post-1'}), (t:Topic {id: 'topic-1'})
+CREATE (p)-[:TAGGED_WITH {confidence: 0.95, auto_generated: false}]->(t);
+
+MATCH (p:Post {id: 'post-2'}), (t:Topic {id: 'topic-2'})
+CREATE (p)-[:TAGGED_WITH {confidence: 0.92, auto_generated: false}]->(t);
+
+MATCH (p:Post {id: 'post-3'}), (t:Topic {id: 'topic-3'})
+CREATE (p)-[:TAGGED_WITH {confidence: 0.88, auto_generated: false}]->(t);
+
+MATCH (p:Post {id: 'post-4'}), (t:Topic {id: 'topic-3'})
+CREATE (p)-[:TAGGED_WITH {confidence: 0.85, auto_generated: true}]->(t);
+
+MATCH (p:Post {id: 'post-5'}), (t:Topic {id: 'topic-5'})
+CREATE (p)-[:TAGGED_WITH {confidence: 0.91, auto_generated: false}]->(t);
+
+-- Auto-tag remaining posts
+MATCH (p:Post), (t:Topic)
+WHERE NOT (p)-[:TAGGED_WITH]->(t)
+  AND rand() < 0.3
+CREATE (p)-[:TAGGED_WITH {
+    confidence: 0.5 + (rand() * 0.5),
+    auto_generated: true
+}]->(t);

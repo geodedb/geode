@@ -1,0 +1,292 @@
+-- Migration: Social Network Schema
+-- Version: 001
+-- Description: Creates a comprehensive social network graph with users, posts, companies, and locations
+-- Author: Geode Team
+-- Date: 2025-09-26
+
+-- Create schema constraints and indexes
+CREATE CONSTRAINT user_email_unique ON User(email);
+CREATE CONSTRAINT company_ticker_unique ON Company(ticker);
+CREATE INDEX user_location_idx ON User(location);
+CREATE INDEX post_created_idx ON Post(created_at);
+CREATE INDEX company_industry_idx ON Company(industry);
+
+-- Define node labels with property constraints
+CREATE LABEL User WITH PROPERTIES (
+    id STRING NOT NULL,
+    email STRING NOT NULL,
+    username STRING NOT NULL,
+    full_name STRING,
+    bio STRING,
+    created_at TIMESTAMP NOT NULL,
+    last_active TIMESTAMP,
+    location STRING,
+    ip_address IpAddr,
+    profile_vector VectorF32,
+    verified BOOLEAN DEFAULT false,
+    follower_count INTEGER DEFAULT 0,
+    following_count INTEGER DEFAULT 0
+);
+
+CREATE LABEL Post WITH PROPERTIES (
+    id STRING NOT NULL,
+    content STRING NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP,
+    likes INTEGER DEFAULT 0,
+    shares INTEGER DEFAULT 0,
+    comments INTEGER DEFAULT 0,
+    content_vector VectorF32,
+    language LanguageTag,
+    sentiment FLOAT
+);
+
+CREATE LABEL Company WITH PROPERTIES (
+    id STRING NOT NULL,
+    name STRING NOT NULL,
+    ticker STRING,
+    industry STRING,
+    founded DATE,
+    headquarters LatLon,
+    employees INTEGER,
+    revenue Currency,
+    website STRING,
+    description STRING,
+    logo_hash Hash
+);
+
+CREATE LABEL Location WITH PROPERTIES (
+    id STRING NOT NULL,
+    name STRING NOT NULL,
+    type STRING, -- city, state, country
+    coordinates LatLon,
+    population INTEGER,
+    timezone STRING,
+    country_code STRING,
+    region Geometry
+);
+
+CREATE LABEL Topic WITH PROPERTIES (
+    id STRING NOT NULL,
+    name STRING NOT NULL,
+    category STRING,
+    description STRING,
+    trending_score FLOAT,
+    related_vector VectorF32
+);
+
+CREATE LABEL Group WITH PROPERTIES (
+    id STRING NOT NULL,
+    name STRING NOT NULL,
+    description STRING,
+    created_at TIMESTAMP NOT NULL,
+    member_count INTEGER DEFAULT 0,
+    privacy STRING DEFAULT 'public', -- public, private, secret
+    rules STRING[],
+    cover_image_hash Hash
+);
+
+CREATE LABEL Event WITH PROPERTIES (
+    id STRING NOT NULL,
+    title STRING NOT NULL,
+    description STRING,
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP,
+    location LatLon,
+    venue STRING,
+    capacity INTEGER,
+    attendees INTEGER DEFAULT 0,
+    ticket_price Currency,
+    categories STRING[]
+);
+
+CREATE LABEL Product WITH PROPERTIES (
+    id STRING NOT NULL,
+    name STRING NOT NULL,
+    description STRING,
+    price Currency,
+    category STRING,
+    brand STRING,
+    rating FLOAT,
+    reviews INTEGER DEFAULT 0,
+    in_stock BOOLEAN DEFAULT true,
+    features STRING[],
+    embedding VectorF32
+);
+
+CREATE LABEL Device WITH PROPERTIES (
+    id STRING NOT NULL,
+    device_type STRING,
+    os STRING,
+    browser STRING,
+    ip_address IpAddr,
+    mac_address Mac,
+    subnet Subnet,
+    last_seen TIMESTAMP,
+    trust_score FLOAT
+);
+
+CREATE LABEL Media WITH PROPERTIES (
+    id STRING NOT NULL,
+    type STRING, -- image, video, audio
+    url STRING,
+    size_bytes INTEGER,
+    mime_type STRING,
+    duration_seconds INTEGER,
+    width INTEGER,
+    height INTEGER,
+    hash Hash,
+    created_at TIMESTAMP,
+    tags STRING[]
+);
+
+-- Define edge types with properties
+CREATE EDGE TYPE FOLLOWS WITH PROPERTIES (
+    since TIMESTAMP NOT NULL,
+    notifications BOOLEAN DEFAULT true
+);
+
+CREATE EDGE TYPE FRIENDS_WITH WITH PROPERTIES (
+    since TIMESTAMP NOT NULL,
+    closeness_score FLOAT
+);
+
+CREATE EDGE TYPE LIKES WITH PROPERTIES (
+    timestamp TIMESTAMP NOT NULL,
+    reaction STRING -- like, love, haha, wow, sad, angry
+);
+
+CREATE EDGE TYPE POSTED WITH PROPERTIES (
+    timestamp TIMESTAMP NOT NULL,
+    device_id STRING
+);
+
+CREATE EDGE TYPE COMMENTED_ON WITH PROPERTIES (
+    content STRING NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    edited BOOLEAN DEFAULT false
+);
+
+CREATE EDGE TYPE SHARED WITH PROPERTIES (
+    timestamp TIMESTAMP NOT NULL,
+    comment STRING
+);
+
+CREATE EDGE TYPE WORKS_AT WITH PROPERTIES (
+    position STRING,
+    department STRING,
+    start_date DATE NOT NULL,
+    end_date DATE,
+    is_current BOOLEAN DEFAULT true
+);
+
+CREATE EDGE TYPE LOCATED_IN WITH PROPERTIES (
+    since DATE,
+    is_primary BOOLEAN DEFAULT true
+);
+
+CREATE EDGE TYPE MEMBER_OF WITH PROPERTIES (
+    joined_at TIMESTAMP NOT NULL,
+    role STRING DEFAULT 'member' -- member, moderator, admin
+);
+
+CREATE EDGE TYPE ATTENDING WITH PROPERTIES (
+    rsvp_status STRING, -- going, interested, not_going
+    rsvp_time TIMESTAMP,
+    ticket_count INTEGER DEFAULT 1
+);
+
+CREATE EDGE TYPE PURCHASED WITH PROPERTIES (
+    timestamp TIMESTAMP NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    price Currency,
+    rating INTEGER,
+    review STRING
+);
+
+CREATE EDGE TYPE TAGGED_WITH WITH PROPERTIES (
+    confidence FLOAT DEFAULT 1.0,
+    auto_generated BOOLEAN DEFAULT false
+);
+
+CREATE EDGE TYPE CONNECTED_FROM WITH PROPERTIES (
+    first_seen TIMESTAMP NOT NULL,
+    last_seen TIMESTAMP NOT NULL,
+    connection_count INTEGER DEFAULT 1
+);
+
+CREATE EDGE TYPE MENTIONED_IN WITH PROPERTIES (
+    context STRING,
+    sentiment FLOAT
+);
+
+CREATE EDGE TYPE REPLIED_TO WITH PROPERTIES (
+    timestamp TIMESTAMP NOT NULL,
+    thread_depth INTEGER DEFAULT 1
+);
+
+CREATE EDGE TYPE INVESTED_IN WITH PROPERTIES (
+    amount Currency,
+    date DATE,
+    round STRING -- seed, series_a, series_b, etc
+);
+
+-- Create computed properties and views
+CREATE MATERIALIZED VIEW trending_posts AS
+    MATCH (u:User)-[posted:POSTED]->(p:Post)
+    WHERE p.created_at > now() - interval '24 hours'
+    WITH p, count{(u2:User)-[:LIKES]->(p)} AS like_count,
+         count{(u3:User)-[:SHARED]->(p)} AS share_count,
+         count{(u4:User)-[:COMMENTED_ON]->(p)} AS comment_count
+    LET engagement_score = like_count + (share_count * 2) + (comment_count * 3)
+    WHERE engagement_score > 100
+    RETURN p.id, p.content, engagement_score, like_count, share_count, comment_count
+    ORDER BY engagement_score DESC
+    LIMIT 100;
+
+CREATE MATERIALIZED VIEW user_influence_score AS
+    MATCH (u:User)
+    WITH u,
+         count{(u)-[:POSTED]->(:Post)} AS post_count,
+         count{(:User)-[:FOLLOWS]->(u)} AS follower_count,
+         avg{(:Post)<-[:POSTED]-(u)<-[:LIKES]-(:User)} AS avg_likes
+    LET influence = (follower_count * 0.5) + (post_count * 0.3) + (avg_likes * 0.2)
+    RETURN u.id, u.username, influence, follower_count, post_count
+    ORDER BY influence DESC;
+
+-- Add check constraints
+ALTER LABEL User ADD CONSTRAINT CHECK (follower_count >= 0);
+ALTER LABEL Post ADD CONSTRAINT CHECK (likes >= 0 AND shares >= 0 AND comments >= 0);
+ALTER LABEL Company ADD CONSTRAINT CHECK (employees >= 0);
+ALTER LABEL Event ADD CONSTRAINT CHECK (attendees <= capacity);
+ALTER LABEL Product ADD CONSTRAINT CHECK (rating >= 0 AND rating <= 5);
+
+-- Create triggers for maintaining counts
+CREATE TRIGGER update_follower_count
+AFTER INSERT OR DELETE ON FOLLOWS
+FOR EACH ROW
+EXECUTE FUNCTION update_user_follower_count();
+
+CREATE TRIGGER update_post_stats
+AFTER INSERT OR DELETE ON LIKES, SHARED, COMMENTED_ON
+FOR EACH ROW
+EXECUTE FUNCTION update_post_engagement_stats();
+
+-- Create full-text search indexes
+CREATE FULLTEXT INDEX post_content_fts ON Post(content);
+CREATE FULLTEXT INDEX user_bio_fts ON User(bio);
+CREATE FULLTEXT INDEX company_description_fts ON Company(description);
+
+-- Create vector similarity indexes for recommendation
+CREATE VECTOR INDEX post_embedding_idx ON Post(content_vector) USING HNSW WITH (m=16, ef=200);
+CREATE VECTOR INDEX user_profile_idx ON User(profile_vector) USING HNSW WITH (m=16, ef=200);
+CREATE VECTOR INDEX product_embedding_idx ON Product(embedding) USING HNSW WITH (m=16, ef=200);
+
+-- Create spatial indexes
+CREATE SPATIAL INDEX location_coords_idx ON Location(coordinates) USING RTREE;
+CREATE SPATIAL INDEX company_hq_idx ON Company(headquarters) USING RTREE;
+CREATE SPATIAL INDEX event_location_idx ON Event(location) USING RTREE;
+
+-- Create network indexes
+CREATE NETWORK INDEX device_subnet_idx ON Device(subnet) USING PATRICIA;
+CREATE NETWORK INDEX user_ip_idx ON User(ip_address) USING PATRICIA;

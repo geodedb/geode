@@ -69,8 +69,10 @@ help:
 	@echo "  make qemu-test-clients   - Test clients with QEMU emulation"
 	@echo ""
 	@echo "Test targets:"
-	@echo "  make test        - Run all tests (Zig + Go)"
+	@echo "  make test        - Run all tests (Zig + Go + dataset)"
 	@echo "  make integration-test - Run comprehensive integration tests"
+	@echo "  make dataset-integration-test - Test dataset with all clients"
+	@echo "  make load-dataset - Load example social network dataset"
 	@echo "  make fuzz        - Run fuzz tests"
 	@echo "  make bench       - Run benchmarks"
 	@echo ""
@@ -119,6 +121,10 @@ release:
 test:
 	$(ZIG) build test $(ZIG_FLAGS)
 	$(MAKE) go-test
+	@echo "Running dataset integration tests (if dataset is loaded)..."
+	@if [ -x "scripts/run_dataset_integration_tests.sh" ]; then \
+		./scripts/run_dataset_integration_tests.sh 2>/dev/null || echo "Dataset tests skipped (dataset may not be loaded)"; \
+	fi
 
 # Build Go client library
 go-build:
@@ -170,11 +176,31 @@ go-example: build go-build
 	fi
 
 # Run comprehensive integration tests
-integration-test: build
+integration-test: build dataset-integration-test
 	@if [ -f "scripts/integration_test.sh" ]; then \
 		./scripts/integration_test.sh; \
 	else \
 		echo "Integration test script not found"; \
+	fi
+
+# Run dataset integration tests for all clients
+dataset-integration-test: build
+	@echo "Running dataset integration tests..."
+	@if [ -x "scripts/run_dataset_integration_tests.sh" ]; then \
+		./scripts/run_dataset_integration_tests.sh; \
+	else \
+		echo "Dataset integration test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Load example dataset (for development/testing)
+load-dataset: build
+	@echo "Loading example dataset..."
+	@if [ -x "scripts/load_example_dataset.sh" ]; then \
+		./scripts/load_example_dataset.sh; \
+	else \
+		echo "Dataset loader script not found or not executable"; \
+		exit 1; \
 	fi
 
 fuzz:

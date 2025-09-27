@@ -1,0 +1,330 @@
+-- Migration: Events, Products, and Advanced Features
+-- Version: 004
+-- Description: Adds events, products, devices, media, and demonstrates advanced type features
+-- Author: Geode Team
+-- Date: 2025-09-26
+-- Dependencies: 003_social_network_relationships.gql
+
+-- Create Events
+CREATE (:Event {
+    id: 'event-1',
+    title: 'GraphDB Conference 2024',
+    description: 'Annual conference for graph database professionals and enthusiasts',
+    start_time: timestamp('2024-10-15T09:00:00Z'),
+    end_time: timestamp('2024-10-17T18:00:00Z'),
+    location: LatLon(37.7749, -122.4194),
+    venue: 'Moscone Center, San Francisco',
+    capacity: 2000,
+    attendees: 1456,
+    ticket_price: Currency('USD', 49900), -- $499.00
+    categories: ['Technology', 'Conference', 'GraphDB', 'Networking']
+});
+
+CREATE (:Event {
+    id: 'event-2',
+    title: 'AI/ML Meetup - September Edition',
+    description: 'Monthly gathering of AI and ML practitioners',
+    start_time: timestamp('2024-09-28T18:30:00Z'),
+    end_time: timestamp('2024-09-28T21:00:00Z'),
+    location: LatLon(40.7128, -74.0060),
+    venue: 'WeWork Times Square',
+    capacity: 150,
+    attendees: 127,
+    ticket_price: Currency('USD', 0),
+    categories: ['Technology', 'Meetup', 'AI', 'MachineLearning']
+});
+
+CREATE (:Event {
+    id: 'event-3',
+    title: 'Startup Pitch Night',
+    description: 'Early-stage startups pitch to investors and get feedback',
+    start_time: timestamp('2024-10-05T17:00:00Z'),
+    end_time: timestamp('2024-10-05T20:30:00Z'),
+    location: LatLon(51.5074, -0.1278),
+    venue: 'TechHub London',
+    capacity: 200,
+    attendees: 189,
+    ticket_price: Currency('GBP', 2000), -- £20.00
+    categories: ['Business', 'Startups', 'Investment', 'Pitching']
+});
+
+-- Create Products
+CREATE (:Product {
+    id: 'prod-1',
+    name: 'Graph Database Fundamentals - eBook',
+    description: 'Comprehensive guide to graph database concepts and implementation',
+    price: Currency('USD', 3999), -- $39.99
+    category: 'Books',
+    brand: 'TechPress',
+    rating: 4.7,
+    reviews: 234,
+    in_stock: true,
+    features: ['Digital Download', 'PDF Format', '450 Pages', 'Code Examples'],
+    embedding: VectorF32([0.8, 0.9, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2])
+});
+
+CREATE (:Product {
+    id: 'prod-2',
+    name: 'ML Model Training Credits - 1000 GPU Hours',
+    description: 'Cloud credits for training machine learning models on high-performance GPUs',
+    price: Currency('USD', 99900), -- $999.00
+    category: 'Cloud Services',
+    brand: 'CloudCompute Pro',
+    rating: 4.5,
+    reviews: 89,
+    in_stock: true,
+    features: ['Instant Activation', 'A100 GPUs', 'Priority Queue', '24/7 Support'],
+    embedding: VectorF32([0.7, 0.8, 0.9, 0.5, 0.6, 0.3, 0.4, 0.2])
+});
+
+CREATE (:Product {
+    id: 'prod-3',
+    name: 'Developer Mechanical Keyboard',
+    description: 'Premium mechanical keyboard designed for programmers',
+    price: Currency('USD', 24900), -- $249.00
+    category: 'Hardware',
+    brand: 'KeyMaster Pro',
+    rating: 4.9,
+    reviews: 567,
+    in_stock: true,
+    features: ['Cherry MX Switches', 'RGB Backlight', 'Programmable Keys', 'USB-C'],
+    embedding: VectorF32([0.5, 0.6, 0.4, 0.8, 0.7, 0.9, 0.2, 0.3])
+});
+
+-- Create Devices
+CREATE (:Device {
+    id: 'device-1',
+    device_type: 'laptop',
+    os: 'macOS 14.0',
+    browser: 'Safari 17.0',
+    ip_address: IpAddr('198.51.100.42'),
+    mac_address: Mac('a1:b2:c3:d4:e5:f6'),
+    subnet: Subnet('198.51.100.0/24'),
+    last_seen: timestamp('2024-09-26T14:30:00Z'),
+    trust_score: 0.95
+});
+
+CREATE (:Device {
+    id: 'device-2',
+    device_type: 'mobile',
+    os: 'iOS 17.0',
+    browser: 'Mobile Safari',
+    ip_address: IpAddr('203.0.113.78'),
+    mac_address: Mac('f6:e5:d4:c3:b2:a1'),
+    subnet: Subnet('203.0.113.0/24'),
+    last_seen: timestamp('2024-09-26T13:45:00Z'),
+    trust_score: 0.92
+});
+
+CREATE (:Device {
+    id: 'device-3',
+    device_type: 'desktop',
+    os: 'Windows 11',
+    browser: 'Chrome 117',
+    ip_address: IpAddr('2001:db8::8a2e:370:7334'),
+    mac_address: Mac('11:22:33:44:55:66'),
+    subnet: Subnet('2001:db8::/32'),
+    last_seen: timestamp('2024-09-26T12:00:00Z'),
+    trust_score: 0.88
+});
+
+CREATE (:Device {
+    id: 'device-4',
+    device_type: 'tablet',
+    os: 'Android 14',
+    browser: 'Chrome Mobile',
+    ip_address: IpAddr('192.0.2.146'),
+    mac_address: Mac('aa:bb:cc:dd:ee:ff'),
+    subnet: Subnet('192.0.2.0/24'),
+    last_seen: timestamp('2024-09-26T15:20:00Z'),
+    trust_score: 0.85
+});
+
+CREATE (:Device {
+    id: 'device-5',
+    device_type: 'laptop',
+    os: 'Ubuntu 22.04',
+    browser: 'Firefox 118',
+    ip_address: IpAddr('10.0.1.50'),
+    mac_address: Mac('de:ad:be:ef:ca:fe'),
+    subnet: Subnet('10.0.0.0/16'),
+    last_seen: timestamp('2024-09-26T10:15:00Z'),
+    trust_score: 0.90
+});
+
+-- Create Media
+CREATE (:Media {
+    id: 'media-1',
+    type: 'image',
+    url: 'https://cdn.example.com/images/graph-conf-2024.jpg',
+    size_bytes: 2457600,
+    mime_type: 'image/jpeg',
+    duration_seconds: null,
+    width: 1920,
+    height: 1080,
+    hash: Hash('BLAKE3', 'graph-conf-banner-2024'),
+    created_at: timestamp('2024-08-15T10:00:00Z'),
+    tags: ['conference', 'banner', 'graphdb', '2024']
+});
+
+CREATE (:Media {
+    id: 'media-2',
+    type: 'video',
+    url: 'https://cdn.example.com/videos/ml-tutorial.mp4',
+    size_bytes: 157286400,
+    mime_type: 'video/mp4',
+    duration_seconds: 1200,
+    width: 1280,
+    height: 720,
+    hash: Hash('SHA3-512', 'ml-tutorial-intro-2024'),
+    created_at: timestamp('2024-09-01T14:30:00Z'),
+    tags: ['tutorial', 'machine-learning', 'educational']
+});
+
+CREATE (:Media {
+    id: 'media-3',
+    type: 'audio',
+    url: 'https://cdn.example.com/podcasts/startup-stories-ep42.mp3',
+    size_bytes: 45875200,
+    mime_type: 'audio/mpeg',
+    duration_seconds: 2400,
+    width: null,
+    height: null,
+    hash: Hash('SHA3-256', 'podcast-ep42-audio'),
+    created_at: timestamp('2024-09-10T08:00:00Z'),
+    tags: ['podcast', 'startups', 'interview', 'episode-42']
+});
+
+-- Connect users to events
+MATCH (u:User {id: 'user-1'}), (e:Event {id: 'event-1'})
+CREATE (u)-[:ATTENDING {
+    rsvp_status: 'going',
+    rsvp_time: timestamp('2024-08-20T10:00:00Z'),
+    ticket_count: 1
+}]->(e);
+
+MATCH (u:User {id: 'user-2'}), (e:Event {id: 'event-1'})
+CREATE (u)-[:ATTENDING {
+    rsvp_status: 'going',
+    rsvp_time: timestamp('2024-08-22T14:30:00Z'),
+    ticket_count: 2
+}]->(e);
+
+MATCH (u:User {id: 'user-3'}), (e:Event {id: 'event-1'})
+CREATE (u)-[:ATTENDING {
+    rsvp_status: 'interested',
+    rsvp_time: timestamp('2024-08-25T09:15:00Z'),
+    ticket_count: 1
+}]->(e);
+
+MATCH (u:User {id: 'user-2'}), (e:Event {id: 'event-2'})
+CREATE (u)-[:ATTENDING {
+    rsvp_status: 'going',
+    rsvp_time: timestamp('2024-09-20T16:00:00Z'),
+    ticket_count: 1
+}]->(e);
+
+MATCH (u:User {id: 'user-4'}), (e:Event {id: 'event-3'})
+CREATE (u)-[:ATTENDING {
+    rsvp_status: 'going',
+    rsvp_time: timestamp('2024-09-28T12:00:00Z'),
+    ticket_count: 1
+}]->(e);
+
+-- Connect users to products (purchases)
+MATCH (u:User {id: 'user-1'}), (p:Product {id: 'prod-1'})
+CREATE (u)-[:PURCHASED {
+    timestamp: timestamp('2024-08-10T09:30:00Z'),
+    quantity: 1,
+    price: Currency('USD', 3999),
+    rating: 5,
+    review: 'Excellent resource for learning graph databases. Highly recommended!'
+}]->(p);
+
+MATCH (u:User {id: 'user-2'}), (p:Product {id: 'prod-2'})
+CREATE (u)-[:PURCHASED {
+    timestamp: timestamp('2024-09-05T14:20:00Z'),
+    quantity: 1,
+    price: Currency('USD', 99900),
+    rating: 4,
+    review: 'Good performance, but a bit pricey. Support team is very responsive.'
+}]->(p);
+
+MATCH (u:User {id: 'user-3'}), (p:Product {id: 'prod-3'})
+CREATE (u)-[:PURCHASED {
+    timestamp: timestamp('2024-07-15T11:45:00Z'),
+    quantity: 1,
+    price: Currency('USD', 24900),
+    rating: 5,
+    review: 'Best keyboard I have ever used. The build quality is exceptional!'
+}]->(p);
+
+-- Connect devices to users
+MATCH (u:User {id: 'user-1'}), (d:Device {id: 'device-1'})
+CREATE (d)-[:CONNECTED_FROM {
+    first_seen: timestamp('2024-01-15T10:00:00Z'),
+    last_seen: timestamp('2024-09-26T14:30:00Z'),
+    connection_count: 450
+}]->(u);
+
+MATCH (u:User {id: 'user-2'}), (d:Device {id: 'device-2'})
+CREATE (d)-[:CONNECTED_FROM {
+    first_seen: timestamp('2023-11-20T08:30:00Z'),
+    last_seen: timestamp('2024-09-26T13:45:00Z'),
+    connection_count: 823
+}]->(u);
+
+MATCH (u:User {id: 'user-3'}), (d:Device {id: 'device-3'})
+CREATE (d)-[:CONNECTED_FROM {
+    first_seen: timestamp('2024-03-10T14:00:00Z'),
+    last_seen: timestamp('2024-09-26T12:00:00Z'),
+    connection_count: 256
+}]->(u);
+
+-- Connect media to posts
+MATCH (p:Post {id: 'post-1'}), (m:Media {id: 'media-1'})
+CREATE (p)-[:INCLUDES]->(m);
+
+MATCH (p:Post {id: 'post-2'}), (m:Media {id: 'media-2'})
+CREATE (p)-[:INCLUDES]->(m);
+
+-- Create investment relationships
+MATCH (c1:Company {id: 'comp-2'}), (c2:Company {id: 'comp-5'})
+CREATE (c1)-[:INVESTED_IN {
+    amount: Currency('USD', 5000000),
+    date: date('2023-06-15'),
+    round: 'series_a'
+}]->(c2);
+
+MATCH (c1:Company {id: 'comp-2'}), (c2:Company {id: 'comp-4'})
+CREATE (c1)-[:INVESTED_IN {
+    amount: Currency('EUR', 10000000),
+    date: date('2022-09-20'),
+    round: 'series_b'
+}]->(c2);
+
+-- Create mentions in posts
+MATCH (p:Post {id: 'post-3'}), (c:Company {id: 'comp-1'})
+CREATE (c)-[:MENTIONED_IN {
+    context: 'hiring announcement',
+    sentiment: 0.9
+}]->(p);
+
+MATCH (p:Post {id: 'post-2'}), (t:Topic {id: 'topic-2'})
+CREATE (t)-[:MENTIONED_IN {
+    context: 'technical discussion',
+    sentiment: 0.75
+}]->(p);
+
+-- Create reply threads
+MATCH (p1:Post {id: 'post-1'}), (p2:Post {id: 'post-6'})
+CREATE (p2)-[:REPLIED_TO {
+    timestamp: timestamp('2024-09-25T11:00:00Z'),
+    thread_depth: 1
+}]->(p1);
+
+MATCH (p1:Post {id: 'post-6'}), (p2:Post {id: 'post-7'})
+CREATE (p2)-[:REPLIED_TO {
+    timestamp: timestamp('2024-09-25T11:30:00Z'),
+    thread_depth: 2
+}]->(p1);

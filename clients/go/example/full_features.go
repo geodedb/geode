@@ -25,7 +25,7 @@ func main() {
 	}
 	defer conn.Close()
 	
-	fmt.Println("=== Geode Full Features Example ===\n")
+	fmt.Println("=== Geode Full Features Example ===")
 	
 	// 1. Authentication
 	fmt.Println("1. Authentication:")
@@ -229,7 +229,8 @@ func main() {
 	} else if len(aggPage.Rows) > 0 {
 		row := aggPage.Rows[0]
 		fmt.Printf("   ✓ Total persons: %d\n", row["total"].Int)
-		fmt.Printf("   ✓ Average age: %.2f\n", row["avg_age"].Dec.FloatString(2))
+		avgAge, _ := row["avg_age"].Dec.Float64()
+		fmt.Printf("   ✓ Average age: %.2f\n", avgAge)
 		fmt.Printf("   ✓ Age range: %d - %d\n", row["min_age"].Int, row["max_age"].Int)
 	}
 	

@@ -1,0 +1,106 @@
+-- Common test queries for the social network dataset
+-- These queries should work across all client implementations
+
+-- Test 1: Basic node count
+-- Expected: At least 100 nodes
+MATCH (n) RETURN count(n) AS node_count;
+
+-- Test 2: Verify user with extended types
+-- Expected: user-1 with verified=true, IP address set
+MATCH (u:User {id: 'user-1'})
+RETURN u.username, u.verified, u.ip_address, u.location;
+
+-- Test 3: Network type operations
+-- Expected: Returns true for private IP check
+MATCH (u:User {id: 'user-1'})
+RETURN ip_is_private(u.ip_address) AS is_private;
+
+-- Test 4: Geographic distance calculation
+-- Expected: Distance between SF and NYC (~4100km)
+MATCH (l1:Location {name: 'San Francisco'}), (l2:Location {name: 'New York'})
+RETURN distance_haversine(l1.coordinates, l2.coordinates) AS distance_meters;
+
+-- Test 5: Vector similarity search
+-- Expected: At least 2 similar posts
+MATCH (p1:Post {id: 'post-1'})
+MATCH (p2:Post)
+WHERE p1 <> p2
+  AND vector_cosine_similarity(p1.content_vector, p2.content_vector) > 0.5
+RETURN count(p2) AS similar_posts;
+
+-- Test 6: Subnet containment check
+-- Expected: true (device-1 IP is in its subnet)
+MATCH (d:Device {id: 'device-1'})
+RETURN ip_contains(d.subnet, d.ip_address) AS contained;
+
+-- Test 7: Currency type verification
+-- Expected: Company with USD revenue
+MATCH (c:Company {id: 'comp-1'})
+RETURN c.name, c.revenue, currency_code(c.revenue) AS currency;
+
+-- Test 8: Follow relationship traversal
+-- Expected: At least 3 followers for user-3
+MATCH (follower:User)-[:FOLLOWS]->(u:User {id: 'user-3'})
+RETURN count(follower) AS follower_count;
+
+-- Test 9: Post engagement metrics
+-- Expected: Post with likes, shares, comments
+MATCH (u:User {id: 'user-1'})-[:POSTED]->(p:Post)
+RETURN p.id, p.likes, p.shares, p.comments;
+
+-- Test 10: Company location relationship
+-- Expected: Company located in a city
+MATCH (c:Company {id: 'comp-1'})-[:LOCATED_IN]->(l:Location)
+RETURN c.name, l.name, l.type;
+
+-- Test 11: Event attendance
+-- Expected: At least 2 users attending event-1
+MATCH (u:User)-[:ATTENDING]->(e:Event {id: 'event-1'})
+RETURN count(u) AS attendee_count;
+
+-- Test 12: MAC address vendor OUI
+-- Expected: Returns first 3 octets of MAC
+MATCH (d:Device {id: 'device-1'})
+RETURN mac_vendor_oui(d.mac_address) AS oui;
+
+-- Test 13: Language tag on posts
+-- Expected: en-US for post-1
+MATCH (p:Post {id: 'post-1'})
+RETURN p.id, language_tag_primary(p.language) AS primary_lang;
+
+-- Test 14: Hash type verification
+-- Expected: SHA3-256 hash for company logo
+MATCH (c:Company {id: 'comp-1'})
+RETURN c.name, hash_algorithm(c.logo_hash) AS hash_algo;
+
+-- Test 15: Group membership with roles
+-- Expected: user-1 as admin of group-1
+MATCH (u:User {id: 'user-1'})-[m:MEMBER_OF]->(g:Group {id: 'group-1'})
+RETURN u.username, g.name, m.role;
+
+-- Test 16: Product purchase with rating
+-- Expected: Purchase with review
+MATCH (u:User {id: 'user-1'})-[p:PURCHASED]->(prod:Product {id: 'prod-1'})
+RETURN u.username, prod.name, p.rating, p.review;
+
+-- Test 17: Investment relationships
+-- Expected: At least 1 investment
+MATCH (c1:Company)-[inv:INVESTED_IN]->(c2:Company)
+RETURN count(inv) AS investment_count;
+
+-- Test 18: Topic tagging
+-- Expected: At least 1 tagged post
+MATCH (p:Post)-[t:TAGGED_WITH]->(topic:Topic)
+WHERE t.confidence > 0.8
+RETURN count(p) AS tagged_posts;
+
+-- Test 19: Device trust score aggregation
+-- Expected: Average trust score > 0.8
+MATCH (d:Device)
+RETURN avg(d.trust_score) AS avg_trust;
+
+-- Test 20: Spatial query - events near SF
+-- Expected: At least 1 event within 100km
+MATCH (e:Event)
+WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000
+RETURN count(e) AS nearby_events;

@@ -25,6 +25,8 @@ For the complete, unaggregated table (including duplicates per evidence token) a
 - **☁️ S3 Cloud Backups**: Full + incremental (multipart, checksums, resumable, PIT recovery) production‑ready.
 - **🔔 CDC Webhook Hardening**: Headers, retries with backoff+jitter, DLQ, idempotency, metrics.
 - **📊 CBO Small-N Calibration**: Bias corrections + guardrails always active; decision tracing via `GEODE_TRACE_OPTIMIZER` only.
+- **🆕 Extended Type System**: 12 new first-class types (IpAddr, Subnet, Mac, Hash, Currency, LanguageTag, LatLon, Geometry, Temperature, Pressure, VectorF32) with 40+ built-in functions.
+- **🔍 Persisted Indexes**: Patricia trie (CIDR), R-tree (spatial), HNSW (vector similarity) with snapshot+WAL persistence.
 - **🔐 Security Hardening (In‑Progress)**: TDE (AES‑256‑GCM page + WAL encryption) integrated; key rotation (state+checksum) + local & simulated external wrap/unwrap + remote QUIC KMS prototype (generate/unwrap) landing. MFA (TOTP + recovery codes + elevation metadata) partially complete; policy matrix expansion pending.
 - **🔍 FTS Partial**: Phrase / proximity / highlighting primitives loaded by default; analyzers + BM25 scoring forthcoming.
 - **⚡ Parallel Execution Prototype**: Thread pool + deterministic ordered `parallelMap`; expansion to Expand/Filter/Join operators planned.
@@ -81,7 +83,41 @@ make build
 
 # Connect with client
 ./zig-out/bin/geodec "MATCH (n) RETURN n LIMIT 10"
+
+# Load example dataset (optional but recommended)
+./scripts/load_example_dataset.sh
+
+# Try example queries
+./zig-out/bin/geodec "MATCH (u:User) WHERE u.verified = true RETURN u.username LIMIT 5"
 ```
+
+### Quick Start with Example Dataset
+
+The included social network dataset demonstrates all of Geode's advanced features including the extended type system, spatial queries, vector similarity search, and more:
+
+```bash
+# Load the comprehensive example dataset (~100 nodes, ~500 edges)
+./scripts/load_example_dataset.sh
+
+# Example queries demonstrating various features:
+
+# 1. Network Security - Find devices on private networks
+./zig-out/bin/geodec "MATCH (d:Device) WHERE ip_is_private(d.ip_address) RETURN d.id, d.ip_address, d.subnet"
+
+# 2. Geographic Search - Find companies near San Francisco
+./zig-out/bin/geodec "MATCH (c:Company) WHERE distance_haversine(c.headquarters, LatLon(37.7749, -122.4194)) < 50000 RETURN c.name, c.headquarters"
+
+# 3. Vector Similarity - Find similar posts using embeddings
+./zig-out/bin/geodec "MATCH (p1:Post {id: 'post-1'}), (p2:Post) WHERE p1 <> p2 AND vector_cosine_similarity(p1.content_vector, p2.content_vector) > 0.7 RETURN p2.id, p2.content LIMIT 5"
+
+# 4. Social Graph - Find influencers
+./zig-out/bin/geodec "MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count, u.verified ORDER BY u.follower_count DESC"
+
+# 5. Financial Analysis - Company investments with currency conversion
+./zig-out/bin/geodec "MATCH (c1:Company)-[inv:INVESTED_IN]->(c2:Company) RETURN c1.name, c2.name, inv.amount, inv.round"
+```
+
+See `migrations/README.md` for complete dataset documentation, schema details, and over 10 advanced example queries.
 
 ### Feature Activation Notes
 
@@ -107,7 +143,9 @@ geode backup --dest s3://my-bucket/backups --mode full
 ### Core Components
 
 - **Query Engine**: ISO GQL parser, planner, executor with distributed federation
-- **Storage**: MVCC, WAL/ARIES, page management, S3 backup integration
+- **Storage**: MVCC, WAL/ARIES, page management, S3 backup integration, extended type system
+- **Type System**: 12 new types including network (IP/CIDR/MAC), geographic (LatLon/Geometry), vector embeddings
+- **Indexes**: Patricia trie (IP prefix), R-tree (spatial), HNSW (vector similarity) with persistence
 - **Distributed**: Raft consensus, 2PC transactions, coordinator-worker federation
 - **Network**: QUIC+TLS only (port 8443), binary protocol
 - **CDC**: Kafka/Webhook sinks with reliability guarantees
@@ -135,6 +173,48 @@ geode backup --dest s3://my-bucket/backups --mode full
 - Dead letter queue with configurable retention
 - Custom headers for authentication/routing
 
+## Type System Extensions
+
+### New First-Class Types (v0.18.0)
+
+#### Network Types
+- **IpAddr**: IPv4/IPv6 addresses with RFC 5952 canonicalization
+- **Subnet**: CIDR notation with prefix matching via Patricia trie index
+- **Mac**: EUI-48 MAC addresses with vendor OUI extraction
+
+#### Geographic Types  
+- **LatLon/LatLonAlt**: Coordinate pairs with haversine distance
+- **Geometry**: WKT/WKB storage, GeoJSON output, R-tree spatial indexing
+
+#### Specialized Types
+- **Hash**: SHA3-256/512, BLAKE3 with constant-time comparison
+- **Currency**: ISO 4217 codes with minor units
+- **LanguageTag**: BCP-47 canonicalization and matching
+- **Temperature/Pressure**: Unit-aware scientific quantities
+- **VectorF32**: SIMD-optimized embeddings with HNSW indexing
+
+### Built-in Functions
+
+```gql
+-- Network operations
+ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))  -- true
+ip_is_private(IpAddr("192.168.1.1"))                   -- true
+
+-- Geographic calculations  
+distance_haversine(LatLon(0,0), LatLon(0,1))          -- 111195 meters
+st_intersects(polygon1, polygon2)                      -- spatial predicate
+
+-- Vector similarity
+vector_knn("embedding", Vector([0.1, 0.2]), 5, "cosine")
+vector_dot(vec1, vec2)
+```
+
+### Persisted Indexes
+
+- **Patricia Trie**: O(prefix_bits) IP/CIDR lookups, used by `ip_contains()`
+- **R-tree**: Sub-linear 2D spatial queries for `st_intersects()`, `st_contains()`
+- **HNSW**: O(log N) approximate k-NN for `vector_knn()` with high recall
+
 ## Performance
 
 ### v0.18.0 Benchmarks
@@ -143,6 +223,8 @@ geode backup --dest s3://my-bucket/backups --mode full
 - **S3 Backup**: 100MB/s upload with multipart
 - **CDC Delivery**: 10K events/sec with retries
 - **CBO Small-N**: <10% overhead, prevents 90% of bad plans
+- **Type Operations**: IPv6 parsing ~1M/sec, vector SIMD ≥2× scalar
+- **Index Performance**: Patricia LPM <1μs, R-tree bbox filter <10μs, HNSW k-NN <100μs
 
 ### Resource Usage
 

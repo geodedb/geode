@@ -27,13 +27,15 @@ LIMIT 100
 
 ### ✅ Storage Layer
 
-**Reality**: Production-ready with cloud backup
+**Reality**: Production-ready with cloud backup and extended types
 
 - **MVCC**: Snapshot isolation working
 - **WAL**: ARIES-style recovery tested
 - **Pages**: Slotted pages with compression
 - **Backup**: S3 full + incremental with checksums
 - **Recovery**: Point-in-time restore working
+- **Types**: 12 new first-class types (IP, Subnet, MAC, Hash, Currency, LanguageTag, LatLon, Geometry, Temperature, Pressure, Vector)
+- **Indexes**: Patricia trie (CIDR), R-tree (spatial), HNSW (vector) with persistence
 
 ### ✅ Network Transport
 
@@ -100,6 +102,21 @@ LIMIT 100
 - **Phonetic**: Soundex algorithm for phonetic matching
 - **Index Stats**: HyperLogLog for cardinality, document/term frequency tracking
 - **Search Engine**: Integrated search with ranking and highlighting
+
+### ✅ Extended Type System
+
+**Reality**: Complete implementation of 12 new first-class types with indexes
+
+- **Network Types**: IpAddr (IPv4/IPv6), Subnet (CIDR), Mac (EUI-48)
+- **Geographic**: LatLon, LatLonAlt, Geometry (WKT/WKB/GeoJSON)
+- **Security**: Hash (SHA3-256/512, BLAKE3 optional) with constant-time comparison
+- **Financial**: Currency (ISO 4217) with minor units
+- **I18n**: LanguageTag (BCP-47) with canonicalization
+- **Scientific**: Temperature, Pressure with unit conversions
+- **Vector**: VectorF32 with SIMD operations
+- **Functions**: 40+ built-in (ip_contains, distance_haversine, vector_knn, etc.)
+- **Indexes**: Patricia trie (IP prefix), R-tree (spatial), HNSW (vector similarity)
+- **Persistence**: All indexes support snapshot+WAL with atomic checkpoint
 
 ### ✅ Graph Algorithms
 

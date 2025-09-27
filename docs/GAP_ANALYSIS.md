@@ -12,7 +12,7 @@ The project has broad test + benchmark coverage across 59 distinct requirement I
 
 | Metric                      | Value                       |
 | --------------------------- | --------------------------- |
-| Distinct Requirements (IDs) | 59                          |
+| Distinct Requirements (IDs) | 60                          |
 | TESTED entries              | 443                         |
 | BENCHED entries             | 229                         |
 | IMPL entries                | 7                           |

@@ -1,0 +1,283 @@
+// Extended Type System Examples for Geode v0.18.0
+
+// ============================================
+// 1. Network Types (IP, CIDR, MAC)
+// ============================================
+
+// Find all devices in a specific subnet
+MATCH (d:Device)
+WHERE ip_contains(Subnet("192.168.0.0/16"), d.ip_address)
+RETURN d.hostname, d.ip_address, d.mac_address
+
+// Check for private IP addresses
+MATCH (s:Server)
+WHERE ip_is_private(s.ip_address)
+RETURN s.name, ip_family(s.ip_address) AS ip_version
+
+// Find overlapping network segments
+MATCH (n1:Network), (n2:Network)
+WHERE n1.id < n2.id AND ip_overlaps(n1.subnet, n2.subnet)
+RETURN n1.name, n2.name, n1.subnet, n2.subnet
+
+// Extract MAC vendor information
+MATCH (d:Device)
+RETURN d.hostname, 
+       d.mac_address,
+       oui(d.mac_address) AS vendor_oui,
+       mac_is_multicast(d.mac_address) AS is_multicast
+
+// ============================================
+// 2. Geographic Types (LatLon, Geometry)
+// ============================================
+
+// Find nearby locations within 10km
+MATCH (l1:Location {name: "Central Station"})
+MATCH (l2:Location)
+WHERE distance_haversine(l1.coordinates, l2.coordinates) < 10000
+RETURN l2.name, distance_haversine(l1.coordinates, l2.coordinates) AS distance_m
+ORDER BY distance_m
+
+// Spatial containment queries
+MATCH (p:PointOfInterest)
+WHERE st_contains(
+    GeometryFromText("POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))"),
+    p.location
+)
+RETURN p.name, st_asGeoJSON(p.location) AS geojson
+
+// Find intersecting regions
+MATCH (r1:Region), (r2:Region)
+WHERE r1.id < r2.id AND st_intersects(r1.boundary, r2.boundary)
+RETURN r1.name, r2.name
+
+// Store delivery route with altitude
+CREATE (r:Route {
+    name: "Mountain Delivery",
+    start: LatLonAlt(46.5197, 6.6323, 372.0, "ellipsoid"),  // Lausanne
+    end: LatLonAlt(46.9480, 7.4474, 540.0, "ellipsoid"),    // Bern
+})
+RETURN r.name, altitude(r.start) AS start_altitude
+
+// ============================================
+// 3. Security Types (Hash, Cryptographic)
+// ============================================
+
+// Store and verify password hashes
+CREATE (u:User {
+    username: "alice",
+    password_hash: Hash("SHA3-256", "3a985da74fe225b2045c172d6bd390bd855f086e5f6ee8a2d4a8a24ab9f87612")
+})
+
+// Constant-time hash comparison for security
+MATCH (u:User {username: $username})
+WHERE hash_equals(u.password_hash, $provided_hash)
+RETURN u.user_id, u.last_login
+
+// Document integrity verification
+MATCH (d:Document)
+RETURN d.title, 
+       hash_alg(d.content_hash) AS algorithm,
+       d.content_hash
+
+// ============================================
+// 4. Financial Types (Currency)
+// ============================================
+
+// Multi-currency transaction processing
+MATCH (t:Transaction)
+RETURN t.id,
+       t.amount,
+       t.currency,
+       minor_units(t.currency) AS decimal_places,
+       t.amount * POWER(10, minor_units(t.currency)) AS amount_in_minor_units
+
+// Currency conversion with proper decimals
+CREATE (p:Payment {
+    amount: 1234.56,
+    currency: Currency("USD"),
+    converted_amount: 1098.23,
+    converted_currency: Currency("EUR")
+})
+
+// ============================================
+// 5. Internationalization (LanguageTag)
+// ============================================
+
+// Content localization matching
+MATCH (c:Content)
+WHERE lang_match(["en-US", "en"], c.language)
+RETURN c.title, c.language
+
+// Canonicalize language tags
+CREATE (d:Document {
+    title: "User Guide",
+    language: lang_canonicalize("EN-us"),  // Returns "en-US"
+    translations: [
+        LanguageTag("fr-FR"),
+        LanguageTag("de-DE"),
+        LanguageTag("ja-JP")
+    ]
+})
+
+// Find content by language preference
+MATCH (u:User {id: $userId})
+MATCH (c:Content)
+WHERE lang_match(u.language_preferences, c.language)
+RETURN c.title, c.language
+ORDER BY array_position(u.language_preferences, c.language)
+
+// ============================================
+// 6. Scientific Types (Temperature, Pressure)
+// ============================================
+
+// Weather station data with unit conversions
+CREATE (r:Reading {
+    station_id: "WS001",
+    timestamp: timestamp(),
+    temperature: Temperature(23.5, "C"),     // Stored as 296.65K
+    pressure: Pressure(1013.25, "hPa"),      // Stored as 101325 Pa
+    humidity: 65.0
+})
+
+// Query with unit-aware comparisons
+MATCH (r:Reading)
+WHERE r.temperature > Temperature(20, "C")
+  AND r.pressure < Pressure(1, "atm")
+RETURN r.station_id, r.temperature, r.pressure
+
+// Industrial sensor monitoring
+MATCH (s:Sensor)
+WHERE s.type = "pressure" 
+  AND s.last_reading > Pressure(2, "bar")
+RETURN s.id, s.location, s.last_reading
+
+// ============================================
+// 7. Vector Types (Embeddings, Similarity)
+// ============================================
+
+// Semantic document search using embeddings
+MATCH (d:Document)
+WHERE vector_cosine(d.embedding, $query_embedding) > 0.8
+RETURN d.title, vector_cosine(d.embedding, $query_embedding) AS similarity
+ORDER BY similarity DESC
+LIMIT 10
+
+// K-nearest neighbor search with HNSW index
+MATCH (p:Product)
+WITH vector_knn(p.features, Vector([0.1, 0.2, 0.3, 0.4]), 5, "l2") AS neighbors
+UNWIND neighbors AS neighbor
+MATCH (similar:Product {id: neighbor.id})
+RETURN similar.name, neighbor.score
+
+// Image similarity search
+MATCH (i:Image)
+WHERE vector_dot(i.feature_vector, $query_vector) > 100
+RETURN i.url, i.tags, vector_l2(i.feature_vector, $query_vector) AS distance
+ORDER BY distance
+LIMIT 20
+
+// Recommendation using embeddings
+MATCH (u:User {id: $userId})-[:LIKED]->(item:Item)
+WITH AVG(item.embedding) AS user_preference
+MATCH (rec:Item)
+WHERE NOT EXISTS { MATCH (u)-[:LIKED]->(rec) }
+  AND vector_cosine(rec.embedding, user_preference) > 0.7
+RETURN rec.name, vector_cosine(rec.embedding, user_preference) AS score
+ORDER BY score DESC
+LIMIT 10
+
+// ============================================
+// 8. Combined Type Examples
+// ============================================
+
+// IoT device monitoring with location and network info
+CREATE (sensor:IoTSensor {
+    device_id: "IOT-001",
+    ip_address: IpAddr("192.168.1.100"),
+    mac_address: Mac("aa:bb:cc:dd:ee:ff"),
+    location: LatLon(37.7749, -122.4194),  // San Francisco
+    last_reading: Temperature(22.5, "C"),
+    status: "active"
+})
+
+// Geofenced network access control
+MATCH (d:Device)
+WHERE ip_contains(Subnet("10.0.0.0/8"), d.ip_address)
+  AND distance_haversine(d.location, LatLon(37.7749, -122.4194)) < 1000
+  AND NOT mac_is_multicast(d.mac_address)
+RETURN d.device_id, d.owner
+
+// Multi-factor authentication check
+MATCH (u:User {username: $username})
+WHERE hash_equals(u.password_hash, $password_hash)
+  AND distance_haversine(u.last_known_location, $current_location) < 50000
+  AND ip_contains(u.allowed_subnet, $client_ip)
+RETURN u.user_id, u.permissions
+
+// Global content delivery network optimization
+MATCH (server:CDNServer)
+MATCH (client:Client {ip: $client_ip})
+WHERE ip_contains(server.serving_subnet, client.ip)
+  AND distance_haversine(server.location, client.estimated_location) < 500000
+RETURN server.hostname, 
+       server.location,
+       distance_haversine(server.location, client.estimated_location) AS distance_m
+ORDER BY distance_m
+LIMIT 1
+
+// ============================================
+// 9. Index-Accelerated Queries
+// ============================================
+
+// Patricia trie accelerated IP lookup
+// Planner automatically uses Patricia index on subnet columns
+MATCH (n:NetworkSegment)
+WHERE ip_contains(n.cidr, IpAddr("192.168.5.42"))
+RETURN n.vlan_id, n.gateway
+
+// R-tree accelerated spatial query
+// Planner uses R-tree index for st_intersects/st_contains
+MATCH (store:Store)
+WHERE st_intersects(
+    store.delivery_area,
+    GeometryFromText("POINT(-122.4194 37.7749)")
+)
+RETURN store.name, store.delivery_fee
+
+// HNSW accelerated vector search
+// Planner uses HNSW index for vector_knn when available
+MATCH (doc:Document)
+WITH vector_knn(doc.embedding, $query_vec, 100, "cosine") AS results
+UNWIND results AS r
+MATCH (d:Document {id: r.id})
+RETURN d.title, r.score
+WHERE r.score > 0.85
+
+// ============================================
+// 10. Type Validation and Constraints
+// ============================================
+
+// Create constraint ensuring valid IP addresses
+CREATE CONSTRAINT valid_server_ip
+ON (s:Server)
+ASSERT s.ip_address IS NOT NULL 
+   AND (ip_family(s.ip_address) = "IPv4" OR ip_family(s.ip_address) = "IPv6")
+
+// Ensure MAC addresses are unicast
+CREATE CONSTRAINT unicast_only
+ON (d:Device)
+ASSERT NOT mac_is_multicast(d.mac_address)
+
+// Validate temperature ranges
+CREATE CONSTRAINT valid_temperature
+ON (r:Reading)
+ASSERT r.temperature > Temperature(-273.15, "C")  // Absolute zero
+   AND r.temperature < Temperature(1000, "C")      // Reasonable upper bound
+
+// Ensure coordinates are within valid ranges
+CREATE CONSTRAINT valid_coordinates
+ON (l:Location)
+ASSERT latitude(l.coordinates) >= -90 
+   AND latitude(l.coordinates) <= 90
+   AND longitude(l.coordinates) >= -180
+   AND longitude(l.coordinates) <= 180

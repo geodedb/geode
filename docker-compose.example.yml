@@ -1,0 +1,111 @@
+# Docker Compose for Geode with Example Dataset
+# Usage: docker-compose -f docker-compose.example.yml up
+
+version: '3.8'
+
+services:
+  geode:
+    image: geode:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: geode-example
+    ports:
+      - "8443:8443"  # QUIC+TLS
+    volumes:
+      - geode-data:/data
+      - ./migrations:/migrations:ro
+      - ./certs:/certs
+    environment:
+      - GEODE_LOG_LEVEL=info
+      - GEODE_LOG_JSON=true
+      - GEODE_DATA_DIR=/data
+      - GEODE_CERT_PATH=/certs
+      # Extended type system is enabled by default in v0.18.0
+      # All indexes (Patricia, R-tree, HNSW) are automatically available
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/geodec", "--host", "127.0.0.1", "--port", "8443", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geode-network
+
+  # One-time container to load the example dataset
+  dataset-loader:
+    image: geode:latest
+    container_name: geode-dataset-loader
+    depends_on:
+      geode:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command: |
+      sh -c "
+        echo 'Waiting for Geode to be ready...'
+        sleep 5
+        echo 'Loading example dataset...'
+        for file in /migrations/*.gql; do
+          echo \"Loading $$file...\"
+          geodec --host geode --port 8443 < $$file || exit 1
+        done
+        echo 'Dataset loaded successfully!'
+        echo 'Verifying data...'
+        geodec --host geode --port 8443 'MATCH (n) RETURN count(n) AS nodes'
+        geodec --host geode --port 8443 'MATCH ()-[r]->() RETURN count(r) AS edges'
+        echo 'Example queries you can try:'
+        echo '  geodec --host localhost --port 8443 \"MATCH (u:User) WHERE u.verified = true RETURN u.username\"'
+        echo '  geodec --host localhost --port 8443 \"MATCH (d:Device) WHERE ip_is_private(d.ip_address) RETURN d.id, d.ip_address\"'
+        echo 'Dataset loading complete!'
+      "
+    networks:
+      - geode-network
+
+  # Optional: Grafana for monitoring
+  grafana:
+    image: grafana/grafana:latest
+    container_name: geode-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-worldmap-panel
+    depends_on:
+      - prometheus
+    networks:
+      - geode-network
+
+  # Optional: Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: geode-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    depends_on:
+      - geode
+    networks:
+      - geode-network
+
+volumes:
+  geode-data:
+    driver: local
+  grafana-data:
+    driver: local
+  prometheus-data:
+    driver: local
+
+networks:
+  geode-network:
+    driver: bridge

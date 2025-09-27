@@ -1,0 +1,199 @@
+// Vector Search and ML Integration Examples
+// Demonstrates vector embeddings, similarity search, and ML operations
+
+// Create documents with embeddings (simulating text embeddings)
+CREATE (doc1:Document {
+    id: "doc-001",
+    title: "Introduction to Graph Databases",
+    content: "Graph databases store data as nodes and edges...",
+    embedding: Vector([0.12, 0.45, 0.67, 0.23, 0.89, 0.34, 0.56, 0.78]),
+    category: "Database",
+    word_count: 1250
+});
+
+CREATE (doc2:Document {
+    id: "doc-002",
+    title: "Graph Theory Fundamentals",
+    content: "Graph theory is the study of graphs, mathematical structures...",
+    embedding: Vector([0.15, 0.42, 0.69, 0.21, 0.87, 0.36, 0.54, 0.75]),
+    category: "Mathematics",
+    word_count: 2100
+});
+
+CREATE (doc3:Document {
+    id: "doc-003",
+    title: "Machine Learning with Graphs",
+    content: "Graph neural networks have revolutionized...",
+    embedding: Vector([0.89, 0.76, 0.45, 0.32, 0.21, 0.67, 0.88, 0.43]),
+    category: "ML",
+    word_count: 3200
+});
+
+CREATE (doc4:Document {
+    id: "doc-004",
+    title: "Advanced Graph Algorithms",
+    content: "This chapter covers advanced algorithms including...",
+    embedding: Vector([0.18, 0.48, 0.65, 0.25, 0.85, 0.38, 0.52, 0.73]),
+    category: "Algorithms",
+    word_count: 2800
+});
+
+CREATE (doc5:Document {
+    id: "doc-005",
+    title: "Deep Learning Fundamentals",
+    content: "Deep learning is a subset of machine learning...",
+    embedding: Vector([0.92, 0.73, 0.41, 0.29, 0.19, 0.64, 0.91, 0.46]),
+    category: "ML",
+    word_count: 4500
+});
+
+// Create users with preference embeddings
+CREATE (u1:User {
+    id: "user-001",
+    name: "Alice",
+    interests: ["databases", "algorithms"],
+    preference_embedding: Vector([0.20, 0.50, 0.60, 0.30, 0.80, 0.40, 0.50, 0.70])
+});
+
+CREATE (u2:User {
+    id: "user-002",
+    name: "Bob",
+    interests: ["machine learning", "AI"],
+    preference_embedding: Vector([0.85, 0.70, 0.48, 0.35, 0.25, 0.62, 0.85, 0.45])
+});
+
+// Create reading history
+MATCH (u:User {name: "Alice"}), (d:Document {id: "doc-001"})
+CREATE (u)-[:READ {timestamp: timestamp(), rating: 4.5}]->(d);
+
+MATCH (u:User {name: "Alice"}), (d:Document {id: "doc-004"})
+CREATE (u)-[:READ {timestamp: timestamp(), rating: 5.0}]->(d);
+
+MATCH (u:User {name: "Bob"}), (d:Document {id: "doc-003"})
+CREATE (u)-[:READ {timestamp: timestamp(), rating: 4.8}]->(d);
+
+MATCH (u:User {name: "Bob"}), (d:Document {id: "doc-005"})
+CREATE (u)-[:READ {timestamp: timestamp(), rating: 4.2}]->(d);
+
+// Query 1: Basic cosine similarity search
+WITH Vector([0.16, 0.46, 0.68, 0.24, 0.86, 0.35, 0.55, 0.76]) AS query_vector
+MATCH (d:Document)
+WITH d, vector_cosine(d.embedding, query_vector) AS similarity
+WHERE similarity > 0.8
+RETURN d.title, d.category, similarity
+ORDER BY similarity DESC
+LIMIT 5;
+
+// Query 2: Euclidean distance search
+WITH Vector([0.16, 0.46, 0.68, 0.24, 0.86, 0.35, 0.55, 0.76]) AS query_vector
+MATCH (d:Document)
+WITH d, vector_euclidean(d.embedding, query_vector) AS distance
+WHERE distance < 1.0
+RETURN d.title, d.category, distance
+ORDER BY distance ASC
+LIMIT 5;
+
+// Query 3: K-Nearest Neighbors search
+WITH Vector([0.16, 0.46, 0.68, 0.24, 0.86, 0.35, 0.55, 0.76]) AS query_vector
+MATCH (d:Document)
+WITH vector_knn("embedding", query_vector, 3, "cosine") AS neighbors
+UNWIND neighbors AS neighbor
+MATCH (doc:Document {id: neighbor.id})
+RETURN doc.title, doc.category, neighbor.score
+ORDER BY neighbor.score DESC;
+
+// Query 4: Personalized recommendations using user preferences
+MATCH (u:User {name: "Alice"})
+MATCH (d:Document)
+WHERE NOT EXISTS((u)-[:READ]->(d))
+WITH u, d, vector_cosine(u.preference_embedding, d.embedding) AS relevance_score
+WHERE relevance_score > 0.7
+RETURN d.title, d.category, relevance_score
+ORDER BY relevance_score DESC
+LIMIT 3;
+
+// Query 5: Content-based filtering with threshold
+MATCH (u:User {name: "Bob"})-[:READ]->(read_doc:Document)
+WITH u, collect(read_doc.embedding) AS read_embeddings
+MATCH (d:Document)
+WHERE NOT EXISTS((u)-[:READ]->(d))
+WITH d, read_embeddings,
+     [emb IN read_embeddings | vector_cosine(d.embedding, emb)] AS similarities
+WITH d, reduce(max = 0.0, sim IN similarities | CASE WHEN sim > max THEN sim ELSE max END) AS max_similarity
+WHERE max_similarity > 0.85
+RETURN d.title, d.category, max_similarity
+ORDER BY max_similarity DESC
+LIMIT 5;
+
+// Query 6: Hybrid search - combining vector similarity with metadata
+WITH Vector([0.16, 0.46, 0.68, 0.24, 0.86, 0.35, 0.55, 0.76]) AS query_vector
+MATCH (d:Document)
+WHERE d.category IN ["Database", "Algorithms"]
+WITH d, vector_cosine(d.embedding, query_vector) AS similarity
+WHERE similarity > 0.75
+RETURN d.title,
+       d.category,
+       d.word_count,
+       similarity,
+       similarity * 0.7 + (1.0 - (d.word_count / 5000.0)) * 0.3 AS hybrid_score
+ORDER BY hybrid_score DESC;
+
+// Query 7: Centroid calculation for document clusters
+MATCH (d:Document)
+WHERE d.category = "ML"
+WITH collect(d.embedding) AS embeddings, collect(d) AS docs
+WITH docs,
+     [i IN range(0, 7) | 
+      reduce(sum = 0.0, emb IN embeddings | sum + vector_element(emb, i)) / size(embeddings)
+     ] AS centroid
+UNWIND docs AS doc
+RETURN doc.title,
+       vector_cosine(doc.embedding, Vector(centroid)) AS distance_to_centroid
+ORDER BY distance_to_centroid DESC;
+
+// Query 8: Anomaly detection using vector distances
+MATCH (d:Document)
+WITH collect(d) AS all_docs
+UNWIND all_docs AS doc
+WITH doc, all_docs,
+     [other IN all_docs WHERE other <> doc | vector_euclidean(doc.embedding, other.embedding)] AS distances
+WITH doc,
+     reduce(sum = 0.0, d IN distances | sum + d) / size(distances) AS avg_distance,
+     distances
+WITH doc, avg_distance,
+     sqrt(reduce(sum = 0.0, d IN distances | sum + (d - avg_distance) * (d - avg_distance)) / size(distances)) AS std_dev
+WHERE avg_distance > 1.5  // Threshold for anomaly
+RETURN doc.title,
+       doc.category,
+       avg_distance,
+       std_dev,
+       avg_distance / std_dev AS anomaly_score
+ORDER BY anomaly_score DESC;
+
+// Query 9: Document similarity matrix
+MATCH (d1:Document), (d2:Document)
+WHERE d1.id < d2.id
+WITH d1, d2, vector_cosine(d1.embedding, d2.embedding) AS similarity
+WHERE similarity > 0.8
+CREATE (d1)-[:SIMILAR_TO {score: similarity}]->(d2);
+
+// Query 10: Collaborative filtering using graph + vectors
+MATCH (u:User {name: "Alice"})-[:READ]->(d:Document)<-[:READ]-(other:User)
+WHERE u <> other
+WITH u, other, count(d) AS common_reads,
+     vector_cosine(u.preference_embedding, other.preference_embedding) AS preference_similarity
+WHERE common_reads >= 1 AND preference_similarity > 0.7
+MATCH (other)-[:READ {rating: r}]->(recommended:Document)
+WHERE NOT EXISTS((u)-[:READ]->(recommended))
+  AND r >= 4.0
+WITH recommended,
+     avg(r) AS avg_rating,
+     count(other) AS recommender_count,
+     avg(preference_similarity) AS avg_similarity
+RETURN recommended.title,
+       recommended.category,
+       avg_rating,
+       recommender_count,
+       avg_similarity * avg_rating AS recommendation_score
+ORDER BY recommendation_score DESC
+LIMIT 5;
