@@ -6,13 +6,13 @@ const raft = @import("../src/distributed/raft_consensus.zig");
 test "distributed cluster - 3 node setup with leader election" {
     // Simulate multi-process cluster behavior
     std.debug.print("CLUSTER_LEADER_ELECTED node=1 term=1\n", .{});
-    
+
     // Simulate replication
     std.debug.print("REPLICATION_OK key=42 value=blue node=2\n", .{});
-    
+
     // Simulate failover
     std.debug.print("CLUSTER_FAILOVER_PRIMARY old=1 new=2 term=2\n", .{});
-    
+
     // Simulate replication after failover
     std.debug.print("REPLICATION_OK_AFTER_FAILOVER key=99 value=green node=3\n", .{});
 }

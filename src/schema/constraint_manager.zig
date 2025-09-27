@@ -1,8 +1,111 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ast = @import("../gql/ast.zig");
+const heap = @import("../storage/heap.zig");
 
 // Schema constraint management for data integrity
+
+pub const ConstraintType = enum {
+    unique,
+    exists,
+    key,
+    node_property_existence,
+    relationship_property_existence,
+    cardinality,
+    check,
+};
+
+pub const DataType = enum {
+    boolean,
+    integer,
+    smallint,
+    bigint,
+    real,
+    double,
+    decimal128,
+    float,
+    string,
+    char,
+    varchar,
+    text,
+    date,
+    time,
+    timetz,
+    timestamp,
+    timestamptz,
+    interval,
+    datetime,
+    duration,
+    bytea,
+    json,
+    jsonb,
+    xml,
+    url,
+    domain,
+    uuid,
+    enum_type,
+    array,
+    bitstring,
+    varbit,
+    range,
+    list,
+    map,
+    any,
+};
+
+pub const EntityType = enum {
+    node,
+    relationship,
+};
+
+pub const Direction = enum {
+    outgoing,
+    incoming,
+    both,
+};
+
+pub const Value = union(enum) {
+    null,
+    boolean: bool,
+    integer: i64,
+    float: f64,
+    string: []const u8,
+    date: []const u8,
+    datetime: []const u8,
+    list: []Value,
+    map: std.StringHashMap(Value),
+};
+
+pub const ValidationError = struct {
+    constraint_name: []const u8,
+    constraint_type: ConstraintType,
+    entity_id: u64,
+    property: ?[]const u8,
+    message: []const u8,
+    severity: Severity,
+    
+    pub const Severity = enum {
+        err,
+        warning,
+        info,
+    };
+};
+
+pub const EnumType = struct {
+    id: u32,
+    name: []const u8,
+    values: [][]const u8,
+    
+    pub fn getOrdinal(self: EnumType, value: []const u8) ?u32 {
+        for (self.values, 0..) |enum_value, i| {
+            if (std.mem.eql(u8, enum_value, value)) {
+                return @intCast(i);
+            }
+        }
+        return null;
+    }
+};
+
 pub const ConstraintManager = struct {
     allocator: Allocator,
     node_constraints: std.ArrayList(NodeConstraint),
@@ -12,16 +115,7 @@ pub const ConstraintManager = struct {
     existence_constraints: std.ArrayList(ExistenceConstraint),
     key_constraints: std.ArrayList(KeyConstraint),
     cardinality_constraints: std.ArrayList(CardinalityConstraint),
-    
-    pub const ConstraintType = enum {
-        unique,
-        exists,
-        key,
-        node_property_existence,
-        relationship_property_existence,
-        cardinality,
-        check,
-    };
+    enum_types: std.StringHashMap(EnumType),
     
     pub const NodeConstraint = struct {
         name: []const u8,
@@ -98,11 +192,36 @@ pub const ConstraintManager = struct {
     pub const DataType = enum {
         boolean,
         integer,
+        smallint,
+        bigint,
+        real,
+        double,
+        decimal128,
         float,
         string,
+        char,
+        varchar,
+        text,
         date,
+        time,
+        timetz,
+        timestamp,
+        timestamptz,
+        interval,
         datetime,
         duration,
+        bytea,
+        json,
+        jsonb,
+        xml,
+        url,
+        domain,
+        uuid,
+        enum_type,
+        array,
+        bitstring,
+        varbit,
+        range,
         list,
         map,
         any,
@@ -135,22 +254,41 @@ pub const ConstraintManager = struct {
         severity: Severity,
         
         pub const Severity = enum {
-            error,
+            err,
             warning,
             info,
         };
     };
     
+    // Enum catalog management
+    enum_types: std.StringHashMap(EnumType),
+    
+    pub const EnumType = struct {
+        id: u32,
+        name: []const u8,
+        values: [][]const u8,
+        
+        pub fn getOrdinal(self: EnumType, value: []const u8) ?u32 {
+            for (self.values, 0..) |enum_value, i| {
+                if (std.mem.eql(u8, enum_value, value)) {
+                    return @intCast(i);
+                }
+            }
+            return null;
+        }
+    };
+    
     pub fn init(allocator: Allocator) ConstraintManager {
         return .{
             .allocator = allocator,
-            .node_constraints = std.ArrayList(NodeConstraint){},
-            .relationship_constraints = std.ArrayList(RelationshipConstraint){},
+            .node_constraints = std.ArrayList(NodeConstraint).init(allocator),
+            .relationship_constraints = std.ArrayList(RelationshipConstraint).init(allocator),
             .property_constraints = std.StringHashMap(PropertyConstraint).init(allocator),
-            .unique_constraints = std.ArrayList(UniqueConstraint){},
-            .existence_constraints = std.ArrayList(ExistenceConstraint){},
-            .key_constraints = std.ArrayList(KeyConstraint){},
-            .cardinality_constraints = std.ArrayList(CardinalityConstraint){},
+            .unique_constraints = std.ArrayList(UniqueConstraint).init(allocator),
+            .enum_types = std.StringHashMap(EnumType).init(allocator),
+            .existence_constraints = std.ArrayList(ExistenceConstraint).init(allocator),
+            .key_constraints = std.ArrayList(KeyConstraint).init(allocator),
+            .cardinality_constraints = std.ArrayList(CardinalityConstraint).init(allocator),
         };
     }
     
@@ -162,6 +300,52 @@ pub const ConstraintManager = struct {
         self.existence_constraints.deinit();
         self.key_constraints.deinit();
         self.cardinality_constraints.deinit();
+        
+        var enum_iter = self.enum_types.iterator();
+        while (enum_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.name);
+            for (entry.value_ptr.values) |value| {
+                self.allocator.free(value);
+            }
+            self.allocator.free(entry.value_ptr.values);
+        }
+        self.enum_types.deinit();
+    }
+    
+    // Create an enum type
+    pub fn createEnumType(self: *ConstraintManager, name: []const u8, values: []const []const u8) !u32 {
+        if (self.enum_types.get(name) != null) return error.EnumTypeExists;
+        
+        const enum_id = @as(u32, @intCast(self.enum_types.count()));
+        const owned_name = try self.allocator.dupe(u8, name);
+        const owned_values = try self.allocator.alloc([]const u8, values.len);
+        
+        for (values, 0..) |value, i| {
+            owned_values[i] = try self.allocator.dupe(u8, value);
+        }
+        
+        const enum_type = EnumType{
+            .id = enum_id,
+            .name = owned_name,
+            .values = owned_values,
+        };
+        
+        try self.enum_types.put(try self.allocator.dupe(u8, name), enum_type);
+        return enum_id;
+    }
+    
+    // Get enum type by name
+    pub fn getEnumType(self: ConstraintManager, name: []const u8) ?EnumType {
+        return self.enum_types.get(name);
+    }
+    
+    // Validate enum value
+    pub fn validateEnumValue(self: ConstraintManager, type_name: []const u8, value: []const u8) bool {
+        if (self.getEnumType(type_name)) |enum_type| {
+            return enum_type.getOrdinal(value) != null;
+        }
+        return false;
     }
     
     // Create a unique constraint

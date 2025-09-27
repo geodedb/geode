@@ -21,17 +21,17 @@ fn runGeodec(allocator: std.mem.Allocator, query: []const u8) !std.ChildProcess.
 fn loadMigrationFile(allocator: std.mem.Allocator, path: []const u8) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
-    
+
     const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
     defer allocator.free(content);
-    
+
     // Use geodec to execute the migration
     const result = try runGeodec(allocator, content);
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
     }
-    
+
     if (result.term != .Exited or result.term.Exited != 0) {
         std.debug.print("Migration failed: {s}\n", .{result.stderr});
         return error.MigrationFailed;
@@ -40,24 +40,22 @@ fn loadMigrationFile(allocator: std.mem.Allocator, path: []const u8) !void {
 
 test "dataset migration and basic queries" {
     // Skip if not in CI or explicit test mode
-    if (std.os.getenv("GEODE_RUN_DATASET_TESTS") == null and 
-        std.os.getenv("CI") == null) {
+    if (std.os.getenv("GEODE_RUN_DATASET_TESTS") == null and
+        std.os.getenv("CI") == null)
+    {
         return error.SkipZigTest;
     }
-    
+
     const allocator = testing.allocator;
-    
+
     // Start server
-    var server = std.ChildProcess.init(
-        &[_][]const u8{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "8443" },
-        allocator
-    );
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "8443" }, allocator);
     try server.spawn();
     defer _ = server.kill() catch {};
-    
+
     // Wait for server to start
     std.time.sleep(3 * std.time.ns_per_s);
-    
+
     // Load migrations
     const migrations = [_][]const u8{
         "migrations/001_social_network_schema.gql",
@@ -65,12 +63,12 @@ test "dataset migration and basic queries" {
         "migrations/003_social_network_relationships.gql",
         "migrations/004_social_network_events_products.gql",
     };
-    
+
     for (migrations) |migration| {
         std.debug.print("Loading migration: {s}\n", .{migration});
         try loadMigrationFile(allocator, migration);
     }
-    
+
     // Test queries
     const test_queries = [_]struct {
         name: []const u8,
@@ -103,21 +101,21 @@ test "dataset migration and basic queries" {
             .expected_pattern = "USD",
         },
     };
-    
+
     for (test_queries) |test_case| {
         std.debug.print("Testing: {s}\n", .{test_case.name});
-        
+
         const result = try runGeodec(allocator, test_case.query);
         defer {
             allocator.free(result.stdout);
             allocator.free(result.stderr);
         }
-        
+
         if (result.term != .Exited or result.term.Exited != 0) {
             std.debug.print("Query failed: {s}\n", .{result.stderr});
             return error.QueryFailed;
         }
-        
+
         if (std.mem.indexOf(u8, result.stdout, test_case.expected_pattern) == null) {
             std.debug.print("Expected pattern '{s}' not found in output\n", .{test_case.expected_pattern});
             return error.UnexpectedOutput;

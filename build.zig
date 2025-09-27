@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     b.installArtifact(geode_exe);
-    
+
     // Legacy wire binary (keep for compatibility)
     const exe = b.addExecutable(.{
         .name = "wire",
@@ -88,7 +88,7 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_cmd.addArgs(args);
     const run_step = b.step("run", "Run the unified geode CLI");
     run_step.dependOn(&run_cmd.step);
-    
+
     // Legacy wire run command
     const run_wire_cmd = b.addRunArtifact(exe);
     run_wire_cmd.step.dependOn(b.getInstallStep());
@@ -209,10 +209,10 @@ pub fn build(b: *std.Build) void {
     // Add canary test target
     const canary_exe = b.addExecutable(.{
         .name = "canary_main",
-        .root_module = b.createModule(.{ .root_source_file = b.path("tools/canary_main.zig"), .target = target, .optimize = optimize }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/additional_types_canary.zig"), .target = target, .optimize = optimize }),
     });
     const run_canary = b.addRunArtifact(canary_exe);
-    const canary_step = b.step("canary", "Run type system canary tests");
+    const canary_step = b.step("canary", "Run additional data types canary tests");
     canary_step.dependOn(&run_canary.step);
 
     // Add acceptance test target
@@ -221,12 +221,12 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("tools/cpa_accept_main.zig"), .target = target, .optimize = optimize }),
     });
     const run_cpa_accept = b.addRunArtifact(cpa_accept_exe);
-    const cpa_accept_step = b.step("cpa_accept", "Run type system acceptance tests");
+    const cpa_accept_step = b.step("cpa_accept", "Run additional data types acceptance tests");
     cpa_accept_step.dependOn(&run_cpa_accept.step);
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
     test_step.dependOn(&run_gql_conformance_tests.step);
-    
+
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
     cli_tests.root_module.addImport("geode", root_mod);

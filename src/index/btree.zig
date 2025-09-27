@@ -1,4 +1,5 @@
 const std = @import("std");
+const heap = @import("../storage/heap.zig");
 const Allocator = std.mem.Allocator;
 
 // B-tree index implementation for property lookups
@@ -515,16 +516,60 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
         }
 
         fn compareKeys(a: Key, b: Key) i8 {
+            if (Key == heap.Value) {
+                return compareValues(a, b);
+            }
             // This should be customized based on Key type
             if (@TypeOf(a) == i64 or @TypeOf(a) == u64) {
                 if (a < b) return -1;
                 if (a > b) return 1;
                 return 0;
             } else if (@TypeOf(a) == []const u8) {
-                return std.mem.order(u8, a, b);
+                return @as(i8, @intCast(std.mem.order(u8, a, b).value()));
             } else {
                 @compileError("Unsupported key type");
             }
+        }
+
+        fn compareValues(a: heap.Value, b: heap.Value) i8 {
+            // Type precedence order for total ordering
+            const type_order = std.meta.fieldIndex(heap.Value, @tagName(a)).? + 1;
+            const type_order_b = std.meta.fieldIndex(heap.Value, @tagName(b)).? + 1;
+
+            if (type_order != type_order_b) {
+                return if (type_order < type_order_b) -1 else 1;
+            }
+
+            return switch (a) {
+                .Null => 0,
+                .Bool => |av| if (av == b.Bool) 0 else if (av) 1 else -1,
+                .Int => |av| if (av < b.Int) -1 else if (av > b.Int) 1 else 0,
+                .SmallInt => |av| if (av < b.SmallInt) -1 else if (av > b.SmallInt) 1 else 0,
+                .BigInt => |av| if (av < b.BigInt) -1 else if (av > b.BigInt) 1 else 0,
+                .Real => |av| if (av < b.Real) -1 else if (av > b.Real) 1 else 0,
+                .Double => |av| if (av < b.Double) -1 else if (av > b.Double) 1 else 0,
+                .Decimal128 => |av| {
+                    const bv = b.Decimal128;
+                    const max_scale = @max(av.scale, bv.scale);
+                    const a_scaled = av.rescale(max_scale) catch av;
+                    const b_scaled = bv.rescale(max_scale) catch bv;
+                    if (a_scaled.coeff < b_scaled.coeff) return -1;
+                    if (a_scaled.coeff > b_scaled.coeff) return 1;
+                    return 0;
+                },
+                .Str => |av| @as(i8, @intCast(std.mem.order(u8, av, b.Str).value())),
+                .Text => |av| @as(i8, @intCast(std.mem.order(u8, av, b.Text).value())),
+                .Char => |av| @as(i8, @intCast(std.mem.order(u8, av.data, b.Char.data).value())),
+                .Varchar => |av| @as(i8, @intCast(std.mem.order(u8, av.data, b.Varchar.data).value())),
+                .Date => |av| if (av.days_since_epoch < b.Date.days_since_epoch) -1 else if (av.days_since_epoch > b.Date.days_since_epoch) 1 else 0,
+                .Time => |av| if (av.micros_since_midnight < b.Time.micros_since_midnight) -1 else if (av.micros_since_midnight > b.Time.micros_since_midnight) 1 else 0,
+                .Timestamp => |av| if (av.micros_since_epoch < b.Timestamp.micros_since_epoch) -1 else if (av.micros_since_epoch > b.Timestamp.micros_since_epoch) 1 else 0,
+                .TimestampTZ => |av| if (av.micros_since_epoch_utc < b.TimestampTZ.micros_since_epoch_utc) -1 else if (av.micros_since_epoch_utc > b.TimestampTZ.micros_since_epoch_utc) 1 else 0,
+                .UUID => |av| @as(i8, @intCast(std.mem.order(u8, &av.bytes, &b.UUID.bytes).value())),
+                .Enum => |av| if (av.value_ordinal < b.Enum.value_ordinal) -1 else if (av.value_ordinal > b.Enum.value_ordinal) 1 else 0,
+                .Url, .Domain, .Xml, .Json, .Jsonb, .Array, .BitString, .VarBit, .IntRange => 0, // Simplified for now
+                else => 0,
+            };
         }
     };
 }

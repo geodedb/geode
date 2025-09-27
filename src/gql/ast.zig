@@ -114,6 +114,25 @@ pub const Expr = union(enum) {
     Time: struct { raw: []const u8, parsed: temporal.Time },
     LocalDateTime: struct { raw: []const u8, parsed: temporal.DateTime },
     List: []*Expr,
+    // New type constructor literals
+    SmallIntLit: i16,
+    BigIntLit: i64,
+    RealLit: f32,
+    DoubleLit: f64,
+    CharLit: struct { text: []const u8, n: u16 },
+    VarcharLit: struct { text: []const u8, n: u16 },
+    TextLit: []const u8,
+    ByteaLit: []const u8,
+    JsonLit: []const u8,
+    JsonbLit: []const u8,
+    XmlLit: []const u8,
+    UrlLit: []const u8,
+    DomainLit: []const u8,
+    UuidLit: []const u8,
+    EnumLit: struct { type_name: []const u8, value: []const u8 },
+    ArrayLit: []*Expr,
+    BitLit: []const u8,
+    VarBitLit: []const u8,
     Member: struct { target: *Expr, field: []const u8 },
     PropertyAccess: struct { object: []const u8, property: []const u8 }, // n.name syntax
     Call: struct { callee: *Expr, args: []*Expr },
@@ -179,6 +198,6 @@ pub const PropertyAccess = struct {
 };
 
 pub const SessionSetStatement = struct {
-    property: []const u8,  // e.g., "GRAPH"
-    value: []const u8,      // e.g., "G1"
+    property: []const u8, // e.g., "GRAPH"
+    value: []const u8, // e.g., "G1"
 };

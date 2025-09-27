@@ -376,7 +376,6 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .String => |s| try w.print("\"{s}\"", .{s}),
         .Int => |n| try w.print("{d}", .{n}),
         .Decimal => |d| blk_dec: {
-            // Render as standard fixed-point decimal with scale digits after the dot
             const neg = d.coeff < 0;
             const abs: i128 = if (neg) -d.coeff else d.coeff;
             var whole: i128 = abs;
@@ -388,11 +387,9 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 whole = @divTrunc(abs, p);
                 frac = @mod(abs, p);
             }
-            // write whole
             try w.print("{s}{d}", .{ if (neg) "-" else "", whole });
             if (d.scale > 0) {
                 try w.writeByte('.');
-                // pad frac with leading zeros to exactly scale digits
                 var buf: [64]u8 = undefined;
                 const s = std.fmt.bufPrint(&buf, "{d}", .{frac}) catch unreachable;
                 if (s.len < d.scale) {
@@ -579,5 +576,30 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printExprWith(w, pc.map.*, 0, opts);
             try w.writeByte(']');
         },
+        .SmallIntLit => |i| try w.print("{d}", .{i}),
+        .BigIntLit => |i| try w.print("{d}", .{i}),
+        .RealLit => |f| try w.print("{d}", .{f}),
+        .DoubleLit => |f| try w.print("{d}", .{f}),
+        .CharLit => |c| try w.print("CHAR({d})\"{s}\"", .{ c.n, c.text }),
+        .VarcharLit => |v| try w.print("VARCHAR({d})\"{s}\"", .{ v.n, v.text }),
+        .TextLit => |t| try w.print("\"{s}\"", .{t}),
+        .ByteaLit => |b| try w.print("BYTEA\"{s}\"", .{b}),
+        .JsonLit => |j| try w.print("JSON\"{s}\"", .{j}),
+        .JsonbLit => |j| try w.print("JSONB\"{s}\"", .{j}),
+        .XmlLit => |x| try w.print("XML\"{s}\"", .{x}),
+        .UrlLit => |u| try w.print("URL\"{s}\"", .{u}),
+        .DomainLit => |d| try w.print("DOMAIN\"{s}\"", .{d}),
+        .UuidLit => |u| try w.print("UUID\"{s}\"", .{u}),
+        .EnumLit => |en| try w.print("{s}::{s}", .{ en.type_name, en.value }),
+        .ArrayLit => |items| {
+            try w.writeByte('[');
+            for (items, 0..) |it, i| {
+                if (i > 0) try w.print(", ", .{});
+                try printExprWith(w, it.*, 0, opts);
+            }
+            try w.writeByte(']');
+        },
+        .BitLit => |bits| try w.print("B\"{s}\"", .{bits}),
+        .VarBitLit => |bits| try w.print("VARBIT\"{s}\"", .{bits}),
     }
 }

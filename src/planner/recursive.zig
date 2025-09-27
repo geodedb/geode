@@ -30,18 +30,18 @@ pub const RecursiveQueryProcessor = struct {
             union_find,
             topological_sort,
         };
-        
+
         // CANARY: REQ=REQ-GQL-012; FEATURE="Recursive CTEs"; ASPECT=CycleDetection; STATUS=TESTED; TEST=e2e_recursive_bounded_default; OWNER=planner; UPDATED=2025-09-25
     };
 
     pub const PathTracking = struct {
-        track_path: bool = true,  // Default-enable path tracking
+        track_path: bool = true, // Default-enable path tracking
         path_column: ?[]const u8,
         path_separator: []const u8 = "/",
         include_self: bool = true,
         max_path_length: u32 = 1000,
-        enable_bounded_expansion: bool = true,  // Default-enable bounded path expansions
-        deterministic_ordering: bool = true,  // Ensure deterministic ordering
+        enable_bounded_expansion: bool = true, // Default-enable bounded path expansions
+        deterministic_ordering: bool = true, // Ensure deterministic ordering
     };
 
     pub const OptimizationHints = struct {
@@ -51,8 +51,8 @@ pub const RecursiveQueryProcessor = struct {
         materialize_intermediate: bool = true,
         parallel_execution: bool = false,
         memory_limit_mb: u32 = 1024,
-        depth_limit: u32 = 100,  // Default depth limit for recursive CTEs
-        enable_by_default: bool = true,  // Recursive CTEs default-enabled
+        depth_limit: u32 = 100, // Default depth limit for recursive CTEs
+        enable_by_default: bool = true, // Recursive CTEs default-enabled
     };
 
     pub const RecursiveCTE = struct {

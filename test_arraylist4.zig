@@ -4,9 +4,9 @@ const TestStruct = struct {
     const Node = struct {
         id: u64,
     };
-    
+
     nodes: std.ArrayListAligned(Node, null),
-    
+
     pub fn init(allocator: std.mem.Allocator) TestStruct {
         return .{
             .nodes = std.ArrayListAligned(Node, null).init(allocator),

@@ -612,7 +612,7 @@ pub const ClusterCoordinator = struct {
     pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: protocol.Message) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
-        
+
         const conn = self.connections.get(node_id) orelse {
             // Establish new QUIC connection
             const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
@@ -620,15 +620,15 @@ pub const ClusterCoordinator = struct {
             try self.connections.put(node_id, new_conn);
             return self.sendToNode(node_id, msg); // Retry with connection
         };
-        
+
         // Frame the message (u32 length | u8 type | payload)
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
-        
+
         try buffer.writer().writeInt(u32, @intCast(msg.payload.len + 1), .little);
         try buffer.writer().writeByte(@intFromEnum(msg.type));
         try buffer.writer().writeAll(msg.payload);
-        
+
         // Send with retries (50ms, 100ms, 200ms backoff)
         var retries: u32 = 0;
         while (retries < 3) : (retries += 1) {
@@ -641,7 +641,7 @@ pub const ClusterCoordinator = struct {
             break;
         }
     }
-    
+
     // CANARY: REQ=REQ-GQL-021; FEATURE="Cluster Message Handler"; ASPECT=OnMessage; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
     pub fn onMessage(self: *ClusterCoordinator, callback: fn (*ClusterCoordinator, *const protocol.Message) void) void {
         self.message_callback = callback;

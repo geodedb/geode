@@ -1,11 +1,29 @@
 const std = @import("std");
 const ast = @import("gql/ast.zig");
+const eval_funcs = @import("types/evaluator_functions.zig");
 
 pub const EvalError = error{
     TypeMismatch,
     DivisionByZero,
     Unsupported,
     RegexCompile,
+    CharLengthExceeded,
+    HexFormatError,
+    JsonInvalid,
+    XmlNotWellFormed,
+    UrlParseError,
+    DomainSyntaxError,
+    UuidParseError,
+    EnumTypeError,
+    EnumValueError,
+    IndexOutOfBounds,
+    BitParseError,
+    RangeBoundsError,
+    FloatNaN,
+    TimeParse,
+    DecimalOverflow,
+    DecimalDivZero,
+    IdnaError,
 };
 
 pub const Value = union(enum) {
@@ -519,15 +537,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             const p = try evalExpr(ally, rm.pattern.*, env);
             return try evalRegex(v, p, ally);
         },
-        .Call => |c| blk_call: {
-            if (c.callee.* == .Ident) {
-                const nm = c.callee.*.Ident;
-                if (std.ascii.eqlIgnoreCase(nm, "last_value") or std.ascii.eqlIgnoreCase(nm, "value_at") or std.ascii.eqlIgnoreCase(nm, "sample_by")) {
-                    break :blk_call Value{ .Null = {} };
-                }
-            }
-            return Value{ .Null = {} };
-        },
+        .Call => |_| Value{ .Null = {} },
         .In => |iv| {
             const v = try evalExpr(ally, iv.value.*, env);
             return try inList(v, iv.set, ally, env);
@@ -575,6 +585,25 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 return Value{ .Null = {} };
             }
         },
+        // New type literals
+        .SmallIntLit => |i| Value{ .Int = @as(i64, i) },
+        .BigIntLit => |i| Value{ .Int = i },
+        .RealLit => |_| Value{ .Null = {} },
+        .DoubleLit => |_| Value{ .Null = {} },
+        .CharLit => |c| Value{ .Str = c.text },
+        .VarcharLit => |v| Value{ .Str = v.text },
+        .TextLit => |t| Value{ .Str = t },
+        .ByteaLit => |b| Value{ .Str = b },
+        .JsonLit => |j| Value{ .Str = j },
+        .JsonbLit => |jb| Value{ .Str = jb },
+        .XmlLit => |x| Value{ .Str = x },
+        .UrlLit => |u| Value{ .Str = u },
+        .DomainLit => |d| Value{ .Str = d },
+        .UuidLit => |u| Value{ .Str = u },
+        .EnumLit => |enum_val| Value{ .Str = enum_val.value },
+        .ArrayLit => |_| Value{ .Null = {} },
+        .BitLit => |b| Value{ .Str = b },
+        .VarBitLit => |vb| Value{ .Str = vb },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };

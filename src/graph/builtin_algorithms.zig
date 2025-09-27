@@ -22,7 +22,7 @@ pub const BuiltinAlgorithms = struct {
             .cache = AlgorithmCache.init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *BuiltinAlgorithms) void {
         self.cache.deinit();
     }
@@ -38,51 +38,51 @@ pub const BuiltinAlgorithms = struct {
         var ranks = std.AutoHashMap(u64, f64).init(self.allocator);
         var new_ranks = std.AutoHashMap(u64, f64).init(self.allocator);
         defer new_ranks.deinit();
-        
+
         // Initialize ranks
         const initial_rank = 1.0 / @as(f64, @floatFromInt(node_count));
         var nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
-        
+
         for (nodes) |node| {
             try ranks.put(node, initial_rank);
             try new_ranks.put(node, 0.0);
         }
-        
+
         // Power iteration
         var iteration: u32 = 0;
         while (iteration < max_iterations) : (iteration += 1) {
             var max_diff: f64 = 0.0;
-            
+
             // Calculate new ranks
             for (nodes) |node| {
                 var rank: f64 = (1.0 - damping_factor) / @as(f64, @floatFromInt(node_count));
-                
+
                 // Get incoming edges
                 const in_edges = try self.graph.getIncomingEdges(node);
                 defer self.allocator.free(in_edges);
-                
+
                 for (in_edges) |edge| {
                     const source_rank = ranks.get(edge.source) orelse initial_rank;
                     const out_degree = try self.graph.getOutDegree(edge.source);
                     rank += damping_factor * source_rank / @as(f64, @floatFromInt(out_degree));
                 }
-                
+
                 try new_ranks.put(node, rank);
-                
+
                 const old_rank = ranks.get(node) orelse initial_rank;
                 max_diff = @max(max_diff, @abs(rank - old_rank));
             }
-            
+
             // Swap ranks
             std.mem.swap(std.AutoHashMap(u64, f64), &ranks, &new_ranks);
-            
+
             if (max_diff < tolerance) break;
         }
-        
+
         return ranks;
     }
-    
+
     // betweennessCentrality() - compute betweenness centrality
     pub fn betweennessCentrality(
         self: *BuiltinAlgorithms,
@@ -90,22 +90,22 @@ pub const BuiltinAlgorithms = struct {
         sample_size: ?usize,
     ) !std.AutoHashMap(u64, f64) {
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
-        
+
         var nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
-        
+
         // Initialize centrality scores
         for (nodes) |node| {
             try centrality.put(node, 0.0);
         }
-        
+
         // Use sampling for large graphs
         const sample = if (sample_size) |size| blk: {
             if (size < nodes.len) {
                 var sampled = try self.allocator.alloc(u64, size);
                 var rng = std.rand.DefaultPrng.init(@intCast(std.time.timestamp()));
                 const random = rng.random();
-                
+
                 for (sampled) |*s| {
                     s.* = nodes[random.intRangeAtMost(usize, 0, nodes.len - 1)];
                 }
@@ -114,12 +114,12 @@ pub const BuiltinAlgorithms = struct {
             break :blk nodes;
         } else nodes;
         defer if (sample_size != null) self.allocator.free(sample);
-        
+
         // Brandes algorithm
         for (sample) |source| {
             var stack = std.ArrayList(u64).init(self.allocator);
             defer stack.deinit();
-            
+
             var paths = std.AutoHashMap(u64, std.ArrayList(u64)).init(self.allocator);
             defer {
                 var it = paths.iterator();
@@ -128,16 +128,16 @@ pub const BuiltinAlgorithms = struct {
                 }
                 paths.deinit();
             }
-            
+
             var sigma = std.AutoHashMap(u64, f64).init(self.allocator);
             defer sigma.deinit();
-            
+
             var delta = std.AutoHashMap(u64, f64).init(self.allocator);
             defer delta.deinit();
-            
+
             var dist = std.AutoHashMap(u64, i32).init(self.allocator);
             defer dist.deinit();
-            
+
             // Initialize
             for (nodes) |node| {
                 try paths.put(node, std.ArrayList(u64).init(self.allocator));
@@ -145,67 +145,67 @@ pub const BuiltinAlgorithms = struct {
                 try delta.put(node, 0.0);
                 try dist.put(node, -1);
             }
-            
+
             try sigma.put(source, 1.0);
             try dist.put(source, 0);
-            
+
             var queue = std.ArrayList(u64).init(self.allocator);
             defer queue.deinit();
             try queue.append(source);
-            
+
             // BFS
             var front: usize = 0;
             while (front < queue.items.len) : (front += 1) {
                 const v = queue.items[front];
                 try stack.append(v);
-                
+
                 const v_dist = dist.get(v) orelse -1;
                 const neighbors = try self.graph.getNeighbors(v);
                 defer self.allocator.free(neighbors);
-                
+
                 for (neighbors) |w| {
                     const w_dist = dist.get(w) orelse -1;
-                    
+
                     // First time we reach w
                     if (w_dist < 0) {
                         try queue.append(w);
                         try dist.put(w, v_dist + 1);
                     }
-                    
+
                     // Shortest path to w via v
                     if (dist.get(w) == v_dist + 1) {
                         const sigma_v = sigma.get(v) orelse 0.0;
                         const sigma_w = sigma.get(w) orelse 0.0;
                         try sigma.put(w, sigma_w + sigma_v);
-                        
+
                         var w_paths = paths.get(w) orelse std.ArrayList(u64).init(self.allocator);
                         try w_paths.append(v);
                         try paths.put(w, w_paths);
                     }
                 }
             }
-            
+
             // Accumulation
             while (stack.items.len > 0) {
                 const w = stack.pop();
                 const w_paths = paths.get(w) orelse continue;
                 const sigma_w = sigma.get(w) orelse 1.0;
                 const delta_w = delta.get(w) orelse 0.0;
-                
+
                 for (w_paths.items) |v| {
                     const sigma_v = sigma.get(v) orelse 1.0;
                     const delta_v = delta.get(v) orelse 0.0;
                     const contribution = (sigma_v / sigma_w) * (1.0 + delta_w);
                     try delta.put(v, delta_v + contribution);
                 }
-                
+
                 if (w != source) {
                     const current = centrality.get(w) orelse 0.0;
                     try centrality.put(w, current + delta_w);
                 }
             }
         }
-        
+
         // Normalize if requested
         if (normalized and nodes.len > 2) {
             const n = @as(f64, @floatFromInt(nodes.len));
@@ -213,17 +213,17 @@ pub const BuiltinAlgorithms = struct {
                 2.0 / ((n - 1.0) * (n - 2.0)) * (n / @as(f64, @floatFromInt(size)))
             else
                 2.0 / ((n - 1.0) * (n - 2.0));
-            
+
             var it = centrality.iterator();
             while (it.next()) |entry| {
                 entry.value_ptr.* *= norm_factor;
             }
         }
-        
+
         return centrality;
     }
-    
-    // closenessCentrality() - compute closeness centrality  
+
+    // closenessCentrality() - compute closeness centrality
     pub fn closenessCentrality(
         self: *BuiltinAlgorithms,
         normalized: bool,
@@ -232,14 +232,14 @@ pub const BuiltinAlgorithms = struct {
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
         const nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
-        
+
         for (nodes) |node| {
             const distances = try self.computeShortestPaths(node);
             defer distances.deinit();
-            
+
             var total_distance: f64 = 0;
             var reachable_count: usize = 0;
-            
+
             var it = distances.iterator();
             while (it.next()) |entry| {
                 if (entry.key_ptr.* != node and entry.value_ptr.* < std.math.maxInt(u32)) {
@@ -247,7 +247,7 @@ pub const BuiltinAlgorithms = struct {
                     reachable_count += 1;
                 }
             }
-            
+
             var closeness: f64 = 0;
             if (total_distance > 0) {
                 if (wf_improved) {
@@ -258,18 +258,18 @@ pub const BuiltinAlgorithms = struct {
                 } else {
                     closeness = @as(f64, @floatFromInt(reachable_count)) / total_distance;
                 }
-                
+
                 if (normalized and nodes.len > 1) {
                     closeness *= @as(f64, @floatFromInt(nodes.len - 1));
                 }
             }
-            
+
             try centrality.put(node, closeness);
         }
-        
+
         return centrality;
     }
-    
+
     // eigenvectorCentrality() - compute eigenvector centrality
     pub fn eigenvectorCentrality(
         self: *BuiltinAlgorithms,
@@ -278,39 +278,39 @@ pub const BuiltinAlgorithms = struct {
     ) !std.AutoHashMap(u64, f64) {
         const nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
-        
+
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
         var new_centrality = std.AutoHashMap(u64, f64).init(self.allocator);
         defer new_centrality.deinit();
-        
+
         // Initialize with uniform values
         const initial = 1.0 / @sqrt(@as(f64, @floatFromInt(nodes.len)));
         for (nodes) |node| {
             try centrality.put(node, initial);
         }
-        
+
         // Power iteration
         var iteration: u32 = 0;
         while (iteration < max_iterations) : (iteration += 1) {
             var norm: f64 = 0;
-            
+
             // Update centrality values
             for (nodes) |node| {
                 var sum: f64 = 0;
                 const neighbors = try self.graph.getNeighbors(node);
                 defer self.allocator.free(neighbors);
-                
+
                 for (neighbors) |neighbor| {
                     sum += centrality.get(neighbor) orelse initial;
                 }
-                
+
                 try new_centrality.put(node, sum);
                 norm += sum * sum;
             }
-            
+
             norm = @sqrt(norm);
             if (norm == 0) norm = 1;
-            
+
             // Normalize and check convergence
             var max_diff: f64 = 0;
             for (nodes) |node| {
@@ -319,13 +319,13 @@ pub const BuiltinAlgorithms = struct {
                 max_diff = @max(max_diff, @abs(new_val - old_val));
                 try centrality.put(node, new_val);
             }
-            
+
             if (max_diff < tolerance) break;
         }
-        
+
         return centrality;
     }
-    
+
     // Community detection using Louvain algorithm
     pub fn louvainCommunities(
         self: *BuiltinAlgorithms,
@@ -334,56 +334,56 @@ pub const BuiltinAlgorithms = struct {
     ) !std.AutoHashMap(u64, u64) {
         const nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
-        
+
         var communities = std.AutoHashMap(u64, u64).init(self.allocator);
         var node_to_comm = std.AutoHashMap(u64, u64).init(self.allocator);
         defer node_to_comm.deinit();
-        
+
         // Initialize each node in its own community
         for (nodes, 0..) |node, i| {
             try communities.put(node, i);
             try node_to_comm.put(node, i);
         }
-        
+
         var rng = std.rand.DefaultPrng.init(random_seed orelse @intCast(std.time.timestamp()));
         const random = rng.random();
-        
+
         // Phase 1: Local optimization
         var improved = true;
         var total_edge_weight = try self.getTotalEdgeWeight();
-        
+
         while (improved) {
             improved = false;
-            
+
             // Shuffle nodes for random order
             var shuffled = try self.allocator.dupe(u64, nodes);
             defer self.allocator.free(shuffled);
             random.shuffle(u64, shuffled);
-            
+
             for (shuffled) |node| {
                 const current_comm = node_to_comm.get(node) orelse continue;
                 const neighbors = try self.graph.getNeighbors(node);
                 defer self.allocator.free(neighbors);
-                
+
                 // Find best community to move to
                 var best_comm = current_comm;
                 var best_gain: f64 = 0;
-                
+
                 var neighbor_comms = std.AutoHashMap(u64, f64).init(self.allocator);
                 defer neighbor_comms.deinit();
-                
+
                 for (neighbors) |neighbor| {
                     const neighbor_comm = node_to_comm.get(neighbor) orelse continue;
                     const weight = try self.graph.getEdgeWeight(node, neighbor);
                     const current = neighbor_comms.get(neighbor_comm) orelse 0;
                     try neighbor_comms.put(neighbor_comm, current + weight);
                 }
-                
+
                 var it = neighbor_comms.iterator();
                 while (it.next()) |entry| {
                     const comm = entry.key_ptr.*;
                     if (comm == current_comm) continue;
-                    
+
                     const gain = self.calculateModularityGain(
                         node,
                         current_comm,
@@ -392,26 +392,26 @@ pub const BuiltinAlgorithms = struct {
                         total_edge_weight,
                         resolution,
                     ) catch 0;
-                    
+
                     if (gain > best_gain) {
                         best_gain = gain;
                         best_comm = comm;
                     }
                 }
-                
+
                 if (best_comm != current_comm) {
                     try node_to_comm.put(node, best_comm);
                     improved = true;
                 }
             }
         }
-        
+
         // Phase 2: Community aggregation (simplified)
         var final_communities = std.AutoHashMap(u64, u64).init(self.allocator);
         var comm_id: u64 = 0;
         var comm_map = std.AutoHashMap(u64, u64).init(self.allocator);
         defer comm_map.deinit();
-        
+
         for (nodes) |node| {
             const comm = node_to_comm.get(node) orelse continue;
             const final_comm = comm_map.get(comm) orelse blk: {
@@ -422,10 +422,10 @@ pub const BuiltinAlgorithms = struct {
             };
             try final_communities.put(node, final_comm);
         }
-        
+
         return final_communities;
     }
-    
+
     // Label propagation for community detection
     pub fn labelPropagationCommunities(
         self: *BuiltinAlgorithms,
@@ -433,40 +433,40 @@ pub const BuiltinAlgorithms = struct {
     ) !std.AutoHashMap(u64, u64) {
         const nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
-        
+
         var labels = std.AutoHashMap(u64, u64).init(self.allocator);
-        
+
         // Initialize each node with unique label
         for (nodes, 0..) |node, i| {
             try labels.put(node, i);
         }
-        
+
         var iteration: u32 = 0;
         var changed = true;
-        
+
         while (changed and iteration < max_iterations) : (iteration += 1) {
             changed = false;
-            
+
             for (nodes) |node| {
                 const neighbors = try self.graph.getNeighbors(node);
                 defer self.allocator.free(neighbors);
-                
+
                 if (neighbors.len == 0) continue;
-                
+
                 // Count label frequencies among neighbors
                 var label_counts = std.AutoHashMap(u64, u32).init(self.allocator);
                 defer label_counts.deinit();
-                
+
                 for (neighbors) |neighbor| {
                     const label = labels.get(neighbor) orelse continue;
                     const count = label_counts.get(label) orelse 0;
                     try label_counts.put(label, count + 1);
                 }
-                
+
                 // Find most frequent label
                 var max_count: u32 = 0;
                 var max_label = labels.get(node) orelse 0;
-                
+
                 var it = label_counts.iterator();
                 while (it.next()) |entry| {
                     if (entry.value_ptr.* > max_count) {
@@ -474,7 +474,7 @@ pub const BuiltinAlgorithms = struct {
                         max_label = entry.key_ptr.*;
                     }
                 }
-                
+
                 const current_label = labels.get(node) orelse 0;
                 if (max_label != current_label) {
                     try labels.put(node, max_label);
@@ -482,10 +482,10 @@ pub const BuiltinAlgorithms = struct {
                 }
             }
         }
-        
+
         return labels;
     }
-    
+
     // shortestPath() function - finds shortest path between two nodes
     pub fn shortestPath(
         self: *BuiltinAlgorithms,
@@ -552,15 +552,15 @@ pub const BuiltinAlgorithms = struct {
 
         return null; // No path found
     }
-    
+
     // Helper functions
     fn getNeighbors(self: *BuiltinAlgorithms, node: u64, relationship_types: ?[]const []const u8, direction: graph_exec.Direction) ![]Neighbor {
         _ = relationship_types;
         _ = direction;
-        
+
         const edges = try self.graph.getOutgoingEdges(node);
         defer self.allocator.free(edges);
-        
+
         var neighbors = try self.allocator.alloc(Neighbor, edges.len);
         for (edges, 0..) |edge, i| {
             neighbors[i] = .{
@@ -568,18 +568,18 @@ pub const BuiltinAlgorithms = struct {
                 .edge = edge.id,
             };
         }
-        
+
         return neighbors;
     }
-    
+
     fn reconstructPath(self: *BuiltinAlgorithms, start: u64, end: u64, parent: *std.AutoHashMap(u64, PathInfo)) !graph_exec.Path {
         var path_nodes = std.ArrayList(u64).init(self.allocator);
         var path_edges = std.ArrayList(u64).init(self.allocator);
-        
+
         var current = end;
         while (current != start) {
             try path_nodes.insert(0, current);
-            
+
             if (parent.get(current)) |info| {
                 if (info.edge) |edge| {
                     try path_edges.insert(0, edge);
@@ -590,33 +590,33 @@ pub const BuiltinAlgorithms = struct {
             }
         }
         try path_nodes.insert(0, start);
-        
+
         return graph_exec.Path{
             .nodes = try path_nodes.toOwnedSlice(),
             .edges = try path_edges.toOwnedSlice(),
             .total_weight = @intCast(path_edges.items.len),
         };
     }
-    
+
     fn computeShortestPaths(self: *BuiltinAlgorithms, source: u64) !std.AutoHashMap(u64, u32) {
         var distances = std.AutoHashMap(u64, u32).init(self.allocator);
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
-        
+
         var queue = std.ArrayList(struct { node: u64, dist: u32 }).init(self.allocator);
         defer queue.deinit();
-        
+
         try queue.append(.{ .node = source, .dist = 0 });
         try distances.put(source, 0);
         try visited.put(source, {});
-        
+
         var front: usize = 0;
         while (front < queue.items.len) : (front += 1) {
             const current = queue.items[front];
-            
+
             const neighbors = try self.graph.getNeighbors(current.node);
             defer self.allocator.free(neighbors);
-            
+
             for (neighbors) |neighbor| {
                 if (!visited.contains(neighbor)) {
                     try visited.put(neighbor, {});
@@ -625,32 +625,32 @@ pub const BuiltinAlgorithms = struct {
                 }
             }
         }
-        
+
         // Set unreachable nodes to max distance
         const all_nodes = try self.graph.getAllNodes();
         defer self.allocator.free(all_nodes);
-        
+
         for (all_nodes) |node| {
             if (!distances.contains(node)) {
                 try distances.put(node, std.math.maxInt(u32));
             }
         }
-        
+
         return distances;
     }
-    
+
     fn getTotalEdgeWeight(self: *BuiltinAlgorithms) !f64 {
         const edges = try self.graph.getAllEdges();
         defer self.allocator.free(edges);
-        
+
         var total: f64 = 0;
         for (edges) |edge| {
             total += edge.weight orelse 1.0;
         }
-        
+
         return total;
     }
-    
+
     fn calculateModularityGain(
         self: *BuiltinAlgorithms,
         node: u64,
@@ -661,37 +661,37 @@ pub const BuiltinAlgorithms = struct {
         resolution: f64,
     ) !f64 {
         _ = from_comm;
-        
+
         const node_degree = try self.graph.getDegree(node);
         var to_comm_weight: f64 = 0;
-        
+
         const neighbors = try self.graph.getNeighbors(node);
         defer self.allocator.free(neighbors);
-        
+
         for (neighbors) |neighbor| {
             if (node_to_comm.get(neighbor) == to_comm) {
                 const weight = try self.graph.getEdgeWeight(node, neighbor);
                 to_comm_weight += weight;
             }
         }
-        
+
         const ki = @as(f64, @floatFromInt(node_degree));
         const m = total_weight;
-        
+
         // Simplified modularity gain calculation
         return (to_comm_weight / m - resolution * ki * ki / (2.0 * m * m));
     }
-    
+
     const Neighbor = struct {
         node: u64,
         edge: ?u64,
     };
-    
+
     const PathInfo = struct {
         node: u64,
         edge: ?u64,
     };
-    
+
     const QueueItem = struct {
         node: u64,
         depth: u32,

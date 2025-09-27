@@ -1,6 +1,7 @@
 const std = @import("std");
 const GqlLexer = @import("gql/lexer.zig");
 const GqlParser = @import("gql/parser.zig");
+const heap = @import("storage/heap.zig");
 // CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCDiagnosticsProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCControlProtocol; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=wire; UPDATED=2025-09-20
@@ -151,34 +152,34 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
 pub fn collectImplementationFlags(ally: std.mem.Allocator, lexer_state: ?*const GqlLexer.Lexer, parser_state: ?*const GqlParser.Parser, session_ctx: ?*const SessionContext) ![][]const u8 {
     // Build dynamic list based on runtime state
     var flags = std.ArrayList([]const u8).init(ally);
-    
+
     // Check if expressions are allowed in ORDER BY (now they are)
     try flags.append("I:IllegalOrderKeyPolicy=expr");
-    
+
     // Check for ORDER tie-break when no explicit ORDER BY
     if (session_ctx != null and session_ctx.?.implicit_order_applied) {
         try flags.append("U:OrderTiebreak=LexJSON");
     }
-    
+
     // Check for double-solidus comment usage
     if (lexer_state != null and lexer_state.?.has_double_solidus_comment) {
         try flags.append("GB03:DoubleSolidusComment");
     }
-    
+
     // Check for ordinal sort keys
     if (parser_state != null and parser_state.?.has_ordinal_sort_key) {
         try flags.append("E:OrdinalSortKey");
     }
-    
+
     // Check for multi-graph catalog
     if (session_ctx != null and session_ctx.?.graph_catalog != null) {
         try flags.append("I:GraphCatalog=memory");
     }
-    
+
     // Static flags
     try flags.append("I:PathTieBreak=LengthId");
     try flags.append("I:Collation=binary");
-    
+
     return flags.toOwnedSlice();
 }
 
@@ -492,4 +493,128 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         }
     }
     return error.Invalid;
+}
+
+pub fn emitValueAsJson(writer: anytype, value: heap.Value, allocator: std.mem.Allocator) !void {
+    switch (value) {
+        .Null => try writer.writeAll("null"),
+        .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
+        .Int => |i| try std.fmt.format(writer, "{d}", .{i}),
+        .SmallInt => |i| try std.fmt.format(writer, "{d}", .{i}),
+        .BigInt => |i| try std.fmt.format(writer, "{d}", .{i}),
+        .Real => |f| try std.fmt.format(writer, "{d}", .{f}),
+        .Double => |f| try std.fmt.format(writer, "{d}", .{f}),
+        .Decimal128 => |d| {
+            const str = try d.toString(allocator);
+            defer allocator.free(str);
+            if (std.fmt.parseFloat(f64, str)) |_| {
+                try std.fmt.format(writer, "{s}", .{str});
+            } else |_| {
+                try std.fmt.format(writer, "\"{s}\"", .{str});
+            }
+        },
+        .Str => |s| try std.fmt.format(writer, "\"{s}\"", .{s}),
+        .Text => |s| try std.fmt.format(writer, "\"{s}\"", .{s}),
+        .Char => |c| try std.fmt.format(writer, "\"{s}\"", .{c.data}),
+        .Varchar => |v| try std.fmt.format(writer, "\"{s}\"", .{v.data}),
+        .Date => |d| {
+            const str = try d.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .Time => |t| {
+            const str = try t.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .TimeTZ => |tz| {
+            const str = try tz.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .Timestamp => |ts| {
+            const str = try ts.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .TimestampTZ => |tsz| {
+            const str = try tsz.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .Interval => |iv| {
+            const str = try iv.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .Bytea => |b| {
+            try writer.writeAll("\"\\\\x");
+            for (b) |byte| {
+                try std.fmt.format(writer, "{X:0>2}", .{byte});
+            }
+            try writer.writeAll("\"");
+        },
+        .Json => |j| try writer.writeAll(j),
+        .Jsonb => |jb| try writer.writeAll(jb.data),
+        .Xml => |x| try std.fmt.format(writer, "\"{s}\"", .{x.data}),
+        .Url => |u| {
+            const str = try u.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .Domain => |d| {
+            const str = try d.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .UUID => |u| {
+            const str = try u.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .Enum => |e| try std.fmt.format(writer, "\"enum_{}_{d}\"", .{ e.type_id, e.value_ordinal }),
+        .Array => |a| {
+            try writer.writeAll("[");
+            const len = a.length();
+            for (0..len) |i| {
+                if (i > 0) try writer.writeAll(",");
+                if (a.elem_type == .int) {
+                    const val = try a.getInt(i);
+                    try std.fmt.format(writer, "{d}", .{val});
+                } else {
+                    try writer.writeAll("null");
+                }
+            }
+            try writer.writeAll("]");
+        },
+        .BitString => |bs| {
+            const str = try bs.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .VarBit => |vb| {
+            const str = try vb.toString(allocator);
+            defer allocator.free(str);
+            try std.fmt.format(writer, "\"{s}\"", .{str});
+        },
+        .IntRange => |r| {
+            try writer.writeAll("{");
+            if (r.lower) |l| {
+                try std.fmt.format(writer, "\"lower\":{d},", .{l});
+            } else {
+                try writer.writeAll("\"lower\":null,");
+            }
+            if (r.upper) |u| {
+                try std.fmt.format(writer, "\"upper\":{d},", .{u});
+            } else {
+                try writer.writeAll("\"upper\":null,");
+            }
+            try std.fmt.format(writer, "\"bounds\":\"{s}\"", .{r.bounds.toString()});
+            try writer.writeAll("}");
+        },
+        // Legacy types
+        .IpAddr, .Subnet, .Mac, .Hash, .Currency, .LanguageTag, .LatLon, .LatLonAlt, .Geometry, .Temperature, .Pressure, .VectorF32 => {
+            try writer.writeAll("null");
+        },
+    }
 }

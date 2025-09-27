@@ -11,8 +11,7 @@ const ExitCode = enum(u8) {
 
 // Usage and help functions
 fn printMainUsage() void {
-    std.debug.print(
-        "geode - Property graph database implementing ISO/IEC 39075:2024 (GQL)\n" ++
+    std.debug.print("geode - Property graph database implementing ISO/IEC 39075:2024 (GQL)\n" ++
         "\n" ++
         "Usage: geode [options] <subcommand> [args...]\n" ++
         "\n" ++
@@ -43,13 +42,11 @@ fn printMainUsage() void {
         "  geode shell --server localhost:8443\n" ++
         "\n" ++
         "Use 'geode <subcommand> --help' for more information on a specific command.\n" ++
-        "\n"
-    , .{});
+        "\n", .{});
 }
 
 fn printServeUsage() void {
-    std.debug.print(
-        "geode serve - Start the database server\n" ++
+    std.debug.print("geode serve - Start the database server\n" ++
         "\n" ++
         "Usage: geode serve [options]\n" ++
         "\n" ++
@@ -66,13 +63,11 @@ fn printServeUsage() void {
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:8443\n" ++
         "  geode serve --stdio --log-level debug\n" ++
-        "\n"
-    , .{});
+        "\n", .{});
 }
 
 fn printQueryUsage() void {
-    std.debug.print(
-        "geode query - Execute a GQL query\n" ++
+    std.debug.print("geode query - Execute a GQL query\n" ++
         "\n" ++
         "Usage: geode query [options] <query>\n" ++
         "\n" ++
@@ -90,13 +85,11 @@ fn printQueryUsage() void {
         "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
-        "\n"
-    , .{});
+        "\n", .{});
 }
 
 fn printShellUsage() void {
-    std.debug.print(
-        "geode shell - Interactive GQL shell\n" ++
+    std.debug.print("geode shell - Interactive GQL shell\n" ++
         "\n" ++
         "Usage: geode shell [options]\n" ++
         "\n" ++
@@ -110,13 +103,11 @@ fn printShellUsage() void {
         "  geode shell\n" ++
         "  geode shell --server localhost:8443\n" ++
         "  geode shell --no-history --format json\n" ++
-        "\n"
-    , .{});
+        "\n", .{});
 }
 
 fn printUserUsage() void {
-    std.debug.print(
-        "geode user - User management\n" ++
+    std.debug.print("geode user - User management\n" ++
         "\n" ++
         "Usage: geode user [options] <command> [args...]\n" ++
         "\n" ++
@@ -141,13 +132,11 @@ fn printUserUsage() void {
         "  geode user create alice alice@example.com\n" ++
         "  geode user list --format json\n" ++
         "  geode user password alice\n" ++
-        "\n"
-    , .{});
+        "\n", .{});
 }
 
 fn printAuthUsage() void {
-    std.debug.print(
-        "geode auth - Authentication commands\n" ++
+    std.debug.print("geode auth - Authentication commands\n" ++
         "\n" ++
         "Usage: geode auth <command> [args...]\n" ++
         "\n" ++
@@ -166,8 +155,7 @@ fn printAuthUsage() void {
         "  geode auth login -U alice\n" ++
         "  geode auth login -U alice --password-file /dev/stdin\n" ++
         "  geode auth logout\n" ++
-        "\n"
-    , .{});
+        "\n", .{});
 }
 
 // Subcommand implementations
@@ -180,19 +168,19 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             std.process.exit(@intFromEnum(ExitCode.success));
         }
     }
-    
+
     // Build server command arguments
     var server_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer server_args.deinit(ally);
-    
+
     try server_args.append(ally, "./zig-out/bin/geoded");
-    
+
     // Parse and translate arguments
     var data_dir: []const u8 = "./data";
     var listen_addr: []const u8 = "0.0.0.0:8443";
     var log_level: []const u8 = "info";
     var use_stdio = false;
-    
+
     i = start_idx;
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
@@ -217,29 +205,29 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             i += 1;
         }
     }
-    
+
     // Add standard arguments
     try server_args.append(ally, "--data_dir");
     try server_args.append(ally, data_dir);
-    
+
     if (!use_stdio) {
         try server_args.append(ally, "--listen");
         try server_args.append(ally, listen_addr);
     }
-    
+
     try server_args.append(ally, "--log-level");
     try server_args.append(ally, log_level);
-    
+
     if (use_stdio) {
         try server_args.append(ally, "--stdio");
     }
-    
+
     // Execute server
     var child = std.process.Child.init(server_args.items, ally);
     child.stdin_behavior = if (use_stdio) .Pipe else .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -254,7 +242,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         printQueryUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    
+
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -262,13 +250,13 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             std.process.exit(@intFromEnum(ExitCode.success));
         }
     }
-    
+
     // Build client command arguments
     var client_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer client_args.deinit(ally);
-    
+
     try client_args.append(ally, "./zig-out/bin/geodec");
-    
+
     // Add query text (first non-option argument)
     var query_text: ?[]const u8 = null;
     i = start_idx;
@@ -278,22 +266,23 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             query_text = arg;
             break;
         }
-        if (std.mem.eql(u8, arg, "--server") or std.mem.eql(u8, arg, "--format") or 
-           std.mem.eql(u8, arg, "--page-size")) {
+        if (std.mem.eql(u8, arg, "--server") or std.mem.eql(u8, arg, "--format") or
+            std.mem.eql(u8, arg, "--page-size"))
+        {
             i += 1; // Skip next arg which is the value
         } else if (std.mem.eql(u8, arg, "--json-param")) {
             i += 2; // Skip two values for json-param
         }
     }
-    
+
     if (query_text == null) {
         std.debug.print("Error: query text required\n", .{});
         printQueryUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    
+
     try client_args.append(ally, query_text.?);
-    
+
     // Pass through relevant options
     i = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -323,13 +312,13 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             try client_args.append(ally, "--rollback");
         }
     }
-    
+
     // Execute client
     var child = std.process.Child.init(client_args.items, ally);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -347,14 +336,14 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
 fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     if (start_idx >= argv.len) {
         printAuthUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
     }
-    
+
     const subcmd = argv[start_idx];
-    
+
     if (std.mem.eql(u8, subcmd, "login")) {
         std.debug.print("Mock auth login - would connect to server and authenticate\n", .{});
         std.debug.print("Successfully authenticated (mock)\n", .{});
@@ -376,7 +365,7 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         printUserUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
     }
-    
+
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -384,26 +373,26 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             std.process.exit(@intFromEnum(ExitCode.success));
         }
     }
-    
+
     // Build user auth command arguments
     var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer auth_args.deinit(ally);
-    
+
     try auth_args.append(ally, "./zig-out/bin/geode-auth");
     try auth_args.append(ally, "user");
-    
+
     // Add remaining args
     i = start_idx;
     while (i < argv.len) : (i += 1) {
         try auth_args.append(ally, argv[i]);
     }
-    
+
     // Execute auth tool
     var child = std.process.Child.init(auth_args.items, ally);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -415,22 +404,22 @@ fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Build role command arguments
     var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer auth_args.deinit(ally);
-    
+
     try auth_args.append(ally, "./zig-out/bin/geode-auth");
     try auth_args.append(ally, "role");
-    
+
     // Add remaining args
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         try auth_args.append(ally, argv[i]);
     }
-    
+
     // Execute auth tool
     var child = std.process.Child.init(auth_args.items, ally);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -442,22 +431,22 @@ fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Build policy command arguments
     var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer auth_args.deinit(ally);
-    
+
     try auth_args.append(ally, "./zig-out/bin/geode-auth");
     try auth_args.append(ally, "policy");
-    
+
     // Add remaining args
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         try auth_args.append(ally, argv[i]);
     }
-    
+
     // Execute auth tool
     var child = std.process.Child.init(auth_args.items, ally);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -469,22 +458,22 @@ fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Build grant command arguments
     var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer auth_args.deinit(ally);
-    
+
     try auth_args.append(ally, "./zig-out/bin/geode-auth");
     try auth_args.append(ally, "grant");
-    
+
     // Add remaining args
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         try auth_args.append(ally, argv[i]);
     }
-    
+
     // Execute auth tool
     var child = std.process.Child.init(auth_args.items, ally);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -496,22 +485,22 @@ fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Build revoke command arguments
     var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer auth_args.deinit(ally);
-    
+
     try auth_args.append(ally, "./zig-out/bin/geode-auth");
     try auth_args.append(ally, "revoke");
-    
+
     // Add remaining args
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         try auth_args.append(ally, argv[i]);
     }
-    
+
     // Execute auth tool
     var child = std.process.Child.init(auth_args.items, ally);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     const term = try child.spawnAndWait();
     std.process.exit(switch (term) {
         .Exited => |code| code,
@@ -521,13 +510,12 @@ fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
 fn cmdBackup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     // Check for help
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            std.debug.print(
-                "geode backup - Create database backup\n" ++
+            std.debug.print("geode backup - Create database backup\n" ++
                 "\n" ++
                 "Usage: geode backup [options]\n" ++
                 "\n" ++
@@ -541,25 +529,23 @@ fn cmdBackup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 "Examples:\n" ++
                 "  geode backup --dest ./backup.gql\n" ++
                 "  geode backup --dest s3://bucket/backup.gql --mode full\n" ++
-                "\n"
-            , .{});
+                "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         }
     }
-    
+
     std.debug.print("Error: backup command not yet implemented\n", .{});
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdRestore(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     // Check for help
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            std.debug.print(
-                "geode restore - Restore database from backup\n" ++
+            std.debug.print("geode restore - Restore database from backup\n" ++
                 "\n" ++
                 "Usage: geode restore [options]\n" ++
                 "\n" ++
@@ -573,25 +559,23 @@ fn cmdRestore(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 "Examples:\n" ++
                 "  geode restore --source ./backup.gql\n" ++
                 "  geode restore --source s3://bucket/backup.gql\n" ++
-                "\n"
-            , .{});
+                "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         }
     }
-    
+
     std.debug.print("Error: restore command not yet implemented\n", .{});
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdMigrate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     // Check for help
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            std.debug.print(
-                "geode migrate - Run database migrations\n" ++
+            std.debug.print("geode migrate - Run database migrations\n" ++
                 "\n" ++
                 "Usage: geode migrate [options] <dir|files...>\n" ++
                 "\n" ++
@@ -603,12 +587,11 @@ fn cmdMigrate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 "Examples:\n" ++
                 "  geode migrate ./migrations/\n" ++
                 "  geode migrate migration1.gql migration2.gql\n" ++
-                "\n"
-            , .{});
+                "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         }
     }
-    
+
     std.debug.print("Error: migrate command not yet implemented\n", .{});
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
@@ -618,23 +601,23 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
-    
+
     const argv = try std.process.argsAlloc(ally);
     defer std.process.argsFree(ally, argv);
-    
+
     if (argv.len < 2) {
         printMainUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    
+
     // Check for global help
     if (std.mem.eql(u8, argv[1], "-h") or std.mem.eql(u8, argv[1], "--help")) {
         printMainUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
     }
-    
+
     const subcommand = argv[1];
-    
+
     // Dispatch to subcommand
     if (std.mem.eql(u8, subcommand, "serve")) {
         try cmdServe(ally, argv, 2);

@@ -117,7 +117,7 @@ test "printer normalization: offset and fraction clamping" {
 test "DATE/TIME two-digit component formatting in normalization" {
     // Note: Non-two-digit inputs would be rejected; assert normalized printing keeps two digits with valid inputs.
     const src2 = "MATCH (n) WHERE n.d = DATE\"2024-01-02\" AND n.t = TIME\"03:04\" RETURN n";
-    var result2 = try lib.parse(std.testing.allocator,  src2, .{});
+    var result2 = try lib.parse(std.testing.allocator, src2, .{});
     defer result2.deinit();
     _ = result2.program;
     // Printer functionality not accessible through geode module
@@ -151,7 +151,7 @@ test "CASE expression parse (simple and searched)" {
     defer result1.deinit();
     try std.testing.expect(result1.program.statements.len == 1);
     const src2 = "MATCH (n) RETURN CASE WHEN n.age < 18 THEN \"minor\" ELSE \"adult\" END";
-    var result2 = try lib.parse(std.testing.allocator,  src2, .{});
+    var result2 = try lib.parse(std.testing.allocator, src2, .{});
     defer result2.deinit();
     try std.testing.expect(result2.program.statements.len == 1);
 }
@@ -433,7 +433,7 @@ test "alias lookahead: ident '=' '[' vs equality ident '=' expr" {
     try std.testing.expect(result1.program.statements.len == 1);
     // Should parse as equality (list comprehension), not path alias, when '[' follows '=' in RETURN
     const src2 = "MATCH (n) RETURN p = [ (n)-[r]->(m) | m ]";
-    var result2 = try lib.parse(std.testing.allocator,  src2, .{});
+    var result2 = try lib.parse(std.testing.allocator, src2, .{});
     defer result2.deinit();
     try std.testing.expect(result2.program.statements.len == 1);
 }

@@ -13,10 +13,10 @@ test "recursive CTEs and bounded expansions default enabled" {
         .depth_limit = 100,
         .enable_by_default = true,
     };
-    
+
     try std.testing.expect(optimizer_hints.enable_by_default == true);
     try std.testing.expect(optimizer_hints.depth_limit == 100);
-    
+
     // Verify bounded path expansions are default-enabled
     const path_tracking = recursive.PathTracking{
         .track_path = true,
@@ -27,29 +27,29 @@ test "recursive CTEs and bounded expansions default enabled" {
         .enable_bounded_expansion = true,
         .deterministic_ordering = true,
     };
-    
+
     try std.testing.expect(path_tracking.enable_bounded_expansion == true);
     try std.testing.expect(path_tracking.deterministic_ordering == true);
-    
+
     // Test recursive frontier iteration
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     var frontier = std.ArrayList(u64).init(allocator);
     defer frontier.deinit();
-    
+
     try frontier.append(1);
     try frontier.append(2);
     try frontier.append(3);
-    
+
     // Simulate bounded expansion with deterministic ordering
     std.mem.sort(u64, frontier.items, {}, comptime std.sort.asc(u64));
-    
+
     try std.testing.expect(frontier.items[0] == 1);
     try std.testing.expect(frontier.items[1] == 2);
     try std.testing.expect(frontier.items[2] == 3);
-    
+
     std.debug.print("RECURSIVE_DEFAULT_ON frontier_iter_ok\n", .{});
-    std.debug.print("BOUNDED_EXPANSION_DEFAULT_ON maxlen={} deterministic=true\n", .{ 3 });
+    std.debug.print("BOUNDED_EXPANSION_DEFAULT_ON maxlen={} deterministic=true\n", .{3});
 }

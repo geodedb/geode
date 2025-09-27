@@ -776,14 +776,14 @@ pub const MaterializedViewManager = struct {
         // Acquire single-flight lock
         self.refresh_manager.refresh_mutex.lock();
         defer self.refresh_manager.refresh_mutex.unlock();
-        
+
         const view = self.catalog.views.get(view_id) orelse return error.ViewNotFound;
-        
+
         // Check if refresh already in progress
         if (self.refresh_manager.active_refreshes.get(view_id) != null) {
             return error.RefreshInProgress;
         }
-        
+
         // Mark as active
         const job = try self.allocator.create(RefreshManager.RefreshJob);
         job.* = .{
@@ -802,46 +802,46 @@ pub const MaterializedViewManager = struct {
             _ = self.refresh_manager.active_refreshes.remove(view_id);
             self.allocator.destroy(job);
         }
-        
+
         // CANARY: REQ=REQ-GQL-016; FEATURE="MV Complete Refresh"; ASPECT=CompleteRefresh; STATUS=TESTED; TEST=e2e_materialized_views_refresh; OWNER=storage; UPDATED=2025-09-25
         // Lines 806-814: Complete refresh implementation
         // Begin transaction for snapshot read
         const txn = try self.storage_engine.beginTransaction(.read_committed);
         defer txn.rollback() catch {};
-        
+
         // Execute the view's defining query
         const query_result = try self.query_executor.execute(view.definition_query, txn);
         defer query_result.deinit();
-        
+
         // Lines 824-832: Execute defining query
         // Create new storage for refreshed data
         const temp_storage = try self.storage_engine.createTempTable(view.name);
         defer self.storage_engine.dropTempTable(temp_storage) catch {};
-        
+
         // Insert all rows into temp storage
         var row_count: u64 = 0;
         while (try query_result.next()) |row| {
             try temp_storage.insert(row);
             row_count += 1;
         }
-        
+
         // Lines 832-840: Atomic swap
         // Atomically swap storage
         const swap_txn = try self.storage_engine.beginTransaction(.serializable);
         errdefer swap_txn.rollback() catch {};
-        
+
         try self.storage_engine.swapTable(view.storage_location, temp_storage, swap_txn);
         try swap_txn.commit();
-        
+
         // Update metrics
         job.rows_processed = row_count;
         job.end_time = std.time.milliTimestamp();
         job.status = .completed;
-        
+
         // Update view metadata
         view.last_refresh_time = std.time.milliTimestamp();
         view.row_count = row_count;
-        
+
         self.refresh_manager.metrics.total_refreshes += 1;
         self.refresh_manager.metrics.complete_refreshes += 1;
     }
@@ -849,13 +849,13 @@ pub const MaterializedViewManager = struct {
     pub fn performIncrementalRefresh(self: *MaterializedViewManager, view_id: u64, since_lsn: u64) !void {
         self.refresh_manager.refresh_mutex.lock();
         defer self.refresh_manager.refresh_mutex.unlock();
-        
+
         const view = self.catalog.views.get(view_id) orelse return error.ViewNotFound;
-        
+
         if (self.refresh_manager.active_refreshes.get(view_id) != null) {
             return error.RefreshInProgress;
         }
-        
+
         const job = try self.allocator.create(RefreshManager.RefreshJob);
         job.* = .{
             .view_id = view_id,
@@ -873,18 +873,18 @@ pub const MaterializedViewManager = struct {
             _ = self.refresh_manager.active_refreshes.remove(view_id);
             self.allocator.destroy(job);
         }
-        
+
         // CANARY: REQ=REQ-GQL-017; FEATURE="MV Incremental Refresh"; ASPECT=IncrementalRefresh; STATUS=TESTED; TEST=e2e_materialized_views_refresh; OWNER=storage; UPDATED=2025-09-25
         // Lines 873-882: Incremental refresh via CDC
         // Get change data since last LSN
         const changes = try self.cdc_engine.getChangesSince(since_lsn);
         defer changes.deinit();
-        
+
         // Lines 884-892: Apply WAL diffs
         // Apply changes to view storage
         const txn = try self.storage_engine.beginTransaction(.read_committed);
         defer txn.rollback() catch {};
-        
+
         var rows_updated: u64 = 0;
         while (try changes.next()) |change| {
             switch (change.operation) {
@@ -894,17 +894,17 @@ pub const MaterializedViewManager = struct {
             }
             rows_updated += 1;
         }
-        
+
         try txn.commit();
-        
+
         // Update metrics and metadata
         job.rows_processed = rows_updated;
         job.end_time = std.time.milliTimestamp();
         job.status = .completed;
-        
+
         view.last_refresh_time = std.time.milliTimestamp();
         view.last_incremental_lsn = since_lsn;
-        
+
         self.refresh_manager.metrics.total_refreshes += 1;
         self.refresh_manager.metrics.incremental_refreshes += 1;
     }

@@ -53,7 +53,7 @@ pub const CdcMessage = struct {
     old_value: ?[]const u8,
     new_value: ?[]const u8,
     metadata: std.StringHashMap([]const u8),
-    
+
     pub const Operation = enum {
         insert,
         update,
@@ -67,7 +67,7 @@ pub const CdcSinkEngine = struct {
     sinks: std.ArrayList(*SinkInstance),
     stats: std.HashMap(CdcSink, CdcStats, std.hash_map.AutoContext(CdcSink), 80),
     message_counter: std.atomic.Value(u64),
-    
+
     pub fn init(allocator: std.mem.Allocator) CdcSinkEngine {
         return .{
             .allocator = allocator,
@@ -76,7 +76,7 @@ pub const CdcSinkEngine = struct {
             .message_counter = std.atomic.Value(u64).init(0),
         };
     }
-    
+
     pub fn deinit(self: *CdcSinkEngine) void {
         for (self.sinks.items) |sink| {
             sink.deinit();
@@ -85,14 +85,14 @@ pub const CdcSinkEngine = struct {
         self.sinks.deinit();
         self.stats.deinit();
     }
-    
+
     pub fn cdcConfigure(self: *CdcSinkEngine, sink: CdcSink, cfg: CdcConfig) !void {
         const instance = try self.allocator.create(SinkInstance);
         instance.* = switch (sink) {
             .Kafka => try KafkaSink.init(self.allocator, cfg),
             .Webhook => try WebhookSink.init(self.allocator, cfg),
         };
-        
+
         try self.sinks.append(instance);
         try self.stats.put(sink, .{
             .delivered = 0,
@@ -102,7 +102,7 @@ pub const CdcSinkEngine = struct {
             .last_error = null,
         });
     }
-    
+
     pub fn cdcStats(self: *CdcSinkEngine) CdcStats {
         var total = CdcStats{
             .delivered = 0,
@@ -111,7 +111,7 @@ pub const CdcSinkEngine = struct {
             .lag_ms = 0,
             .last_error = null,
         };
-        
+
         var it = self.stats.iterator();
         while (it.next()) |entry| {
             total.delivered += entry.value_ptr.delivered;
@@ -122,10 +122,10 @@ pub const CdcSinkEngine = struct {
                 total.last_error = err;
             }
         }
-        
+
         return total;
     }
-    
+
     pub fn publishChange(self: *CdcSinkEngine, change: wal.ChangeRecord) !void {
         const msg = CdcMessage{
             .id = self.message_counter.fetchAdd(1, .monotonic),
@@ -142,7 +142,7 @@ pub const CdcSinkEngine = struct {
             .new_value = change.new_value,
             .metadata = std.StringHashMap([]const u8).init(self.allocator),
         };
-        
+
         for (self.sinks.items) |sink| {
             sink.send(msg) catch |err| {
                 // Update stats on error
@@ -158,21 +158,21 @@ pub const CdcSinkEngine = struct {
 pub const SinkInstance = union(enum) {
     kafka: *KafkaSink,
     webhook: *WebhookSink,
-    
+
     pub fn send(self: *SinkInstance, msg: CdcMessage) !void {
         return switch (self.*) {
             .kafka => |k| k.send(msg),
             .webhook => |w| w.send(msg),
         };
     }
-    
+
     pub fn getType(self: *const SinkInstance) CdcSink {
         return switch (self.*) {
             .kafka => .Kafka,
             .webhook => .Webhook,
         };
     }
-    
+
     pub fn deinit(self: *SinkInstance) void {
         switch (self.*) {
             .kafka => |k| k.deinit(),
@@ -188,7 +188,7 @@ pub const KafkaSink = struct {
     batch: std.ArrayList(CdcMessage),
     delivered_count: u64 = 0,
     retry_count: u64 = 0,
-    
+
     pub fn init(allocator: std.mem.Allocator, config: CdcConfig) !SinkInstance {
         const self = try allocator.create(KafkaSink);
         self.* = .{
@@ -199,23 +199,23 @@ pub const KafkaSink = struct {
         };
         return .{ .kafka = self };
     }
-    
+
     pub fn deinit(self: *KafkaSink) void {
         self.batch.deinit();
         // Clean up Kafka producer
     }
-    
+
     pub fn send(self: *KafkaSink, msg: CdcMessage) !void {
         try self.batch.append(msg);
-        
+
         if (self.batch.items.len >= self.config.batch_size) {
             try self.flush();
         }
     }
-    
+
     fn flush(self: *KafkaSink) !void {
         if (self.batch.items.len == 0) return;
-        
+
         // Simulate Kafka send with retries
         var retry: u32 = 0;
         while (retry <= self.config.retry_count) : (retry += 1) {
@@ -230,22 +230,22 @@ pub const KafkaSink = struct {
                 }
             }
         }
-        
+
         // Send to DLQ if enabled
         if (self.config.dlq_enabled) {
             try self.sendToDLQ();
         }
-        
+
         return error.KafkaDeliveryFailed;
     }
-    
+
     fn tryFlush(self: *KafkaSink) !void {
         _ = self;
         // Simulate Kafka produce
         const success = std.crypto.random.boolean();
         if (!success) return error.KafkaProduceFailed;
     }
-    
+
     fn sendToDLQ(self: *KafkaSink) !void {
         // Send failed messages to dead letter queue
         _ = self;
@@ -259,7 +259,7 @@ pub const WebhookSink = struct {
     batch: std.ArrayList(CdcMessage),
     delivered_count: u64 = 0,
     retry_count: u64 = 0,
-    
+
     pub fn init(allocator: std.mem.Allocator, config: CdcConfig) !SinkInstance {
         const self = try allocator.create(WebhookSink);
         self.* = .{
@@ -270,32 +270,32 @@ pub const WebhookSink = struct {
         };
         return .{ .webhook = self };
     }
-    
+
     pub fn deinit(self: *WebhookSink) void {
         self.batch.deinit();
         // Clean up HTTP client
     }
-    
+
     pub fn send(self: *WebhookSink, msg: CdcMessage) !void {
         try self.batch.append(msg);
-        
+
         if (self.batch.items.len >= self.config.batch_size) {
             try self.flush();
         }
     }
-    
+
     fn flush(self: *WebhookSink) !void {
         if (self.batch.items.len == 0) return;
-        
+
         // Convert messages to JSON
         var json_buf = std.ArrayList(u8).init(self.allocator);
         defer json_buf.deinit();
-        
+
         try std.json.stringify(.{
             .messages = self.batch.items,
             .count = self.batch.items.len,
         }, .{}, json_buf.writer());
-        
+
         // Send with retries
         var retry: u32 = 0;
         while (retry <= self.config.retry_count) : (retry += 1) {
@@ -310,15 +310,15 @@ pub const WebhookSink = struct {
                 }
             }
         }
-        
+
         // Send to DLQ if enabled
         if (self.config.dlq_enabled) {
             try self.sendToDLQ();
         }
-        
+
         return error.WebhookDeliveryFailed;
     }
-    
+
     fn tryPost(self: *WebhookSink, data: []const u8) !void {
         _ = self;
         _ = data;
@@ -326,7 +326,7 @@ pub const WebhookSink = struct {
         const success = std.crypto.random.boolean();
         if (!success) return error.HttpPostFailed;
     }
-    
+
     fn sendToDLQ(self: *WebhookSink) !void {
         // Send failed messages to dead letter queue
         _ = self;
@@ -338,7 +338,7 @@ pub const IncrementalMVRefresh = struct {
     allocator: std.mem.Allocator,
     mv_registry: std.StringHashMap(MaterializedView),
     cdc_consumer: *CdcConsumer,
-    
+
     pub const MaterializedView = struct {
         id: u64,
         name: []const u8,
@@ -347,22 +347,22 @@ pub const IncrementalMVRefresh = struct {
         last_refresh: i64,
         refresh_type: RefreshType,
     };
-    
+
     pub const RefreshType = enum {
         complete,
         incremental,
     };
-    
+
     pub const CdcConsumer = struct {
         position: u64,
-        
+
         pub fn consumeChanges(self: *CdcConsumer) ![]const wal.ChangeRecord {
             _ = self;
             // Consume changes from WAL/CDC stream
             return &[_]wal.ChangeRecord{};
         }
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) IncrementalMVRefresh {
         return .{
             .allocator = allocator,
@@ -370,21 +370,21 @@ pub const IncrementalMVRefresh = struct {
             .cdc_consumer = undefined, // Would be properly initialized
         };
     }
-    
+
     pub fn deinit(self: *IncrementalMVRefresh) void {
         self.mv_registry.deinit();
     }
-    
+
     pub fn refreshIncremental(self: *IncrementalMVRefresh, mv_name: []const u8) !void {
         const mv = self.mv_registry.get(mv_name) orelse return error.MaterializedViewNotFound;
-        
+
         // Get changes since last refresh
         const changes = try self.cdc_consumer.consumeChanges();
-        
+
         // Filter changes relevant to this MV
         var relevant_changes = std.ArrayList(wal.ChangeRecord).init(self.allocator);
         defer relevant_changes.deinit();
-        
+
         for (changes) |change| {
             for (mv.dependencies) |dep| {
                 if (std.mem.eql(u8, change.table, dep)) {
@@ -393,20 +393,20 @@ pub const IncrementalMVRefresh = struct {
                 }
             }
         }
-        
+
         if (relevant_changes.items.len == 0) return;
-        
+
         // Apply incremental updates
         try self.applyIncrementalUpdates(mv, relevant_changes.items);
-        
+
         // Update metadata
         var updated_mv = mv;
         updated_mv.last_refresh = std.time.milliTimestamp();
         try self.mv_registry.put(mv_name, updated_mv);
-        
+
         std.debug.print("MV_INCREMENTAL_OK view_id={} delta_applied={}\n", .{ mv.id, relevant_changes.items.len });
     }
-    
+
     fn applyIncrementalUpdates(self: *IncrementalMVRefresh, mv: MaterializedView, changes: []const wal.ChangeRecord) !void {
         _ = self;
         _ = mv;
@@ -421,24 +421,24 @@ pub const IncrementalMVRefresh = struct {
 
 test "CDC sinks delivery" {
     const allocator = std.testing.allocator;
-    
+
     var engine = CdcSinkEngine.init(allocator);
     defer engine.deinit();
-    
+
     // Configure Kafka sink
     try engine.cdcConfigure(.Kafka, .{
         .sink_type = .Kafka,
         .endpoint = "localhost:9092",
         .batch_size = 10,
     });
-    
+
     // Configure Webhook sink
     try engine.cdcConfigure(.Webhook, .{
         .sink_type = .Webhook,
         .endpoint = "https://example.com/webhook",
         .batch_size = 10,
     });
-    
+
     // Simulate publishing changes
     const change = wal.ChangeRecord{
         .op = .insert,
@@ -447,9 +447,9 @@ test "CDC sinks delivery" {
         .old_value = null,
         .new_value = "{\"name\":\"Alice\"}",
     };
-    
+
     try engine.publishChange(change);
-    
+
     const stats = engine.cdcStats();
     std.debug.print("CDC_SINK_KAFKA_DELIVERED count>={} retries>={}\n", .{ 1, 0 });
     std.debug.print("CDC_SINK_WEBHOOK_DELIVERED count>={} retries>={}\n", .{ 1, 0 });
@@ -457,10 +457,10 @@ test "CDC sinks delivery" {
 
 test "incremental MV refresh" {
     const allocator = std.testing.allocator;
-    
+
     var mv_refresh = IncrementalMVRefresh.init(allocator);
     defer mv_refresh.deinit();
-    
+
     // Register a materialized view
     try mv_refresh.mv_registry.put("user_stats", .{
         .id = 1,
@@ -470,13 +470,13 @@ test "incremental MV refresh" {
         .last_refresh = 0,
         .refresh_type = .incremental,
     });
-    
+
     // Initialize CDC consumer
     var consumer = IncrementalMVRefresh.CdcConsumer{ .position = 0 };
     mv_refresh.cdc_consumer = &consumer;
-    
+
     // Trigger incremental refresh
     try mv_refresh.refreshIncremental("user_stats");
-    
+
     std.debug.print("MV_INCREMENTAL_OK view_id=1 delta_applied=7\n", .{});
 }

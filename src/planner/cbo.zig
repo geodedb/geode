@@ -258,32 +258,32 @@ pub const StatsRegistry = struct {
         total_rows: u64,
         bucket_type: HistogramType,
         last_updated: i64,
-        
+
         pub fn estimateSelectivity(self: *const Histogram, predicate: Predicate) f64 {
             var matching_rows: u64 = 0;
-            
+
             for (self.buckets) |bucket| {
                 if (predicate.matches(bucket)) {
                     matching_rows += bucket.frequency;
                 }
             }
-            
+
             if (self.total_rows == 0) return 0.0;
             return @as(f64, @floatFromInt(matching_rows)) / @as(f64, @floatFromInt(self.total_rows));
         }
     };
-    
+
     pub const HistogramBucket = struct {
         low_value: []const u8,
         high_value: []const u8,
         frequency: u64,
         distinct_count: u64,
     };
-    
+
     const Predicate = struct {
         op: enum { eq, ne, lt, le, gt, ge, between, in },
         value: []const u8,
-        
+
         pub fn matches(self: *const Predicate, bucket: HistogramBucket) bool {
             _ = self;
             _ = bucket;
@@ -303,18 +303,18 @@ pub const StatsRegistry = struct {
     pub const FrequencyHistogram = struct {
         values: std.StringHashMap(u64), // Value -> frequency
         total_count: u64,
-        
+
         pub fn init(allocator: std.mem.Allocator) FrequencyHistogram {
             return .{
                 .values = std.StringHashMap(u64).init(allocator),
                 .total_count = 0,
             };
         }
-        
+
         pub fn deinit(self: *FrequencyHistogram) void {
             self.values.deinit();
         }
-        
+
         pub fn addValue(self: *FrequencyHistogram, value: []const u8) !void {
             const result = try self.values.getOrPut(value);
             if (!result.found_existing) {
@@ -323,11 +323,11 @@ pub const StatsRegistry = struct {
             result.value_ptr.* += 1;
             self.total_count += 1;
         }
-        
+
         pub fn getFrequency(self: *const FrequencyHistogram, value: []const u8) u64 {
             return self.values.get(value) orelse 0;
         }
-        
+
         pub fn estimateSelectivity(self: *const FrequencyHistogram, value: []const u8) f64 {
             if (self.total_count == 0) return 0.0;
             const freq = self.getFrequency(value);
@@ -339,13 +339,13 @@ pub const StatsRegistry = struct {
         boundaries: []const []const u8,
         frequencies: []const u64,
         avg_frequency: f64,
-        
+
         pub fn estimateRangeSelectivity(self: *const HeightBalancedHistogram, low_str: []const u8, high_str: []const u8) f64 {
             _ = low_str;
             _ = high_str;
-            
+
             if (self.frequencies.len == 0) return 0.0;
-            
+
             // Simplified: estimate based on average frequency
             return self.avg_frequency / @as(f64, @floatFromInt(self.frequencies.len));
         }
@@ -354,22 +354,22 @@ pub const StatsRegistry = struct {
     pub const HyperLogLog = struct {
         registers: [16384]u8, // 2^14 registers for 1.04% error
         bias_correction: f64,
-        
+
         pub fn init() HyperLogLog {
             return .{
                 .registers = [_]u8{0} ** 16384,
                 .bias_correction = 0.7213 / (1.0 + 1.079 / 16384.0),
             };
         }
-        
+
         pub fn add(self: *HyperLogLog, value: []const u8) void {
             const hash = std.hash.Wyhash.hash(0, value);
             const j = hash & 0x3FFF; // 14 bits for register index
             const w = hash >> 14;
-            
+
             // Count leading zeros + 1
             const rho = if (w == 0) 50 else @clz(w) + 1;
-            
+
             if (rho > self.registers[j]) {
                 self.registers[j] = @intCast(rho);
             }

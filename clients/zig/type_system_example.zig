@@ -6,25 +6,25 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Configure and connect
     const config = client.Config{
         .host = "127.0.0.1",
-        .port = 8443,  // v0.18.0: QUIC+TLS port
+        .port = 8443, // v0.18.0: QUIC+TLS port
         .use_quic = true,
     };
-    
+
     var geode = client.Client.init(allocator, config);
     defer geode.deinit();
-    
+
     try geode.connect();
     defer geode.disconnect();
-    
+
     std.debug.print("=== Geode Extended Type System Examples (Zig) ===\n\n", .{});
-    
+
     // 1. Network Types
     std.debug.print("1. Network Types:\n", .{});
-    
+
     // Create network device
     _ = try geode.query(
         \\CREATE (d:Device {
@@ -34,7 +34,7 @@ pub fn main() !void {
         \\  mac_address: Mac("00:11:22:33:44:55")
         \\})
     , null);
-    
+
     // Query IP containment
     var iter = try geode.query(
         \\MATCH (d:Device)
@@ -42,17 +42,17 @@ pub fn main() !void {
         \\RETURN d.hostname, ip_family(d.ip_address) AS family
     , null);
     defer iter.close();
-    
+
     while (try iter.next()) |row| {
         std.debug.print("   Device: {s} (IP family: {s})\n", .{
             row.get("d.hostname").?.string,
             row.get("family").?.string,
         });
     }
-    
+
     // 2. Geographic Types
     std.debug.print("\n2. Geographic Types:\n", .{});
-    
+
     // Create locations
     _ = try geode.query(
         \\CREATE (l:Location {
@@ -61,14 +61,14 @@ pub fn main() !void {
         \\  altitude: LatLonAlt(47.3769, 8.5417, 408.0, "ellipsoid")
         \\})
     , null);
-    
+
     _ = try geode.query(
         \\CREATE (l:Location {
         \\  name: "Geneva",
         \\  coordinates: LatLon(46.2044, 6.1432)
         \\})
     , null);
-    
+
     // Calculate distance
     var dist_iter = try geode.query(
         \\MATCH (l1:Location {name: "Zürich"})
@@ -76,16 +76,16 @@ pub fn main() !void {
         \\RETURN distance_haversine(l1.coordinates, l2.coordinates) AS distance_m
     , null);
     defer dist_iter.close();
-    
+
     if (try dist_iter.next()) |row| {
         std.debug.print("   Distance Zürich to Geneva: {} meters\n", .{
             row.get("distance_m").?.integer,
         });
     }
-    
+
     // 3. Vector Types
     std.debug.print("\n3. Vector Types:\n", .{});
-    
+
     // Create vectors
     _ = try geode.query(
         \\CREATE (v1:Vector {
@@ -93,14 +93,14 @@ pub fn main() !void {
         \\  data: Vector([1.0, 2.0, 3.0])
         \\})
     , null);
-    
+
     _ = try geode.query(
         \\CREATE (v2:Vector {
         \\  name: "vec2",
         \\  data: Vector([4.0, 5.0, 6.0])
         \\})
     , null);
-    
+
     // Calculate dot product
     var vec_iter = try geode.query(
         \\MATCH (v1:Vector {name: "vec1"})
@@ -109,15 +109,15 @@ pub fn main() !void {
         \\       vector_l2(v1.data, v2.data) AS l2_distance
     , null);
     defer vec_iter.close();
-    
+
     if (try vec_iter.next()) |row| {
         std.debug.print("   Dot product: {}\n", .{row.get("dot_product").?.integer});
         std.debug.print("   L2 distance: {d:.6}\n", .{row.get("l2_distance").?.float});
     }
-    
+
     // 4. Security Types (Hash)
     std.debug.print("\n4. Security Types:\n", .{});
-    
+
     // Create user with hash
     _ = try geode.query(
         \\CREATE (u:User {
@@ -125,29 +125,29 @@ pub fn main() !void {
         \\  password_hash: Hash("SHA3-256", "abc123def456789...")
         \\})
     , null);
-    
+
     // Verify hash
     const verify_params = .{
         .hash = "SHA3-256:abc123def456789...",
     };
-    
+
     var hash_iter = try geode.query(
         \\MATCH (u:User {username: "bob"})
         \\WHERE hash_equals(u.password_hash, Hash("SHA3-256", $hash))
         \\RETURN u.username, hash_alg(u.password_hash) AS alg
     , verify_params);
     defer hash_iter.close();
-    
+
     if (try hash_iter.next()) |row| {
         std.debug.print("   User {s} verified with {s}\n", .{
             row.get("u.username").?.string,
             row.get("alg").?.string,
         });
     }
-    
+
     // 5. Financial Types
     std.debug.print("\n5. Financial Types:\n", .{});
-    
+
     // Create multi-currency transaction
     _ = try geode.query(
         \\CREATE (t:Transaction {
@@ -156,13 +156,13 @@ pub fn main() !void {
         \\  currency: Currency("EUR")
         \\})
     , null);
-    
+
     var currency_iter = try geode.query(
         \\MATCH (t:Transaction)
         \\RETURN t.id, t.currency, minor_units(t.currency) AS decimals
     , null);
     defer currency_iter.close();
-    
+
     while (try currency_iter.next()) |row| {
         std.debug.print("   Transaction {s}: {s} ({} decimal places)\n", .{
             row.get("t.id").?.string,
@@ -170,10 +170,10 @@ pub fn main() !void {
             row.get("decimals").?.integer,
         });
     }
-    
+
     // 6. Scientific Types
     std.debug.print("\n6. Scientific Types:\n", .{});
-    
+
     // Create sensor reading
     _ = try geode.query(
         \\CREATE (r:SensorReading {
@@ -182,14 +182,14 @@ pub fn main() !void {
         \\  pressure: Pressure(101.3, "kPa")
         \\})
     , null);
-    
+
     var sensor_iter = try geode.query(
         \\MATCH (r:SensorReading)
         \\WHERE r.temperature > Temperature(20, "C")
         \\RETURN r.sensor_id, r.temperature, r.pressure
     , null);
     defer sensor_iter.close();
-    
+
     while (try sensor_iter.next()) |row| {
         std.debug.print("   Sensor {s}: {s}, {s}\n", .{
             row.get("r.sensor_id").?.string,
@@ -197,10 +197,10 @@ pub fn main() !void {
             row.get("r.pressure").?.string,
         });
     }
-    
+
     // 7. Combined IoT Example
     std.debug.print("\n7. IoT Device Monitoring:\n", .{});
-    
+
     // Create IoT device
     _ = try geode.query(
         \\CREATE (iot:IoTDevice {
@@ -212,7 +212,7 @@ pub fn main() !void {
         \\  status_hash: Hash("SHA3-256", "device_ok")
         \\})
     , null);
-    
+
     // Complex query
     var iot_iter = try geode.query(
         \\MATCH (iot:IoTDevice)
@@ -221,7 +221,7 @@ pub fn main() !void {
         \\RETURN iot.device_id, iot.ip, iot.location
     , null);
     defer iot_iter.close();
-    
+
     while (try iot_iter.next()) |row| {
         std.debug.print("   IoT Device {s} at {s} (location: {s})\n", .{
             row.get("iot.device_id").?.string,
@@ -229,6 +229,6 @@ pub fn main() !void {
             row.get("iot.location").?.string,
         });
     }
-    
+
     std.debug.print("\n=== Extended Type System Demo Complete ===\n", .{});
 }

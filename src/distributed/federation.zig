@@ -8,7 +8,7 @@ const raft = @import("raft.zig");
 pub const FederationConfig = struct {
     /// Enable distributed query federation
     enabled: bool = false,
-    
+
     /// Maximum number of remote nodes
     max_nodes: u32 = 100,
 
@@ -26,10 +26,10 @@ pub const FederationConfig = struct {
 
     /// Cache TTL in seconds
     cache_ttl_seconds: u64 = 300,
-    
+
     /// Enable deterministic pagination
     enforce_deterministic_pagination: bool = true,
-    
+
     /// Top-K merge batch size
     topk_merge_batch_size: u32 = 1000,
 };

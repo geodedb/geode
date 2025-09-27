@@ -12,13 +12,13 @@ const cost_model = @import("cost_model.zig");
 pub const StatsRegistry = struct {
     allocator: std.mem.Allocator,
     map: std.AutoHashMap(u64, u64), // signature -> estimated rows
-    enabled: bool,  // Runtime gate, defaults to false (rule-based)
+    enabled: bool, // Runtime gate, defaults to false (rule-based)
 
     pub fn init(alloc: std.mem.Allocator) StatsRegistry {
         const enabled = std.process.getEnvVarOwned(alloc, "GEODE_STATS_REGISTRY") catch |_| null;
         defer if (enabled) |e| alloc.free(e);
-        return .{ 
-            .allocator = alloc, 
+        return .{
+            .allocator = alloc,
             .map = std.AutoHashMap(u64, u64).init(alloc),
             .enabled = if (enabled) |e| std.mem.eql(u8, e, "1") or std.mem.eql(u8, e, "true") else false,
         };
@@ -58,10 +58,10 @@ fn walkWithStats(node: enumerator.LogicalPlan, f: cost_model.CostFactors, sr: *S
     }) * depth_factor;
     const sig_self = signatureOf(node);
     if (node.children.len == 0) {
-        const row_est_leaf: f64 = if (sr.enabled and sr.get(sig_self) != null) 
-            @floatFromInt(sr.get(sig_self).?) 
-        else 
-            1.0;  // Rule-based default when disabled
+        const row_est_leaf: f64 = if (sr.enabled and sr.get(sig_self) != null)
+            @floatFromInt(sr.get(sig_self).?)
+        else
+            1.0; // Rule-based default when disabled
         return .{ .cost = base + (row_est_leaf / 1000.0) * f.per_k_rows, .rows = row_est_leaf, .joins = if (node.op == .join) 1 else 0 };
     }
     var total_cost: f64 = base;

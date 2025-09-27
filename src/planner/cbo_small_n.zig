@@ -9,24 +9,24 @@ const optimizer = @import("optimizer.zig");
 /// OWNER=optimizer-team; UPDATED=2025-09-25
 pub const SmallNCalibration = struct {
     allocator: std.mem.Allocator,
-    
+
     /// Threshold for considering a dataset "small"
     small_n_threshold: u64 = 100,
-    
+
     /// Bias correction factors for small datasets
     bias_factors: BiasFactors,
-    
+
     /// Guardrails to prevent bad plans
     guardrails: Guardrails,
-    
+
     /// Decision log for debugging
     decision_log: ?*DecisionLog,
-    
+
     /// Metrics for monitoring
     metrics: CalibrationMetrics,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .allocator = allocator,
@@ -36,13 +36,13 @@ pub const SmallNCalibration = struct {
             .metrics = CalibrationMetrics.init(),
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         if (self.decision_log) |log| {
             log.deinit();
         }
     }
-    
+
     /// Enable decision logging for debugging
     pub fn enableDecisionLogging(self: *Self) !void {
         if (self.decision_log == null) {
@@ -50,7 +50,7 @@ pub const SmallNCalibration = struct {
             self.decision_log.?.* = DecisionLog.init(self.allocator);
         }
     }
-    
+
     /// Calibrate cost model for small-N dataset
     pub fn calibrate(
         self: *Self,
@@ -60,7 +60,7 @@ pub const SmallNCalibration = struct {
     ) CalibratedFactors {
         // Check if this is a small-N case
         const is_small_n = cardinality <= self.small_n_threshold;
-        
+
         if (!is_small_n) {
             // Use base factors for larger datasets
             return CalibratedFactors{
@@ -69,35 +69,35 @@ pub const SmallNCalibration = struct {
                 .confidence = 1.0,
             };
         }
-        
+
         // Apply bias corrections for small-N
         var adjusted = base_factors;
-        
+
         // Reduce join penalty for small datasets
         adjusted.join_base *= self.bias_factors.join_reduction;
         adjusted.join_depth_penalty *= self.bias_factors.join_depth_reduction;
-        
+
         // Increase relative cost of scans for small data
         // (makes index usage more attractive)
         adjusted.scan_base *= self.bias_factors.scan_amplification;
-        
+
         // Reduce sort cost for small datasets
         adjusted.sort_base *= self.bias_factors.sort_reduction;
-        
+
         // Apply statistical adjustments
         if (stats.has_skew) {
             // Further reduce join costs if data is skewed
             adjusted.join_base *= 0.8;
         }
-        
+
         if (stats.has_correlation) {
             // Reduce sort costs if data is pre-sorted
             adjusted.sort_base *= 0.5;
         }
-        
+
         // Apply guardrails
         adjusted = self.applyGuardrails(adjusted, base_factors);
-        
+
         // Log decision if enabled
         if (self.decision_log) |log| {
             log.recordDecision(.{
@@ -108,20 +108,20 @@ pub const SmallNCalibration = struct {
                 .stats = stats,
             });
         }
-        
+
         // Calculate confidence based on data size
         const confidence = calculateConfidence(cardinality, stats);
-        
+
         // Update metrics
         self.metrics.recordCalibration(is_small_n, confidence);
-        
+
         return CalibratedFactors{
             .factors = adjusted,
             .applied_bias = true,
             .confidence = confidence,
         };
     }
-    
+
     /// Compare CBO plan with heuristic plan
     pub fn validateAgainstHeuristic(
         self: *Self,
@@ -131,12 +131,12 @@ pub const SmallNCalibration = struct {
     ) PlanValidation {
         const cbo_cost = cost_model.estimatePlanCost(cbo_plan, factors);
         const heuristic_cost = cost_model.estimatePlanCost(heuristic_plan, factors);
-        
+
         const cost_ratio = cbo_cost / heuristic_cost;
         const regression_threshold = 1.1; // Allow 10% regression max
-        
+
         const has_regression = cost_ratio > regression_threshold;
-        
+
         if (self.decision_log) |log| {
             log.recordValidation(.{
                 .cbo_cost = cbo_cost,
@@ -145,9 +145,9 @@ pub const SmallNCalibration = struct {
                 .has_regression = has_regression,
             });
         }
-        
+
         self.metrics.recordValidation(has_regression, cost_ratio);
-        
+
         return PlanValidation{
             .use_cbo = !has_regression,
             .cbo_cost = cbo_cost,
@@ -155,14 +155,14 @@ pub const SmallNCalibration = struct {
             .regression_detected = has_regression,
         };
     }
-    
+
     /// Apply guardrails to prevent extreme adjustments
     fn applyGuardrails(self: *Self, adjusted: cost_model.CostFactors, base: cost_model.CostFactors) cost_model.CostFactors {
         var result = adjusted;
-        
+
         // Ensure no factor deviates too much from base
         const max_deviation = self.guardrails.max_factor_deviation;
-        
+
         result.scan_base = clampFactor(result.scan_base, base.scan_base, max_deviation);
         result.filter_base = clampFactor(result.filter_base, base.filter_base, max_deviation);
         result.project_base = clampFactor(result.project_base, base.project_base, max_deviation);
@@ -170,28 +170,28 @@ pub const SmallNCalibration = struct {
         result.aggregate_base = clampFactor(result.aggregate_base, base.aggregate_base, max_deviation);
         result.sort_base = clampFactor(result.sort_base, base.sort_base, max_deviation);
         result.limit_base = clampFactor(result.limit_base, base.limit_base, max_deviation);
-        
+
         // Ensure minimum values
         result.scan_base = @max(result.scan_base, self.guardrails.min_scan_cost);
         result.join_base = @max(result.join_base, self.guardrails.min_join_cost);
-        
+
         return result;
     }
-    
+
     fn clampFactor(value: f64, base: f64, max_deviation: f64) f64 {
         const min = base / max_deviation;
         const max = base * max_deviation;
         return @max(min, @min(max, value));
     }
-    
+
     fn calculateConfidence(cardinality: u64, stats: QueryStatistics) f64 {
         // Higher confidence for larger samples
         var confidence = @min(1.0, @as(f64, @floatFromInt(cardinality)) / 100.0);
-        
+
         // Adjust based on statistics quality
         if (stats.has_histograms) confidence *= 1.2;
         if (stats.sample_rate < 0.1) confidence *= 0.8;
-        
+
         return @min(1.0, confidence);
     }
 };
@@ -202,7 +202,7 @@ pub const BiasFactors = struct {
     join_depth_reduction: f64 = 0.8,
     scan_amplification: f64 = 1.2,
     sort_reduction: f64 = 0.6,
-    
+
     pub fn default() BiasFactors {
         return .{};
     }
@@ -213,7 +213,7 @@ pub const Guardrails = struct {
     max_factor_deviation: f64 = 2.0,
     min_scan_cost: f64 = 0.1,
     min_join_cost: f64 = 0.5,
-    
+
     pub fn default() Guardrails {
         return .{};
     }
@@ -248,13 +248,13 @@ pub const PlanValidation = struct {
 const DecisionLog = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayList(DecisionEntry),
-    
+
     const DecisionEntry = struct {
         timestamp: i64,
         decision: CalibrationDecision,
         validation: ?ValidationEntry,
     };
-    
+
     const CalibrationDecision = struct {
         cardinality: u64,
         is_small_n: bool,
@@ -262,25 +262,25 @@ const DecisionLog = struct {
         adjusted_factors: cost_model.CostFactors,
         stats: QueryStatistics,
     };
-    
+
     const ValidationEntry = struct {
         cbo_cost: f64,
         heuristic_cost: f64,
         cost_ratio: f64,
         has_regression: bool,
     };
-    
+
     fn init(allocator: std.mem.Allocator) DecisionLog {
         return .{
             .allocator = allocator,
             .entries = std.ArrayList(DecisionEntry).init(allocator),
         };
     }
-    
+
     fn deinit(self: *DecisionLog) void {
         self.entries.deinit();
     }
-    
+
     fn recordDecision(self: *DecisionLog, decision: CalibrationDecision) void {
         self.entries.append(.{
             .timestamp = std.time.milliTimestamp(),
@@ -288,13 +288,13 @@ const DecisionLog = struct {
             .validation = null,
         }) catch {};
     }
-    
+
     fn recordValidation(self: *DecisionLog, validation: ValidationEntry) void {
         if (self.entries.items.len > 0) {
             self.entries.items[self.entries.items.len - 1].validation = validation;
         }
     }
-    
+
     /// Export log as JSON for analysis
     pub fn exportJSON(self: *DecisionLog, writer: anytype) !void {
         try std.json.stringify(self.entries.items, .{ .whitespace = .indent_2 }, writer);
@@ -308,7 +308,7 @@ const CalibrationMetrics = struct {
     regressions_prevented: u64,
     total_confidence: f64,
     validation_count: u64,
-    
+
     fn init() CalibrationMetrics {
         return .{
             .small_n_queries = 0,
@@ -318,7 +318,7 @@ const CalibrationMetrics = struct {
             .validation_count = 0,
         };
     }
-    
+
     fn recordCalibration(self: *CalibrationMetrics, is_small_n: bool, confidence: f64) void {
         if (is_small_n) {
             self.small_n_queries += 1;
@@ -327,7 +327,7 @@ const CalibrationMetrics = struct {
         }
         self.total_confidence += confidence;
     }
-    
+
     fn recordValidation(self: *CalibrationMetrics, has_regression: bool, cost_ratio: f64) void {
         _ = cost_ratio;
         self.validation_count += 1;
@@ -335,7 +335,7 @@ const CalibrationMetrics = struct {
             self.regressions_prevented += 1;
         }
     }
-    
+
     pub fn getAverageConfidence(self: *const CalibrationMetrics) f64 {
         const total = self.small_n_queries + self.large_n_queries;
         if (total == 0) return 0;

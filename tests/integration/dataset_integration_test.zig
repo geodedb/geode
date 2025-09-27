@@ -25,18 +25,18 @@ pub fn loadMigrations(allocator: std.mem.Allocator) !void {
 
     for (migrations) |migration| {
         std.debug.print("Loading migration: {s}\n", .{migration});
-        
+
         // Read migration file
         const file = try std.fs.cwd().openFile(migration, .{});
         defer file.close();
         const content = try file.readToEndAlloc(allocator, 1024 * 1024);
         defer allocator.free(content);
-        
+
         // Execute migration
         const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "--host", "127.0.0.1", "--port", "8443", content });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
-        
+
         if (result.term.Exited != 0) {
             std.debug.print("Migration failed: {s}\n", .{result.stderr});
             return error.MigrationFailed;
@@ -46,38 +46,35 @@ pub fn loadMigrations(allocator: std.mem.Allocator) !void {
 
 test "dataset migration system loads successfully" {
     const allocator = testing.allocator;
-    
+
     // Start server in background
     var server = std.ChildProcess.init(&.{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "8443" }, allocator);
     try server.spawn();
     defer _ = server.kill() catch {};
-    
+
     // Wait for server to start
     std.time.sleep(2 * std.time.ns_per_s);
-    
+
     // Load migrations
     try loadMigrations(allocator);
-    
+
     // Verify node count
     const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "MATCH (n) RETURN count(n) AS count" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "count") != null);
 }
 
 test "dataset has correct schema after migration" {
     const allocator = testing.allocator;
-    
+
     // Check User label exists with properties
-    const result = try runCommand(allocator, &.{ 
-        "./zig-out/bin/geodec", 
-        "MATCH (u:User) RETURN u LIMIT 1" 
-    });
+    const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "MATCH (u:User) RETURN u LIMIT 1" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "username") != null);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "ip_address") != null);
@@ -86,7 +83,7 @@ test "dataset has correct schema after migration" {
 
 test "network types work correctly" {
     const allocator = testing.allocator;
-    
+
     // Test IP address operations
     const queries = [_]struct {
         query: []const u8,
@@ -105,12 +102,12 @@ test "network types work correctly" {
             .expected_in_output = "a1:b2:c3",
         },
     };
-    
+
     for (queries) |q| {
         const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", q.query });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
-        
+
         try testing.expect(result.term.Exited == 0);
         try testing.expect(std.mem.indexOf(u8, result.stdout, q.expected_in_output) != null);
     }
@@ -118,16 +115,16 @@ test "network types work correctly" {
 
 test "geographic types and queries work" {
     const allocator = testing.allocator;
-    
+
     // Test distance calculation
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
         "MATCH (l1:Location {name: 'San Francisco'}), (l2:Location {name: 'New York'}) " ++
-        "RETURN distance_haversine(l1.coordinates, l2.coordinates) AS distance",
+            "RETURN distance_haversine(l1.coordinates, l2.coordinates) AS distance",
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     // Distance should be approximately 4,100,000 meters
     try testing.expect(std.mem.indexOf(u8, result.stdout, "distance") != null);
@@ -135,23 +132,23 @@ test "geographic types and queries work" {
 
 test "vector similarity search works" {
     const allocator = testing.allocator;
-    
+
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
         "MATCH (p1:Post {id: 'post-1'}), (p2:Post) " ++
-        "WHERE p1 <> p2 AND vector_cosine_similarity(p1.content_vector, p2.content_vector) > 0.5 " ++
-        "RETURN count(p2) AS similar_count",
+            "WHERE p1 <> p2 AND vector_cosine_similarity(p1.content_vector, p2.content_vector) > 0.5 " ++
+            "RETURN count(p2) AS similar_count",
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "similar_count") != null);
 }
 
 test "relationships are correctly established" {
     const allocator = testing.allocator;
-    
+
     // Test various relationship patterns
     const queries = [_][]const u8{
         "MATCH (u:User)-[:FOLLOWS]->(u2:User {id: 'user-3'}) RETURN count(u) AS followers",
@@ -160,25 +157,25 @@ test "relationships are correctly established" {
         "MATCH (c:Company)-[:INVESTED_IN]->(c2:Company) RETURN count(c) AS investors",
         "MATCH (u:User {id: 'user-1'})-[:MEMBER_OF]->(g:Group) RETURN count(g) AS groups",
     };
-    
+
     for (queries) |query| {
         const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", query });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
-        
+
         try testing.expect(result.term.Exited == 0);
-        try testing.expect(std.mem.indexOf(u8, result.stdout, "count") != null or 
-                          std.mem.indexOf(u8, result.stdout, "followers") != null or
-                          std.mem.indexOf(u8, result.stdout, "posts") != null or
-                          std.mem.indexOf(u8, result.stdout, "attendees") != null or
-                          std.mem.indexOf(u8, result.stdout, "investors") != null or
-                          std.mem.indexOf(u8, result.stdout, "groups") != null);
+        try testing.expect(std.mem.indexOf(u8, result.stdout, "count") != null or
+            std.mem.indexOf(u8, result.stdout, "followers") != null or
+            std.mem.indexOf(u8, result.stdout, "posts") != null or
+            std.mem.indexOf(u8, result.stdout, "attendees") != null or
+            std.mem.indexOf(u8, result.stdout, "investors") != null or
+            std.mem.indexOf(u8, result.stdout, "groups") != null);
     }
 }
 
 test "materialized views are created and populated" {
     const allocator = testing.allocator;
-    
+
     // Query the trending_posts materialized view
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
@@ -186,14 +183,14 @@ test "materialized views are created and populated" {
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     // Even if empty, the view should exist
     try testing.expect(result.term.Exited == 0 or std.mem.indexOf(u8, result.stderr, "empty") != null);
 }
 
 test "constraints are enforced" {
     const allocator = testing.allocator;
-    
+
     // Try to violate unique constraint on User email
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
@@ -201,16 +198,16 @@ test "constraints are enforced" {
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     // Should fail due to unique constraint
     try testing.expect(result.term.Exited != 0);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "constraint") != null or
-                      std.mem.indexOf(u8, result.stderr, "unique") != null);
+        std.mem.indexOf(u8, result.stderr, "unique") != null);
 }
 
 test "indexes improve query performance" {
     const allocator = testing.allocator;
-    
+
     // Query using indexed field (should be fast)
     const start = std.time.nanoTimestamp();
     const result = try runCommand(allocator, &.{
@@ -220,7 +217,7 @@ test "indexes improve query performance" {
     const elapsed = std.time.nanoTimestamp() - start;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "alice_j") != null);
     // Should complete in under 100ms with index
@@ -229,50 +226,47 @@ test "indexes improve query performance" {
 
 test "full-text search works on indexed fields" {
     const allocator = testing.allocator;
-    
+
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
         "MATCH (p:Post) WHERE fulltext_search(p.content, 'graph database') RETURN count(p) AS matches",
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "matches") != null);
 }
 
 test "spatial index queries work efficiently" {
     const allocator = testing.allocator;
-    
+
     // Find all locations within a bounding box
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
         "MATCH (l:Location) " ++
-        "WHERE st_within(l.coordinates, " ++
-        "  st_makeenvelope(-123, 37, -122, 38)) " ++
-        "RETURN count(l) AS in_box",
+            "WHERE st_within(l.coordinates, " ++
+            "  st_makeenvelope(-123, 37, -122, 38)) " ++
+            "RETURN count(l) AS in_box",
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
 }
 
 test "transaction rollback works correctly" {
     const allocator = testing.allocator;
-    
+
     // Start transaction
     _ = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "BEGIN" });
-    
+
     // Create a test node
-    _ = try runCommand(allocator, &.{ 
-        "./zig-out/bin/geodec", 
-        "CREATE (:TestNode {id: 'rollback-test'})" 
-    });
-    
+    _ = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "CREATE (:TestNode {id: 'rollback-test'})" });
+
     // Rollback
     _ = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "ROLLBACK" });
-    
+
     // Verify node doesn't exist
     const result = try runCommand(allocator, &.{
         "./zig-out/bin/geodec",
@@ -280,7 +274,7 @@ test "transaction rollback works correctly" {
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     try testing.expect(result.term.Exited == 0);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "\"count\":0") != null);
 }
