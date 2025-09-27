@@ -53,7 +53,7 @@ pub const GraphStorage = struct {
         for (self.nodes.items) |*node| {
             node.properties.deinit();
         }
-        self.nodes.deinit();
+        self.nodes.deinit(self.allocator);
     }
     
     pub fn addNode(self: *GraphStorage, id: u64, labels: []const []const u8, props: []const struct { []const u8, Value }) !void {
@@ -75,38 +75,40 @@ pub const GraphStorage = struct {
 
 // Global session context (thread-local would be better)
 var g_session_ctx: SessionContext = .{};
-var g_catalog_allocator: ?std.mem.Allocator = null;
+var g_catalog_gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // Initialize test catalog with sample graphs
 pub fn initTestCatalog(allocator: std.mem.Allocator) !void {
+    _ = allocator; // We use our own allocator for the catalog
+    
     if (g_session_ctx.graph_catalog != null) return;
     
-    g_catalog_allocator = allocator;
+    const catalog_allocator = g_catalog_gpa.allocator();
     
-    var catalog = try allocator.create(GraphCatalog);
+    var catalog = try catalog_allocator.create(GraphCatalog);
     catalog.* = .{
-        .graphs = std.StringHashMap(*GraphStorage).init(allocator),
-        .allocator = allocator,
+        .graphs = std.StringHashMap(*GraphStorage).init(catalog_allocator),
+        .allocator = catalog_allocator,
     };
     
     // Create G1
-    var g1 = try allocator.create(GraphStorage);
-    g1.* = GraphStorage.init(allocator);
+    var g1 = try catalog_allocator.create(GraphStorage);
+    g1.* = GraphStorage.init(catalog_allocator);
     try g1.addNode(1, &.{"A"}, &.{.{ "label", .{ .String = "A" } }, .{ "v", .{ .Int = 1 } }});
     try g1.addNode(2, &.{"A"}, &.{.{ "label", .{ .String = "A" } }, .{ "v", .{ .Int = 2 } }});
     try g1.addNode(3, &.{"B"}, &.{.{ "label", .{ .String = "B" } }, .{ "v", .Null }});
     try catalog.graphs.put("G1", g1);
     
     // Create G2
-    var g2 = try allocator.create(GraphStorage);
-    g2.* = GraphStorage.init(allocator);
+    var g2 = try catalog_allocator.create(GraphStorage);
+    g2.* = GraphStorage.init(catalog_allocator);
     try g2.addNode(10, &.{"B"}, &.{.{ "label", .{ .String = "B" } }, .{ "v", .{ .Int = 5 } }});
     try g2.addNode(11, &.{"B"}, &.{.{ "label", .{ .String = "B" } }, .{ "v", .{ .Int = 5 } }});
     try catalog.graphs.put("G2", g2);
     
     // Create default empty graph
-    const default_graph = try allocator.create(GraphStorage);
-    default_graph.* = GraphStorage.init(allocator);
+    const default_graph = try catalog_allocator.create(GraphStorage);
+    default_graph.* = GraphStorage.init(catalog_allocator);
     try catalog.graphs.put("default", default_graph);
     
     g_session_ctx.graph_catalog = catalog;
@@ -114,12 +116,15 @@ pub fn initTestCatalog(allocator: std.mem.Allocator) !void {
 
 pub fn cleanupTestCatalog() void {
     if (g_session_ctx.graph_catalog) |catalog| {
+        const allocator = g_catalog_gpa.allocator();
         catalog.deinit();
-        if (g_catalog_allocator) |allocator| {
-            allocator.destroy(catalog);
-        }
+        allocator.destroy(catalog);
         g_session_ctx.graph_catalog = null;
     }
+    // Check for leaks (in debug mode this will report them)
+    _ = g_catalog_gpa.deinit();
+    // Reinitialize for potential next use
+    g_catalog_gpa = std.heap.GeneralPurposeAllocator(.{}){};
 }
 
 // Main query execution function
@@ -232,8 +237,9 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
         // Create graph if it doesn't exist
         if (g_session_ctx.graph_catalog) |catalog| {
             if (!catalog.graphs.contains(graph_name)) {
-                const new_graph = try allocator.create(GraphStorage);
-                new_graph.* = GraphStorage.init(allocator.*);
+                // Use the catalog's allocator (from arena) for new graphs
+                const new_graph = try catalog.allocator.create(GraphStorage);
+                new_graph.* = GraphStorage.init(catalog.allocator);
                 try catalog.graphs.put(graph_name, new_graph);
             }
             g_session_ctx.active_graph = graph_name;

@@ -221,3 +221,8 @@ test "T19: GROUP BY legality (error)" {
     const expected = "{\"status_class\":\"42000\",\"message\":\"grouping error: non-aggregated expression not in GROUP BY\",\"additional_statuses\":[]}";
     try testing.expectEqualStrings(expected, result);
 }
+
+// Cleanup test catalog at the end
+test "ZZ_cleanup" {
+    test_harness.cleanupTestCatalog();
+}
