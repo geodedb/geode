@@ -3,6 +3,8 @@ const crypto = std.crypto; // AES‑GCM for WAL encryption (aligned with page-le
 // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=CorruptPageRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecovery; OWNER=storage; UPDATED=2025-09-20
 // Page manager imported via build alias to avoid relative path escaping module root.
 const storage = @import("storage_page_manager");
+const fsync_util = @import("fs_fsync");
+const commit_coord = @import("commit_coordinator");
 
 // WAL encryption wrapper: AES-256-GCM per record (nonce: 12 bytes derived from LSN + payload len).
 // Layout when encrypted: [nonce(12)][tag(16)][ciphertext]. Header payload length = 28 + plaintext_len.
@@ -58,7 +60,9 @@ pub const Lsn = struct {
     value: u64,
 };
 
-pub const RecordType = enum { Begin, Insert, Delete, Commit, Abort, CLR, Checkpoint };
+pub const CommitFlushMode = enum { always, every_n, time_window_ms };
+
+pub const RecordType = enum { Begin, Insert, Delete, Commit, Abort, CLR, Checkpoint, PageCompact };
 
 pub const UpdatePayload = struct { page: u32, slot: u16, data: []const u8 };
 
@@ -106,6 +110,12 @@ pub const Wal = struct {
     // Encryption
     enc_enabled: bool = false,
     enc_key: [32]u8 = undefined,
+    // Commit flush policy
+    commit_flush_mode: CommitFlushMode = .always,
+    group_n: u32 = 10,
+    time_window_ms: u32 = 0,
+    last_flush_lsn: u64 = 0,
+    last_flush_ms: i64 = 0,
 
     pub fn init(ally: std.mem.Allocator) Wal {
         const list = std.ArrayList(Record).initCapacity(ally, 0) catch @panic("OOM WAL init");
@@ -147,6 +157,7 @@ pub const Wal = struct {
         defer self.ally.free(path);
         self.file = try dir.createFile(path, .{ .read = true, .truncate = false, .exclusive = false, .mode = 0o600 });
         self.segment_bytes = 0;
+        fsync_util.fsyncParent(path) catch {};
     }
 
     pub fn openFile(self: *Wal, base_path: []const u8) !void {
@@ -433,6 +444,8 @@ pub const Wal = struct {
 
     pub fn fsync(self: *Wal) !void {
         if (self.file) |f| try f.sync();
+        self.last_flush_lsn = self.next_lsn - 1;
+        self.last_flush_ms = std.time.milliTimestamp();
     }
 
     pub fn writeCheckpoint(self: *Wal) !Lsn {

@@ -149,9 +149,13 @@ pub fn build(b: *std.Build) void {
     // Provide supporting modules required by wal for tests
     const tde_hierarchy_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     const key_provider_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
+    const fs_fsync_mod = b.createModule(.{ .root_source_file = b.path("src/storage/fs_fsync.zig"), .target = target, .optimize = optimize });
+    const commit_coord_mod = b.createModule(.{ .root_source_file = b.path("src/txn/commit_coordinator.zig"), .target = target, .optimize = optimize });
     wal_mod_for_tests.addImport("tde_hierarchy", tde_hierarchy_mod_for_tests);
     wal_mod_for_tests.addImport("storage_page_manager", storage_page_manager_shared);
     wal_mod_for_tests.addImport("key_provider", key_provider_mod_for_tests);
+    wal_mod_for_tests.addImport("fs_fsync", fs_fsync_mod);
+    wal_mod_for_tests.addImport("commit_coordinator", commit_coord_mod);
     custom_tests.root_module.addImport("wal", wal_mod_for_tests);
     // Provide storage page manager to test redo optimization
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
@@ -463,10 +467,12 @@ pub fn build(b: *std.Build) void {
     // Security TDE hierarchy module
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
+    // Provide page manager dependency for WAL and additional imports (fs sync, commit coord)
     wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
-    // Provide page manager dependency for WAL (needed for internal @import("storage_page_manager"))
     wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
     wal_mod.addImport("key_provider", key_provider_mod);
+    wal_mod.addImport("fs_fsync", fs_fsync_mod);
+    wal_mod.addImport("commit_coordinator", commit_coord_mod);
     geoded_exe.root_module.addImport("wal", wal_mod);
     geoded_exe.root_module.addImport("tde_hierarchy", tde_hierarchy_mod);
     geoded_exe.root_module.addImport("key_provider", key_provider_mod);
@@ -802,9 +808,11 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/wal_compact.zig"), .target = target, .optimize = optimize }),
     });
     const wal_scan_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    wal_scan_mod.addImport("fs_fsync", fs_fsync_mod);
+    wal_scan_mod.addImport("commit_coordinator", commit_coord_mod);
     wal_scan_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
-    // Also add page manager import for the wal_compact tool variant of WAL module
     wal_scan_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    wal_scan_mod.addImport("key_provider", key_provider_mod);
     wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
     wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     b.installArtifact(wal_compact_exe);
