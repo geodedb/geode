@@ -170,6 +170,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_custom_tests.step);
     
+    // Add canary test target
+    const canary_exe = b.addExecutable(.{
+        .name = "canary_main",
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/canary_main.zig"), .target = target, .optimize = optimize }),
+    });
+    const run_canary = b.addRunArtifact(canary_exe);
+    const canary_step = b.step("canary", "Run type system canary tests");
+    canary_step.dependOn(&run_canary.step);
+    
+    // Add acceptance test target
+    const cpa_accept_exe = b.addExecutable(.{
+        .name = "cpa_accept_main",
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/cpa_accept_main.zig"), .target = target, .optimize = optimize }),
+    });
+    const run_cpa_accept = b.addRunArtifact(cpa_accept_exe);
+    const cpa_accept_step = b.step("cpa_accept", "Run type system acceptance tests");
+    cpa_accept_step.dependOn(&run_cpa_accept.step);
+    
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
     test_step.dependOn(&run_gql_conformance_tests.step);
 
