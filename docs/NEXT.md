@@ -2,7 +2,7 @@
 
 Actionable slices derived strictly from current CANARY evidence. Each slice targets a gap (IMPL/STUB), a parse error, or consolidation of multiple overlapping BENCHED entries into policy/tests. Columns: Why | What | Acceptance | ISO refs | Deps | Scope | DRI | Target Date.
 
-Snapshot Date: 2025‑09‑26 (matches GAP_ANALYSIS.md). No source edits performed. Future work requires adding or updating CANARY tags in code (out of scope here).
+Snapshot Date: 2025‑09‑27 (reflects updated additional data types and new persisted indexes: Interval‑Tree, JSONB Inverted, Domain Trie; security hardening slices promoted).
 
 ## Completed (v0.18.0)
 

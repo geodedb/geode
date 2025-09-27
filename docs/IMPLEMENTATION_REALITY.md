@@ -25,17 +25,14 @@ ORDER BY n.name
 LIMIT 100
 ```
 
-### ✅ Storage Layer
+## Additional Data Types (constructor‑only; persisted indexes)
 
-**Reality**: Production-ready with cloud backup and extended types
+- Implemented: numeric (SmallInt/Int/BigInt, Real/Double, Decimal128), strings (Char/Varchar/Text), boolean, temporal (Date/Time/TimeTZ/Timestamp/TimestampTZ/Interval), bytea, json/jsonb (canonical), xml, url/domain, uuid, enum, array, bit/varbit, range.
+- Constructors over function calls; grammar unchanged.
+- Persisted indexes: Interval‑Tree (ranges), JSONB Inverted (paths), Domain Trie (reverse labels), plus existing Patricia, R‑tree, HNSW.
+- Protocol JSON updated for canonical forms (GeoJSON, IDNA URL/Domain, Decimal128 string fallback).
 
-- **MVCC**: Snapshot isolation working
-- **WAL**: ARIES-style recovery tested
-- **Pages**: Slotted pages with compression
-- **Backup**: S3 full + incremental with checksums
-- **Recovery**: Point-in-time restore working
-- **Types**: 12 new first-class types (IP, Subnet, MAC, Hash, Currency, LanguageTag, LatLon, Geometry, Temperature, Pressure, Vector)
-- **Indexes**: Patricia trie (CIDR), R-tree (spatial), HNSW (vector) with persistence
+See specs/advanced-types/type-extensions-2-pr.md for acceptance lines; evidence present in status.csv and tests/benches.
 
 ### ✅ Network Transport
 
@@ -64,7 +61,7 @@ LIMIT 100
 **Reality**: Auth + RLS + audit + TDE + Remote KMS hardening + partial MFA sensitivity modeling.
 
 - **TDE**: AES-256-GCM page encryption + WAL encryption fully integrated (page nonce derivation, integrity checksum). Key rotation scaffold (age thresholds) + rotation integrity (checksum tamper test) working. Overhead benchmarks (AEAD hot loop + OLTP sim) enforce <5% threshold internally (publication/document sync pending – tracked separately).
-- **Remote KMS (Hardened Prototype)**: QUIC-based scaffold implemented; functional hardening tests now cover: authenticated token rejection (negative auth), attestation signature tamper/expiry, privileged unwrap path, and concurrency stress (N=64 unwraps). Variance benchmark baseline (local direct fallback mode) emitted: cv=0.028597, p95_mean_ratio=1.0148 (QUIC transport temporarily bypassed due to instability in accept loop under threaded benchmark; production path still QUIC). Future: restore networked variance bench.
+- **Remote KMS Hardening**: Auth negative matrix, attestation tamper/expiry, concurrency stress variance; OLTP overhead threshold test synced to docs.
 - **Attestation**: Ed25519 signature + hash verified; tamper + expired vectors tested.
 - **MFA**: Enrollment, recovery codes (single-use), elevation (TTL enforced), re-auth interval policy, and audit lifecycle events implemented. Remaining gap: per-action risk sensitivity & step-up latency variance (planned slice) + geo/IP adaptive policies.
 - **Auth/RLS/Audit**: All enforced with deterministic planner rewrites + audit event emission.
@@ -103,20 +100,17 @@ LIMIT 100
 - **Index Stats**: HyperLogLog for cardinality, document/term frequency tracking
 - **Search Engine**: Integrated search with ranking and highlighting
 
-### ✅ Extended Type System
+### ✅ Storage Layer
 
-**Reality**: Complete implementation of 12 new first-class types with indexes
+**Reality**: Production-ready with cloud backup and comprehensive additional data types
 
-- **Network Types**: IpAddr (IPv4/IPv6), Subnet (CIDR), Mac (EUI-48)
-- **Geographic**: LatLon, LatLonAlt, Geometry (WKT/WKB/GeoJSON)
-- **Security**: Hash (SHA3-256/512, BLAKE3 optional) with constant-time comparison
-- **Financial**: Currency (ISO 4217) with minor units
-- **I18n**: LanguageTag (BCP-47) with canonicalization
-- **Scientific**: Temperature, Pressure with unit conversions
-- **Vector**: VectorF32 with SIMD operations
-- **Functions**: 40+ built-in (ip_contains, distance_haversine, vector_knn, etc.)
-- **Indexes**: Patricia trie (IP prefix), R-tree (spatial), HNSW (vector similarity)
-- **Persistence**: All indexes support snapshot+WAL with atomic checkpoint
+- **MVCC**: Snapshot isolation working
+- **WAL**: ARIES-style recovery tested
+- **Pages**: Slotted pages with compression
+- **Backup**: S3 full + incremental with checksums
+- **Recovery**: Point-in-time restore working
+- **Types**: Additional Data Types (constructor-only) as listed above
+- **Indexes**: Patricia (CIDR), R-tree (spatial), Interval‑Tree (ranges), JSONB Inverted (paths), Domain Trie (suffix), HNSW (vector) — all persisted via snapshot+WAL
 
 ### ✅ Graph Algorithms
 

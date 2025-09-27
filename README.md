@@ -25,8 +25,8 @@ For the complete, unaggregated table (including duplicates per evidence token) a
 - **☁️ S3 Cloud Backups**: Full + incremental (multipart, checksums, resumable, PIT recovery) production‑ready.
 - **🔔 CDC Webhook Hardening**: Headers, retries with backoff+jitter, DLQ, idempotency, metrics.
 - **📊 CBO Small-N Calibration**: Bias corrections + guardrails always active; decision tracing via `GEODE_TRACE_OPTIMIZER` only.
-- **🆕 Extended Type System**: 12 new first-class types (IpAddr, Subnet, Mac, Hash, Currency, LanguageTag, LatLon, Geometry, Temperature, Pressure, VectorF32) with 40+ built-in functions.
-- **🔍 Persisted Indexes**: Patricia trie (CIDR), R-tree (spatial), HNSW (vector similarity) with snapshot+WAL persistence.
+- **🆕 Additional Data Types**: Comprehensive scalar/document suite with constructor-only semantics (numeric, strings, boolean, temporal, bytea, json/jsonb, xml, url/domain, uuid, enum, array, bit/varbit, range).
+- **🔍 Persisted Indexes**: Patricia trie (CIDR), R-tree (spatial), Interval-Tree (ranges), JSONB Inverted (paths), Domain Trie (suffix), and HNSW (vector similarity) — all snapshot+WAL persisted.
 - **🔐 Security Hardening (In‑Progress)**: TDE (AES‑256‑GCM page + WAL encryption) integrated; key rotation (state+checksum) + local & simulated external wrap/unwrap + remote QUIC KMS prototype (generate/unwrap) landing. MFA (TOTP + recovery codes + elevation metadata) partially complete; policy matrix expansion pending.
 - **🔍 FTS Partial**: Phrase / proximity / highlighting primitives loaded by default; analyzers + BM25 scoring forthcoming.
 - **⚡ Parallel Execution Prototype**: Thread pool + deterministic ordered `parallelMap`; expansion to Expand/Filter/Join operators planned.
@@ -196,6 +196,17 @@ geode backup --dest s3://my-bucket/backups --mode full
 - **Temperature/Pressure**: Unit-aware scientific quantities
 - **VectorF32**: SIMD-optimized embeddings with HNSW indexing
 
+### Additional Data Types (constructor-only)
+
+- Numeric: SmallInt/Int/BigInt, Real/Double, Decimal128
+- Strings: Char(n)/Varchar(n)/Text (char compare ignores trailing spaces)
+- Temporal: Date, Time, TimeTZ, Timestamp, TimestampTZ, Interval
+- Binary/Docs: Bytea, Json, Jsonb (canonical), Xml
+- Network/I18n/Specialized: Url, Domain, UUID, Enum
+- Collections & Ranges: Array[T], Bit/VarBit, Range<T>
+
+Constructors are function calls (e.g., Decimal("123.45",2), Char("A",3), Url("http://example.com"), Range("int4",1,4,"[)")).
+
 ### Built-in Functions
 
 ```gql
@@ -214,9 +225,12 @@ vector_dot(vec1, vec2)
 
 ### Persisted Indexes
 
-- **Patricia Trie**: O(prefix_bits) IP/CIDR lookups, used by `ip_contains()`
-- **R-tree**: Sub-linear 2D spatial queries for `st_intersects()`, `st_contains()`
-- **HNSW**: O(log N) approximate k-NN for `vector_knn()` with high recall
+- **Patricia Trie (CIDR)**: O(prefix_bits) IP/Subnet lookups used by `ip_contains()`
+- **R-tree (2D)**: Spatial predicates `st_intersects()` / `st_contains()`
+- **Interval-Tree (Ranges)**: Contains/overlaps for `Range<T>`
+- **JSONB Inverted**: Path/value postings for `jsonb_get`/filters
+- **Domain Trie**: Reverse-label suffix lookups for domains/FQDNs
+- **HNSW (Vectors)**: Approximate k-NN for `vector_knn()` with high recall
 
 ## Performance
 

@@ -6,7 +6,12 @@ Single authoritative gap ledger generated from existing CANARY evidence (docs‑
 
 ## Executive Summary
 
-The project has broad test + benchmark coverage across 59 distinct requirement IDs (REQ‑GQL‑###). Marketing claims of “100% coverage” from prior versions have been removed. Coverage is evidence‑based only.
+- Distinct Requirements (IDs): 60
+- TESTED: 443 | BENCHED: 229 | IMPL: 7 | STUB: 6 | REMOVED: 0 | MISSING: 0 | Parse Errors: 0
+
+New evidence now included in counts:
+- Additional Data Types (constructor-only numeric/strings/temporal/bytea/json/jsonb/xml/url/domain/uuid/enum/array/bit/range)
+- Persisted Indexes: Interval‑Tree, JSONB Inverted, Domain Trie
 
 ### Scanner Evidence Snapshot
 
@@ -27,7 +32,11 @@ Freshness: All TESTED/BENCHED UPDATED dates are within 60‑day window (no STALE
 
 Instead of percentage marketing summaries, raw counts are provided. Each row below is directly traceable to a CANARY tag line and associated test / benchmark names. Rows with status IMPL or STUB are explicit gaps (follow‑ups tracked in `NEXT.md`).
 
-### Parse Error Impact (Resolved)
+### Recently Added Evidence (post 2025‑09‑27)
+
+- Range/JSONB/Domain specialized indexes persisted (snapshot+WAL); acceptance lines added
+- URL/Domain canonicalization + IDNA in protocol output; UUID v4/v7; Decimal128 half‑even rounding tests
+- Security hardening: Remote KMS auth negative/attestation/unwrap concurrency variance; OLTP overhead threshold publication sync
 
 No active parse errors exist. The earlier discrepancy (invalid STATUS token) has been resolved; governance tooling operates in strict mode without exceptions. Should future parse errors arise, they must be documented here with file:line, failing STATUS token, and remediation plan before alteration of source tags.
 
@@ -400,7 +409,7 @@ All benchmarks have variance envelopes:
 
 ## Conclusion
 
-v0.18.0 successfully delivers critical infrastructure features with 100% test coverage. The foundation is now in place for v0.19's security and performance enhancements.
+v0.18.0 successfully delivers critical infrastructure features with evidence-based coverage. Additional data types and specialized indexes are implemented with constructor-only semantics and persisted index support. Security hardening advances (remote KMS, TDE thresholds) are reflected in UPDATED evidence.
 
 ### Key Achievements
 

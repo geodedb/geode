@@ -1,6 +1,6 @@
 # SECURITY_PROGRESS.md - Security & Hardening Matrix
 
-This file centralizes the security hardening status with CANARY markers for traceability. Each row corresponds to one or more requirements. New placeholder requirement IDs use the TDE / SEC prefix pattern and must be integrated into status generation tooling.
+This matrix reflects updated evidence as of 2025-09-27, including Remote KMS negative auth, attestation, unwrap concurrency variance, and OLTP overhead publication sync. Network transport variance benchmarking will be reintroduced in a future slice; current benchmark uses documented local fallback.
 
 | Area                              | Status   | Evidence                                                                                                      | Next Action                                                          | Risk |
 | --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---- |
