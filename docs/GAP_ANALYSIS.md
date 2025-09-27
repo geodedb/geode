@@ -105,6 +105,19 @@ All TESTED/BENCHED UPDATED dates fall within 60 days of snapshot date (2025‑09
 - This file references only existing CANARY tokens; no speculative features included.
 - Any new requirement IDs must appear in source with valid CANARY tags before inclusion here.
 
+### Newly Added (Post-Snapshot) Evidence – Pending Next Full Regeneration
+
+Two provisional requirement IDs have been introduced in source after the 2025-09-26 snapshot and will appear in the next regenerated table once `canaryscan` is re-run and this document refreshed:
+
+- REQ-GQL-082 ExtendedBuiltins
+  - ASPECT=ENGINE (IMPL) plus FUNCTION_UUID_V4 / FUNCTION_VECTOR_COSINE / FUNCTION_GEOBOX_CONTAINS / FUNCTION_POLYGON_AREA / FUNCTION_DURATION_ARITH / FUNCTION_JSON_GET / FUNCTION_DATE_PART (all STATUS=TESTED) in `src/types/extended_functions.zig`.
+  - Adapter bridge CANARY (ASPECT=ADAPTER_BRIDGE STATUS=TESTED) in `tests/canary_extended_builtins.zig` exercising integration via `eval_extended.zig`.
+- REQ-GQL-083 ExtendedDecimalFormatting
+  - ASPECT=FORMATTER (IMPL) at top of `src/types/extended.zig` covering decimal parse/format logic.
+  - Round-trip formatter CANARY (STATUS=TESTED) in `tests/canary_extended_builtins.zig`.
+
+These additions were made to support experimental extended scalar and geometric/vector functions. They intentionally do not alter existing requirement counts in this static snapshot section; the next doc refresh must incorporate their rows from `status.csv` once regenerated.
+
 ---
 
 END OF FILE

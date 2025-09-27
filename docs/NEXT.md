@@ -8,89 +8,46 @@ Snapshot Date: 2025‑09‑26 (matches GAP_ANALYSIS.md). No source edits perform
 
 ### Extended Type System Implementation ✅
 
-| Field       | Detail |
-| ----------- | ------ |
-| Why         | Core types limited to primitives; no native support for network, geographic, vector, or specialized domain types |
-| What        | Implemented 12 new first-class types with 40+ built-in functions and 3 persisted index types |
-| Completed   | - IpAddr, Subnet, Mac with Patricia trie indexing<br>- LatLon, Geometry with R-tree spatial indexing<br>- VectorF32 with HNSW similarity indexing<br>- Hash, Currency, LanguageTag, Temperature, Pressure types<br>- Full encode/decode, constructors, predicates |
-| Tests       | - tools/canary_main.zig (19 invariants)<br>- tools/cpa_accept_main.zig (18 acceptance criteria)<br>- tests/test_type_extensions.zig (15 unit tests) |
-| ISO refs    | Data types (§4.3-4.16), Built-in functions (§7), Value expressions (§9) |
-| Impact      | Enables domain-specific queries: IP containment, spatial search, vector similarity, multi-currency, i18n |
+| Field     | Detail                                                                                                                                                                                                                                                            |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why       | Core types limited to primitives; no native support for network, geographic, vector, or specialized domain types                                                                                                                                                  |
+| What      | Implemented 12 new first-class types with 40+ built-in functions and 3 persisted index types                                                                                                                                                                      |
+| Completed | - IpAddr, Subnet, Mac with Patricia trie indexing<br>- LatLon, Geometry with R-tree spatial indexing<br>- VectorF32 with HNSW similarity indexing<br>- Hash, Currency, LanguageTag, Temperature, Pressure types<br>- Full encode/decode, constructors, predicates |
+| Tests     | - tools/canary_main.zig (19 invariants)<br>- tools/cpa_accept_main.zig (18 acceptance criteria)<br>- tests/test_type_extensions.zig (15 unit tests)                                                                                                               |
+| ISO refs  | Data types (§4.3-4.16), Built-in functions (§7), Value expressions (§9)                                                                                                                                                                                           |
+| Impact    | Enables domain-specific queries: IP containment, spatial search, vector similarity, multi-currency, i18n                                                                                                                                                          |
 
-## Slices (Backlog)
+## Recently Closed Slices (Evidence Landed)
 
-### 1. Federation Latency Aggregates (REQ-GQL-024 / LatencyAggregate\*)
+The following backlog items were executed and now have full CANARY evidence (tests/benches). They are retained here for historical traceability but require no further action.
 
-| Field       | Detail                                                                                                                                                                                                 |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Why         | Six IMPL aspects (Archive/GovernanceSummary/MultiRun/RobustStats/SchemaValidation/Streak) lack TESTED/BENCHED evidence; risk of silent drift in mismatch diagnostics.                                  |
-| What        | Add unit + integration tests generating synthetic federation mismatch events; implement variance envelope benchmark for aggregate streak & schema validation.                                          |
-| Acceptance  | Tests: TestCANARY_REQ_GQL_024_FederationLatencyAggregate{Archive,Summary,MultiRun,RobustStats,SchemaValidation,Streak}; Bench: BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope. |
-| ISO refs    | GQL ordering & diagnostics propagation (§16.16–16.19 for ordered emission relevance).                                                                                                                  |
-| Deps        | Existing federation mismatch benchmarks & protocol tests.                                                                                                                                              |
-| Scope       | ~500 LOC tests + 1 benchmark harness.                                                                                                                                                                  |
-| DRI         | federation-team                                                                                                                                                                                        |
-| Target Date | 2025-10-15                                                                                                                                                                                             |
+### Federation Latency Aggregates (REQ-GQL-024) — COMPLETED
 
-### 2. Migration Engine STUB Cleanup (REQ-GQL-087 / multiple STUB aspects)
+All six aspects now STATUS=TESTED with tests in `tests/test_federation_latency_aggregates.zig` and mirrored CANARY lines in `src/distributed/federation_latency_aggregate.zig`. Variance/Tail benches present (`benchmark_federation_latency_aggregate_variance.zig`).
 
-| Field | Detail |
-| Why | Four STUB aspects (CliParityStatusCommand, DownReversalSafety, DriftPolicyOutcomeStrict, ObservabilityMetrics, PlanDryRunIntegrity) block governance verify from claiming higher maturity. |
-| What | Implement CLI status parity test scaffolding; add safety invariants tests for down reversal; produce metrics export test; create dry-run integrity checksum test. |
-| Acceptance | Tests: TestCANARY*REQ_GQL_087*{CliParityStatusCommand,DownReversalSafety,DriftPolicyOutcomeStrict,ObservabilityMetrics,PlanDryRunIntegrity}. All move to TESTED. |
-| ISO refs | Conformance & diagnostics reliability mapping (§23). |
-| Deps | Existing migration ledger schema tests. |
-| Scope | 5 focused tests (~350 LOC). |
-| DRI | migration-team |
-| Target Date | 2025-10-10 |
+### Migration Engine STUB Cleanup (REQ-GQL-087) — COMPLETED
 
-### 3. Cost Model Enumeration Seed IMPL Reduction (REQ-GQL-075 / remaining IMPL entry)
+All five aspects promoted to STATUS=TESTED (see CANARY lines in `src/migration/mod.zig`). No remaining STUB entries.
 
-| Field | Detail |
-| Why | One IMPL aspect remains (AdaptiveEstimatorBias in cost_seed.zig) alongside TESTED/BENCHED peers; risk of uneven bias calibration across enumerations. |
-| What | Promote to TESTED via deterministic calibration scenario test comparing expected bias correction deltas vs reported factors. |
-| Acceptance | New test: TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity. |
-| ISO refs | Query optimization semantics (ISO GQL execution model). |
-| Deps | Existing bias persistence & dynamic alpha tests. |
-| Scope | Single test ~120 LOC. |
-| DRI | planner-team |
-| Target Date | 2025-10-05 |
+### Cost Model Enumeration Seed IMPL Reduction (REQ-GQL-075) — COMPLETED
 
-### 4. Parse Error Remediation (Benchmark STATUS Token)
+Adaptive estimator bias parity test implemented: `test_cost_model_adaptive_bias_parity.zig` with CANARY STATUS=TESTED. No residual IMPL gaps.
 
-| Field | Detail |
-| Why | Previously invalid STATUS=PARTIAL blocked scanner verify; all converted to IMPL/TESTED/BENCHED. |
-| What | Replace invalid token with allowed STATUS (likely BENCHED) post confirmation that benchmark produces performance metrics; re-run scanner expecting exit 0. |
-| Acceptance | Scanner: `./bin/canaryscan --root . --verify GAP_ANALYSIS.md --strict` returns exit 0. No additional functional tests needed beyond existing benchmark JSON emission check. |
-| ISO refs | N/A (governance tooling integrity, internal). |
-| Deps | Security team confirmation that benchmark scope matches BENCHED semantics. |
-| Scope | 1-line tag fix (separate PR). |
-| DRI | security-team |
-| Target Date | 2025-09-29 |
+### Parse Error Remediation (Benchmark STATUS Token) — COMPLETED
 
-### 5. Recursive Execution Parser STUB (REQ-GQL-079 / ParserRecognition STUB)
+Invalid STATUS token replaced; scanner runs in strict mode (parse errors=0). See `GAP_ANALYSIS.md` snapshot and current `status.csv`.
 
-| Field | Detail |
-| Why | Mixed TESTED + STUB entries for ParserRecognition create inconsistent maturity signal. |
-| What | Add unit test covering negative + cycle detection path ensuring parser gracefully rejects unsupported recursive constructs outside allowed bounds. |
-| Acceptance | Test: TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycleBound. STUB entry removed (auto-promoted to TESTED). |
-| ISO refs | Recursive CTE / pattern recognition (§14 execution of recursive queries). |
-| Deps | Existing cycle guard tests. |
-| Scope | ~150 LOC test. |
-| DRI | engine-team |
-| Target Date | 2025-10-03 |
+### Recursive Execution Parser STUB (REQ-GQL-079) — COMPLETED
 
-### 6. RLS/ABAC Hardening Follow-up (REQ-GQL-080)
+Negative cycle recognition tests present; no STUB entries remain for ParserRecognition.
 
-| Field | Detail |
-| Why | Current tests cover enforcement/policy cache/catalog; missing stress + variance bench to quantify overhead. |
-| What | Introduce benchmark measuring authorization filter latency variance across mixed label/property queries; add negative test for policy cache invalidation race. |
-| Acceptance | Bench: BenchmarkCANARY_REQ_GQL_080_RlsAbacEnforcementVarianceEnvelope. Test: TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace. |
-| ISO refs | Security & data access semantics (authorization aspects). |
-| Deps | Existing enforcement hook tests. |
-| Scope | 1 benchmark + 1 test (~220 LOC). |
-| DRI | security-team |
-| Target Date | 2025-10-12 |
+### RLS/ABAC Hardening Follow-up (REQ-GQL-080) — COMPLETED
+
+Variance + tail latency benches (`benchmark_rls_abac_variance.zig`) and policy cache invalidation race test (`tests/canary_rls_abac.zig`) landed with CANARY.
+
+## Remaining Backlog
+
+The backlog now begins at slice 7 (Monitoring Variance Consolidation) and onward; slices 1–6 moved above.
 
 ### 7. Monitoring Variance Consolidation (REQ-GQL-081)
 

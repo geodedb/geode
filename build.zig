@@ -87,6 +87,10 @@ pub fn build(b: *std.Build) void {
     lib_unit_tests.root_module.addOptions("build_options", build_opts);
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
+    // Extended type built-in functions tests (new module)
+    const ext_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/types/extended_functions.zig"), .target = target, .optimize = optimize }) });
+    const run_ext_builtins_tests = b.addRunArtifact(ext_builtins_tests);
+
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
     exe_unit_tests.root_module.addImport("geode", root_mod);
     exe_unit_tests.root_module.addOptions("build_options", build_opts);
@@ -101,7 +105,7 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
-    
+
     // GQL Conformance tests
     const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
     gql_conformance_tests.root_module.addImport("test_harness", b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize }));
@@ -166,10 +170,16 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_ext_builtins_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_custom_tests.step);
-    
+
+    // Extended built-ins CANARY adapter + decimal formatter tests
+    const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });
+    canary_extended_builtins_tests.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&canary_extended_builtins_tests.step);
+
     // Add canary test target
     const canary_exe = b.addExecutable(.{
         .name = "canary_main",
@@ -178,7 +188,7 @@ pub fn build(b: *std.Build) void {
     const run_canary = b.addRunArtifact(canary_exe);
     const canary_step = b.step("canary", "Run type system canary tests");
     canary_step.dependOn(&run_canary.step);
-    
+
     // Add acceptance test target
     const cpa_accept_exe = b.addExecutable(.{
         .name = "cpa_accept_main",
@@ -187,7 +197,7 @@ pub fn build(b: *std.Build) void {
     const run_cpa_accept = b.addRunArtifact(cpa_accept_exe);
     const cpa_accept_step = b.step("cpa_accept", "Run type system acceptance tests");
     cpa_accept_step.dependOn(&run_cpa_accept.step);
-    
+
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
     test_step.dependOn(&run_gql_conformance_tests.step);
 
@@ -345,6 +355,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&planner_plan_selection_tests.step);
     test_step.dependOn(&planner_prune_tests.step);
     test_step.dependOn(&planner_pipeline_selection_tests.step);
+
+    // Variance auto-calibration tests (cost model & pagination)
+    const cost_model_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_cost_model_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
+    cost_model_autocalib_tests.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&cost_model_autocalib_tests.step);
+    const pagination_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_pagination_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
+    pagination_autocalib_tests.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&pagination_autocalib_tests.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
@@ -357,8 +375,7 @@ pub fn build(b: *std.Build) void {
     geoded_exe.root_module.addImport("geode", root_mod);
     // GQL is accessed through geode module now
     // Planner cost model modules (enumeration seed, explain) with distinct aliases
-    const planner_cost_explain_mod = b.createModule(.{ .root_source_file = b.path("src/planner/cost_explain.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("planner_cost_explain", planner_cost_explain_mod);
+    // cost_explain is now exposed through geode root (lib.zig) to avoid duplicate module inclusion.
     const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("sentinel", sentinel_mod);
     geoded_exe.root_module.addOptions("build_options", build_opts);

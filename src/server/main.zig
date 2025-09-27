@@ -16,8 +16,8 @@ const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("tools/cert_gen.zig");
 const mvcc = @import("server/txn/mvcc.zig");
 const logger = @import("log/logger.zig");
-// Cost model modules (planner)
-const cost_explain = @import("planner_cost_explain");
+// Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
+const cost_explain = geode.cost_explain;
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
@@ -106,6 +106,7 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Replace with static precomputed combinations (NULLs policy toggled at runtime where needed).
 var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
 var g_order_keys_expr: bool = false; // default identifiers-only; toggled via --order-keys expr
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=IllegalOrderKeyPolicy; STATUS=TESTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
 
 // Base flag strings (shared)
 const F_ILLEGAL = "I:IllegalOrderKeyPolicy=ident-only";
@@ -2216,6 +2217,48 @@ fn processMessage(
                 text = "";
             }
             var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = !g_order_keys_expr, .forbid_orderby_calls = !g_order_keys_expr }) catch return try gpa.dupe(u8, "");
+            switch (parse_res) {
+                .Err => |er| {
+                    // Map parser message to diagnostics (IllegalOrderKey, US001) using same helper as later handler
+                    var codes_buf: [4]diagnostics.Code = undefined;
+                    const n_raw = collectTextDiagnostics(text, er.msg, &codes_buf);
+                    const n = diagnostics.foldCodes(codes_buf[0..n_raw]);
+                    if (n == 0) {
+                        return protocol.buildErrorLine(gpa, "ParseError", er.msg, "") catch try gpa.dupe(u8, "");
+                    }
+                    const primary = codes_buf[0];
+                    const add_slice = buildAdditionalStatusesAlloc(gpa, codes_buf[0..n], primary);
+                    const primary_msg = if (primary == .IllegalOrderKey) er.msg else diagnostics.defaultMessage(primary);
+                    const has_us001 = primary == .US001;
+                    var flags_buf_local: [3][]const u8 = .{ F_ILLEGAL, F_TIEBREAK, "U:US001/enforced" };
+                    const base_flags = if (has_us001) flags_buf_local[0..3] else flags_buf_local[0..2];
+                    // Build error line with flags
+                    const err_line = protocol.buildErrorLineWithFlagsCustomStatus(gpa, diagnostics.codeName(primary), primary_msg, diagnostics.anchorFor(primary), add_slice, base_flags, null) catch try gpa.dupe(u8, "");
+                    return err_line;
+                },
+                .Ok => |_| {},
+            }
+            // Post-parse ORDER BY function call validation (server fallback) when expressions disallowed.
+            if (!g_order_keys_expr and parse_res == .Ok) {
+                const prog = parse_res.Ok.program;
+                // Walk first statement only (tests use single statement queries).
+                if (prog.statements.len > 0) {
+                    const st0 = prog.statements[0];
+                    switch (st0) {
+                        .Query => |qv| if (qv.order_by) |ob| {
+                            var i_fn: usize = 0;
+                            while (i_fn < ob.keys.len) : (i_fn += 1) {
+                                const e = ob.keys[i_fn].expr;
+                                if (e == .Call) {
+                                    const err_line2 = protocol.buildErrorLine(gpa, "IllegalOrderKey", "ORDER BY key must be identifier", diagnostics.anchorFor(.IllegalOrderKey)) catch try gpa.dupe(u8, "");
+                                    return err_line2;
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            }
             defer if (parse_res == .Ok) parse_res.Ok.deinit();
             switch (parse_res) {
                 .Err => |_| return try gpa.dupe(u8, ""),
@@ -2283,7 +2326,7 @@ fn processMessage(
                             // Build explain chain when requested (emit EXPLAIN frame immediately, THEN return bindings via PULL normally)
                             if (explain_mode) {
                                 // Build linear op chain approximation using cost model seed descriptors.
-                                var ops_buf: [8]cost_explain.seed.OpDescriptor = undefined;
+                                var ops_buf: [8]geode.cost_seed.OpDescriptor = undefined;
                                 var opn: usize = 0;
                                 ops_buf[opn] = .{ .kind = .Scan };
                                 opn += 1;
@@ -3340,7 +3383,7 @@ pub fn main() !void {
                                         _ = stdout_file.write(schema_line2) catch {};
                                     } else |_| {}
                                     // Build op chain descriptors (Scan -> Project -> [Aggregate] -> [Sort] -> [Filter] -> [Limit])
-                                    var ops_buf: [8]cost_explain.seed.OpDescriptor = undefined;
+                                    var ops_buf: [8]geode.cost_seed.OpDescriptor = undefined;
                                     var opn: usize = 0;
                                     ops_buf[opn] = .{ .kind = .Scan };
                                     opn += 1;

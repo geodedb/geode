@@ -25,16 +25,12 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
     _ = options;
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
-    
+
     var lexer = Lexer{ .src = source };
-    var parser = Parser{ 
-        .lx = &lexer, 
-        .arena = &arena, 
-        .cur = lexer.next() 
-    };
-    
+    var parser = Parser{ .lx = &lexer, .arena = &arena, .cur = lexer.next() };
+
     const program = try parser.parseProgram();
-    
+
     return ParseResult{
         .program = program,
         .arena = arena,
@@ -48,6 +44,13 @@ pub const conformance = @import("conformance.zig");
 // Re-export selected runtime helpers so binaries can import via the geode package
 pub const exec = @import("exec.zig");
 pub const planner = @import("planner.zig");
+// Expose cost model seed & variance auto-calibration modules for tests (avoid relative imports)
+pub const cost_seed = @import("planner/cost_seed.zig");
+pub const cost_model_calibration = @import("planner/calibration.zig");
+// Re-export cost explain JSON builders (distinct from calibration reporting)
+pub const cost_explain = @import("planner/cost_explain.zig");
+// Expose pagination auto-calibration helpers
+pub const pagination_calibration = @import("pagination/calibration.zig");
 // Expose structural key utilities for benchmarks (PathCache related)
 pub const planner_structural_key = @import("planner/structural_key.zig");
 // Expose planner pipeline orchestration (synthetic phases + selection integration)
@@ -56,6 +59,9 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Re-export extended evaluation registry and extended types for CANARY tests
+pub const eval_ext = @import("eval_extended.zig");
+pub const ext_types = @import("types/extended.zig");
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
@@ -149,8 +155,13 @@ pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, para
 }
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
-    return parseGqlOptions(src, allocator, .{});
+    // Enforce ident-only ORDER BY keys and forbid function calls unless explicitly relaxed
+    const allow_expr = std.posix.getenv("GEODE_ORDER_KEYS_EXPR") != null;
+    const opts: ParseOptions = if (allow_expr) .{} else .{ .ident_order_only = true, .forbid_orderby_calls = true };
+    return parseGqlOptions(src, allocator, opts);
 }
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=IllegalOrderKeyPolicy; STATUS=TESTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=OrderKeyExprOverrideEnv; STATUS=DOCUMENTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
 
 pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseResult {
     var arena = std.heap.ArenaAllocator.init(allocator);

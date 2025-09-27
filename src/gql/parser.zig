@@ -252,7 +252,7 @@ pub const Parser = struct {
                     // Parse SESSION SET PROPERTY GRAPH <name>
                     var property: []const u8 = "";
                     var value: []const u8 = "";
-                    
+
                     // Check for PROPERTY keyword
                     if (self.cur.kind == .PROPERTY) {
                         self.advance();
@@ -285,7 +285,7 @@ pub const Parser = struct {
                             self.advance();
                         }
                     }
-                    
+
                     break :blk .{ .SessionSet = .{ .property = property, .value = value } };
                 }
                 if (self.cur.kind == .RESET) {
@@ -423,6 +423,13 @@ pub const Parser = struct {
             var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             // first expression key - allow expressions now
             const expr1 = try self.parseOrExpr();
+            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
+            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
+            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
+                // Message string matched in diagnostics mapping path (server expects substring)
+                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
+                return error.UnexpectedToken;
+            }
             // Check if it's an ordinal
             if (expr1 == .Int and self.isValidOrdinal(expr1.Int, items.items.len)) {
                 self.has_ordinal_sort_key = true;
@@ -450,6 +457,10 @@ pub const Parser = struct {
             while (self.cur.kind == .comma) {
                 self.advance();
                 const exprk = try self.parseOrExpr();
+                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
+                    self.last_error = "function calls in ORDER BY are disabled";
+                    return error.UnexpectedToken;
+                }
                 // Check if it's an ordinal
                 if (exprk == .Int and self.isValidOrdinal(exprk.Int, items.items.len)) {
                     self.has_ordinal_sort_key = true;
@@ -480,6 +491,25 @@ pub const Parser = struct {
 
         var limit: ?usize = null;
         var offset: ?usize = null;
+
+        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
+        if (ord) |ob| {
+            if (self.ident_order_only) {
+                var i_chk: usize = 0;
+                while (i_chk < ob.keys.len) : (i_chk += 1) {
+                    const ke = ob.keys[i_chk].expr;
+                    if (ke != .Ident) {
+                        if (self.containsCall(ke)) {
+                            self.last_error = "function calls in ORDER BY are disabled";
+                        } else {
+                            self.last_error = "ORDER BY key must be identifier";
+                        }
+                        return error.UnexpectedToken;
+                    }
+                }
+            }
+        }
+
         if (self.cur.kind == .LIMIT) {
             self.advance();
             const n = try self.expect(.integer_lit);
@@ -1145,7 +1175,7 @@ pub const Parser = struct {
         };
     }
 
-    fn containsCall(self: *Parser, e: ast.Expr) bool {
+    pub fn containsCall(self: *Parser, e: ast.Expr) bool {
         return switch (e) {
             .Call => true,
             .Member => |m| self.containsCall(m.target.*),
@@ -1161,6 +1191,27 @@ pub const Parser = struct {
                 break :blk2 false;
             },
             .IsNull => |z| self.containsCall(z.target.*),
+            else => false,
+        };
+    }
+
+    // Static variant for post-parse validation (no Parser instance state needed)
+    pub fn containsCallStatic(e: ast.Expr) bool {
+        return switch (e) {
+            .Call => true,
+            .Member => |m| containsCallStatic(m.target.*),
+            .Unary => |u| containsCallStatic(u.expr.*),
+            .Binary => |b| containsCallStatic(b.left.*) or containsCallStatic(b.right.*),
+            .List => |items| blk: {
+                for (items) |it| if (containsCallStatic(it.*)) break :blk true;
+                break :blk false;
+            },
+            .In => |x| blk2: {
+                if (containsCallStatic(x.value.*)) break :blk2 true;
+                for (x.set) |it| if (containsCallStatic(it.*)) break :blk2 true;
+                break :blk2 false;
+            },
+            .IsNull => |z| containsCallStatic(z.target.*),
             else => false,
         };
     }

@@ -104,7 +104,7 @@ pub const VectorF32 = struct {
 pub fn encodeValue(ally: std.mem.Allocator, v: Value) ![]u8 {
     var buf = std.ArrayList(u8).init(ally);
     defer buf.deinit();
-    
+
     switch (v) {
         .Null => {
             try buf.append(0x00);
@@ -317,8 +317,8 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const n = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             const nn: usize = @intCast(n);
             if (bytes.len < 5 + nn) return error.Underflow;
-            const tag = try ally.dupe(u8, bytes[5 .. 5 + nn]);
-            return .{ .LanguageTag = .{ .tag = tag } };
+            const lang_tag_dup = try ally.dupe(u8, bytes[5 .. 5 + nn]);
+            return .{ .LanguageTag = .{ .tag = lang_tag_dup } };
         },
         0x0C => { // TAG_LatLon
             if (bytes.len < 1 + 16) return error.Underflow;
@@ -333,12 +333,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const alt_bits = std.mem.readInt(u64, bytes[17..25][0..8], .little);
             const ref_code = bytes[25];
             const ref = std.meta.intToEnum(AltRef, ref_code) catch return error.InvalidAltRef;
-            return .{ .LatLonAlt = .{ 
-                .lat = @bitCast(lat_bits), 
-                .lon = @bitCast(lon_bits), 
-                .alt = @bitCast(alt_bits),
-                .ref = ref
-            } };
+            return .{ .LatLonAlt = .{ .lat = @bitCast(lat_bits), .lon = @bitCast(lon_bits), .alt = @bitCast(alt_bits), .ref = ref } };
         },
         0x0E => { // TAG_Geom
             if (bytes.len < 1 + 4) return error.Underflow;
@@ -370,7 +365,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             var data = try ally.alloc(f32, dim);
             var i: usize = 0;
             while (i < dim) : (i += 1) {
-                const bits = std.mem.readInt(u32, bytes[3 + i*4 .. 3 + i*4 + 4][0..4], .little);
+                const bits = std.mem.readInt(u32, bytes[3 + i * 4 .. 3 + i * 4 + 4][0..4], .little);
                 data[i] = @bitCast(bits);
             }
             return .{ .VectorF32 = .{ .dim = dim, .data = data } };
