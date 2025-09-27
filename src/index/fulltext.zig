@@ -180,11 +180,13 @@ pub const FullTextIndex = struct {
     }
 
     fn normalize(self: *FullTextIndex, text: []const u8) ![]u8 {
-        var normalized = try self.allocator.alloc(u8, text.len);
-        for (text, 0..) |c, i| {
-            normalized[i] = std.ascii.toLower(c);
-        }
-        return normalized;
+        // Unicode-aware normalization: NFC then case fold (minimal subset implementation)
+        // CANARY: REQ=REQ-GQL-UNICODE-007; FEATURE="UnicodeFtsIntegration"; ASPECT=IndexerNormalize; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize; OWNER=unicode; UPDATED=2025-09-27
+        const unicode = @import("../unicode/geode_unicode.zig");
+        const nfc = try unicode.nfcNormalize(self.allocator, text);
+        defer self.allocator.free(nfc);
+        const folded = try unicode.foldCase(self.allocator, nfc);
+        return folded; // caller owns
     }
 
     fn updateIdfScores(self: *FullTextIndex) !void {

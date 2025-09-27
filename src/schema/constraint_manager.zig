@@ -177,10 +177,17 @@ pub const ConstraintManager = struct {
             props[i] = try self.allocator.dupe(u8, prop);
         }
         
+        // Normalize label_or_type to NFC for deterministic uniqueness key namespace
+    // CANARY: REQ=REQ-GQL-UNICODE-011; FEATURE="UnicodeUniqueKeys"; ASPECT=NormalizeLabel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize; OWNER=unicode; UPDATED=2025-09-27
+        const unicode = @import("../unicode/geode_unicode.zig");
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+        const alloc_tmp = gpa.allocator();
+        const norm_label = unicode.nfcNormalize(alloc_tmp, label_or_type) catch label_or_type;
+        defer if (norm_label.ptr != label_or_type.ptr) alloc_tmp.free(norm_label);
         const constraint = UniqueConstraint{
             .name = try self.allocator.dupe(u8, name),
             .entity_type = entity_type,
-            .label_or_type = try self.allocator.dupe(u8, label_or_type),
+            .label_or_type = try self.allocator.dupe(u8, norm_label),
             .properties = props,
             .index_name = null,
         };

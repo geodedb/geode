@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	quic "github.com/quic-go/quic-go"
 )
@@ -134,6 +136,28 @@ type conn struct {
 	mu     sync.Mutex // serialize requests; server supports only one active result
 	closed bool
 	activeRows *rows // only one at a time
+}
+
+// Unicode helpers (client-side convenience)
+// CANARY: REQ=REQ-GQL-UNICODE-012; FEATURE="UTF-8 -> UTF-16 Conversion"; ASPECT=ClientWrapperGo; STATUS=IMPL; TEST=TestCANARY_ClientGo_Utf8Utf16RoundTrip; OWNER=clients; UPDATED=2025-09-27
+func Utf8ToUtf16(s string) []uint16 { return utf16.Encode([]rune(s)) }
+// CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UTF-16 -> UTF-8 Conversion"; ASPECT=ClientWrapperGo; STATUS=IMPL; TEST=TestCANARY_ClientGo_Utf8Utf16RoundTrip; OWNER=clients; UPDATED=2025-09-27
+func Utf16ToUtf8(u []uint16) string { return string(utf16.Decode(u)) }
+// CANARY: REQ=REQ-GQL-UNICODE-014; FEATURE="WTF-8 Lossy Decode"; ASPECT=ClientWrapperGo; STATUS=IMPL; TEST=TestCANARY_ClientGo_Wtf8Lossy; OWNER=clients; UPDATED=2025-09-27
+func Wtf8Lossy(b []byte) string { // treat invalid sequences with replacement
+	var out []rune
+	i := 0
+	for i < len(b) {
+		r, size := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && size == 1 { // invalid
+			out = append(out, '\uFFFD') // replacement character
+			i++
+			continue
+		}
+		out = append(out, r)
+		i += size
+	}
+	return string(out)
 }
 
 func newConn(cfg *dsnConfig) (*conn, error) {

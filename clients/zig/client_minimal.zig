@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode = @import("geode"); // access unicode utilities
 
 // Minimal client for cross-compilation testing
 pub const Config = struct {
@@ -42,6 +43,20 @@ pub const Client = struct {
                 },
             },
         };
+    }
+
+    // Unicode convenience wrappers delegate to core geode unicode module
+    // CANARY: REQ=REQ-GQL-UNICODE-012; FEATURE="UTF-8 -> UTF-16 Conversion"; ASPECT=ClientWrapperZig; STATUS=TESTED; TEST=TestCANARY_ClientUnicode_Utf8ToUtf16; OWNER=clients; UPDATED=2025-09-27
+    pub fn utf8ToUtf16Alloc(self: *Self, src: []const u8) ![]u16 {
+        return try geode.unicode.utf8ToUtf16Alloc(self.allocator, src);
+    }
+    // CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UTF-16 -> UTF-8 Conversion"; ASPECT=ClientWrapperZig; STATUS=TESTED; TEST=TestCANARY_ClientUnicode_Utf16ToUtf8; OWNER=clients; UPDATED=2025-09-27
+    pub fn utf16ToUtf8Alloc(self: *Self, src: []const u16) ![]u8 {
+        return try geode.unicode.utf16ToUtf8Alloc(self.allocator, src);
+    }
+    // CANARY: REQ=REQ-GQL-UNICODE-014; FEATURE="WTF-8 Lossy Decode"; ASPECT=ClientWrapperZig; STATUS=TESTED; TEST=TestCANARY_ClientUnicode_Wtf8Lossy; OWNER=clients; UPDATED=2025-09-27
+    pub fn wtf8LossyToUtf8Alloc(self: *Self, src: []const u8) ![]u8 {
+        return try geode.unicode.wtf8LossyToUtf8Alloc(self.allocator, src);
     }
 };
 

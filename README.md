@@ -178,15 +178,18 @@ geode backup --dest s3://my-bucket/backups --mode full
 ### New First-Class Types (v0.18.0)
 
 #### Network Types
+
 - **IpAddr**: IPv4/IPv6 addresses with RFC 5952 canonicalization
 - **Subnet**: CIDR notation with prefix matching via Patricia trie index
 - **Mac**: EUI-48 MAC addresses with vendor OUI extraction
 
-#### Geographic Types  
+#### Geographic Types
+
 - **LatLon/LatLonAlt**: Coordinate pairs with haversine distance
 - **Geometry**: WKT/WKB storage, GeoJSON output, R-tree spatial indexing
 
 #### Specialized Types
+
 - **Hash**: SHA3-256/512, BLAKE3 with constant-time comparison
 - **Currency**: ISO 4217 codes with minor units
 - **LanguageTag**: BCP-47 canonicalization and matching
@@ -200,7 +203,7 @@ geode backup --dest s3://my-bucket/backups --mode full
 ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))  -- true
 ip_is_private(IpAddr("192.168.1.1"))                   -- true
 
--- Geographic calculations  
+-- Geographic calculations
 distance_haversine(LatLon(0,0), LatLon(0,1))          -- 111195 meters
 st_intersects(polygon1, polygon2)                      -- spatial predicate
 
@@ -299,6 +302,17 @@ geodec "EXPLAIN RECURSIVE MATCH (n) RETURN n LIMIT 5"   # experimental recursive
 - [REQUIREMENTS.md](docs/REQUIREMENTS.md) - ISO GQL compliance requirements
 
 ## Known Limitations
+
+## Unicode Support
+
+See `docs/UNICODE.md` for detailed coverage and governance. Current capabilities:
+
+- Minimal NFC subset + selective case folding (REQ-GQL-UNICODE-004/005)
+- FTS analyzer + eval + ORDER BY + uniqueness NFC canonicalization (REQ-GQL-UNICODE-008/009/010/011)
+- UTF-8 ⇄ UTF-16 conversion via std.unicode (REQ-GQL-UNICODE-012/013)
+- Lossy WTF-8 → UTF-8 decoding (REQ-GQL-UNICODE-014)
+
+Normalization breadth (full combining classes/composition) and grapheme segmentation intentionally deferred; tracked via future REQ IDs when implemented.
 
 ### Federation
 

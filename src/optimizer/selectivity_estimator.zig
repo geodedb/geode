@@ -1,9 +1,9 @@
 const std = @import("std");
 
 // Simple frequency sampler + adaptive feedback estimator.
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=FrequencySampler; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_084_FrequencySampler; OWNER=optimizer; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorApi; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_084_EstimatorApi; OWNER=optimizer; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=AdaptiveFeedbackHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook; OWNER=optimizer; UPDATED=2025-09-27
 
 pub const Sample = struct { hash: u64, count: u64 };
 
@@ -38,7 +38,7 @@ pub const FrequencySampler = struct {
             try self.samples.append(.{ .hash = h, .count = 1 });
         } else {
             // Reservoir-style eviction: replace a random slot with probability
-            const idx = @intCast(usize, h % @as(u64, @intCast(self.max_samples)));
+            const idx: usize = @intCast(h % @as(u64, self.max_samples));
             self.samples.items[idx] = .{ .hash = h, .count = 1 };
         }
     }

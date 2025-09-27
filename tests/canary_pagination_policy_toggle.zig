@@ -14,3 +14,18 @@ test "TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle" {
     // Policy override path would bypass adding US001; simulate by just checking primary unaffected
     try std.testing.expect(primary == .IllegalOrderKey);
 }
+
+// Additional edge test for diagnostics precedence folding breadth
+test "TestCANARY_REQ_GQL_010_DiagnosticsFoldExtended" {
+    var arr: [7]diagnostics.Code = .{ .StoragePageChecksum, .ExecutionGuardTrip, .TypeMismatchDivZero, .GroupByIllegal, .IllegalOrderKey, .US001, .TypeMismatch };
+    const n = diagnostics.foldCodes(arr[0..]);
+    try std.testing.expect(n == 7);
+    // Expect strict ordering by precedence ranks (US001 first, checksum near end)
+    try std.testing.expect(arr[0] == .US001);
+    try std.testing.expect(arr[1] == .IllegalOrderKey);
+    try std.testing.expect(arr[2] == .GroupByIllegal);
+    try std.testing.expect(arr[3] == .TypeMismatch);
+    try std.testing.expect(arr[4] == .TypeMismatchDivZero);
+    try std.testing.expect(arr[5] == .ExecutionGuardTrip);
+    try std.testing.expect(arr[6] == .StoragePageChecksum);
+}

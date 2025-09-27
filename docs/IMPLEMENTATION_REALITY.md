@@ -144,29 +144,6 @@ LIMIT 100
 - **Parallel Costing**: Setup costs, degree of parallelism optimization
 - **EXPLAIN**: Detailed JSON with cost breakdown, confidence scores, factor details
 
-### (Replaced) Legacy Security Section
-
-Superseded by expanded Security section above. Previously described "basic auth only" is obsolete: encryption, MFA path, rotation persistence, and audit extensions are integrated. Remaining gaps are external KMS, published perf validation (<5% TDE overhead), full MFA policy matrix, and step-up sensitivity modeling.
-
-## Not Working Yet
-
-### (moved) Multi-threading now Partial (see above)
-
-- **Queries**: Work across shards
-- **Mutations**: Single shard only
-- **Transactions**: No cross-shard ACID
-
-### (moved) Advanced FTS now Partial (see above)
-
-- **Working**: Simple term search
-- **Missing**: Phrase queries, highlighting
-- **Missing**: Language analyzers
-- **Planned**: v0.19
-
-### (Removed) Obsolete Multi-threading Section
-
-Single-thread-only statement removed; prototype parallelism now partially implemented (see Multi-threading section above).
-
 ## Performance Reality
 
 ### Actual Benchmarks (Single Node)

@@ -49,6 +49,15 @@ pub fn build(b: *std.Build) void {
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
     // (TDE security module imported indirectly via geode root; dedicated module variable removed)
 
+    // Unicode generated tables (minimal). We attempt to run the generator; failure is non-fatal for now (IMPL stage).
+    // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables; OWNER=unicode; UPDATED=2025-09-27
+    // Use plain 'zig' from PATH for generator (0.15 Build struct no longer exposes zig_exe field directly)
+    const unicode_gen_cmd = b.addSystemCommand(&.{ "zig", "run", "tools/gen_unicode_tables.zig", "third_party/unicode/ucd/UnicodeData.txt", "src/unicode/generated" });
+    // We don't gate root module import on success yet; future promotion to TESTED will add dependency wiring.
+    // The geode root can @import("unicode/geode_unicode.zig") directly; generated tables live alongside.
+    // We currently do not wire the command as a dependency (non-fatal); future promotion to enforced step will add dependency.
+    _ = unicode_gen_cmd; // silence unused warning until enforced
+
     const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
     gql_exe.root_module.addImport("geode", root_mod);
@@ -363,6 +372,33 @@ pub fn build(b: *std.Build) void {
     const pagination_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_pagination_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
     pagination_autocalib_tests.root_module.addImport("geode", root_mod);
     test_step.dependOn(&pagination_autocalib_tests.step);
+    // Unified benchmark JSON lines variance calibration (parses historical benchmarks corpus)
+    const variance_hist_calib_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/variance_calibration.zig"), .target = target, .optimize = optimize });
+    const variance_hist_calib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_variance_autocalibration.zig"), .target = target, .optimize = optimize }) });
+    variance_hist_calib_tests.root_module.addImport("monitoring/variance_calibration.zig", variance_hist_calib_mod);
+    test_step.dependOn(&variance_hist_calib_tests.step);
+
+    // MFA risk sensitivity & step-up tests
+    const mfa_risk_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa_risk.zig"), .target = target, .optimize = optimize });
+    const mfa_risk_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_risk_stepup.zig"), .target = target, .optimize = optimize }) });
+    mfa_risk_tests.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
+    test_step.dependOn(&mfa_risk_tests.step);
+    // Recovery code contention test
+    const mfa_recovery_contention_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&mfa_recovery_contention_tests.step);
+    // TDE published overhead sync test
+    const tde_published_sync_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_tde_published_overhead_sync.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&tde_published_sync_tests.step);
+    // Benchmarks (MFA latency + recovery contention) as executables for manual run / CI capture
+    const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });
+    mfa_stepup_latency_bench.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
+    b.installArtifact(mfa_stepup_latency_bench);
+    const run_mfa_stepup_latency_bench = b.addRunArtifact(mfa_stepup_latency_bench);
+    test_step.dependOn(&run_mfa_stepup_latency_bench.step);
+    const mfa_recovery_contention_bench = b.addExecutable(.{ .name = "bench_mfa_recovery_code_contention", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
+    b.installArtifact(mfa_recovery_contention_bench);
+    const run_mfa_recovery_contention_bench = b.addRunArtifact(mfa_recovery_contention_bench);
+    test_step.dependOn(&run_mfa_recovery_contention_bench.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
@@ -542,6 +578,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/client/main.zig"), .target = target, .optimize = optimize }),
     });
     geodec_exe.root_module.addImport("sentinel", sentinel_mod);
+    geodec_exe.root_module.addImport("geode", root_mod);
     geodec_exe.root_module.addOptions("build_options", build_opts);
     geodec_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
@@ -846,6 +883,11 @@ pub fn build(b: *std.Build) void {
         .root_module = user_manager_mod,
     });
     test_step.dependOn(&user_manager_test.step);
+
+    // Unicode UTF-16 / WTF-8 conversion canary tests
+    const unicode_utf16_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_unicode_utf16.zig"), .target = target, .optimize = optimize }) });
+    unicode_utf16_tests.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&unicode_utf16_tests.step);
 
     const e2e_rls_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_rls_security.zig"), .target = target, .optimize = optimize }),

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-27T03:33:10.262485859Z",
+  "generated_at": "2025-09-27T12:20:31.351545165Z",
   "requirements": [
     {
       "id": "REQ-GQL-001",
@@ -44,6 +44,21 @@
     {
       "id": "REQ-GQL-004",
       "features": [
+        {
+          "feature": "Pagination",
+          "aspect": "PaginationAutoCalibration",
+          "status": "TESTED",
+          "files": [
+            "src/pagination/calibration.zig",
+            "tests/canary_pagination_variance_autocalib.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_004_PaginationAutoCalibratePageSize"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-26"
+        },
         {
           "feature": "Pagination",
           "aspect": "PaginationExecutionStreaming",
@@ -117,6 +132,35 @@
         },
         {
           "feature": "Pagination Legality (US001)",
+          "aspect": "IllegalOrderKeyPolicy",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig",
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "TestGQL_IllegalOrderKey"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "Pagination Legality (US001)",
+          "aspect": "OrderKeyExprOverrideEnv",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig"
+          ],
+          "tests": [
+            "TestGQL_IllegalOrderKey"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "Pagination Legality (US001)",
           "aspect": "Planner",
           "status": "TESTED",
           "files": [
@@ -170,7 +214,7 @@
           ],
           "benches": [],
           "owner": "planner",
-          "updated": "2025-09-23"
+          "updated": "2025-09-26"
         },
         {
           "feature": "PaginationExecutionStreaming",
@@ -184,7 +228,33 @@
           ],
           "benches": [],
           "owner": "planner",
-          "updated": "2025-09-26"
+          "updated": "2025-09-23"
+        },
+        {
+          "feature": "PaginationVarianceAutoCalibration",
+          "aspect": "AutoCalibrationLogic",
+          "status": "TESTED",
+          "files": [
+            "src/monitoring/variance_calibration.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_004_PaginationVarianceAutoCalibration"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "PaginationVarianceAutoCalibration",
+          "aspect": "Test",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_variance_autocalibration.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-27"
         }
       ]
     },
@@ -396,14 +466,15 @@
             "src/canary.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_010_DiagnosticsFold"
+            "TestCANARY_REQ_GQL_010_DiagnosticsFold",
+            "TestCANARY_REQ_GQL_010_DiagnosticsFoldExtended"
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFold",
             "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge"
           ],
           "owner": "engine",
-          "updated": "2025-09-20"
+          "updated": "2025-09-27"
         },
         {
           "feature": "Diagnostics Precedence & Folding",
@@ -413,11 +484,12 @@
             "src/diagnostics.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_010_DiagnosticsFold"
+            "TestCANARY_REQ_GQL_010_DiagnosticsFold",
+            "TestCANARY_REQ_GQL_010_DiagnosticsFoldExtended"
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-20"
+          "updated": "2025-09-27"
         },
         {
           "feature": "Freshness Guard",
@@ -3420,6 +3492,22 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
+            "tests/canary_txn_phantom_anomaly.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomDetection"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "PredicateRangeDetection",
+          "status": "BENCHED",
+          "files": [
             "src/txn/manager.zig"
           ],
           "tests": [
@@ -3433,19 +3521,20 @@
         },
         {
           "feature": "MVCC Phantom Prevention",
-          "aspect": "PredicateRangeDetection",
+          "aspect": "RangeTracker",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_phantom_anomaly.zig"
+            "src/txn/manager.zig",
+            "src/txn/range_tracker.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomDetection"
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
           ],
           "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope"
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
           "owner": "txn",
-          "updated": "2025-09-21"
+          "updated": "2025-09-26"
         },
         {
           "feature": "MVCC Phantom Prevention",
@@ -3474,23 +3563,6 @@
           ],
           "owner": "txn",
           "updated": "2025-09-22"
-        },
-        {
-          "feature": "MVCC Phantom Prevention",
-          "aspect": "RangeTracker",
-          "status": "BENCHED",
-          "files": [
-            "src/txn/manager.zig",
-            "src/txn/range_tracker.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -3629,22 +3701,6 @@
           "aspect": "PlanCostModelFactors",
           "status": "BENCHED",
           "files": [
-            "tests/canary_planner_cost_model.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanCostModelFactors",
-          "status": "BENCHED",
-          "files": [
             "src/planner/cost_model.zig"
           ],
           "tests": [
@@ -3655,6 +3711,22 @@
           ],
           "owner": "planner",
           "updated": "2025-09-25"
+        },
+        {
+          "feature": "Cost Based Optimizer",
+          "aspect": "PlanCostModelFactors",
+          "status": "BENCHED",
+          "files": [
+            "tests/canary_planner_cost_model.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-22"
         },
         {
           "feature": "Cost Based Optimizer",
@@ -4171,22 +4243,6 @@
           "aspect": "WriteSkewDetection",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_write_skew.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_025_WriteSkewDetection"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Transactions/MVCC",
-          "aspect": "WriteSkewDetection",
-          "status": "BENCHED",
-          "files": [
             "src/txn/manager.zig"
           ],
           "tests": [
@@ -4197,6 +4253,22 @@
           ],
           "owner": "txn",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "Transactions/MVCC",
+          "aspect": "WriteSkewDetection",
+          "status": "BENCHED",
+          "files": [
+            "tests/canary_txn_write_skew.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_025_WriteSkewDetection"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-21"
         }
       ]
     },
@@ -4211,13 +4283,14 @@
             "src/conformance.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_026_FlaggerCompleteness"
+            "TestCANARY_REQ_GQL_026_FlaggerCompleteness",
+            "TestCANARY_REQ_GQL_026_FlaggerNegativeMissing"
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope"
           ],
           "owner": "conformance",
-          "updated": "2025-09-21"
+          "updated": "2025-09-27"
         },
         {
           "feature": "Page Management",
@@ -4318,20 +4391,6 @@
         {
           "feature": "WAL Compaction",
           "aspect": "CorruptPageRecoveryLatency",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_recovery_corrupt_latency.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "WAL Compaction",
-          "aspect": "CorruptPageRecoveryLatency",
           "status": "BENCHED",
           "files": [
             "tests/canary_recovery_corrupt_latency.zig"
@@ -4340,6 +4399,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
           ],
+          "owner": "storage",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "WAL Compaction",
+          "aspect": "CorruptPageRecoveryLatency",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_recovery_corrupt_latency.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
+          ],
+          "benches": [],
           "owner": "storage",
           "updated": "2025-09-22"
         },
@@ -4359,7 +4432,7 @@
             "BenchmarkCANARY_REQ_GQL_028_WalFragmentation"
           ],
           "owner": "storage",
-          "updated": "2025-09-20"
+          "updated": "2025-09-27"
         },
         {
           "feature": "WAL Compaction",
@@ -6050,6 +6123,20 @@
         {
           "feature": "Traversals",
           "aspect": "BFS",
+          "status": "TESTED",
+          "files": [
+            "src/graph/traversal_bfs.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_062_BFS"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Traversals",
+          "aspect": "BFS",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_bfs_traversal.zig"
@@ -6062,20 +6149,6 @@
           ],
           "owner": "graph",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
         },
         {
           "feature": "Traversals",
@@ -6215,20 +6288,6 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -6239,6 +6298,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -6798,7 +6871,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
+            "src/graph/containers/count_min_sketch.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -6814,7 +6887,7 @@
           "aspect": "CountMinSketch",
           "status": "BENCHED",
           "files": [
-            "src/graph/containers/count_min_sketch.zig"
+            "tests/benchmark_count_min_sketch_container.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_069_CountMinSketch"
@@ -7215,20 +7288,6 @@
           "aspect": "QUICListener",
           "status": "TESTED",
           "files": [
-            "tests/canary_quic.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICListener"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICListener",
-          "status": "TESTED",
-          "files": [
             "src/transport/quic.zig"
           ],
           "tests": [
@@ -7237,6 +7296,20 @@
           "benches": [],
           "owner": "wire",
           "updated": "2025-09-25"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICListener",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICListener"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-09-22"
         },
         {
           "feature": "Network Transport",
@@ -7447,20 +7520,6 @@
           "aspect": "AdaptiveEstimatorBias",
           "status": "TESTED",
           "files": [
-            "test_cost_model_adaptive_bias.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
-          "status": "TESTED",
-          "files": [
             "src/planner/cost_seed.zig",
             "test_cost_model_adaptive_bias_parity.zig"
           ],
@@ -7470,6 +7529,20 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "TESTED",
+          "files": [
+            "test_cost_model_adaptive_bias.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
         },
         {
           "feature": "Cost Model Enumeration Seed",
@@ -7558,6 +7631,21 @@
         },
         {
           "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorVarianceAutoCalibration",
+          "status": "TESTED",
+          "files": [
+            "src/planner/calibration.zig",
+            "tests/canary_cost_model_variance_autocalib.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AutoCalibrationAdjustsAlpha"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
           "aspect": "CalibrationEntries",
           "status": "TESTED",
           "files": [
@@ -7604,20 +7692,6 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "EstimatorPrimitives",
-          "status": "TESTED",
-          "files": [
-            "tests/cost_model_seed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "EstimatorPrimitives",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_cost_model_seed_variance.zig",
@@ -7629,6 +7703,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "EstimatorPrimitives",
+          "status": "TESTED",
+          "files": [
+            "tests/cost_model_seed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -7747,6 +7835,32 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
+        },
+        {
+          "feature": "CostModelVarianceAutoCalibration",
+          "aspect": "AutoCalibrationLogic",
+          "status": "TESTED",
+          "files": [
+            "src/monitoring/variance_calibration.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelVarianceAutoCalibration"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "CostModelVarianceAutoCalibration",
+          "aspect": "Test",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_variance_autocalibration.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-27"
         },
         {
           "feature": "Query Optimizer",
@@ -7948,8 +8062,8 @@
       "id": "REQ-GQL-081",
       "features": [
         {
-          "feature": "Monitoring",
-          "aspect": "MetricsRegistryVarianceEnvelope",
+          "feature": "MonitoringVariance",
+          "aspect": "LegacyVarianceEnvelope",
           "status": "REMOVED",
           "files": [
             "benchmarks/benchmark_monitoring_metrics_variance.zig"
@@ -7958,25 +8072,11 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope"
           ],
-          "owner": "ops",
-          "updated": "2025-09-26 // superseded by unified benchmark (see MetricsRegistryVarianceUnified)"
+          "owner": "ops-team",
+          "updated": "2025-09-27 // superseded by unified benchmark (UnifiedVarianceEnvelope)"
         },
         {
-          "feature": "Monitoring",
-          "aspect": "MetricsRegistryVarianceUnified",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_monitoring_metrics_variance_unified.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified"
-          ],
-          "owner": "ops",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "Monitoring",
+          "feature": "MonitoringVariance",
           "aspect": "TailLatencyP999Envelope",
           "status": "BENCHED",
           "files": [
@@ -7986,8 +8086,37 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryTailP999"
           ],
-          "owner": "ops",
-          "updated": "2025-09-26"
+          "owner": "ops-team",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MonitoringVariance",
+          "aspect": "UnifiedVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_monitoring_metrics_variance_unified.zig",
+            "benchmarks/benchmark_monitoring_variance_unified.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified"
+          ],
+          "owner": "ops-team",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MonitoringVariance",
+          "aspect": "UnifiedVarianceEnvelope",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_monitoring_variance_unified.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified"
+          ],
+          "benches": [],
+          "owner": "ops-team",
+          "updated": "2025-09-27"
         }
       ]
     },
@@ -8172,20 +8301,6 @@
           "aspect": "FORMATTER",
           "status": "TESTED",
           "files": [
-            "src/types/extended.zig"
-          ],
-          "tests": [
-            "extended.decimal parse/format"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "ExtendedDecimalFormatting",
-          "aspect": "FORMATTER",
-          "status": "TESTED",
-          "files": [
             "tests/canary_extended_builtins.zig"
           ],
           "tests": [
@@ -8194,6 +8309,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-27"
+        },
+        {
+          "feature": "ExtendedDecimalFormatting",
+          "aspect": "FORMATTER",
+          "status": "TESTED",
+          "files": [
+            "src/types/extended.zig"
+          ],
+          "tests": [
+            "extended.decimal parse/format"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-26"
         },
         {
           "feature": "WalCompaction",
@@ -8221,7 +8350,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-23"
+          "updated": "2025-09-27"
         },
         {
           "feature": "WalCompaction",
@@ -8268,7 +8397,7 @@
           ],
           "benches": [],
           "owner": "optimizer",
-          "updated": "2025-09-23"
+          "updated": "2025-09-27"
         },
         {
           "feature": "SelectivityEstimator",
@@ -8282,7 +8411,7 @@
           ],
           "benches": [],
           "owner": "optimizer",
-          "updated": "2025-09-23"
+          "updated": "2025-09-27"
         },
         {
           "feature": "SelectivityEstimator",
@@ -8310,7 +8439,7 @@
           ],
           "benches": [],
           "owner": "optimizer",
-          "updated": "2025-09-23"
+          "updated": "2025-09-27"
         }
       ]
     },
@@ -8729,6 +8858,25 @@
       ]
     },
     {
+      "id": "REQ-GQL-DATASET-GO",
+      "features": [
+        {
+          "feature": "DatasetIntegrationGoClient",
+          "aspect": "Testing",
+          "status": "TESTED",
+          "files": [
+            "clients/go/gql/dataset_integration_test.go"
+          ],
+          "tests": [
+            "TestDatasetMigration|TestNetworkTypes|TestGeographicTypes|TestVectorSimilarity|TestCurrencyType|TestGraphTraversal|TestTransactions|TestConstraints|TestPerformanceWithIndexes"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-DATASET-ZIG",
       "features": [
         {
@@ -9076,6 +9224,78 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "MfaRecoveryCodeContention",
+          "aspect": "VarianceEnvelope",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_mfa_recovery_code_contention.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionRatioBounds"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MfaRecoveryCodeContention",
+          "aspect": "VarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_mfa_recovery_code_contention.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionVariance"
+          ],
+          "owner": "security",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MfaRiskSensitivity",
+          "aspect": "RiskModel",
+          "status": "TESTED",
+          "files": [
+            "src/security/mfa_risk.zig",
+            "tests/canary_mfa_risk_stepup.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_MFA_CORE_001_RiskMatrixDeterministic"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MfaRiskStepUpDecision",
+          "aspect": "DecisionLogic",
+          "status": "TESTED",
+          "files": [
+            "src/security/mfa_risk.zig",
+            "tests/canary_mfa_risk_stepup.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_MFA_CORE_001_StepUpBoundary"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MfaRiskStepUpDecision",
+          "aspect": "LatencyVarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "benchmarks/benchmark_mfa_stepup_latency.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_MFA_CORE_001_StepUpLatencyVariance"
+          ],
+          "owner": "security",
+          "updated": "2025-09-27"
         }
       ]
     },
@@ -9104,13 +9324,11 @@
         {
           "feature": "MfaPolicyEngine",
           "aspect": "SECURITY",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
-            "src/security/auth.zig"
+            "tests/test_mfa_policies.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
@@ -9118,11 +9336,13 @@
         {
           "feature": "MfaPolicyEngine",
           "aspect": "SECURITY",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
-            "tests/test_mfa_policies.zig"
+            "src/security/auth.zig"
           ],
-          "tests": [],
+          "tests": [
+            "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
@@ -9461,7 +9681,7 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2025-09-27"
         },
         {
           "feature": "WAL encryption",
@@ -9671,20 +9891,6 @@
         {
           "feature": "RemoteKMSPrototype",
           "aspect": "ConcurrencyStressVariance",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_remote_kms_hardening.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "RemoteKMSPrototype",
-          "aspect": "ConcurrencyStressVariance",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_remote_kms_unwrap_concurrency.zig",
@@ -9694,6 +9900,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance"
           ],
+          "owner": "security",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "RemoteKMSPrototype",
+          "aspect": "ConcurrencyStressVariance",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_remote_kms_hardening.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress"
+          ],
+          "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
         },
@@ -9748,6 +9968,20 @@
         {
           "feature": "TDEOlptOverheadValidation",
           "aspect": "PERFORMANCE",
+          "status": "TESTED",
+          "files": [
+            "tests/test_tde_oltp_overhead_threshold.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold"
+          ],
+          "benches": [],
+          "owner": "perf",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "TDEOlptOverheadValidation",
+          "aspect": "PERFORMANCE",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_tde_oltp_overhead.zig"
@@ -9761,17 +9995,17 @@
         },
         {
           "feature": "TDEOlptOverheadValidation",
-          "aspect": "PERFORMANCE",
+          "aspect": "PublishedSync",
           "status": "TESTED",
           "files": [
-            "tests/test_tde_oltp_overhead_threshold.zig"
+            "tests/canary_tde_published_overhead_sync.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold"
+            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent"
           ],
           "benches": [],
           "owner": "perf",
-          "updated": "2025-09-26"
+          "updated": "2025-09-27"
         }
       ]
     },
@@ -9867,6 +10101,522 @@
       ]
     },
     {
+      "id": "REQ-GQL-UNICODE-002",
+      "features": [
+        {
+          "feature": "UnicodeTableGenerator",
+          "aspect": "Tooling",
+          "status": "TESTED",
+          "files": [
+            "tools/gen_unicode_tables.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_002_GeneratorDryRun"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-004",
+      "features": [
+        {
+          "feature": "UnicodeCore",
+          "aspect": "CliNormalizationFlag",
+          "status": "TESTED",
+          "files": [
+            "src/client/main.zig",
+            "tests/canary_cli_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientCli_NormalizeNfc"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeCore",
+          "aspect": "NormalizationNfc",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/geode_unicode.zig",
+            "tests/canary_unicode_basic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_004_NfcRoundTrip"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-005",
+      "features": [
+        {
+          "feature": "UnicodeCore",
+          "aspect": "CaseFolding",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/geode_unicode.zig",
+            "tests/canary_unicode_basic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_005_FoldSharpS"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeCore",
+          "aspect": "CliFoldCaseFlag",
+          "status": "TESTED",
+          "files": [
+            "src/client/main.zig",
+            "tests/canary_cli_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientCli_FoldCase"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-006",
+      "features": [
+        {
+          "feature": "UnicodeBuildIntegration",
+          "aspect": "BuildStep",
+          "status": "TESTED",
+          "files": [
+            "build.zig",
+            "tests/canary_unicode_build_integration.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-007",
+      "features": [
+        {
+          "feature": "UnicodeFtsIntegration",
+          "aspect": "IndexerNormalize",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_unicode_fts.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27 // Source index fulltext.zig updated to match this test name"
+        },
+        {
+          "feature": "UnicodeFtsIntegration",
+          "aspect": "IndexerNormalize",
+          "status": "TESTED",
+          "files": [
+            "src/index/fulltext.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-008",
+      "features": [
+        {
+          "feature": "UnicodeFtsAdvanced",
+          "aspect": "AnalyzerLower",
+          "status": "TESTED",
+          "files": [
+            "src/fts/advanced.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeFtsAdvanced",
+          "aspect": "AnalyzerLower",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_unicode_fts.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-009",
+      "features": [
+        {
+          "feature": "UnicodeEval",
+          "aspect": "CompareNfc",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-010",
+      "features": [
+        {
+          "feature": "UnicodeOrderBy",
+          "aspect": "CompareNfc",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig",
+            "tests/canary_unicode_orderby.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-011",
+      "features": [
+        {
+          "feature": "UnicodeUniqueKeys",
+          "aspect": "NormalizeLabel",
+          "status": "TESTED",
+          "files": [
+            "src/schema/constraint_manager.zig",
+            "tests/canary_unicode_unique_key.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-012",
+      "features": [
+        {
+          "feature": "UTF-8 -> UTF-16 Conversion",
+          "aspect": "ClientTestGo",
+          "status": "TESTED",
+          "files": [
+            "clients/go/geode/unicode_test.go"
+          ],
+          "tests": [
+            "TestCANARY_ClientGo_Utf8Utf16RoundTrip"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UTF-8 -> UTF-16 Conversion",
+          "aspect": "ClientTestZig",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_client_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientUnicode_Utf8ToUtf16"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UTF-8 -> UTF-16 Conversion",
+          "aspect": "ClientWrapperGo",
+          "status": "TESTED",
+          "files": [
+            "clients/go/geode/driver.go"
+          ],
+          "tests": [
+            "TestCANARY_ClientGo_Utf8Utf16RoundTrip"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UTF-8 -> UTF-16 Conversion",
+          "aspect": "ClientWrapperZig",
+          "status": "TESTED",
+          "files": [
+            "clients/zig/client_minimal.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientUnicode_Utf8ToUtf16"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeUtf16",
+          "aspect": "Utf8ToUtf16",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/geode_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_012_Utf8ToUtf16RoundTrip"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeUtf16",
+          "aspect": "Utf8ToUtf16",
+          "status": "TESTED",
+          "files": [
+            "docs/UNICODE.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_012_Utf8ToUtf16RoundTrip"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-013",
+      "features": [
+        {
+          "feature": "UTF-16 -> UTF-8 Conversion",
+          "aspect": "ClientTestGo",
+          "status": "TESTED",
+          "files": [
+            "clients/go/geode/unicode_test.go"
+          ],
+          "tests": [
+            "TestCANARY_ClientGo_Utf8Utf16RoundTrip"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UTF-16 -> UTF-8 Conversion",
+          "aspect": "ClientTestZig",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_client_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientUnicode_Utf16ToUtf8"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UTF-16 -> UTF-8 Conversion",
+          "aspect": "ClientWrapperGo",
+          "status": "TESTED",
+          "files": [
+            "clients/go/geode/driver.go"
+          ],
+          "tests": [
+            "TestCANARY_ClientGo_Utf8Utf16RoundTrip"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UTF-16 -> UTF-8 Conversion",
+          "aspect": "ClientWrapperZig",
+          "status": "TESTED",
+          "files": [
+            "clients/zig/client_minimal.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientUnicode_Utf16ToUtf8"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeUtf16",
+          "aspect": "CliUtf16HexInputFlag",
+          "status": "TESTED",
+          "files": [
+            "src/client/main.zig",
+            "tests/canary_cli_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientCli_Utf16Input"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeUtf16",
+          "aspect": "Utf16ToUtf8",
+          "status": "TESTED",
+          "files": [
+            "docs/UNICODE.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_013_Utf16ToUtf8RoundTrip"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeUtf16",
+          "aspect": "Utf16ToUtf8",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/geode_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_013_Utf16ToUtf8RoundTrip"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-UNICODE-014",
+      "features": [
+        {
+          "feature": "UnicodeWtf8",
+          "aspect": "Wtf8LossyDecode",
+          "status": "TESTED",
+          "files": [
+            "docs/UNICODE.md"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_014_Wtf8Lossy"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeWtf8",
+          "aspect": "Wtf8LossyDecode",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/geode_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_UNICODE_014_Wtf8Lossy"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "WTF-8 Lossy Decode",
+          "aspect": "ClientTestGo",
+          "status": "TESTED",
+          "files": [
+            "clients/go/geode/unicode_test.go"
+          ],
+          "tests": [
+            "TestCANARY_ClientGo_Wtf8Lossy"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "WTF-8 Lossy Decode",
+          "aspect": "ClientTestZig",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_client_unicode.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientUnicode_Wtf8Lossy"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "WTF-8 Lossy Decode",
+          "aspect": "ClientWrapperGo",
+          "status": "TESTED",
+          "files": [
+            "clients/go/geode/driver.go"
+          ],
+          "tests": [
+            "TestCANARY_ClientGo_Wtf8Lossy"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "WTF-8 Lossy Decode",
+          "aspect": "ClientWrapperZig",
+          "status": "TESTED",
+          "files": [
+            "clients/zig/client_minimal.zig"
+          ],
+          "tests": [
+            "TestCANARY_ClientUnicode_Wtf8Lossy"
+          ],
+          "benches": [],
+          "owner": "clients",
+          "updated": "2025-09-27"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-XXX",
       "features": [
         {
@@ -9888,11 +10638,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 218,
+      "BENCHED": 220,
       "IMPL": 1,
       "REMOVED": 1,
       "STUB": 4,
-      "TESTED": 423
+      "TESTED": 469
     },
     "by_aspect": {
       "ADAPTER_BRIDGE": 2,
@@ -9911,6 +10661,7 @@
       "AdaptiveEstimatorBiasPersistenceV2": 1,
       "AdaptiveEstimatorBiasVarianceEnvelope": 1,
       "AdaptiveEstimatorDynamicAlpha": 1,
+      "AdaptiveEstimatorVarianceAutoCalibration": 1,
       "AdaptiveFeedbackHook": 1,
       "AdaptiveFlush": 1,
       "AdaptiveJitterThresholds": 1,
@@ -9920,6 +10671,7 @@
       "AdaptiveStressHarness": 1,
       "AdvancedCostModel": 1,
       "AdvancedCostModelCalibrationVarianceEnvelope": 1,
+      "AnalyzerLower": 2,
       "AppendEntriesCommitAdvance": 1,
       "AppendEntriesSuccess": 1,
       "AppendEntriesTermMismatch": 1,
@@ -9927,6 +10679,7 @@
       "ArchivalHook": 1,
       "Archive": 1,
       "AuditLogging": 1,
+      "AutoCalibrationLogic": 2,
       "AvgVarianceEnvelope": 1,
       "BENCH": 1,
       "BFS": 2,
@@ -9945,6 +10698,7 @@
       "BoundedQuantifierDeterminism": 1,
       "BridgeLeverage": 1,
       "BridgesArticulation": 1,
+      "BuildStep": 1,
       "CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope": 1,
       "CDCApplyBatchLatencyVarianceEnvelope": 1,
       "CDCControlProtocol": 1,
@@ -9955,14 +10709,23 @@
       "CalibrationFeedback": 1,
       "CanaryFreshnessAudit": 1,
       "CascadePerf": 2,
+      "CaseFolding": 1,
       "CheckpointSelection": 1,
       "CliErgonomics": 1,
+      "CliFoldCaseFlag": 1,
+      "CliNormalizationFlag": 1,
       "CliParityStatusCommand": 1,
+      "CliUtf16HexInputFlag": 1,
+      "ClientTestGo": 3,
+      "ClientTestZig": 3,
+      "ClientWrapperGo": 3,
+      "ClientWrapperZig": 3,
       "ClosenessCentrality": 1,
       "ClosenessVarianceEnvelope": 1,
       "CommitAdvancementVarianceEnvelope": 1,
       "CompactionJob": 1,
       "CompactionVarianceEnvelope": 1,
+      "CompareNfc": 2,
       "CompleteRefresh": 1,
       "ComplexPatterns": 1,
       "Component": 1,
@@ -9991,6 +10754,7 @@
       "DecimalOverflowAvg": 1,
       "DecimalOverflowHandling": 1,
       "DecimalOverflowSum": 1,
+      "DecisionLogic": 1,
       "DeltaGuardPreview": 1,
       "DesignDoc": 1,
       "DiagnosticsExport": 1,
@@ -10088,6 +10852,7 @@
       "HopcroftKarp": 1,
       "IDDFS": 1,
       "INFRA": 2,
+      "IllegalOrderKeyPolicy": 1,
       "ImplDefinedCollationAndNullOrdering": 1,
       "ImplDefinedFlagsProtocolIntegration": 1,
       "ImplDefinedZeroLengthPathPolicy": 1,
@@ -10095,6 +10860,7 @@
       "Implementation": 1,
       "ImplementationRealityDeltaTool": 1,
       "IncrementalRefresh": 1,
+      "IndexerNormalize": 2,
       "Ingest": 1,
       "InterNodeMessaging": 1,
       "InvertedIndexCore": 1,
@@ -10112,13 +10878,12 @@
       "LatencyAggregateRobustStats": 1,
       "LatencyAggregateSchemaValidation": 1,
       "LatencyAggregateStreak": 1,
-      "LatencyVarianceEnvelope": 1,
+      "LatencyVarianceEnvelope": 2,
+      "LegacyVarianceEnvelope": 1,
       "MVCCRepairThroughputVarianceEnvelope": 1,
       "MVCCVersionPruneVarianceEnvelope": 1,
       "MatchLabelPropertyVarianceEnvelope": 1,
       "MetaCommandsBasic": 1,
-      "MetricsRegistryVarianceEnvelope": 1,
-      "MetricsRegistryVarianceUnified": 1,
       "MismatchFalsePositiveGuard": 1,
       "MixedAggregateVarianceEnvelope": 1,
       "MixedAggregationBreadth": 1,
@@ -10131,10 +10896,13 @@
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
       "NextSliceStructureGuard": 1,
+      "NormalizationNfc": 1,
+      "NormalizeLabel": 1,
       "ObservabilityMetrics": 1,
       "OnMessage": 1,
       "OptionalMatchNullPreserve": 1,
       "OrderByEnforcement": 1,
+      "OrderKeyExprOverrideEnv": 1,
       "OrderedEmission": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
@@ -10144,6 +10912,7 @@
       "PERFORMANCE": 5,
       "PageRank": 1,
       "PageRankVarianceEnvelope": 1,
+      "PaginationAutoCalibration": 1,
       "PaginationExecutionStreaming": 1,
       "PaginationExecutionVarianceEnvelope": 1,
       "PaginationOrderedVarianceEnvelope": 1,
@@ -10241,6 +11010,7 @@
       "Protocol": 1,
       "ProtocolE2E": 17,
       "ProtocolE2E_QUIC": 4,
+      "PublishedSync": 1,
       "QUERY": 1,
       "QUICAccept": 1,
       "QUICBasicE2E": 1,
@@ -10283,6 +11053,7 @@
       "Retention": 1,
       "RewriteHookImplementation": 1,
       "RewriteHookPipelineIntegration": 1,
+      "RiskModel": 1,
       "RobustStats": 1,
       "RobustStatsP99": 1,
       "RobustnessBase32Decode": 1,
@@ -10321,8 +11092,9 @@
       "TenantRegistry": 1,
       "TenantRegistryBasic": 1,
       "TenantRegistryVarianceEnvelope": 1,
-      "Testing": 3,
-      "Tooling": 4,
+      "Test": 2,
+      "Testing": 4,
+      "Tooling": 5,
       "TopologicalSortKahn": 1,
       "Traversal": 1,
       "TrendAppend": 1,
@@ -10330,14 +11102,17 @@
       "Trie": 1,
       "TxnConflictMatrixVarianceEnvelope": 1,
       "TxnPromptIndicator": 1,
+      "UnifiedVarianceEnvelope": 2,
       "UnionFind": 1,
       "UniquePerf": 1,
       "UniquePerfVarianceEnvelope": 1,
       "Unit": 4,
       "UnweightedBFSPaths": 2,
+      "Utf16ToUtf8": 2,
+      "Utf8ToUtf16": 2,
       "VarianceConfigHelper": 1,
       "VarianceConfigStats": 1,
-      "VarianceEnvelope": 3,
+      "VarianceEnvelope": 5,
       "VarianceEnvelopeGuard": 1,
       "WALFlushBatchVarianceEnvelope": 1,
       "WALIOThrottleVarianceEnvelope": 1,
@@ -10360,7 +11135,8 @@
       "WalAdaptivePolicyLatencyVarianceEnvelope": 1,
       "WalCompactionVarianceEnvelope": 1,
       "Wire": 5,
-      "WriteSkewDetection": 2
+      "WriteSkewDetection": 2,
+      "Wtf8LossyDecode": 2
     }
   }
 }

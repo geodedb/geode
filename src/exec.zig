@@ -63,7 +63,14 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
                 defer tmp_ally.free(sa);
                 const sb = printer.stringifyExprAlloc(tmp_ally, rb.key, .{}) catch return a < b;
                 defer tmp_ally.free(sb);
-                const ord = std.mem.order(u8, sa, sb);
+                // Unicode-aware ORDER BY comparison: normalize to NFC then compare bytes
+                // CANARY: REQ=REQ-GQL-UNICODE-010; FEATURE="UnicodeOrderBy"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc; OWNER=unicode; UPDATED=2025-09-27
+                const unicode = @import("unicode/geode_unicode.zig");
+                const na = unicode.nfcNormalize(tmp_ally, sa) catch sa;
+                defer if (na.ptr != sa.ptr) tmp_ally.free(na);
+                const nb = unicode.nfcNormalize(tmp_ally, sb) catch sb;
+                defer if (nb.ptr != sb.ptr) tmp_ally.free(nb);
+                const ord = std.mem.order(u8, na, nb);
                 if (sc.desc) return ord == .gt else return ord == .lt;
             };
             if (sc.desc) {

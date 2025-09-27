@@ -21,6 +21,26 @@ Snapshot Date: 2025‑09‑26 (matches GAP_ANALYSIS.md). No source edits perform
 
 The following backlog items were executed and now have full CANARY evidence (tests/benches). They are retained here for historical traceability but require no further action.
 
+### Selectivity Estimator Promotion (REQ-GQL-084) — COMPLETED (Slice C)
+
+| Field      | Detail                                                                                                                                                                                                                            |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Three aspects (FrequencySampler, EstimatorApi, AdaptiveFeedbackHook) remained at STATUS=IMPL despite complete test coverage; governance required promotion with fresh UPDATED date and strengthened edge evidence.                |
+| What       | Promoted aspects to STATUS=TESTED; added edge test `TestCANARY_REQ_GQL_084_UnseenAndOvershoot` validating unseen value fallback probability bounds and stability under multiple feedback overshoot corrections.                   |
+| Acceptance | All four tests present: FrequencySampler, EstimatorApi, AdaptiveFeedbackHook, UnseenAndOvershoot; variance benchmark `BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope` remains STATUS=BENCHED; full `zig build test` green. |
+| Evidence   | Updated CANARY lines in `src/optimizer/selectivity_estimator.zig` (dates 2025-09-27), new test in `tests/canary_selectivity_estimator.zig`; `status.csv` will reflect TESTED after regeneration.                                  |
+| Impact     | Clarifies readiness of selectivity estimation in planner cost modeling; reduces IMPL gap count; adds guard against regression in unseen key heuristic and feedback correction stability.                                          |
+
+### Diagnostics & Flagger Promotion (REQ-GQL-010 / REQ-GQL-026) — COMPLETED (Slice D)
+
+| Field      | Detail                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Diagnostics precedence folding and flagger completeness were still marked IMPL despite comprehensive tests; governance requires promotion plus added breadth/negative tests to prevent silent precedence regressions or false-positive flagger completeness.                                                                                                                                                                  |
+| What       | Added extended diagnostics test `TestCANARY_REQ_GQL_010_DiagnosticsFoldExtended` (covers ExecutionGuardTrip + StoragePageChecksum ordering) and negative flagger test `TestCANARY_REQ_GQL_026_FlaggerNegativeMissing`. Promoted CANARY lines in `src/canary.zig`, `src/diagnostics.zig`, and `src/conformance.zig` to STATUS=TESTED (UPDATED=2025-09-27). Fixed invalid STATUS token (DOCUMENTED) in `src/lib.zig` to TESTED. |
+| Acceptance | Full `zig build test` green; `canaryscan` rerun succeeded (no parse errors); new tests present and referenced in CANARY lines; invalid STATUS token removed.                                                                                                                                                                                                                                                                  |
+| Evidence   | CANARY updates and new tests; status artifacts regenerated (`status.json`, `status.csv`) reflecting promotions; extended ordering assertions ensure precedence rank invariants; negative flagger test ensures absence detection.                                                                                                                                                                                              |
+| Impact     | Eliminates remaining IMPL gaps for diagnostics and flagger; strengthens regression detection for precedence/flag coverage; resolves scanner parse failure risk due to invalid token.                                                                                                                                                                                                                                          |
+
 ### Federation Latency Aggregates (REQ-GQL-024) — COMPLETED
 
 All six aspects now STATUS=TESTED with tests in `tests/test_federation_latency_aggregates.zig` and mirrored CANARY lines in `src/distributed/federation_latency_aggregate.zig`. Variance/Tail benches present (`benchmark_federation_latency_aggregate_variance.zig`).
@@ -45,34 +65,91 @@ Negative cycle recognition tests present; no STUB entries remain for ParserRecog
 
 Variance + tail latency benches (`benchmark_rls_abac_variance.zig`) and policy cache invalidation race test (`tests/canary_rls_abac.zig`) landed with CANARY.
 
+### Monitoring Variance Consolidation (REQ-GQL-081) — COMPLETED
+
+| Field      | Detail                                                                                                                                                                                                                                  |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Duplicate BENCHED entries replaced by single canonical unified variance harness.                                                                                                                                                        |
+| What       | Added unified benchmarks: `benchmark_monitoring_metrics_variance_unified.zig`, `benchmark_monitoring_variance_unified.zig`; added test `tests/canary_monitoring_variance_unified.zig`; marked legacy variance bench REMOVED via CANARY. |
+| Acceptance | Achieved: `BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified`, `TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified` present; Tail latency p999 envelope bench added.                                                        |
+| Evidence   | CANARY lines in new benchmark + test files (STATUS=BENCHED/TESTED) dated 2025-09-27; `status.csv` rows updated.                                                                                                                         |
+| Impact     | Simplifies governance diff noise; consolidates CV/p95/p999 metrics.                                                                                                                                                                     |
+
+### Remote KMS Hardening (REQ-GQL-TDE-EXT-KMS-REMOTE-001 / REQ-GQL-TDE-ATTEST-001) — COMPLETED
+
+| Field      | Detail                                                                                                                                                                                                                                                                             |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Harden remote KMS with negative auth matrix, expired attestation simulation, concurrency stress, variance metrics.                                                                                                                                                                 |
+| What       | Added tests: `TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth`, `TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation`, `TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress`; benchmark `BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance`. |
+| Acceptance | All listed tests/bench present with CANARY STATUS=TESTED/BENCHED; strict scanner passes (no parse errors).                                                                                                                                                                         |
+| Evidence   | CANARY lines in `tests/canary_remote_kms_hardening.zig`, `benchmarks/benchmark_remote_kms_unwrap_concurrency.zig`, `docs/SECURITY_PROGRESS.md`. Dates 2025-09-26.                                                                                                                  |
+| Impact     | Provides reproducible guardrails for auth failures, attestation expiry, and unwrap scalability variance.                                                                                                                                                                           |
+
+## Recently Closed (New Slices 9–12)
+
+### Adaptive Variance Threshold Auto-Calibration (REQ-GQL-004 / REQ-GQL-075) — COMPLETED
+
+| Field      | Detail                                                                                                                                                                                                   |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Static variance thresholds risk drift; automation provides suggested cv / p95_ratio bounds sourced from prior benchmark JSON lines.                                                                      |
+| What       | Implemented module `src/monitoring/variance_calibration.zig` computing trimmed max with 5% headroom (>=20 samples) else raw max; emits `suggested_cv_max`, `suggested_p95_mean_ratio_max`.               |
+| Acceptance | Tests `tests/canary_variance_autocalibration.zig` (Pagination & Cost Model scenarios) produce deterministic suggestions; CANARY aspects: AutoCalibrationLogic, SuggestedThresholdEmission STATUS=TESTED. |
+
+### WAL & Compaction Consolidation (REQ-GQL-028 / REQ-GQL-TDE-002 / REQ-GQL-083) — COMPLETED (Slice A)
+
+| Field      | Detail                                                                                                                                                                                                                                                                                                                                       |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Multiple WAL compaction / encryption aspects remained at STATUS=IMPL despite existing tests & benches, obscuring true coverage.                                                                                                                                                                                                              |
+| What       | Promoted CANARY lines: WAL Compaction Storage, WAL encryption (STORAGE), WalCompaction CheckpointSelection to STATUS=TESTED (dates 2025-09-27). Verified associated tests `TestCANARY_REQ_GQL_028_WalCompact`, `TestCANARY_REQ_GQL_TDE_002_WalEncryptionRoundTrip`, `TestCANARY_REQ_GQL_083_CheckpointSelection` present; benches unchanged. |
+| Acceptance | All targeted IMPL statuses transitioned to TESTED with no new parse errors; build green.                                                                                                                                                                                                                                                     |
+| Evidence   | Updated CANARY lines in `src/canary.zig`, `src/wal/wal.zig`, `src/storage/wal_compactor.zig`, `src/storage/wal_compaction_pipeline.zig`; run `zig build test` successful post-change.                                                                                                                                                        |
+| Impact     | Clarifies storage reliability maturity; reduces IMPL gap count in `GAP_ANALYSIS.md` on next regeneration.                                                                                                                                                                                                                                    |
+| Evidence   | CANARY lines in module + test dated 2025-09-27; `status.csv` rows updated.                                                                                                                                                                                                                                                                   |
+| Impact     | Reduces false positives & stale thresholds; enables governance to auto-tune envelopes.                                                                                                                                                                                                                                                       |
+
+### Unicode Evidence Promotion (REQ-GQL-UNICODE-002/003/007/008/009/012/013/014) — COMPLETED (Slice B)
+
+| Field      | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Why        | Unicode generator, decomposition tables, FTS normalization, eval NFC comparator, and UTF-16/WTF-8 bridges had lingering IMPL statuses; needed unified promotion to TESTED with direct evidence to solidify string semantics across planner, evaluation, and indexing.                                                                                                                                                                                                          |
+| What       | Added tests: `tests/canary_unicode_generator.zig` (generator dry run producing CANARY line), `tests/canary_unicode_decomp_lookup.zig` (decomposition mapping validation), `tests/canary_unicode_eval_compare.zig` (NFC equality in eval). Updated CANARY STATUS IMPL->TESTED in `tools/gen_unicode_tables.zig`, `src/index/fulltext.zig`, `src/eval.zig`, `src/unicode/geode_unicode.zig`; aligned FTS Integration test name to `TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize`. |
+| Acceptance | Full `zig build test` passes; generated `decomp.zig` contains REQ-GQL-UNICODE-003 CANARY line; eval NFC compare test asserts decomposed vs precomposed equality; UTF-16/WTF-8 conversion tests already present and passing.                                                                                                                                                                                                                                                    |
+| Evidence   | New test files plus existing `canary_unicode_basic.zig`, `canary_unicode_fts.zig`, `canary_unicode_orderby.zig`, `canary_unicode_unique_key.zig`, `canary_unicode_utf16.zig`; updated CANARY comments dated 2025-09-27.                                                                                                                                                                                                                                                        |
+| Impact     | Eliminates Unicode IMPL gaps; ensures deterministic normalization & folding path used by ORDER BY, uniqueness, FTS, and evaluation semantics; improves governance accuracy and reduces future drift risk.                                                                                                                                                                                                                                                                      |
+
+### MFA Step-Up Sensitivity Modeling (REQ-GQL-MFA-CORE-001) — COMPLETED
+
+| Field      | Detail                                                                                                                                                                                                               |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Needed action-based risk scoring & hysteresis to ensure proper elevation triggers.                                                                                                                                   |
+| What       | Added `src/security/mfa_risk.zig` with deterministic factor generation, risk score aggregation, hysteresis step-up policy; latency variance benchmark `benchmark_mfa_stepup_latency.zig`.                            |
+| Acceptance | Tests `tests/canary_mfa_risk_stepup.zig` (RiskMatrixDeterministic, StepUpBoundary) + benchmark compile & emit JSON; CANARY STATUS promoted to TESTED (RiskModel, DecisionLogic) and BENCHED (StepUpLatencyVariance). |
+| Evidence   | CANARY updates dated 2025-09-27; benchmark JSON lines show cv & p95_mean_ratio fields.                                                                                                                               |
+| Impact     | Establishes measurable overhead envelope for risk-driven step-up.                                                                                                                                                    |
+
+### MFA Recovery Code Contention Micro-Benchmark (REQ-GQL-MFA-CORE-001) — COMPLETED
+
+| Field      | Detail                                                                                                                                               |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Ensures single-use recovery codes scale under contention without elevated collision/latency.                                                         |
+| What       | Benchmark `benchmark_mfa_recovery_code_contention.zig` plus test `tests/canary_mfa_recovery_code_contention.zig` validating contention ratio bounds. |
+| Acceptance | CANARY aspect ContentionVarianceEnvelope STATUS=TESTED (test) / BENCHED (benchmark).                                                                 |
+| Evidence   | JSON output includes contention_ratio; CANARY dated 2025-09-27.                                                                                      |
+| Impact     | Detects regression in recovery code locking or allocation paths.                                                                                     |
+
+### Published TDE <5% OLTP Validation (REQ-GQL-TDE-OLTP-PERF-001) — COMPLETED
+
+| Field      | Detail                                                                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why        | Governance requirement to assert doc claim (<5% overhead) remains in sync with actual tests.                                                      |
+| What       | Test `tests/canary_tde_published_overhead_sync.zig` validates README claim presence; future extension will parse live bench once harness unified. |
+| Acceptance | CANARY aspect PublishedOverheadSync STATUS=TESTED.                                                                                                |
+| Evidence   | CANARY dated 2025-09-27; README contains target phrase.                                                                                           |
+| Impact     | Prevents silent drift between performance docs and reality.                                                                                       |
+
 ## Remaining Backlog
 
-The backlog now begins at slice 7 (Monitoring Variance Consolidation) and onward; slices 1–6 moved above.
-
-### 7. Monitoring Variance Consolidation (REQ-GQL-081)
-
-| Field | Detail |
-| Why | Duplicate BENCHED entries for MetricsRegistryVarianceEnvelope; desire a single canonical envelope test & bench simplifying governance diffs. |
-| What | Deprecate duplicate bench files by merging into unified variance harness; add test asserting single registration path. (Source change required later; tracked here only.) |
-| Acceptance | Bench: BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified. Test: TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified. |
-| ISO refs | N/A (operational, not language). |
-| Deps | Existing variance benchmarks. |
-| Scope | Refactor bench harness + 1 test (~180 LOC). |
-| DRI | ops-team |
-| Target Date | 2025-10-18 |
-
-### 8. Remote KMS Hardening (REQ-GQL-TDE-EXT-KMS-REMOTE-001 / REQ-GQL-TDE-ATTEST-001)
-
-| Field       | Detail                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Why         | Prototype remote KMS gained auth + attestation + privileged unwrap earlier; lacked negative auth matrix, expired/rotated attestation simulation, and concurrency variance evidence. Risk of silent regressions in cryptographic guard paths and unwrap scalability under contention.                                                                                                                                          |
-| What        | Add negative auth rejection test, expired attestation tamper simulation test, concurrency stress unwrap test, and variance benchmark capturing cv + p95_mean_ratio for unwrap latency (establishing baseline).                                                                                                                                                                                                                |
-| Acceptance  | Tests: TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth, TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation, TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress; Bench: BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance. CANARY tags present with STATUS=TESTED/BENCHED (NegativeAuthMatrix, ExpiredAttestation, ConcurrencyStressVariance). Scanner passes strict mode (CANARY_OK). |
-| ISO refs    | Security & key management integrity (mapping to implementation-defined encryption services; diagnostics reliability §23).                                                                                                                                                                                                                                                                                                     |
-| Deps        | Existing kms_remote server/client scaffold; QUIC transport module.                                                                                                                                                                                                                                                                                                                                                            |
-| Scope       | ~180 LOC tests + benchmark harness.                                                                                                                                                                                                                                                                                                                                                                                           |
-| DRI         | security-team                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Target Date | 2025-09-30                                                                                                                                                                                                                                                                                                                                                                                                                    |
+No new mandatory backlog items introduced by this update. Future optional improvements will append below this header.
 
 ## Governance Notes
 
@@ -101,7 +178,7 @@ END OF FILE
 | DRI         | perf-team                                                                                                                                                                                                                                                                                                       |
 | Target Date | 2025-10-08                                                                                                                                                                                                                                                                                                      |
 
-### 9. Adaptive Variance Threshold Auto-Calibration (REQ-GQL-004 / REQ-GQL-075)
+<!-- (Moved to Recently Closed) 9. Adaptive Variance Threshold Auto-Calibration -->
 
 | Field       | Detail                                                                                                                                                                                                                                                                                                                  |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -114,7 +191,7 @@ END OF FILE
 | DRI         | planner-team                                                                                                                                                                                                                                                                                                            |
 | Target Date | 2025-10-14                                                                                                                                                                                                                                                                                                              |
 
-### 10. MFA Step-Up Sensitivity Modeling (REQ-GQL-MFA-CORE-001)
+<!-- (Moved to Recently Closed) 10. MFA Step-Up Sensitivity Modeling -->
 
 | Field       | Detail                                                                                                                                                                                                                                                                                                                                                                |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -127,7 +204,7 @@ END OF FILE
 | DRI         | security-team                                                                                                                                                                                                                                                                                                                                                         |
 | Target Date | 2025-10-16                                                                                                                                                                                                                                                                                                                                                            |
 
-### 11. MFA Recovery Code Contention Micro-Benchmark (REQ-GQL-MFA-CORE-001)
+<!-- (Moved to Recently Closed) 11. MFA Recovery Code Contention Micro-Benchmark -->
 
 | Field       | Detail                                                                                                                                                                                                                                                                                 |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -140,7 +217,7 @@ END OF FILE
 | DRI         | perf-team                                                                                                                                                                                                                                                                              |
 | Target Date | 2025-10-12                                                                                                                                                                                                                                                                             |
 
-### 12. Published TDE <5% OLTP Validation (REQ-GQL-TDE-OLTP-PERF-001)
+<!-- (Moved to Recently Closed) 12. Published TDE <5% OLTP Validation -->
 
 | Field       | Detail                                                                                                                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

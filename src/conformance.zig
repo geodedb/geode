@@ -1,5 +1,5 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-026; FEATURE="Conformance/Flagger"; ASPECT=FlaggerCompleteness; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_026_FlaggerCompleteness; BENCH=BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope; OWNER=conformance; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-026; FEATURE="Conformance/Flagger"; ASPECT=FlaggerCompleteness; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_026_FlaggerCompleteness,TestCANARY_REQ_GQL_026_FlaggerNegativeMissing; BENCH=BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope; OWNER=conformance; UPDATED=2025-09-27
 
 pub const Profile = struct {
     version: []const u8 = "skeleton",
@@ -68,6 +68,22 @@ test "TestCANARY_REQ_GQL_026_FlaggerCompleteness" {
         }
         try std.testing.expect(found);
     }
+}
+
+// Negative guard: ensure a bogus required flag (should not exist) is absent; protects against false positives in completeness logic.
+test "TestCANARY_REQ_GQL_026_FlaggerNegativeMissing" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const flags = try collectImplDefinedFlags(alloc);
+    defer alloc.free(flags);
+    var found = false;
+    for (flags) |f| {
+        if (std.mem.eql(u8, f, "NonExistentPolicyToggle")) {
+            found = true;
+        }
+    }
+    try std.testing.expect(!found);
 }
 
 test "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope" {

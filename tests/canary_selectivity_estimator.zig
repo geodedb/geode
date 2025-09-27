@@ -47,3 +47,25 @@ test "TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook" {
     // Expect correction applied reducing prediction
     try std.testing.expect(pred2 < pred);
 }
+
+// Additional edge test: unseen value fallback and feedback overshoot stability
+test "TestCANARY_REQ_GQL_084_UnseenAndOvershoot" {
+    const ally = std.testing.allocator;
+    var ae = estimator_mod.AdaptiveEstimator.init(ally, 8);
+    defer ae.deinit();
+    // Observe a skewed distribution for key X
+    var i: usize = 0;
+    while (i < 50) : (i += 1) try ae.observe("X");
+    // Unseen key Y selectivity should be small but >0
+    const unseen = ae.estimate("Y");
+    try std.testing.expect(unseen > 0 and unseen < 0.05);
+    const pred = ae.estimate("X");
+    // Apply feedback that drastically lowers selectivity (simulate strong predicate)
+    ae.feedback("X", pred * 0.01);
+    const adj = ae.estimate("X");
+    try std.testing.expect(adj < pred);
+    // Second overshoot shouldn't drive correction negative or zero
+    ae.feedback("X", pred * 0.0001);
+    const adj2 = ae.estimate("X");
+    try std.testing.expect(adj2 > 0 and adj2 <= adj);
+}

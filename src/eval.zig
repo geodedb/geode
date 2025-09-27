@@ -271,7 +271,17 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
                 break :blk5 .{ .Bool = cmpToBool(op, ord) };
             }
             if (l == .Str and r == .Str) {
-                const ord = std.mem.order(u8, l.Str, r.Str);
+                // Unicode-aware comparison: normalize both operands to NFC then compare byte-wise.
+                // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2025-09-27
+                const unicode = @import("unicode/geode_unicode.zig");
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const alloc = gpa.allocator();
+                const ln = unicode.nfcNormalize(alloc, l.Str) catch return EvalError.Unsupported;
+                defer alloc.free(ln);
+                const rn = unicode.nfcNormalize(alloc, r.Str) catch return EvalError.Unsupported;
+                defer alloc.free(rn);
+                const ord = std.mem.order(u8, ln, rn);
                 return .{ .Bool = switch (op) {
                     .Eq => ord == .eq,
                     .Ne => ord != .eq,

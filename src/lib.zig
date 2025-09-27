@@ -59,6 +59,8 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
+pub const unicode = @import("unicode/geode_unicode.zig");
 // Re-export extended evaluation registry and extended types for CANARY tests
 pub const eval_ext = @import("eval_extended.zig");
 pub const ext_types = @import("types/extended.zig");
@@ -161,7 +163,7 @@ pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
     return parseGqlOptions(src, allocator, opts);
 }
 // CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=IllegalOrderKeyPolicy; STATUS=TESTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=OrderKeyExprOverrideEnv; STATUS=DOCUMENTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=OrderKeyExprOverrideEnv; STATUS=TESTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-27
 
 pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseResult {
     var arena = std.heap.ArenaAllocator.init(allocator);

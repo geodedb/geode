@@ -1,5 +1,5 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Precedence & Folding"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_DiagnosticsFold; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Precedence & Folding"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_DiagnosticsFold,TestCANARY_REQ_GQL_010_DiagnosticsFoldExtended; OWNER=engine; UPDATED=2025-09-27
 
 pub var strict_mode: bool = false; // When true, emit US001 errors for unordered pagination - disabled by default
 

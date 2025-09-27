@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const quic_transport = @import("transport/quic");
 const logger = @import("log/logger.zig");
+const geode = @import("geode");
 
 fn getStdOut() std.fs.File {
     return if (builtin.os.tag == .windows)
@@ -62,6 +63,9 @@ pub fn main() !void {
     var use_quic = true; // v0.17.0: QUIC is the only network transport, TCP removed
     var log_level_arg: ?[]const u8 = null;
     var use_stdio = false;
+    var opt_normalize_nfc = false;
+    var opt_fold_case = false;
+    var opt_utf16_input = false; // if true, treat provided query text as UTF-16 hex code units
 
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--test-wal-skip-ratio")) {
@@ -120,11 +124,79 @@ pub fn main() !void {
                 log_level_arg = argv[i + 1];
                 i += 1;
             }
+        } else if (std.mem.eql(u8, argv[i], "--normalize-nfc")) {
+            opt_normalize_nfc = true;
+        } else if (std.mem.eql(u8, argv[i], "--fold-case")) {
+            opt_fold_case = true;
+        } else if (std.mem.eql(u8, argv[i], "--utf16-input")) {
+            opt_utf16_input = true;
         }
     }
 
     if (log_level_arg) |lla| logger.setLevel(logger.parseLevel(lla));
     logger.info("client.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
+
+    // Apply Unicode preprocessing to input text if requested
+    var processed_text = text;
+    var owned_text: ?[]u8 = null;
+    defer if (owned_text) |ot| gpa.free(ot);
+    // Provide a tiny helper (freeText) via inline to avoid leaking; if not present, manual free
+    // Convert from UTF-16 hex units if specified: expects sequence like 0041 0020 1F600
+    if (opt_utf16_input) {
+        var units = std.ArrayList(u16).initCapacity(gpa, 0) catch return error.OutOfMemory;
+        defer units.deinit(gpa);
+        var it = std.mem.tokenizeAny(u8, text, " \t");
+        while (it.next()) |tok| {
+            if (tok.len == 0) continue;
+            const val = std.fmt.parseInt(u32, tok, 16) catch continue;
+            if (val <= 0xFFFF) {
+                units.append(gpa, @as(u16, @intCast(val))) catch {};
+            }
+        }
+        var utf8: ?[]u8 = null;
+        utf8 = blk_utf16: {
+            const res_utf8 = geode.unicode.utf16ToUtf8Alloc(gpa, units.items) catch {
+                logger.warn("client.unicode_utf16_decode_fail", .{.{ .key = "err", .value = "InvalidUtf16" }});
+                break :blk_utf16 null;
+            };
+            break :blk_utf16 res_utf8;
+        };
+        if (utf8) |u| {
+            owned_text = u;
+            processed_text = u;
+        }
+    }
+    if (opt_normalize_nfc) {
+        const nfc = blk_nfc: {
+            const res_nfc = geode.unicode.nfcNormalize(gpa, processed_text) catch {
+                logger.warn("client.unicode_nfc_fail", .{.{ .key = "err", .value = "InvalidUtf8" }});
+                break :blk_nfc null;
+            };
+            break :blk_nfc res_nfc;
+        };
+        if (nfc) |n| {
+            if (owned_text) |ot| gpa.free(ot);
+            owned_text = n;
+            processed_text = n;
+        }
+    }
+    if (opt_fold_case) {
+        const folded = blk_fold: {
+            const res_fold = geode.unicode.foldCase(gpa, processed_text) catch {
+                logger.warn("client.unicode_fold_fail", .{.{ .key = "err", .value = "InvalidUtf8" }});
+                break :blk_fold null;
+            };
+            break :blk_fold res_fold;
+        };
+        if (folded) |f| {
+            if (owned_text) |ot| gpa.free(ot);
+            owned_text = f;
+            processed_text = f;
+        }
+    }
+    // CANARY: REQ=REQ-GQL-UNICODE-004; FEATURE="UnicodeCore"; ASPECT=CliNormalizationFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_NormalizeNfc; OWNER=clients; UPDATED=2025-09-27
+    // CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CliFoldCaseFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_FoldCase; OWNER=clients; UPDATED=2025-09-27
+    // CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UnicodeUtf16"; ASPECT=CliUtf16HexInputFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_Utf16Input; OWNER=clients; UPDATED=2025-09-27
 
     // Collect extra server args for stdio-spawned server (e.g., --data_dir, feature flags)
     var server_extra_args = std.ArrayList([]const u8).initCapacity(gpa, 0) catch return error.OutOfMemory;
@@ -175,11 +247,11 @@ pub fn main() !void {
             // RUN_GQL
             if (param_name) |pn| {
                 const pj = param_json orelse "{}";
-                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ text, pn, pj });
+                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ processed_text, pn, pj });
                 defer gpa.free(msg);
                 try stream.writeAll(msg);
             } else {
-                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{text});
+                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{processed_text});
                 defer gpa.free(msg);
                 try stream.writeAll(msg);
             }
@@ -372,7 +444,7 @@ pub fn main() !void {
     if (param_name) |pn| {
         const pj = param_json orelse "{}";
         try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-        try child_stdin_file.writeAll(text);
+        try child_stdin_file.writeAll(processed_text);
         try child_stdin_file.writeAll("\",\"params\":{\"");
         try child_stdin_file.writeAll(pn);
         try child_stdin_file.writeAll("\":");
@@ -380,7 +452,7 @@ pub fn main() !void {
         try child_stdin_file.writeAll("}}\n");
     } else {
         try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-        try child_stdin_file.writeAll(text);
+        try child_stdin_file.writeAll(processed_text);
         try child_stdin_file.writeAll("\"}\n");
     }
 
