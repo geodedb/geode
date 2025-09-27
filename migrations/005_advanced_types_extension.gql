@@ -1,0 +1,40 @@
+-- Migration: Social Network Advanced Types Extension
+-- Version: 005
+-- Description: Introduce additional advanced types to existing labels and new indexes
+-- Author: Geode Team
+-- Date: 2025-09-27
+
+-- Extend User with URL/Domain, Jsonb profile, and Bytea avatar
+ALTER LABEL User ADD COLUMN homepage Url;
+ALTER LABEL User ADD COLUMN email_domain Domain;
+ALTER LABEL User ADD COLUMN profile_jsonb Jsonb;
+ALTER LABEL User ADD COLUMN avatar Bytea;
+
+-- Backfill email_domain from email where present
+UPDATE (u:User) SET u.email_domain = Domain(split_part(u.email, '@', 2)) WHERE u.email IS NOT NULL;
+
+-- Extend Post with Json and Xml
+ALTER LABEL Post ADD COLUMN metadata Json;
+ALTER LABEL Post ADD COLUMN content_xml Xml;
+
+-- Extend Company with Url and Domain, and revenue_range Range<int4>
+ALTER LABEL Company ADD COLUMN website_url Url;
+ALTER LABEL Company ADD COLUMN domain Domain;
+ALTER LABEL Company ADD COLUMN revenue_range Range("int4");
+
+-- Extend Device with Url (mgmt), and Bit/VarBit flags
+ALTER LABEL Device ADD COLUMN mgmt_url Url;
+ALTER LABEL Device ADD COLUMN feature_flags VarBit;
+
+-- Add JSONB inverted index on User.profile_jsonb
+CREATE JSONB INDEX user_profile_json_idx ON User(profile_jsonb);
+
+-- Add Domain Trie index on Company.domain
+CREATE DOMAIN INDEX company_domain_idx ON Company(domain);
+
+-- Add Interval-Tree index on Company.revenue_range
+CREATE RANGE INDEX company_revenue_range_idx ON Company(revenue_range);
+
+-- Sample data for new columns
+MATCH (c:Company {id: "COMP-001"}) SET c.website_url = Url("https://example.com"), c.domain = Domain("example.com"), c.revenue_range = Range("int4", 1000000, 5000000, "[)");
+MATCH (u:User {id: "USER-001"}) SET u.homepage = Url("https://users.example.com/u1"), u.profile_jsonb = Jsonb('{"theme":"dark","lang":"en-US"}'), u.avatar = Bytea("\\x89504E470D0A1A0A");

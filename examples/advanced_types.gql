@@ -1,0 +1,32 @@
+# Advanced Types Examples
+
+# Network & Domain
+MATCH (d:Device)
+WHERE ip_contains(Subnet("10.0.0.0/8"), d.ip_address) AND NOT mac_is_multicast(d.mac_address)
+RETURN d.id, d.ip_address, d.subnet;
+
+# Geographic & Geometry
+MATCH (l:Location)
+WHERE st_intersects(l.region, GeometryFromText("POLYGON((0 0,0 1,1 1,1 0,0 0))"))
+RETURN l.id, st_asGeoJSON(l.region) AS region_json;
+
+# Vectors
+MATCH (p:Post)
+WITH p, vector_cosine(p.content_vector, Vector([0.1,0.2,0.3])) AS score
+WHERE score IS NOT NULL AND score > 0.8
+RETURN p.id, score ORDER BY score DESC LIMIT 5;
+
+# JSON/JSONB path
+MATCH (u:User)
+WHERE jsonb_exists(u.profile_jsonb, "theme")
+RETURN u.id, jsonb_get(u.profile_jsonb, "$.theme") AS theme;
+
+# URL/Domain
+MATCH (c:Company)
+WHERE domain_root(c.domain) = "example.com"
+RETURN c.id, url_host(c.website_url) AS host;
+
+# Ranges
+MATCH (c:Company)
+WHERE range_contains(c.revenue_range, 2500000)
+RETURN c.id, c.revenue_range;
