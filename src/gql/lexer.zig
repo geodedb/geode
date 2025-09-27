@@ -7,6 +7,7 @@ pub const Lexer = struct {
     idx: usize = 0,
     line: u32 = 1,
     col: u32 = 1,
+    has_double_solidus_comment: bool = false,
 
     pub fn next(self: *Lexer) t.Token {
         self.skipSeparators();
@@ -17,7 +18,8 @@ pub const Lexer = struct {
         const c = self.peek();
         if (t.isIdentifierStart(c)) return self.scanIdentifierOrKeyword();
         if (t.isDigit(c)) return self.scanNumeric();
-        if (c == '"' or c == '\'') return self.scanStringAny(c);
+        if (c == '"') return self.scanQuotedIdentifier();
+        if (c == '\'') return self.scanStringAny(c);
 
         if (self.matchSingle()) |tokv| return tokn(tokv);
 
@@ -59,8 +61,23 @@ pub const Lexer = struct {
                 self.advance();
                 continue;
             }
+            // multi-line comment: /* ... */
+            if (c == '/' and self.idx + 1 < self.src.len and self.src[self.idx + 1] == '*') {
+                self.idx += 2;
+                self.col += 2;
+                while (self.idx + 1 < self.src.len) {
+                    if (self.src[self.idx] == '*' and self.src[self.idx + 1] == '/') {
+                        self.idx += 2;
+                        self.col += 2;
+                        break;
+                    }
+                    self.advance();
+                }
+                continue;
+            }
             // single-line comment: // ...
             if (c == '/' and self.idx + 1 < self.src.len and self.src[self.idx + 1] == '/') {
+                self.has_double_solidus_comment = true;
                 while (self.idx < self.src.len and self.src[self.idx] != '\n') self.advance();
                 continue;
             }
@@ -282,6 +299,7 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "DELETE")) return .DELETE;
         if (std.ascii.eqlIgnoreCase(word, "MERGE")) return .MERGE;
         if (std.ascii.eqlIgnoreCase(word, "GRAPH")) return .GRAPH;
+        if (std.ascii.eqlIgnoreCase(word, "PROPERTY")) return .PROPERTY;
         if (std.ascii.eqlIgnoreCase(word, "DROP")) return .DROP;
         if (std.ascii.eqlIgnoreCase(word, "ORDER")) return .ORDER;
         if (std.ascii.eqlIgnoreCase(word, "BY")) return .BY;
@@ -290,11 +308,13 @@ pub const Lexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "DESC")) return .DESC;
         if (std.ascii.eqlIgnoreCase(word, "LIMIT")) return .LIMIT;
         if (std.ascii.eqlIgnoreCase(word, "OFFSET")) return .OFFSET;
+        if (std.ascii.eqlIgnoreCase(word, "SKIP")) return .SKIP;
         if (std.ascii.eqlIgnoreCase(word, "HAVING")) return .HAVING;
         if (std.ascii.eqlIgnoreCase(word, "NULLS")) return .NULLS;
         if (std.ascii.eqlIgnoreCase(word, "FIRST")) return .FIRST;
         if (std.ascii.eqlIgnoreCase(word, "LAST")) return .LAST;
         if (std.ascii.eqlIgnoreCase(word, "ON")) return .ON;
+        if (std.ascii.eqlIgnoreCase(word, "UNKNOWN")) return .UNKNOWN;
         if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
         if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
         if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
@@ -321,6 +341,39 @@ pub const Lexer = struct {
             kind = .float_lit;
         }
         return .{ .kind = kind, .lexeme = self.src[start..self.idx], .loc = loc };
+    }
+
+    fn scanQuotedIdentifier(self: *Lexer) t.Token {
+        const loc: t.Location = .{ .line = self.line, .column = self.col };
+        const start = self.idx;
+        self.idx += 1;
+        self.col += 1;
+        const content_start = self.idx;
+        while (self.idx < self.src.len) {
+            const c = self.src[self.idx];
+            if (c == '"') {
+                // Check for escaped quote ""
+                if (self.idx + 1 < self.src.len and self.src[self.idx + 1] == '"') {
+                    self.idx += 2;
+                    self.col += 2;
+                    continue;
+                }
+                // End of quoted identifier
+                const content = self.src[content_start..self.idx];
+                self.idx += 1;
+                self.col += 1;
+                return .{ .kind = .quoted_identifier, .lexeme = content, .loc = loc };
+            }
+            if (c == '\n') {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+            self.idx += 1;
+        }
+        // Unterminated quoted identifier
+        return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }
 
     fn scanStringAny(self: *Lexer, quote: u8) t.Token {

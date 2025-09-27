@@ -53,10 +53,11 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
     gql_exe.root_module.addImport("geode", root_mod);
 
-    const gql_mod = b.createModule(.{ .root_source_file = b.path("src/gql/ast.zig"), .target = target, .optimize = optimize });
-    gql_exe.root_module.addImport("gql", gql_mod);
+    // Create gql module but don't use it as a separate import to avoid conflicts
+    // The gql code is imported through the geode module instead
+    // const gql_mod = b.createModule(.{ .root_source_file = b.path("src/gql/ast.zig"), .target = target, .optimize = optimize });
+    // gql_exe.root_module.addImport("gql", gql_mod);
 
-    const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
     b.installArtifact(gql_exe);
     const gql_run = b.addRunArtifact(gql_exe);
     gql_run.step.dependOn(b.getInstallStep());
@@ -93,13 +94,17 @@ pub fn build(b: *std.Build) void {
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
     gql_unit_tests.root_module.addImport("geode", root_mod);
     gql_unit_tests.root_module.addOptions("build_options", build_opts);
-    gql_unit_tests.root_module.addImport("gql", gql_mod);
+    // Don't add gql module import here to avoid duplicate module ownership
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_gql_unit_tests = b.addRunArtifact(gql_unit_tests);
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    
+    // GQL Conformance tests
+    const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
+    gql_conformance_tests.root_module.addImport("test_harness", b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize }));
     // Provide server graph exec module for guard tests referencing MATCH executor internals
     const server_graph_exec_mod = b.createModule(.{ .root_source_file = b.path("src/server/graph/exec.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("server_graph_exec", server_graph_exec_mod);
@@ -164,6 +169,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_custom_tests.step);
+    
+    const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
+    test_step.dependOn(&run_gql_conformance_tests.step);
 
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
@@ -329,8 +337,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/server/main.zig"), .target = target, .optimize = optimize }),
     });
     geoded_exe.root_module.addImport("geode", root_mod);
-    geoded_exe.root_module.addImport("gql", gql_mod);
-    geoded_exe.root_module.addImport("protocol", protocol_mod);
+    // GQL is accessed through geode module now
     // Planner cost model modules (enumeration seed, explain) with distinct aliases
     const planner_cost_explain_mod = b.createModule(.{ .root_source_file = b.path("src/planner/cost_explain.zig"), .target = target, .optimize = optimize });
     geoded_exe.root_module.addImport("planner_cost_explain", planner_cost_explain_mod);
@@ -513,7 +520,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/fuzz/main.zig"), .target = target, .optimize = optimize }),
     });
     fuzz_exe.root_module.addImport("geode", root_mod);
-    fuzz_exe.root_module.addImport("gql", gql_mod);
+    // GQL is accessed through geode module
     b.installArtifact(fuzz_exe);
     const fuzz_run = b.addRunArtifact(fuzz_exe);
     const fuzz_step = b.step("fuzz", "Run fuzz harnesses (placeholder)");
@@ -524,7 +531,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/bench/main.zig"), .target = target, .optimize = optimize }),
     });
     bench_exe.root_module.addImport("geode", root_mod);
-    bench_exe.root_module.addImport("gql", gql_mod);
+    // GQL is accessed through geode module
     b.installArtifact(bench_exe);
     const bench_run = b.addRunArtifact(bench_exe);
     // Reuse earlier bench_step defined near top (captures TDE bench). We capture it by name via labeled block pattern.
@@ -786,7 +793,6 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_federation_mismatch_flag.zig"), .target = target, .optimize = optimize }),
     });
     fed_mismatch_flag_test.root_module.addImport("geode", root_mod);
-    fed_mismatch_flag_test.root_module.addImport("protocol", protocol_mod);
     fed_mismatch_flag_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
     test_step.dependOn(&fed_mismatch_flag_test.step);
 

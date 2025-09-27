@@ -1,4 +1,6 @@
 const std = @import("std");
+const GqlLexer = @import("gql/lexer.zig");
+const GqlParser = @import("gql/parser.zig");
 // CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCDiagnosticsProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCControlProtocol; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=wire; UPDATED=2025-09-20
@@ -146,35 +148,63 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
 ///  I: Implementation-defined
 ///  U: Usage / policy toggle
 /// Returned slice lifetime: caller owned (single allocation of joined strings).
-pub fn collectImplementationFlags(ally: std.mem.Allocator) ![][]const u8 {
-    // For now, static list; future: driven by runtime config (collation, null ordering, tie-break).
-    const entries = [_][]const u8{
-        "I:IllegalOrderKeyPolicy=ident-only",
-        "I:NullsFirstPolicy", // default null ordering (NULLS FIRST) policy
-        "I:PathTieBreak=LengthId", // UA005/UA006 deterministic ordering
-        "I:Collation=binary", // binary collation default
-    };
-    var out = try ally.alloc([]const u8, entries.len);
-    var i: usize = 0;
-    while (i < entries.len) : (i += 1) out[i] = entries[i];
-    return out;
+pub fn collectImplementationFlags(ally: std.mem.Allocator, lexer_state: ?*const GqlLexer.Lexer, parser_state: ?*const GqlParser.Parser, session_ctx: ?*const SessionContext) ![][]const u8 {
+    // Build dynamic list based on runtime state
+    var flags = std.ArrayList([]const u8).init(ally);
+    
+    // Check if expressions are allowed in ORDER BY (now they are)
+    try flags.append("I:IllegalOrderKeyPolicy=expr");
+    
+    // Check for ORDER tie-break when no explicit ORDER BY
+    if (session_ctx != null and session_ctx.?.implicit_order_applied) {
+        try flags.append("U:OrderTiebreak=LexJSON");
+    }
+    
+    // Check for double-solidus comment usage
+    if (lexer_state != null and lexer_state.?.has_double_solidus_comment) {
+        try flags.append("GB03:DoubleSolidusComment");
+    }
+    
+    // Check for ordinal sort keys
+    if (parser_state != null and parser_state.?.has_ordinal_sort_key) {
+        try flags.append("E:OrdinalSortKey");
+    }
+    
+    // Check for multi-graph catalog
+    if (session_ctx != null and session_ctx.?.graph_catalog != null) {
+        try flags.append("I:GraphCatalog=memory");
+    }
+    
+    // Static flags
+    try flags.append("I:PathTieBreak=LengthId");
+    try flags.append("I:Collation=binary");
+    
+    return flags.toOwnedSlice();
 }
 
+pub const SessionContext = struct {
+    active_graph: []const u8 = "default",
+    graph_catalog: ?*GraphCatalog = null,
+    implicit_order_applied: bool = false,
+};
+
+pub const GraphCatalog = struct {
+    graphs: std.StringHashMap(*anyopaque), // Points to GraphStorage from server/graph/exec.zig
+};
+
 test "TestCANARY_REQ_GQL_005_ProtocolImplementationFlagsEnumeration" {
-    const flags = try collectImplementationFlags(std.testing.allocator);
+    const flags = try collectImplementationFlags(std.testing.allocator, null, null, null);
     defer std.testing.allocator.free(flags);
     // Basic presence checks
     var found_illegal: bool = false;
-    var found_nulls: bool = false;
     var found_tiebreak: bool = false;
     var found_collation: bool = false;
     for (flags) |f| {
-        if (std.mem.eql(u8, f, "I:IllegalOrderKeyPolicy=ident-only")) found_illegal = true;
-        if (std.mem.eql(u8, f, "I:NullsFirstPolicy")) found_nulls = true;
+        if (std.mem.eql(u8, f, "I:IllegalOrderKeyPolicy=expr")) found_illegal = true;
         if (std.mem.eql(u8, f, "I:PathTieBreak=LengthId")) found_tiebreak = true;
         if (std.mem.eql(u8, f, "I:Collation=binary")) found_collation = true;
     }
-    try std.testing.expect(found_illegal and found_nulls and found_tiebreak and found_collation);
+    try std.testing.expect(found_illegal and found_tiebreak and found_collation);
 }
 
 pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {

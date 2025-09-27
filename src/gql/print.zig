@@ -558,6 +558,14 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 try w.print(" IS NULL", .{});
             }
         },
+        .IsUnknown => |uz| {
+            try printExprWith(w, uz.target.*, 0, opts);
+            if (uz.negated) {
+                try w.print(" IS NOT UNKNOWN", .{});
+            } else {
+                try w.print(" IS UNKNOWN", .{});
+            }
+        },
         .Map => |_| try w.print("{{…}}", .{}),
         .PatternComp => |pc| {
             if (pc.alias) |al| try w.print("{s} = ", .{al});

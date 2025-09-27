@@ -125,19 +125,19 @@ go-build:
 	@if [ -d "clients/go/gql" ]; then \
 		if command -v go >/dev/null 2>&1; then \
 			echo "Preparing Go client module vendor..."; \
-			cd clients/go/gql && go mod vendor || echo "go mod vendor (clients/go/gql) failed, continuing"; \
+			(cd clients/go/gql && go mod vendor || echo "go mod vendor (clients/go/gql) failed, continuing"); \
 			echo "Building Go client library (using vendor)..."; \
-			cd clients/go/gql && go build -mod=vendor ./... || { echo "Go build failed (skipping)"; exit 0; }; \
+			(cd clients/go/gql && go build -mod=vendor ./... || { echo "Go build failed (skipping)"; exit 0; }); \
 			if [ -d "clients/go/gql/example" ]; then \
 				echo "Building Go example program..."; \
-				cd clients/go/gql/example && go build -mod=vendor -o ../../../zig-out/bin/gql-example . || echo "Failed to build example"; \
+				(cd clients/go/gql/example && go build -mod=vendor -o ../../../../zig-out/bin/gql-example . || echo "Failed to build example"); \
 			fi; \
 			echo "Go client library built (or skipped failures)"; \
 		else \
 			echo "Go toolchain not found, skipping Go build"; \
 		fi; \
 	else \
-		echo "Go client directory not found, skipping Go build"; \
+			echo "Go client directory not found, skipping Go build"; \
 	fi
 
 # Run Go client tests

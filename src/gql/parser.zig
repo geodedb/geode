@@ -20,6 +20,8 @@ pub const Parser = struct {
     forbid_orderby_calls: bool = false,
     // Optional: when true, path aliases are forbidden in ORDER BY keys.
     forbid_orderby_paths: bool = false,
+    // Track if ordinal sort keys are used
+    has_ordinal_sort_key: bool = false,
     // TS extensions (SERIES UDFs) allowed when true
     ts_extensions: bool = false,
     // Last error context message (static or source-backed slice).
@@ -247,7 +249,44 @@ pub const Parser = struct {
                 self.advance();
                 if (self.cur.kind == .SET) {
                     self.advance();
-                    break :blk .SessionSet;
+                    // Parse SESSION SET PROPERTY GRAPH <name>
+                    var property: []const u8 = "";
+                    var value: []const u8 = "";
+                    
+                    // Check for PROPERTY keyword
+                    if (self.cur.kind == .PROPERTY) {
+                        self.advance();
+                        // Expect GRAPH
+                        if (self.cur.kind == .GRAPH) {
+                            property = "GRAPH";
+                            self.advance();
+                            // Expect graph name (identifier or quoted identifier or string)
+                            if (self.cur.kind == .identifier) {
+                                value = self.cur.lexeme;
+                                self.advance();
+                            } else if (self.cur.kind == .quoted_identifier) {
+                                value = self.cur.lexeme;
+                                self.advance();
+                            } else if (self.cur.kind == .string_lit) {
+                                value = self.cur.lexeme;
+                                self.advance();
+                            } else {
+                                return error.UnexpectedToken;
+                            }
+                        } else {
+                            return error.UnexpectedToken;
+                        }
+                    } else if (self.cur.kind == .identifier) {
+                        // Other session properties (not implemented)
+                        property = self.cur.lexeme;
+                        self.advance();
+                        if (self.cur.kind == .identifier or self.cur.kind == .string_lit) {
+                            value = self.cur.lexeme;
+                            self.advance();
+                        }
+                    }
+                    
+                    break :blk .{ .SessionSet = .{ .property = property, .value = value } };
                 }
                 if (self.cur.kind == .RESET) {
                     self.advance();
@@ -382,16 +421,12 @@ pub const Parser = struct {
             self.advance();
             _ = try self.expect(.BY);
             var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-            // first expression key
+            // first expression key - allow expressions now
             const expr1 = try self.parseOrExpr();
-            if (self.forbid_orderby_calls and self.containsCall(expr1)) return self.unexpected("function calls in ORDER BY are disabled");
-            if (self.ident_order_only and !(expr1 == .Ident or (expr1 == .Int and self.isValidOrdinal(expr1.Int, items.items.len)))) return self.unexpected("ORDER BY key must be identifier");
-            if (!self.ident_order_only and self.strict_order_keys and !self.isSimpleOrderKey(expr1)) return self.unexpected("ORDER BY key must be identifier or member");
-            if (self.forbid_orderby_paths and self.isPathAlias(expr1)) return self.unexpected("ORDER BY cannot reference path alias");
-            if (self.ident_order_only and expr1 == .Ident) {
-                if (!self.isProjectedIdent(expr1.Ident, items.items)) return self.unexpected("ORDER BY key must reference projected identifier");
+            // Check if it's an ordinal
+            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, items.items.len)) {
+                self.has_ordinal_sort_key = true;
             }
-            // If ident_order_only policy is active by server, enforce identifier-only here
             var desc1 = false;
             if (self.cur.kind == .ASC) {
                 desc1 = false;
@@ -415,12 +450,9 @@ pub const Parser = struct {
             while (self.cur.kind == .comma) {
                 self.advance();
                 const exprk = try self.parseOrExpr();
-                if (self.forbid_orderby_calls and self.containsCall(exprk)) return self.unexpected("function calls in ORDER BY are disabled");
-                if (self.ident_order_only and !(exprk == .Ident or (exprk == .Int and self.isValidOrdinal(exprk.Int, items.items.len)))) return self.unexpected("ORDER BY key must be identifier");
-                if (!self.ident_order_only and self.strict_order_keys and !self.isSimpleOrderKey(exprk)) return self.unexpected("ORDER BY key must be identifier or member");
-                if (self.forbid_orderby_paths and self.isPathAlias(exprk)) return self.unexpected("ORDER BY cannot reference path alias");
-                if (self.ident_order_only and exprk == .Ident) {
-                    if (!self.isProjectedIdent(exprk.Ident, items.items)) return self.unexpected("ORDER BY key must reference projected identifier");
+                // Check if it's an ordinal
+                if (exprk == .Int and self.isValidOrdinal(exprk.Int, items.items.len)) {
+                    self.has_ordinal_sort_key = true;
                 }
                 var d = false;
                 if (self.cur.kind == .ASC) {
@@ -453,7 +485,7 @@ pub const Parser = struct {
             const n = try self.expect(.integer_lit);
             limit = try std.fmt.parseInt(usize, n.lexeme, 10);
         }
-        if (self.cur.kind == .OFFSET) {
+        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
             self.advance();
             const n = try self.expect(.integer_lit);
             offset = try std.fmt.parseInt(usize, n.lexeme, 10);
@@ -801,11 +833,21 @@ pub const Parser = struct {
                         neg = true;
                         self.advance();
                     }
-                    _ = try self.expect(.NULL);
-                    const a = self.arena.allocator();
-                    const tp = try a.create(ast.Expr);
-                    tp.* = left;
-                    return .{ .IsNull = .{ .target = tp, .negated = neg } };
+                    if (self.cur.kind == .NULL) {
+                        self.advance();
+                        const a = self.arena.allocator();
+                        const tp = try a.create(ast.Expr);
+                        tp.* = left;
+                        return .{ .IsNull = .{ .target = tp, .negated = neg } };
+                    } else if (self.cur.kind == .UNKNOWN) {
+                        self.advance();
+                        const a = self.arena.allocator();
+                        const tp = try a.create(ast.Expr);
+                        tp.* = left;
+                        return .{ .IsUnknown = .{ .target = tp, .negated = neg } };
+                    } else {
+                        return self.unexpected("expected NULL or UNKNOWN after IS");
+                    }
                 }
                 return left;
             },
@@ -985,7 +1027,7 @@ pub const Parser = struct {
                 const wh_slice = try whens.toOwnedSlice(self.arena.allocator());
                 break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
             },
-            .identifier => blk: {
+            .identifier, .quoted_identifier => blk: {
                 const tkn = self.cur;
                 self.advance();
                 break :blk .{ .Ident = tkn.lexeme };

@@ -9,7 +9,7 @@ pub const Statement = union(enum) {
     Union: UnionQuery,
     Intersect: BinarySet,
     Except: BinarySet,
-    SessionSet,
+    SessionSet: SessionSetStatement,
     SessionReset,
     SessionClose,
     StartTransaction,
@@ -121,6 +121,7 @@ pub const Expr = union(enum) {
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
     In: struct { value: *Expr, set: []*Expr },
     IsNull: struct { target: *Expr, negated: bool },
+    IsUnknown: struct { target: *Expr, negated: bool },
     // String predicates
     StartsWith: struct { value: *Expr, prefix: *Expr },
     EndsWith: struct { value: *Expr, suffix: *Expr },
@@ -175,4 +176,9 @@ pub const SetClause = struct {
 pub const PropertyAccess = struct {
     object: []const u8,
     property: []const u8,
+};
+
+pub const SessionSetStatement = struct {
+    property: []const u8,  // e.g., "GRAPH"
+    value: []const u8,      // e.g., "G1"
 };

@@ -2,7 +2,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_PropertyAccess; OWNER=engine; UPDATED=2025-09-20
 const geode = @import("geode");
 const eval = geode.eval;
-const protocol = @import("protocol");
+const protocol = geode.protocol;
 const ast = geode.ast;
 
 // Graph execution operators for MATCH patterns

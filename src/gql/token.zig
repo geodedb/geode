@@ -33,6 +33,7 @@ pub const TokenKind = enum {
 
     // literals & identifiers
     identifier,
+    quoted_identifier,
     integer_lit,
     float_lit,
     string_lit,
@@ -87,6 +88,7 @@ pub const TokenKind = enum {
     DELETE,
     MERGE,
     GRAPH,
+    PROPERTY,
     DROP,
     ORDER,
     BY,
@@ -95,11 +97,13 @@ pub const TokenKind = enum {
     DESC,
     LIMIT,
     OFFSET,
+    SKIP,
     HAVING,
     NULLS,
     FIRST,
     LAST,
     ON,
+    UNKNOWN,
 
     // pattern and string operators (extras)
     regex_match, // =~

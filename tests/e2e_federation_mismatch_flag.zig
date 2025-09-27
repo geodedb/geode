@@ -1,6 +1,6 @@
 const std = @import("std");
 const geode = @import("geode");
-const protocol = @import("protocol");
+const protocol = geode.protocol;
 // Embedded minimal federation_flag logic (duplicated for test isolation to avoid module import constraints in zig test).
 var g_last_federation_mismatch: bool = false;
 fn consumeMismatchFlag() bool {

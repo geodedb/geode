@@ -21,6 +21,26 @@ pub const ParseOptions = struct {
     ts_extensions: bool = false,
 };
 
+pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !ParseResult {
+    _ = options;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    
+    var lexer = Lexer{ .src = source };
+    var parser = Parser{ 
+        .lx = &lexer, 
+        .arena = &arena, 
+        .cur = lexer.next() 
+    };
+    
+    const program = try parser.parseProgram();
+    
+    return ParseResult{
+        .program = program,
+        .arena = arena,
+    };
+}
+
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
 // Re-export conformance profile helpers for CLI/tools
@@ -56,6 +76,7 @@ pub const storage = struct {
 };
 
 // Re-export wire protocol definitions for tests/benchmarks needing Value / frame types
+pub const protocol = @import("protocol.zig");
 
 // Graph analytics (lightweight builders and centrality algorithms)
 pub const graph = struct {

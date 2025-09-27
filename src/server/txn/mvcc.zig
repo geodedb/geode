@@ -1,5 +1,13 @@
 const std = @import("std");
 
+// Diagnostic info for protocol layer
+pub const DiagnosticInfo = struct {
+    status_class: []const u8,
+    status_subclass: []const u8,
+    message: []const u8,
+    anchor: ?[]const u8,
+};
+
 // Transaction isolation levels
 pub const IsolationLevel = enum {
     ReadUncommitted,
@@ -532,9 +540,8 @@ pub const MVCCManager = struct {
     }
 
     // Map conflict to ISO SQL error code 40001 (serialization failure)
-    pub fn conflictToError(conflict: ConflictInfo) !@import("protocol").DiagnosticInfo {
-        const protocol = @import("protocol");
-        return protocol.DiagnosticInfo{
+    pub fn conflictToError(conflict: ConflictInfo) !DiagnosticInfo {
+        return DiagnosticInfo{
             .status_class = "40",
             .status_subclass = "001",
             .message = try std.fmt.allocPrint(std.heap.page_allocator, "Serialization failure: {s} conflict on resource {} with transaction {}", .{ @tagName(conflict.conflict_type), conflict.resource_id, conflict.conflicting_txn }),

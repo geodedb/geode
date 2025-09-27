@@ -1,8 +1,10 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Precedence & Folding"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_DiagnosticsFold; OWNER=engine; UPDATED=2025-09-20
 
+pub var strict_mode: bool = false; // When true, emit US001 errors for unordered pagination - disabled by default
+
 pub const Code = enum(u16) {
-    US001 = 1, // Pagination unordered
+    US001 = 1, // Pagination unordered (gated behind strict mode)
     GroupByIllegal = 2,
     IllegalOrderKey = 3,
     TypeMismatch = 4,
@@ -10,6 +12,7 @@ pub const Code = enum(u16) {
     TxnState = 6,
     StoragePageChecksum = 7,
     ExecutionGuardTrip = 8, // MATCH safety guard (max_results/max_frontier) triggered
+    GB02CommentDisabled = 9, // Double-hyphen comments disabled
 };
 
 pub fn codeName(c: Code) []const u8 {
@@ -22,6 +25,7 @@ pub fn codeName(c: Code) []const u8 {
         .TxnState => "TxnState",
         .StoragePageChecksum => "StoragePageChecksum",
         .ExecutionGuardTrip => "ExecutionGuardTrip",
+        .GB02CommentDisabled => "GB02",
     };
 }
 
@@ -33,6 +37,7 @@ pub fn anchorFor(c: Code) []const u8 {
         .TxnState => "8",
         .StoragePageChecksum => "4",
         .ExecutionGuardTrip => "14.x",
+        .GB02CommentDisabled => "GB02",
     };
 }
 
@@ -40,12 +45,13 @@ pub fn defaultMessage(c: Code) []const u8 {
     return switch (c) {
         .US001 => "unordered pagination",
         .IllegalOrderKey => "ORDER BY key must be identifier",
-        .GroupByIllegal => "group by illegal",
+        .GroupByIllegal => "grouping error: non-aggregated expression not in GROUP BY",
         .TypeMismatch => "type mismatch",
         .TypeMismatchDivZero => "division by zero",
         .TxnState => "transaction state error",
         .StoragePageChecksum => "page checksum mismatch detected during load",
         .ExecutionGuardTrip => "match execution safety guard tripped",
+        .GB02CommentDisabled => "syntax error: double-hyphen comments disabled (GB02)",
     };
 }
 
@@ -75,6 +81,7 @@ pub fn precedence(a: Code, b: Code) Code {
                 .TxnState => 5,
                 .ExecutionGuardTrip => 6,
                 .StoragePageChecksum => 7,
+                .GB02CommentDisabled => 8,
             };
         }
     };

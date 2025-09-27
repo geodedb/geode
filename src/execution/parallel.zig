@@ -1,4 +1,5 @@
 const std = @import("std");
+const Random = std.Random;
 
 // Parallel execution thread pool with work-stealing scheduler
 // CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/e2e_parallel_execution.zig:1; BENCH=tests/benchmark_parallel_expand_mem_perf.zig:1; OWNER=engine; UPDATED=2025-09-26
@@ -35,7 +36,7 @@ pub const WorkStealingDeque = struct {
             // Non-empty
             if (t == b) {
                 // Last element - need CAS
-                if (!self.top.cmpxchgWeak(t, t + 1, .acq_rel, .acquire)) {
+                if (self.top.cmpxchgWeak(t, t + 1, .acq_rel, .acquire) != null) {
                     // Failed race
                     _ = self.bottom.fetchAdd(1, .release);
                     return null;
@@ -62,7 +63,7 @@ pub const WorkStealingDeque = struct {
             defer self.mutex.unlock();
             
             // Try to steal from top
-            if (self.top.cmpxchgWeak(t, t + 1, .acq_rel, .acquire)) {
+            if (self.top.cmpxchgWeak(t, t + 1, .acq_rel, .acquire) == null) {
                 if (t >= 0 and t < self.jobs.items.len) {
                     return self.jobs.items[@intCast(t)];
                 }
@@ -250,10 +251,8 @@ pub const Pool = struct {
     }
 };
 
-fn workerMainSteal(args: struct { pool: *Pool, worker_id: usize }) void {
-    const pool = args.pool;
-    const worker_id = args.worker_id;
-    var rng = std.rand.DefaultPrng.init(@intCast(std.time.timestamp() + worker_id));
+fn workerMainSteal(pool: *Pool, worker_id: usize) void {
+    var rng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp() + @as(i64, @intCast(worker_id))));
     const random = rng.random();
     
     while (!pool.shutdown) {
