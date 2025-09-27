@@ -35,6 +35,15 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // Main unified CLI binary
+    const geode_exe = b.addExecutable(.{
+        .name = "geode",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/main.zig"), .target = target, .optimize = optimize }),
+    });
+    geode_exe.root_module.addOptions("build_options", build_opts);
+    b.installArtifact(geode_exe);
+    
+    // Legacy wire binary (keep for compatibility)
     const exe = b.addExecutable(.{
         .name = "wire",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }),
@@ -73,11 +82,19 @@ pub fn build(b: *std.Build) void {
     const gql_step = b.step("gql", "Run GQL CLI");
     gql_step.dependOn(&gql_run.step);
 
-    const run_cmd = b.addRunArtifact(exe);
+    // Main run command now uses the unified CLI
+    const run_cmd = b.addRunArtifact(geode_exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("run", "Run the unified geode CLI");
     run_step.dependOn(&run_cmd.step);
+    
+    // Legacy wire run command
+    const run_wire_cmd = b.addRunArtifact(exe);
+    run_wire_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_wire_cmd.addArgs(args);
+    const run_wire_step = b.step("run-wire", "Run the legacy wire app");
+    run_wire_step.dependOn(&run_wire_cmd.step);
 
     // --- Benchmarks ---
     // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
@@ -209,6 +226,12 @@ pub fn build(b: *std.Build) void {
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
     test_step.dependOn(&run_gql_conformance_tests.step);
+    
+    // CLI integration tests
+    const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
+    cli_tests.root_module.addImport("geode", root_mod);
+    const run_cli_tests = b.addRunArtifact(cli_tests);
+    test_step.dependOn(&run_cli_tests.step);
 
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });

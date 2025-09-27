@@ -42,10 +42,44 @@ pub fn main() !void {
     const gpa = if (build_options.enable_sentinel) sentinel.maybeSentinel(std.heap.page_allocator) else std.heap.page_allocator;
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
+    // Handle help flags
+    if (argv.len >= 2 and (std.mem.eql(u8, argv[1], "-h") or std.mem.eql(u8, argv[1], "--help"))) {
+        std.debug.print(
+            "geodec - GQL query client\n" ++
+            "\n" ++
+            "Usage: geodec [options] <GQL text>\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  -h, --help              Show this help\n" ++
+            "  --server <host:port>    Server address (default: 127.0.0.1:8443)\n" ++
+            "  --format <fmt>          Output format: txt|json (default: json)\n" ++
+            "  --json-param <name> <value>  Add JSON parameter\n" ++
+            "  --page-size <n>         Page size for results (default: 1)\n" ++
+            "  --pull-all              Pull all result pages\n" ++
+            "  --extra-pull <n>        Pull n extra pages\n" ++
+            "  --begin                 Start transaction\n" ++
+            "  --commit                Commit transaction\n" ++
+            "  --rollback              Rollback transaction\n" ++
+            "  --process <path>        Use stdio with server process\n" ++
+            "  --server-arg <arg>      Pass argument to server (repeatable)\n" ++
+            "\n" ++
+            "Examples:\n" ++
+            "  geodec \"MATCH (n) RETURN n LIMIT 10\"\n" ++
+            "  geodec --format txt \"MATCH (u:User) RETURN u.name\"\n" ++
+            "  geodec --server localhost:8443 \"RETURN 1 AS test\"\n" ++
+            "\n" ++
+            "Note: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n" ++
+            "\n"
+        , .{});
+        std.process.exit(0);
+    }
+    
     if (argv.len < 2) {
-        std.debug.print("usage: geodec <GQL text> [--json-param name json] [--server host:port] [--process /path/to/geoded] [--page-size N] [--pull-all] [--extra-pull N] [--format txt|json] [--begin] [--commit|--rollback] [--server-arg <arg>]...\n", .{});
-        std.debug.print("\nNote: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n", .{});
-        return;
+        std.debug.print("Error: query text required\n\n", .{});
+        std.debug.print("usage: geodec <GQL text> [options]\n", .{});
+        std.debug.print("Note: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n", .{});
+        std.debug.print("Use 'geodec --help' for detailed usage information.\n", .{});
+        std.process.exit(2);
     }
     const text: []const u8 = argv[1];
     var server_address: []const u8 = "127.0.0.1";
