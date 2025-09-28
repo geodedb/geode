@@ -46,7 +46,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 # Copy binaries
-COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geoded /usr/local/bin/geoded
+COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geode /usr/local/bin/geode
 COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geodec /usr/local/bin/geodec
 COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/cert_gen /usr/local/bin/cert_gen
 
@@ -61,5 +61,5 @@ WORKDIR /home/nonroot
 EXPOSE 7567/udp 9090/tcp
 
 # Run geoded
-ENTRYPOINT ["/usr/local/bin/geoded"]
-CMD ["--listen-quic", "0.0.0.0:7567", "--data-dir", "/data", "--log-json"]
+ENTRYPOINT ["/usr/local/bin/geode", "serve"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:7567", "--log-level", "info"]

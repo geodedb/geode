@@ -160,7 +160,6 @@ fn printAuthUsage() void {
 
 // Subcommand implementations
 fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Check for help
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -169,17 +168,19 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
     }
 
-    // Build server command arguments
-    var server_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
+    var server_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 16) catch return error.OutOfMemory;
     defer server_args.deinit(ally);
 
-    try server_args.append(ally, "./zig-out/bin/geoded");
+    var passthrough = std.ArrayList([]const u8).initCapacity(ally, argv.len + 16) catch return error.OutOfMemory;
+    defer passthrough.deinit(ally);
 
-    // Parse and translate arguments
+    try server_args.append(ally, "geoded");
+
     var data_dir: []const u8 = "./data";
-    var listen_addr: []const u8 = "0.0.0.0:8443";
+    var listen_addr: []const u8 = "0.0.0.0:7567";
     var log_level: []const u8 = "info";
     var use_stdio = false;
+    var override_listen = false;
 
     i = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -203,15 +204,24 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             try server_args.append(ally, "--key");
             try server_args.append(ally, argv[i + 1]);
             i += 1;
+        } else {
+            // passthrough unknown flags (and their value if present)
+            if (std.mem.eql(u8, arg, "--listen-quic")) {
+                override_listen = true;
+            }
+            try passthrough.append(ally, arg);
+            if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
+                try passthrough.append(ally, argv[i + 1]);
+                i += 1;
+            }
         }
     }
 
-    // Add standard arguments
     try server_args.append(ally, "--data_dir");
     try server_args.append(ally, data_dir);
 
-    if (!use_stdio) {
-        try server_args.append(ally, "--listen");
+    if (!use_stdio and !override_listen) {
+        try server_args.append(ally, "--listen-quic");
         try server_args.append(ally, listen_addr);
     }
 
@@ -222,7 +232,10 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         try server_args.append(ally, "--stdio");
     }
 
-    // Execute server
+    if (passthrough.items.len > 0) {
+        for (passthrough.items) |p| try server_args.append(ally, p);
+    }
+
     var child = std.process.Child.init(server_args.items, ally);
     child.stdin_behavior = if (use_stdio) .Pipe else .Inherit;
     child.stdout_behavior = .Inherit;
@@ -255,7 +268,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var client_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
     defer client_args.deinit(ally);
 
-    try client_args.append(ally, "./zig-out/bin/geodec");
+    try client_args.append(ally, "geodec");
 
     // Add query text (first non-option argument)
     var query_text: ?[]const u8 = null;

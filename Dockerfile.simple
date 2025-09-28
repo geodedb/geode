@@ -112,8 +112,8 @@ EXPOSE 7567/udp 9090/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD geodec "RETURN 1 AS health" --server 127.0.0.1:7567 || exit 1
+    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
 
 # Default entrypoint and command
-ENTRYPOINT ["/usr/local/bin/geoded"]
-CMD ["--listen-quic", "0.0.0.0:7567", "--data-dir", "/data", "--log-json"]
+ENTRYPOINT ["/usr/local/bin/geode", "serve"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:7567", "--log-level", "debug"]
