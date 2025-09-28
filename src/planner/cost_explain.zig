@@ -47,8 +47,7 @@ fn buildOpsJson(allocator: std.mem.Allocator, schema_name: []const u8, ops: []co
     try w.print("{d}", .{@as(i64, @intFromFloat(@floor(total_est_rows)))});
     try w.writeAll(",\"cost\":");
     try w.print("{d}", .{@as(i64, @intFromFloat(@floor(total_cost)))});
-    try w.writeAll("}}");
-    try w.writeAll("}");
+    try w.writeAll("},\"profile_version\":2}");
     return buf.toOwnedSlice(allocator);
 }
 

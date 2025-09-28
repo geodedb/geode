@@ -706,8 +706,8 @@ cross-go-windows-x86_64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for Windows x86_64..."; \
 		mkdir -p zig-out/windows-x86_64/bin; \
-		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o ../../../../zig-out/windows-x86_64/bin/gql-example.exe . && \
+		cd clients/go/gql && go mod vendor && cd example && \
+		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor -o ../../../../zig-out/windows-x86_64/bin/gql-example.exe . && \
 		echo "✓ Go client example built for Windows x86_64"; \
 	fi
 
@@ -716,8 +716,8 @@ cross-go-linux-x86_64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for Linux x86_64..."; \
 		mkdir -p zig-out/linux-x86_64/bin; \
-		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../../../../zig-out/linux-x86_64/bin/gql-example . && \
+		cd clients/go/gql && go mod vendor && cd example && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -o ../../../../zig-out/linux-x86_64/bin/gql-example . && \
 		echo "✓ Go client example built for Linux x86_64"; \
 	fi
 
@@ -726,8 +726,8 @@ cross-go-linux-arm64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for Linux ARM64..."; \
 		mkdir -p zig-out/linux-arm64/bin; \
-		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ../../../../zig-out/linux-arm64/bin/gql-example . && \
+		cd clients/go/gql && go mod vendor && cd example && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=vendor -o ../../../../zig-out/linux-arm64/bin/gql-example . && \
 		echo "✓ Go client example built for Linux ARM64"; \
 	fi
 
@@ -736,8 +736,8 @@ cross-go-darwin-x86_64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for macOS x86_64..."; \
 		mkdir -p zig-out/macos-x86_64/bin; \
-		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o ../../../../zig-out/macos-x86_64/bin/gql-example . && \
+		cd clients/go/gql && go mod vendor && cd example && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -mod=vendor -o ../../../../zig-out/macos-x86_64/bin/gql-example . && \
 		echo "✓ Go client example built for macOS x86_64"; \
 	fi
 
@@ -746,8 +746,8 @@ cross-go-darwin-arm64:
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Building Go client example for macOS ARM64..."; \
 		mkdir -p zig-out/macos-arm64/bin; \
-		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o ../../../../zig-out/macos-arm64/bin/gql-example . && \
+		cd clients/go/gql && go mod vendor && cd example && \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -mod=vendor -o ../../../../zig-out/macos-arm64/bin/gql-example . && \
 		echo "✓ Go client example built for macOS ARM64"; \
 	fi
 
