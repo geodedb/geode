@@ -38,7 +38,7 @@ pub const Decimal128 = struct {
         for (str[start..]) |c| {
             if (c == '.') continue;
             const digit = c - '0';
-            if (coeff > (std.math.maxInt(i128) - digit) / 10) return Error.Overflow;
+            if (coeff > (@as(u128, std.math.maxInt(u128)) - digit) / 10) return Error.Overflow;
             coeff = coeff * 10 + digit;
         }
 
@@ -121,14 +121,16 @@ pub const Decimal128 = struct {
         }
 
         const abs_coeff = @abs(self.coeff);
-        const int_part = @divTrunc(abs_coeff, std.math.powi(i128, 10, self.scale) catch unreachable);
-        const frac_part = @rem(abs_coeff, std.math.powi(i128, 10, self.scale) catch unreachable);
+        const scale_power = std.math.powi(u128, 10, @as(u128, @intCast(self.scale))) catch unreachable;
+        const int_part = @divTrunc(abs_coeff, scale_power);
+        const frac_part = @rem(abs_coeff, scale_power);
 
-        return std.fmt.allocPrint(allocator, "{s}{d}.{d:0>[2]}", .{
+        const scale_width = @as(usize, @intCast(self.scale));
+        return std.fmt.allocPrint(allocator, "{s}{d}.{d:0>[3]}", .{
             if (self.coeff < 0) "-" else "",
             int_part,
             frac_part,
-            self.scale,
+            scale_width,
         });
     }
 };

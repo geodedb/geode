@@ -1,5 +1,4 @@
 const std = @import("std");
-const heap = @import("../storage/heap.zig");
 
 pub const DistanceMetric = enum {
     l2,
@@ -17,7 +16,7 @@ pub const HnswNode = struct {
         const vec_copy = try allocator.dupe(f32, vector);
         const neighbors = try allocator.alloc(std.ArrayList(u64), level + 1);
         for (neighbors) |*list| {
-            list.* = std.ArrayList(u64).init(allocator);
+            list.* = std.ArrayList(u64){};
         }
 
         return .{
@@ -30,7 +29,7 @@ pub const HnswNode = struct {
 
     pub fn deinit(self: *HnswNode, allocator: std.mem.Allocator) void {
         for (self.neighbors) |*list| {
-            list.deinit();
+            list.deinit(allocator);
         }
         allocator.free(self.neighbors);
         allocator.free(self.vector);
@@ -46,7 +45,7 @@ pub const Hnsw = struct {
     max_level: u8,
     dim: u16,
     seed: u64,
-    rng: std.rand.DefaultPrng,
+    rng: std.Random.DefaultPrng,
 
     pub fn init(allocator: std.mem.Allocator, dim: u16, M: u16, ef_construction: u16) Hnsw {
         return .{
@@ -58,7 +57,7 @@ pub const Hnsw = struct {
             .max_level = 0,
             .dim = dim,
             .seed = 42,
-            .rng = std.rand.DefaultPrng.init(42),
+            .rng = std.Random.DefaultPrng.init(42),
         };
     }
 
@@ -80,8 +79,7 @@ pub const Hnsw = struct {
     }
 
     fn distance(self: *const Hnsw, a: []const f32, b: []const f32, metric: DistanceMetric) f64 {
-        // CANARY NOTE: metric parameter now actively influences switch below; self reserved for future per-index metric weighting.
-        _ = self; // currently unused; kept for potential future use (per-index normalization factors)
+        _ = self;
         if (a.len != b.len) return std.math.inf(f64);
 
         switch (metric) {
@@ -161,13 +159,13 @@ pub const Hnsw = struct {
             return;
         }
 
-        var candidates = std.ArrayList(u64).init(self.allocator);
-        defer candidates.deinit();
+        var candidates = std.ArrayList(u64){};
+        defer candidates.deinit(self.allocator);
 
-        var w = std.ArrayList(u64).init(self.allocator);
-        defer w.deinit();
+        var w = std.ArrayList(u64){};
+        defer w.deinit(self.allocator);
 
-        try candidates.append(self.entry_point.?);
+        try candidates.append(self.allocator, self.entry_point.?);
 
         var lc: i32 = @intCast(self.max_level);
         while (lc >= 0) : (lc -= 1) {
@@ -175,8 +173,8 @@ pub const Hnsw = struct {
 
             if (layer > level) {
                 const nearest = try self.searchLayer(vector, candidates.items, 1, layer);
-                candidates.clearAndFree();
-                for (nearest) |n| try candidates.append(n);
+                candidates.clearAndFree(self.allocator);
+                for (nearest) |n| try candidates.append(self.allocator, n);
             } else {
                 const nearest = try self.searchLayer(vector, candidates.items, self.ef_construction, layer);
 
@@ -184,24 +182,24 @@ pub const Hnsw = struct {
                 const neighbors = try self.selectNeighbors(vector, nearest, M);
 
                 for (neighbors) |neighbor| {
-                    try node.neighbors[layer].append(neighbor);
+                    try node.neighbors[layer].append(self.allocator, neighbor);
 
                     if (self.nodes.getPtr(neighbor)) |neighbor_node| {
-                        try neighbor_node.neighbors[@min(layer, neighbor_node.level)].append(id);
+                        try neighbor_node.neighbors[@min(layer, neighbor_node.level)].append(self.allocator, id);
 
                         const max_neighbors = if (layer == 0) self.M * 2 else self.M;
                         if (neighbor_node.neighbors[@min(layer, neighbor_node.level)].items.len > max_neighbors) {
                             const pruned = try self.selectNeighbors(neighbor_node.vector, neighbor_node.neighbors[@min(layer, neighbor_node.level)].items, max_neighbors);
-                            neighbor_node.neighbors[@min(layer, neighbor_node.level)].clearAndFree();
+                            neighbor_node.neighbors[@min(layer, neighbor_node.level)].clearAndFree(self.allocator);
                             for (pruned) |p| {
-                                try neighbor_node.neighbors[@min(layer, neighbor_node.level)].append(p);
+                                try neighbor_node.neighbors[@min(layer, neighbor_node.level)].append(self.allocator, p);
                             }
                         }
                     }
                 }
 
-                candidates.clearAndFree();
-                for (nearest) |n| try candidates.append(n);
+                candidates.clearAndFree(self.allocator);
+                for (nearest) |n| try candidates.append(self.allocator, n);
             }
         }
 
@@ -217,18 +215,21 @@ pub const Hnsw = struct {
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
 
-        var candidates = std.PriorityQueue(struct { id: u64, dist: f64 }, void, struct {
-            fn lessThan(_: void, a: @This(), b: @This()) std.math.Order {
+        const DistNode = struct { id: u64, dist: f64 };
+        const CandidatesContext = struct {
+            fn lessThan(_: @This(), a: DistNode, b: DistNode) std.math.Order {
                 return std.math.order(b.dist, a.dist);
             }
-        }.lessThan).init(self.allocator, {});
-        defer candidates.deinit();
-
-        var w = std.PriorityQueue(struct { id: u64, dist: f64 }, void, struct {
-            fn lessThan(_: void, a: @This(), b: @This()) std.math.Order {
+        };
+        const WContext = struct {
+            fn lessThan(_: @This(), a: DistNode, b: DistNode) std.math.Order {
                 return std.math.order(a.dist, b.dist);
             }
-        }.lessThan).init(self.allocator, {});
+        };
+        var candidates = std.PriorityQueue(DistNode, CandidatesContext, CandidatesContext.lessThan).init(self.allocator, CandidatesContext{});
+        defer candidates.deinit();
+
+        var w = std.PriorityQueue(DistNode, WContext, WContext.lessThan).init(self.allocator, WContext{});
         defer w.deinit();
 
         for (entry_points) |ep| {

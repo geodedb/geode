@@ -1,0 +1,37 @@
+name: Fuzz
+on:
+  pull_request:
+  schedule:
+    - cron: '0 3 * * *'
+jobs:
+  fuzz-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Build tests
+        run: zig build test
+      - name: Run fuzz (short)
+        run: zig build test --fuzz=10s
+  fuzz-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [parser, hnsw_snapshot, hnsw_wal, txn_sequence, lfu_cache, protocol_hello, decimal_roundtrip, planner_prune]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Run fuzz target
+        run: |
+          zig build test -- -Denable-llvm-fuzzer=true
+  fuzz-windows-skip:
+    runs-on: windows-latest
+    steps:
+      - run: echo "Skipping fuzz on Windows (unsupported in Zig 0.15.1)"

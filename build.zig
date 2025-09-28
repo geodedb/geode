@@ -20,9 +20,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
+    const enable_llvm_fuzzer = b.option(bool, "enable-llvm-fuzzer", "Enable LLVM libFuzzer fallback for fuzz tests") orelse false;
 
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
+    build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -102,6 +104,8 @@ pub fn build(b: *std.Build) void {
     lib_unit_tests.root_module.addImport("geode", root_mod);
     lib_unit_tests.root_module.addOptions("build_options", build_opts);
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+
+    const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)
     const ext_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/types/extended_functions.zig"), .target = target, .optimize = optimize }) });
@@ -226,6 +230,66 @@ pub fn build(b: *std.Build) void {
     cli_tests.root_module.addImport("geode", root_mod);
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_step.dependOn(&run_cli_tests.step);
+
+    if (is_windows) {
+        const echo_skip = b.addSystemCommand(&.{ "sh", "-lc", "echo 'Skipping fuzz on Windows (unsupported in Zig 0.15.1)'" });
+        test_step.dependOn(&echo_skip.step);
+    } else {
+        const parser_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/parser_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        parser_fuzz_tests.root_module.addImport("geode", root_mod);
+        parser_fuzz_tests.root_module.addOptions("build_options", build_opts);
+        const run_parser_fuzz = b.addRunArtifact(parser_fuzz_tests);
+        test_step.dependOn(&run_parser_fuzz.step);
+
+        // moved earlier wiring for hnsw fuzz modules above
+
+        const txn_sequence_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/txn_sequence_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        const mvcc_adv_mod_for_fuzz = b.createModule(.{ .root_source_file = b.path("src/txn/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
+        const range_tracker_mod_for_fuzz = b.createModule(.{ .root_source_file = b.path("src/txn/range_tracker.zig"), .target = target, .optimize = optimize });
+        const txn_mod_for_fuzz = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
+        txn_mod_for_fuzz.addImport("mvcc_adv", mvcc_adv_mod_for_fuzz);
+        txn_mod_for_fuzz.addImport("range_tracker", range_tracker_mod_for_fuzz);
+        txn_sequence_fuzz_tests.root_module.addImport("txn", txn_mod_for_fuzz);
+        const run_txn_sequence_fuzz = b.addRunArtifact(txn_sequence_fuzz_tests);
+        test_step.dependOn(&run_txn_sequence_fuzz.step);
+
+        const lfu_cache_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/lfu_cache_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        lfu_cache_fuzz_tests.root_module.addImport("geode", root_mod);
+        const run_lfu_cache_fuzz = b.addRunArtifact(lfu_cache_fuzz_tests);
+        test_step.dependOn(&run_lfu_cache_fuzz.step);
+
+        const protocol_hello_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/protocol_hello_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        protocol_hello_fuzz_tests.root_module.addImport("geode", root_mod);
+        const run_protocol_hello_fuzz = b.addRunArtifact(protocol_hello_fuzz_tests);
+        test_step.dependOn(&run_protocol_hello_fuzz.step);
+
+        const decimal_roundtrip_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/decimal_roundtrip_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        const decimal128_mod = b.createModule(.{ .root_source_file = b.path("src/types/decimal128.zig"), .target = target, .optimize = optimize });
+        decimal_roundtrip_fuzz_tests.root_module.addImport("decimal128", decimal128_mod);
+        const run_decimal_roundtrip_fuzz = b.addRunArtifact(decimal_roundtrip_fuzz_tests);
+        test_step.dependOn(&run_decimal_roundtrip_fuzz.step);
+
+        const planner_prune_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/planner_prune_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        const planner_enumerator_mod_fuzz = b.createModule(.{ .root_source_file = b.path("src/planner/enumerator.zig"), .target = target, .optimize = optimize });
+        planner_prune_fuzz_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod_fuzz);
+        const run_planner_prune_fuzz = b.addRunArtifact(planner_prune_fuzz_tests);
+        test_step.dependOn(&run_planner_prune_fuzz.step);
+
+        const hnsw_snapshot_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_snapshot_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        const hnsw_persist_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw_persist.zig"), .target = target, .optimize = optimize });
+        const hnsw_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw.zig"), .target = target, .optimize = optimize });
+        hnsw_persist_mod.addImport("hnsw", hnsw_mod);
+        hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
+        hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
+        const run_hnsw_snapshot_fuzz = b.addRunArtifact(hnsw_snapshot_fuzz_tests);
+        test_step.dependOn(&run_hnsw_snapshot_fuzz.step);
+
+        const hnsw_wal_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_wal_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        hnsw_wal_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
+        hnsw_wal_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
+        const run_hnsw_wal_fuzz = b.addRunArtifact(hnsw_wal_fuzz_tests);
+        test_step.dependOn(&run_hnsw_wal_fuzz.step);
+    }
 
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
@@ -711,6 +775,13 @@ pub fn build(b: *std.Build) void {
     user_auth_step.dependOn(&user_auth_run.step);
     const doccheck_step = b.step("doccheck", "Validate documentation conformance tables");
     doccheck_step.dependOn(&doccheck_run.step);
+
+    const gen_fuzz_exe = b.addExecutable(.{ .name = "gen_fuzz", .root_module = b.createModule(.{ .root_source_file = b.path("tools/gen_fuzz.zig"), .target = target, .optimize = optimize }) });
+    b.installArtifact(gen_fuzz_exe);
+    const gen_fuzz_run = b.addRunArtifact(gen_fuzz_exe);
+    if (b.args) |a| gen_fuzz_run.addArgs(a);
+    const gen_fuzz_step = b.step("gen-fuzz", "Generate fuzz target scaffold");
+    gen_fuzz_step.dependOn(&gen_fuzz_run.step);
 
     const tools_step = b.step("tools", "Build all auxiliary tools");
     tools_step.dependOn(&doccheck_exe.step);

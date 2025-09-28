@@ -1,5 +1,5 @@
 const std = @import("std");
-const hnsw = @import("hnsw.zig");
+const hnsw = @import("hnsw");
 
 const MAGIC = "GDHW";
 
@@ -97,7 +97,7 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec
         var record: NodeRecord = undefined;
         _ = try snap_file.read(std.mem.asBytes(&record));
 
-        var vector = try allocator.alloc(f32, header.dim);
+        const vector = try allocator.alloc(f32, header.dim);
         for (vector) |*v| {
             var bits: u32 = undefined;
             _ = try vec_file.read(std.mem.asBytes(&bits));
@@ -116,7 +116,7 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec
             while (j < count) : (j += 1) {
                 var neighbor: u64 = undefined;
                 _ = try snap_file.read(std.mem.asBytes(&neighbor));
-                try node.neighbors[level].append(neighbor);
+                try node.neighbors[level].append(allocator, neighbor);
             }
         }
 
@@ -159,7 +159,7 @@ pub fn replayWal(index: *hnsw.Hnsw, path: []const u8) !void {
         var dim: u16 = undefined;
         _ = try file.read(std.mem.asBytes(&dim));
 
-        var vector = try index.allocator.alloc(f32, dim);
+        const vector = try index.allocator.alloc(f32, dim);
         defer index.allocator.free(vector);
 
         for (vector) |*v| {
