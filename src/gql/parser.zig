@@ -133,6 +133,44 @@ pub const Parser = struct {
                 }
                 break :blk_scan .ScanValues;
             },
+            .SELECT => blk_select: {
+                // SELECT [DISTINCT] <select_list> maps to RETURN semantics
+                self.advance();
+                var distinct = false;
+                if (self.cur.kind == .DISTINCT) {
+                    distinct = true;
+                    self.advance();
+                }
+
+                // Parse select list (same as RETURN items)
+                var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                while (true) {
+                    const expr = try self.parseOrExpr();
+                    var alias: ?[]const u8 = null;
+                    if (self.cur.kind == .AS) {
+                        self.advance();
+                        const al = try self.expect(.identifier);
+                        alias = al.lexeme;
+                    }
+                    try items.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
+                    if (self.cur.kind != .comma) break;
+                    self.advance();
+                }
+
+                // Create a minimal Query with just the return clause
+                // (No FROM clause support yet - maps to current active graph)
+                const query = ast.Query{
+                    .optional_match = false,
+                    .match = .{ .chains = &.{} }, // Empty match pattern
+                    .where_clause = null,
+                    .with_clause = null,
+                    .ret = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct },
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                };
+                break :blk_select .{ .Query = query };
+            },
             .MATCH, .OPTIONAL => blk_query: {
                 const first = try self.parseQuery();
                 if (self.cur.kind == .UNION) {
@@ -948,7 +986,7 @@ pub const Parser = struct {
                 var saw_distinct = false;
                 if (self.cur.kind != .r_paren) {
                     // Special handling: COUNT(DISTINCT expr)
-                    if (base == .Ident and std.ascii.eqlIgnoreCase(base.Ident, "count") and self.cur.kind == .DISTINCT) {
+                    if (base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count") and self.cur.kind == .DISTINCT) {
                         saw_distinct = true;
                         self.advance();
                     }
@@ -969,9 +1007,9 @@ pub const Parser = struct {
                 // Simple built-in validation: enforce arity for a few known functions
                 if (base == .Ident) {
                     var name = base.Ident;
-                    if (saw_distinct and std.ascii.eqlIgnoreCase(name, "count")) {
+                    if (saw_distinct and std.ascii.eqlIgnoreCase(name.orig, "count")) {
                         // Rewrite to synthetic function name countDistinct so executor picks it up.
-                        name = "countDistinct";
+                        name = .{ .orig = "countDistinct", .cnf = "COUNTDISTINCT" };
                         // Allocate new ident expr for callee
                         const np = try a.create(ast.Expr);
                         np.* = .{ .Ident = name };
@@ -980,7 +1018,7 @@ pub const Parser = struct {
                     // Convert []*Expr -> []Expr view for validator
                     var flat = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     for (args_slice) |p| try flat.append(self.arena.allocator(), p.*);
-                    if (!validateBuiltinCall(name, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions) and !std.ascii.eqlIgnoreCase(name, "countDistinct")) return self.unexpected("invalid builtin function call");
+                    if (!validateBuiltinCall(name.orig, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions) and !std.ascii.eqlIgnoreCase(name.orig, "countDistinct")) return self.unexpected("invalid builtin function call");
                 }
                 base = .{ .Call = .{ .callee = cp, .args = args_slice } };
                 continue;
@@ -1057,10 +1095,13 @@ pub const Parser = struct {
                 const wh_slice = try whens.toOwnedSlice(self.arena.allocator());
                 break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
             },
-            .identifier, .quoted_identifier => blk: {
+            .identifier, .quoted_identifier, .EXISTS => blk: {
                 const tkn = self.cur;
                 self.advance();
-                break :blk .{ .Ident = tkn.lexeme };
+                // Create CNF representation for identifiers
+                const unicode = @import("../unicode/unicode_tables.zig");
+                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
+                break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
             },
             .string_lit => blk: {
                 const tkn = self.cur;

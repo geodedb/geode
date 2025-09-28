@@ -7,13 +7,25 @@ pub const Profile = struct {
 };
 
 pub const Features = struct {
+    // Core language features
     order_by: bool = true,
     order_by_nulls_policy: bool = true,
+    order_by_alias_resolution: bool = true,
     group_by_phase1: bool = true,
     having_parsed: bool = true,
     set_ops_skeleton: bool = true,
     temporals_structured: bool = true,
     session_offset_flag: bool = true,
+    // ISO conformance features
+    select_statement: bool = true,
+    return_distinct: bool = true,
+    unicode_identifiers: bool = true,
+    case_insensitive_identifiers: bool = true,
+    comment_double_slash: bool = true, // GB03
+    comment_double_dash: bool = true, // GB02
+    reserved_words_complete: bool = true,
+    unordered_pagination: bool = true, // No longer requires ORDER BY
+    structured_diagnostics: bool = true,
 };
 
 pub fn writeConformanceJson(w: anytype, prof: Profile) !void {
@@ -22,11 +34,21 @@ pub fn writeConformanceJson(w: anytype, prof: Profile) !void {
     try w.writeAll("\"features\":{");
     try w.print("\"order_by\":{},", .{prof.features.order_by});
     try w.print("\"order_by_nulls_policy\":{},", .{prof.features.order_by_nulls_policy});
+    try w.print("\"order_by_alias_resolution\":{},", .{prof.features.order_by_alias_resolution});
     try w.print("\"group_by_phase1\":{},", .{prof.features.group_by_phase1});
     try w.print("\"having_parsed\":{},", .{prof.features.having_parsed});
     try w.print("\"set_ops_skeleton\":{},", .{prof.features.set_ops_skeleton});
     try w.print("\"temporals_structured\":{},", .{prof.features.temporals_structured});
-    try w.print("\"session_offset_flag\":{}", .{prof.features.session_offset_flag});
+    try w.print("\"session_offset_flag\":{},", .{prof.features.session_offset_flag});
+    try w.print("\"select_statement\":{},", .{prof.features.select_statement});
+    try w.print("\"return_distinct\":{},", .{prof.features.return_distinct});
+    try w.print("\"unicode_identifiers\":{},", .{prof.features.unicode_identifiers});
+    try w.print("\"case_insensitive_identifiers\":{},", .{prof.features.case_insensitive_identifiers});
+    try w.print("\"comment_double_slash\":{},", .{prof.features.comment_double_slash});
+    try w.print("\"comment_double_dash\":{},", .{prof.features.comment_double_dash});
+    try w.print("\"reserved_words_complete\":{},", .{prof.features.reserved_words_complete});
+    try w.print("\"unordered_pagination\":{},", .{prof.features.unordered_pagination});
+    try w.print("\"structured_diagnostics\":{}", .{prof.features.structured_diagnostics});
     try w.writeAll("}}");
 }
 
@@ -45,7 +67,7 @@ pub fn collectImplDefinedFlags(ally: std.mem.Allocator) ![][]const u8 {
     var list = try ally.alloc([]const u8, 5);
     list[0] = "CollationBinaryDefault";
     list[1] = "NullOrderPolicyDefault";
-    list[2] = "US001PaginationPolicy";
+    list[2] = "UnorderedPaginationAllowed"; // Changed from US001
     list[3] = "UA005PathTieBreak";
     list[4] = "UA006PathTieBreak";
     return list;

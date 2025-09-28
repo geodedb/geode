@@ -378,7 +378,7 @@ pub fn executeWith(
 
         for (with_clause.items) |item| {
             const alias = item.alias orelse switch (item.expr) {
-                .Ident => |name| name,
+                .Ident => |id| id.orig,
                 else => "col",
             };
 
@@ -406,16 +406,16 @@ pub fn executeWith(
 
             // Handle different expression types
             switch (item.expr) {
-                .Ident => |name| {
+                .Ident => |id| {
                     // Pass through existing binding
-                    if (binding.vars.get(name)) |val| {
+                    if (binding.vars.get(id.orig)) |val| {
                         try new_binding.vars.put(alias, val);
                     }
                 },
                 .Call => |call| {
                     // Handle aggregation functions
                     if (call.callee.* == .Ident) {
-                        const func_name = call.callee.*.Ident;
+                        const func_name = call.callee.*.Ident.orig;
                         if (std.ascii.eqlIgnoreCase(func_name, "count")) {
                             // For now, just count as 1 per binding
                             try new_binding.vars.put(alias, .{ .Value = .{ .Int = 1 } });
@@ -896,8 +896,8 @@ pub fn bindingsToJson(
 
             // Evaluate return expression in binding context
             switch (item.expr) {
-                .Ident => |name| {
-                    if (binding.vars.get(name)) |val| {
+                .Ident => |id| {
+                    if (binding.vars.get(id.orig)) |val| {
                         try writeBindingValue(writer, val, graph);
                     } else {
                         try writer.writeAll("null");

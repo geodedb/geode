@@ -101,8 +101,14 @@ pub const OrderBy = struct {
     keys: []OrderKey,
 };
 
+// Identifier with canonical name form for case-insensitive matching
+pub const IdentRepr = struct {
+    orig: []const u8, // Original identifier as written
+    cnf: []const u8, // Canonical name form (uppercase)
+};
+
 pub const Expr = union(enum) {
-    Ident: []const u8,
+    Ident: IdentRepr,
     String: []const u8,
     Int: i64,
     // Fixed-point decimal literal: coeff * 10^-scale

@@ -22,7 +22,54 @@ pub const Row = struct {
     key: ast.Expr,
     // An identifier to test stability.
     id: usize,
+    // Values for the projected columns (for DISTINCT deduplication)
+    values: []eval.Value = &.{},
 };
+
+// Deduplicate rows if DISTINCT is specified
+pub fn dedupRowsIfDistinct(rows: []Row, distinct: bool, order: ?ast.OrderBy, arena: std.mem.Allocator) ![]Row {
+    if (!distinct or rows.len == 0) return rows;
+
+    // Track seen rows using a hash map
+    var seen = std.AutoHashMap(u64, void).init(arena);
+    defer seen.deinit();
+
+    var result = std.ArrayList(Row).init(arena);
+    defer result.deinit();
+
+    for (rows) |row| {
+        // Compute hash of row values
+        var hasher = std.hash.Wyhash.init(0);
+        for (row.values) |val| {
+            // Simple hash based on value type and content
+            switch (val) {
+                .Null => hasher.update("null"),
+                .Bool => |b| hasher.update(if (b) "true" else "false"),
+                .Int => |i| {
+                    var buf: [32]u8 = undefined;
+                    const s = std.fmt.bufPrint(&buf, "{}", .{i}) catch "0";
+                    hasher.update(s);
+                },
+                .String => |s| hasher.update(s),
+                else => hasher.update("other"),
+            }
+        }
+        const hash = hasher.final();
+
+        // Check if we've seen this row before
+        const gop = try seen.getOrPut(hash);
+        if (!gop.found_existing) {
+            try result.append(row);
+        }
+    }
+
+    // If ordered, maintain the order; otherwise return deduplicated rows
+    if (order != null) {
+        // Already maintained order by processing in sequence
+    }
+
+    return result.toOwnedSlice();
+}
 
 pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy.NullsPolicy, ctx: planner.SessionContext, ally: std.mem.Allocator) !void {
     // Sort indices to keep original stability; break ties by original index.
@@ -209,8 +256,8 @@ pub fn runGroupedQuery(
         fn go(ally_inner: std.mem.Allocator, aggs_out: *std.ArrayList(Agg), args_out: *std.ArrayList(?ast.Expr), e: ast.Expr) void {
             switch (e) {
                 .Call => |c| switch (c.callee.*) {
-                    .Ident => |nm| {
-                        if (std.ascii.eqlIgnoreCase(nm, "count")) {
+                    .Ident => |id| {
+                        if (std.ascii.eqlIgnoreCase(id.orig, "count")) {
                             if (c.args.len == 0) {
                                 aggs_out.append(ally_inner, .CountStar) catch {};
                                 args_out.append(ally_inner, null) catch {};
@@ -218,22 +265,22 @@ pub fn runGroupedQuery(
                                 aggs_out.append(ally_inner, .Count) catch {};
                                 args_out.append(ally_inner, c.args[0].*) catch {};
                             }
-                        } else if (std.ascii.eqlIgnoreCase(nm, "countdistinct") or std.ascii.eqlIgnoreCase(nm, "count_distinct")) {
+                        } else if (std.ascii.eqlIgnoreCase(id.orig, "countdistinct") or std.ascii.eqlIgnoreCase(id.orig, "count_distinct")) {
                             // Interim syntax: COUNT_DISTINCT(expr) or countDistinct(expr) until parser supports COUNT(DISTINCT expr)
                             if (c.args.len == 1) {
                                 aggs_out.append(ally_inner, .CountDistinct) catch {};
                                 args_out.append(ally_inner, c.args[0].*) catch {};
                             }
-                        } else if (std.ascii.eqlIgnoreCase(nm, "sum")) {
+                        } else if (std.ascii.eqlIgnoreCase(id.orig, "sum")) {
                             aggs_out.append(ally_inner, .Sum) catch {};
                             args_out.append(ally_inner, c.args[0].*) catch {};
-                        } else if (std.ascii.eqlIgnoreCase(nm, "min")) {
+                        } else if (std.ascii.eqlIgnoreCase(id.orig, "min")) {
                             aggs_out.append(ally_inner, .Min) catch {};
                             args_out.append(ally_inner, c.args[0].*) catch {};
-                        } else if (std.ascii.eqlIgnoreCase(nm, "max")) {
+                        } else if (std.ascii.eqlIgnoreCase(id.orig, "max")) {
                             aggs_out.append(ally_inner, .Max) catch {};
                             args_out.append(ally_inner, c.args[0].*) catch {};
-                        } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {
+                        } else if (std.ascii.eqlIgnoreCase(id.orig, "avg")) {
                             aggs_out.append(ally_inner, .Avg) catch {};
                             args_out.append(ally_inner, c.args[0].*) catch {};
                         }
@@ -434,7 +481,7 @@ pub fn runGroupedQuery(
                 .Call => |c| blk_c: {
                     const callee = c.callee.*;
                     const nm = switch (callee) {
-                        .Ident => |s| s,
+                        .Ident => |id| id.orig,
                         else => break :blk_c,
                     };
                     var sig = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
@@ -490,7 +537,7 @@ pub fn runGroupedQuery(
                         }
                     } else if (expr == .Ident) {
                         // If it's an alias, replace with the aliased expression
-                        const id = expr.Ident;
+                        const id = expr.Ident.orig;
                         var ridx: ?usize = null;
                         var ri2: usize = 0;
                         while (ri2 < q.ret.items.len) : (ri2 += 1) {
@@ -2187,7 +2234,7 @@ pub fn rewriteExprWithAggregates(
         .Call => |c| blk_call: {
             const callee = c.callee.*;
             const nm = switch (callee) {
-                .Ident => |s| s,
+                .Ident => |id| id.orig,
                 else => break :blk_call .{ .Null = {} },
             };
             var sig_buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;

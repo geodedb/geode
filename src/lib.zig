@@ -3,6 +3,15 @@ const Lexer = @import("gql/lexer.zig").Lexer;
 const Parser = @import("gql/parser.zig").Parser;
 pub const ast = @import("gql/ast.zig");
 
+// GQL module namespace
+pub const gql = struct {
+    pub const ast = @import("gql/ast.zig");
+    pub const token = @import("gql/token.zig");
+    pub const status = @import("gql/status.zig");
+    pub const parser = @import("gql/parser.zig");
+    pub const lexer = @import("gql/lexer.zig");
+};
+
 pub const ParseResult = struct {
     program: ast.Program,
     arena: std.heap.ArenaAllocator,
@@ -61,6 +70,7 @@ pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
+pub const unicode_tables = @import("unicode/unicode_tables.zig");
 // Re-export extended evaluation registry and extended types for CANARY tests
 pub const eval_ext = @import("eval_extended.zig");
 pub const ext_types = @import("types/extended.zig");

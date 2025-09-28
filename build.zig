@@ -128,6 +128,11 @@ pub fn build(b: *std.Build) void {
 
     // GQL Conformance tests
     const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
+
+    // Add new ISO conformance patch tests
+    const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
+    conformance_patch_tests.root_module.addImport("geode", root_mod);
+    const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
     gql_conformance_tests.root_module.addImport("test_harness", b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize }));
     // Provide server graph exec module for guard tests referencing MATCH executor internals
     const server_graph_exec_mod = b.createModule(.{ .root_source_file = b.path("src/server/graph/exec.zig"), .target = target, .optimize = optimize });
@@ -197,6 +202,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ext_builtins_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_gql_unit_tests.step);
+    test_step.dependOn(&run_conformance_patch_tests.step);
     test_step.dependOn(&run_custom_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests

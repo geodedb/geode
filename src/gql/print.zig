@@ -372,7 +372,7 @@ pub fn stringifyExprAlloc(ally: std.mem.Allocator, e: ast.Expr, opts: PrintOptio
 pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !void {
     _ = prec;
     switch (e) {
-        .Ident => |s| try w.print("{s}", .{s}),
+        .Ident => |id| try w.print("{s}", .{id.orig}),
         .String => |s| try w.print("\"{s}\"", .{s}),
         .Int => |n| try w.print("{d}", .{n}),
         .Decimal => |d| blk_dec: {

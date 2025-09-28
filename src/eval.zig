@@ -503,7 +503,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .Int => |n| .{ .Int = n },
         .Bool => |b| .{ .Bool = b },
         .String => |s| .{ .Str = s },
-        .Ident => |name| env.get(name) orelse Value{ .Null = {} },
+        .Ident => |id| env.get(id.orig) orelse Value{ .Null = {} },
         .Param => |pname| env.getParam(pname) orelse Value{ .Null = {} },
         .Unary => |u| blk: {
             const v = try evalExpr(ally, u.expr.*, env);
@@ -635,8 +635,8 @@ fn inList(value: Value, set: []*ast.Expr, ally: std.mem.Allocator, env: Env) Eva
 test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     const ally = std.testing.allocator;
     const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } } };
-    var a_ident = ast.Expr{ .Ident = "a" };
-    var s_ident = ast.Expr{ .Ident = "s" };
+    var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     // IN list with NULL element yields NULL if no match
     var nullx = ast.Expr{ .Null = {} };
     var lit9 = ast.Expr{ .Int = 9 };
@@ -685,7 +685,7 @@ test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
 test "eval: mixed-type IN across bools and big ints stringified" {
     const ally = std.testing.allocator;
     const env = Env{ .names = &.{"a"}, .values = &.{Value{ .Int = 9007199254740991 }} }; // 2^53-1
-    var a_ident = ast.Expr{ .Ident = "a" };
+    var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var s_big = ast.Expr{ .String = "9007199254740991" };
     var t_true = ast.Expr{ .String = "true" };
     var b_true = ast.Expr{ .Bool = true };
@@ -699,7 +699,7 @@ test "eval: mixed-type IN across bools and big ints stringified" {
 test "eval: CASE searched produces expected values" {
     const ally = std.testing.allocator;
     const env = Env{ .names = &.{"a"}, .values = &.{Value{ .Int = 1 }} };
-    var a_expr = ast.Expr{ .Ident = "a" };
+    var a_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var zero = ast.Expr{ .Int = 0 };
     var pred = ast.Expr{ .Binary = .{ .op = .Gt, .left = &a_expr, .right = &zero } };
     var p = ast.Expr{ .String = "p" };
@@ -713,7 +713,7 @@ test "eval: CASE searched produces expected values" {
 test "eval: string predicates and regex basic" {
     const ally = std.testing.allocator;
     const env = Env{ .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }} };
-    var s = ast.Expr{ .Ident = "s" };
+    var s = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     var al = ast.Expr{ .String = "Al" };
     var z = ast.Expr{ .String = "Z" };
     var ice = ast.Expr{ .String = "ice" };
@@ -767,13 +767,13 @@ test "eval: implicit int<->string in predicates and IN list" {
     const ally = std.testing.allocator;
     const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 42 }, Value{ .Str = "42" } } };
     // s STARTS WITH "4" -> true
-    var s_ident = ast.Expr{ .Ident = "s" };
+    var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     var four = ast.Expr{ .String = "4" };
     const sw = ast.Expr{ .StartsWith = .{ .value = &s_ident, .prefix = &four } };
     const v1 = try evalExpr(ally, sw, env);
     try std.testing.expect(v1 == .Bool and v1.Bool == true);
     // a = "42" -> true (implicit Eq int<->string)
-    var a_ident = ast.Expr{ .Ident = "a" };
+    var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var s_lit = ast.Expr{ .String = "42" };
     const eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_lit } };
     const v2 = try evalExpr(ally, eq, env);
@@ -790,7 +790,7 @@ test "eval: implicit int<->string in predicates and IN list" {
 test "eval: parameters substitution and STARTS WITH via $param" {
     const ally = std.testing.allocator;
     const env = Env{ .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }}, .param_names = &.{"prefix"}, .param_values = &.{Value{ .Str = "Al" }} };
-    var s_ident = ast.Expr{ .Ident = "s" };
+    var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     var pref = ast.Expr{ .Param = "prefix" };
     const sw = ast.Expr{ .StartsWith = .{ .value = &s_ident, .prefix = &pref } };
     const v = try evalExpr(ally, sw, env);
@@ -802,7 +802,7 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     // Env: a=7, s="007"; params: needle="Al", list=["6",7], pat="^A.*$"
     const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } }, .param_names = &.{ "needle", "list0", "list1", "pat" }, .param_values = &.{ Value{ .Str = "Al" }, Value{ .Str = "6" }, Value{ .Int = 7 }, Value{ .Str = "^A.*$" } } };
     // a IN [$list0, $list1] -> true
-    var a_ident = ast.Expr{ .Ident = "a" };
+    var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var p0 = ast.Expr{ .Param = "list0" };
     var p1 = ast.Expr{ .Param = "list1" };
     var items: [2]*ast.Expr = .{ &p0, &p1 };
@@ -810,7 +810,7 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     const v1 = try evalExpr(ally, inx, env);
     try std.testing.expect(v1 == .Bool and v1.Bool);
     // Equality mixed-type: a = s (7 vs "007") -> false; but a = "7" literal -> true
-    var s_ident = ast.Expr{ .Ident = "s" };
+    var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     const eq1 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_ident } };
     const v2 = try evalExpr(ally, eq1, env);
     try std.testing.expect(v2 == .Bool and !v2.Bool);

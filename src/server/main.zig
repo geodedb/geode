@@ -1252,8 +1252,8 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         const EvalInBinding = struct {
             fn evalRet(alloc: std.mem.Allocator, b: *const graph_exec.Binding, it: geode.ast.ReturnItem, g: *const graph_exec.GraphStorage) eval.Value {
                 return switch (it.expr) {
-                    .Ident => |name| blk_i: {
-                        if (b.vars.get(name)) |bv| {
+                    .Ident => |id| blk_i: {
+                        if (b.vars.get(id.orig)) |bv| {
                             switch (bv) {
                                 .Value => |pv| break :blk_i PropToEval.conv(pv),
                                 .Node, .Edge, .Path, .Null => break :blk_i eval.Value{ .Null = {} },
@@ -1376,7 +1376,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     const key_expr = ob.keys[ki].expr;
                     var kv: KeyVal = .{ .kind = .Null };
                     if (key_expr == .Ident) {
-                        if (col_index.get(key_expr.Ident)) |posc| {
+                        if (col_index.get(key_expr.Ident.orig)) |posc| {
                             if (ri_k < rows_values.items.len and posc < rows_values.items[ri_k].len) {
                                 const v = rows_values.items[ri_k][posc];
                                 kv = switch (v) {
@@ -1635,7 +1635,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     const key_expr = ob.keys[key_i].expr;
                     var val: eval.Value = .{ .Null = {} };
                     if (need_row_values and key_expr == .Ident) {
-                        if (col_index.get(key_expr.Ident)) |colpos| {
+                        if (col_index.get(key_expr.Ident.orig)) |colpos| {
                             if (row_index < rows_values.items.len) {
                                 const rv = rows_values.items[row_index];
                                 if (colpos < rv.len) val = rv[colpos];
@@ -3514,7 +3514,7 @@ pub fn main() !void {
                                             if (it2.expr == .Call) {
                                                 const callee = it2.expr.Call.callee.*;
                                                 if (callee == .Ident) {
-                                                    const nm = callee.Ident;
+                                                    const nm = callee.Ident.orig;
                                                     if (std.ascii.eqlIgnoreCase(nm, "count")) {
                                                         forced_type = "INT";
                                                     } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {

@@ -16,8 +16,24 @@ pub const Lexer = struct {
         if (self.matchMulti()) |tokv| return tokn(tokv);
 
         const c = self.peek();
-        if (t.isIdentifierStart(c)) return self.scanIdentifierOrKeyword();
-        if (t.isDigit(c)) return self.scanNumeric();
+
+        // Check for Unicode identifier start (or ASCII)
+        if (c < 128) {
+            if (t.isIdentifierStart(@intCast(c))) return self.scanIdentifierOrKeyword();
+            if (t.isDigit(c)) return self.scanNumeric();
+        } else {
+            // Potential Unicode identifier
+            const cp_len = std.unicode.utf8CodepointSequenceLength(c) catch 1;
+            if (self.idx + cp_len <= self.src.len) {
+                const cp_bytes = self.src[self.idx .. self.idx + cp_len];
+                var iter = std.unicode.Utf8Iterator{ .bytes = cp_bytes, .i = 0 };
+                if (iter.nextCodepoint()) |cp| {
+                    if (t.isIdentifierStart(cp)) return self.scanIdentifierOrKeyword();
+                    if (t.isUnicodeDigit(cp)) return self.scanNumeric();
+                }
+            }
+        }
+
         if (c == '"') return self.scanQuotedIdentifier();
         if (c == '\'') return self.scanStringAny(c);
 
@@ -81,11 +97,12 @@ pub const Lexer = struct {
                 while (self.idx < self.src.len and self.src[self.idx] != '\n') self.advance();
                 continue;
             }
-            // hash comment: # ...
-            if (c == '#') {
+            // double-dash comment: -- ...
+            if (c == '-' and self.idx + 1 < self.src.len and self.src[self.idx + 1] == '-') {
                 while (self.idx < self.src.len and self.src[self.idx] != '\n') self.advance();
                 continue;
             }
+
             break;
         }
     }
@@ -194,15 +211,25 @@ pub const Lexer = struct {
     fn scanIdentifierOrKeyword(self: *Lexer) t.Token {
         const start = self.idx;
         const loc: t.Location = .{ .line = self.line, .column = self.col };
-        self.idx += 1;
-        self.col += 1;
-        while (self.idx < self.src.len and t.isIdentifierContinue(self.src[self.idx])) {
-            self.idx += 1;
+
+        // Handle Unicode identifiers - read UTF-8 code points
+        var iter = std.unicode.Utf8Iterator{ .bytes = self.src[self.idx..], .i = 0 };
+        var first = true;
+
+        while (iter.nextCodepoint()) |cp| {
+            if (first) {
+                first = false;
+                if (!t.isIdentifierStart(cp)) break;
+            } else {
+                if (!t.isIdentifierContinue(cp)) break;
+            }
+            const cp_len = std.unicode.utf8CodepointSequenceLength(self.src[self.idx]) catch 1;
+            self.idx += cp_len;
             self.col += 1;
         }
         const slice = self.src[start..self.idx];
         // case-insensitive keyword mapping
-        const kind = keywordKind(slice);
+        const kind = t.keywordKind(slice);
         // Special handling for typed temporal literals: DATE"..." / DATETIME"..." / TIME"..." / LOCAL DATETIME"..."
         if (kind == .date_lit or kind == .datetime_lit or kind == .time_lit) {
             const save_idx = self.idx;
@@ -250,76 +277,6 @@ pub const Lexer = struct {
             return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
         }
         return .{ .kind = kind, .lexeme = slice, .loc = loc };
-    }
-
-    fn keywordKind(word: []const u8) t.TokenKind {
-        // keep small and fast; extend later
-        if (std.ascii.eqlIgnoreCase(word, "MATCH")) return .MATCH;
-        if (std.ascii.eqlIgnoreCase(word, "OPTIONAL")) return .OPTIONAL;
-        if (std.ascii.eqlIgnoreCase(word, "WHERE")) return .WHERE;
-        if (std.ascii.eqlIgnoreCase(word, "RETURN")) return .RETURN;
-        if (std.ascii.eqlIgnoreCase(word, "WITH")) return .WITH;
-        if (std.ascii.eqlIgnoreCase(word, "CASE")) return .CASE;
-        if (std.ascii.eqlIgnoreCase(word, "WHEN")) return .WHEN;
-        if (std.ascii.eqlIgnoreCase(word, "THEN")) return .THEN;
-        if (std.ascii.eqlIgnoreCase(word, "ELSE")) return .ELSE;
-        if (std.ascii.eqlIgnoreCase(word, "END")) return .END;
-        if (std.ascii.eqlIgnoreCase(word, "AND")) return .AND;
-        if (std.ascii.eqlIgnoreCase(word, "OR")) return .OR;
-        if (std.ascii.eqlIgnoreCase(word, "NOT")) return .NOT;
-        if (std.ascii.eqlIgnoreCase(word, "IN")) return .IN;
-        if (std.ascii.eqlIgnoreCase(word, "IS")) return .IS;
-        if (std.ascii.eqlIgnoreCase(word, "STARTS")) return .STARTS;
-        if (std.ascii.eqlIgnoreCase(word, "ENDS")) return .ENDS;
-        if (std.ascii.eqlIgnoreCase(word, "CONTAINS")) return .CONTAINS;
-        if (std.ascii.eqlIgnoreCase(word, "CALL")) return .CALL;
-        if (std.ascii.eqlIgnoreCase(word, "YIELD")) return .YIELD;
-        if (std.ascii.eqlIgnoreCase(word, "TRUE")) return .TRUE;
-        if (std.ascii.eqlIgnoreCase(word, "FALSE")) return .FALSE;
-        if (std.ascii.eqlIgnoreCase(word, "NULL")) return .NULL;
-        if (std.ascii.eqlIgnoreCase(word, "AS")) return .AS;
-        if (std.ascii.eqlIgnoreCase(word, "DISTINCT")) return .DISTINCT;
-        if (std.ascii.eqlIgnoreCase(word, "UNION")) return .UNION;
-        if (std.ascii.eqlIgnoreCase(word, "INTERSECT")) return .INTERSECT;
-        if (std.ascii.eqlIgnoreCase(word, "EXCEPT")) return .EXCEPT;
-        if (std.ascii.eqlIgnoreCase(word, "ALL")) return .ALL;
-        if (std.ascii.eqlIgnoreCase(word, "SESSION")) return .SESSION;
-        if (std.ascii.eqlIgnoreCase(word, "SET")) return .SET;
-        if (std.ascii.eqlIgnoreCase(word, "RESET")) return .RESET;
-        if (std.ascii.eqlIgnoreCase(word, "CLOSE")) return .CLOSE;
-        if (std.ascii.eqlIgnoreCase(word, "INSERT")) return .INSERT;
-        if (std.ascii.eqlIgnoreCase(word, "VALUE")) return .VALUE;
-        if (std.ascii.eqlIgnoreCase(word, "VALUES")) return .VALUES;
-        if (std.ascii.eqlIgnoreCase(word, "SCAN")) return .SCAN;
-        if (std.ascii.eqlIgnoreCase(word, "START")) return .START;
-        if (std.ascii.eqlIgnoreCase(word, "TRANSACTION")) return .TRANSACTION;
-        if (std.ascii.eqlIgnoreCase(word, "COMMIT")) return .COMMIT;
-        if (std.ascii.eqlIgnoreCase(word, "ROLLBACK")) return .ROLLBACK;
-        if (std.ascii.eqlIgnoreCase(word, "CREATE")) return .CREATE;
-        if (std.ascii.eqlIgnoreCase(word, "DELETE")) return .DELETE;
-        if (std.ascii.eqlIgnoreCase(word, "MERGE")) return .MERGE;
-        if (std.ascii.eqlIgnoreCase(word, "GRAPH")) return .GRAPH;
-        if (std.ascii.eqlIgnoreCase(word, "PROPERTY")) return .PROPERTY;
-        if (std.ascii.eqlIgnoreCase(word, "DROP")) return .DROP;
-        if (std.ascii.eqlIgnoreCase(word, "ORDER")) return .ORDER;
-        if (std.ascii.eqlIgnoreCase(word, "BY")) return .BY;
-        if (std.ascii.eqlIgnoreCase(word, "GROUP")) return .GROUP;
-        if (std.ascii.eqlIgnoreCase(word, "ASC")) return .ASC;
-        if (std.ascii.eqlIgnoreCase(word, "DESC")) return .DESC;
-        if (std.ascii.eqlIgnoreCase(word, "LIMIT")) return .LIMIT;
-        if (std.ascii.eqlIgnoreCase(word, "OFFSET")) return .OFFSET;
-        if (std.ascii.eqlIgnoreCase(word, "SKIP")) return .SKIP;
-        if (std.ascii.eqlIgnoreCase(word, "HAVING")) return .HAVING;
-        if (std.ascii.eqlIgnoreCase(word, "NULLS")) return .NULLS;
-        if (std.ascii.eqlIgnoreCase(word, "FIRST")) return .FIRST;
-        if (std.ascii.eqlIgnoreCase(word, "LAST")) return .LAST;
-        if (std.ascii.eqlIgnoreCase(word, "ON")) return .ON;
-        if (std.ascii.eqlIgnoreCase(word, "UNKNOWN")) return .UNKNOWN;
-        if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
-        if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
-        if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
-        if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit; // expecting LOCAL DATETIME"..."
-        return .identifier;
     }
 
     fn scanNumeric(self: *Lexer) t.Token {

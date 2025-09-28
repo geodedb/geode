@@ -7,6 +7,7 @@ const temporal = gql.temporal;
 const eval = gql.eval;
 const diagnostics = gql.diagnostics;
 const ast = gql.ast;
+const status = gql.gql.status;
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
@@ -165,12 +166,13 @@ pub fn main() !void {
     var res: gql.ParseResult = switch (outcome) {
         .Ok => |ok| ok,
         .Err => |pe| {
-            if (diagnostics.mapParserMessage(pe.msg)) |code| {
-                std.debug.print("diagnostic: {s} (parse): {s} at line {d}, col {d}; token={s}\n", .{ diagnostics.codeName(code), pe.msg, pe.line, pe.column, @tagName(pe.token) });
-            } else {
-                std.debug.print("parse error: {s} at line {d}, col {d}; token={s}\n", .{ pe.msg, pe.line, pe.column, @tagName(pe.token) });
-            }
-            std.process.exit(3);
+            // Output structured JSON diagnostic to stderr
+            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr = stderr_file.deprecatedWriter();
+            const gql_status = status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
+            try status.writeJson(stderr, gql_status);
+            try stderr.writeByte('\n');
+            std.process.exit(2);
         },
     };
     defer res.deinit();
@@ -356,7 +358,7 @@ pub fn main() !void {
             // IN/NOT IN benchmark using evaluator
             const names = &.{ "a", "s" };
             const env = eval.Env{ .names = names, .values = &.{ .{ .Int = 42 }, .{ .Str = "42" } } };
-            var a_ident = ast.Expr{ .Ident = "a" };
+            var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
             var lit41 = ast.Expr{ .String = "41" };
             var lit42 = ast.Expr{ .String = "42" };
             var lit43 = ast.Expr{ .Int = 43 };
@@ -549,8 +551,8 @@ pub fn main() !void {
                             if (call_expr != .Call) return;
                             const c = call_expr.Call;
                             switch (c.callee.*) {
-                                .Ident => |nm| {
-                                    if (std.ascii.eqlIgnoreCase(nm, "count")) {
+                                .Ident => |id| {
+                                    if (std.ascii.eqlIgnoreCase(id.orig, "count")) {
                                         if (c.args.len == 0) {
                                             aggs_out.append(ally_inner, .CountStar) catch {};
                                             v_idxs_out.append(ally_inner, 0) catch {};
@@ -560,19 +562,19 @@ pub fn main() !void {
                                             v_idxs_out.append(ally_inner, 1) catch {};
                                             labels_out.append(ally_inner, "COUNT") catch {};
                                         }
-                                    } else if (std.ascii.eqlIgnoreCase(nm, "sum")) {
+                                    } else if (std.ascii.eqlIgnoreCase(id.orig, "sum")) {
                                         aggs_out.append(ally_inner, .Sum) catch {};
                                         v_idxs_out.append(ally_inner, 1) catch {};
                                         labels_out.append(ally_inner, "SUM") catch {};
-                                    } else if (std.ascii.eqlIgnoreCase(nm, "min")) {
+                                    } else if (std.ascii.eqlIgnoreCase(id.orig, "min")) {
                                         aggs_out.append(ally_inner, .Min) catch {};
                                         v_idxs_out.append(ally_inner, 1) catch {};
                                         labels_out.append(ally_inner, "MIN") catch {};
-                                    } else if (std.ascii.eqlIgnoreCase(nm, "max")) {
+                                    } else if (std.ascii.eqlIgnoreCase(id.orig, "max")) {
                                         aggs_out.append(ally_inner, .Max) catch {};
                                         v_idxs_out.append(ally_inner, 1) catch {};
                                         labels_out.append(ally_inner, "MAX") catch {};
-                                    } else if (std.ascii.eqlIgnoreCase(nm, "avg")) {
+                                    } else if (std.ascii.eqlIgnoreCase(id.orig, "avg")) {
                                         aggs_out.append(ally_inner, .Avg) catch {};
                                         v_idxs_out.append(ally_inner, 1) catch {};
                                         labels_out.append(ally_inner, "AVG") catch {};

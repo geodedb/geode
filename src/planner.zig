@@ -327,7 +327,7 @@ fn isAggregateCall(e: ast.Expr) bool {
         .Call => |c| blk: {
             const callee = c.callee.*;
             const name = switch (callee) {
-                .Ident => |s| s,
+                .Ident => |id| id.orig,
                 else => break :blk false,
             };
             if (std.ascii.eqlIgnoreCase(name, "count")) break :blk true;
@@ -355,8 +355,8 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
     }
     for (gb.keys) |k| {
         switch (k) {
-            .Ident => |s| {
-                _ = allowed.put(s, {}) catch {};
+            .Ident => |id| {
+                _ = allowed.put(id.orig, {}) catch {};
             },
             .Member => {
                 const ss = printer.stringifyExprAlloc(std.heap.page_allocator, k, .{}) catch continue;
@@ -375,9 +375,9 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
         const e = it.expr;
         if (isAggregateCall(e)) continue;
         switch (e) {
-            .Ident => |s| {
-                if (!allowed.contains(s)) return PlanError.GroupByIllegal;
-                _ = nonagg.put(s, {}) catch {};
+            .Ident => |id| {
+                if (!allowed.contains(id.orig)) return PlanError.GroupByIllegal;
+                _ = nonagg.put(id.orig, {}) catch {};
             },
             .Member => {
                 const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch return PlanError.GroupByIllegal;
@@ -403,7 +403,7 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
 fn exprAllowedInGroup(e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
     return switch (e) {
         .Int, .Bool, .Null, .String => true,
-        .Ident => |s| allowed.contains(s),
+        .Ident => |id| allowed.contains(id.orig),
         .Member => blk: {
             const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch break :blk false;
             defer std.heap.page_allocator.free(ss);
