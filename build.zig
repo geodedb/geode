@@ -43,12 +43,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addOptions("build_options", build_opts);
     b.installArtifact(geode_exe);
 
-    // Legacy wire binary (keep for compatibility)
-    const exe = b.addExecutable(.{
-        .name = "wire",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }),
-    });
-    b.installArtifact(exe);
+    // Remove legacy wire binary build and install (deprecated)
 
     const gql_exe = b.addExecutable(.{
         .name = "gql",
@@ -89,12 +84,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the unified geode CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // Legacy wire run command
-    const run_wire_cmd = b.addRunArtifact(exe);
-    run_wire_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_wire_cmd.addArgs(args);
-    const run_wire_step = b.step("run-wire", "Run the legacy wire app");
-    run_wire_step.dependOn(&run_wire_cmd.step);
+    // Legacy wire binary removed; run-wire step removed
 
     // --- Benchmarks ---
     // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
@@ -612,8 +602,8 @@ pub fn build(b: *std.Build) void {
     geodec_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
     geodec_exe.root_module.addImport("log/logger.zig", logging_mod);
-    const geode_audit_verify = b.addExecutable(.{ .name = "geode-audit", .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize }) });
-    b.installArtifact(geode_audit_verify);
+    const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("audit_cli", audit_mod);
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",

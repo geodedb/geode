@@ -968,7 +968,6 @@ pub const AttributeBasedAccessControl = struct {
             // TODO: Implement attribute evaluation
             return true;
         }
-
     };
 
     pub fn init(allocator: Allocator) !AttributeBasedAccessControl {

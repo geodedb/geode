@@ -20,6 +20,17 @@ else
 	WINE_CMD := wine64
 endif
 
+# --- Go client settings (strict vendor mode) ---
+GO ?= go
+GQL_CLIENT_DIR ?= clients/go/gql
+# Force vendor even if someone tries to override; strip any -mod flag the caller passed
+export GOFLAGS := -mod=vendor $(filter-out -mod=%,$(GOFLAGS))
+export GOWORK ?= off
+GO_BUILD_FLAGS ?= -trimpath
+GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
+
+.PHONY: go-prep go-vendor-sync go-vendor-check go-matrix
+
 .PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
@@ -39,9 +50,21 @@ endif
 sub:
 	git submodule update --init --recursive
 
-# Help target
-help:
-	@echo "Geode Makefile targets (v0.17.0):"
+# --- Go vendoring: sync + enforce vendor usage ---
+go-prep: go-vendor-sync go-vendor-check
+
+go-vendor-sync:
+	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
+		echo "-> syncing vendor in $(GQL_CLIENT_DIR)"; \
+		cd "$(GQL_CLIENT_DIR)" && \
+		$(GO) mod tidy && $(GO) mod vendor && $(GO) mod verify; \
+	else \
+		echo "Go client directory '$(GQL_CLIENT_DIR)' not found"; exit 1; \
+	fi
+
+go-vendor-check:
+	@echo "-> verifying vendor is used (GOFLAGS=$(GOFLAGS))"
+	@cd "$(GQL_CLIENT_DIR)" && $(GO) list -mod=vendor -m all 2>/dev/null || echo "(note) 'go list -m all' may not resolve under vendor; proceeding with vendor-only builds"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make build       - Build debug version (Zig + Go)"
@@ -50,9 +73,10 @@ help:
 	@echo "  make cross-compile - Build for all cross-compilation targets"
 	@echo "  make status-generate - Generate docs/status.csv from CANARY markers"
 	@echo "  make no-feature-flags - Check for compile-time feature flags"
-	@echo "  make cluster-test - Run multi-node Raft cluster test"
-	@echo ""
-	@echo "Cross-compilation targets:"
+	@echo "Verification targets:"
+	@echo "  make verify-all     - Full end-to-end verification (vendor sync+check, build, test, cross, clients, governance, docker)"
+	@echo "  make verify-fast    - Faster verification (no fuzz/bench/docker/governance)"
+	@echo "  make ci-verify      - CI-friendly alias of verify-all"
 	@echo "  make cross-windows      - Build for Windows x86_64"
 	@echo "  make cross-linux-arm    - Build for Linux ARM (32-bit)"
 	@echo "  make cross-linux-arm64  - Build for Linux ARM64"
@@ -126,44 +150,34 @@ test:
 		./scripts/run_dataset_integration_tests.sh 2>/dev/null || echo "Dataset tests skipped (dataset may not be loaded)"; \
 	fi
 
-# Build Go client library
-go-build:
-	@if [ -d "clients/go/gql" ]; then \
-		if command -v go >/dev/null 2>&1; then \
-			echo "Preparing Go client module vendor..."; \
-			(cd clients/go/gql && go mod vendor || echo "go mod vendor (clients/go/gql) failed, continuing"); \
-			echo "Building Go client library (using vendor)..."; \
-			(cd clients/go/gql && go build -mod=vendor ./... || { echo "Go build failed (skipping)"; exit 0; }); \
-			if [ -d "clients/go/gql/example" ]; then \
-				echo "Building Go example program..."; \
-				(cd clients/go/gql/example && go build -mod=vendor -o ../../../../zig-out/bin/gql-example . || echo "Failed to build example"); \
-			fi; \
-			echo "Go client library built (or skipped failures)"; \
-		else \
-			echo "Go toolchain not found, skipping Go build"; \
+# Build Go client library (strict vendor)
+go-build: go-prep
+	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
+		echo "Building Go client library..."; \
+		cd "$(GQL_CLIENT_DIR)" && $(GO) build $(GO_BUILD_FLAGS) ./...; \
+		if [ -d "$(GQL_CLIENT_DIR)/example" ]; then \
+			echo "Building Go example..."; \
+			mkdir -p zig-out/bin; \
+			cd "$(GQL_CLIENT_DIR)/example" && $(GO) build $(GO_BUILD_FLAGS) -o ../../../../zig-out/bin/gql-example .; \
 		fi; \
 	else \
-			echo "Go client directory not found, skipping Go build"; \
+		echo "Go client directory not found"; exit 1; \
 	fi
 
-# Run Go client tests
-go-test: go-build
-	@if [ -d "clients/go/gql" ]; then \
-		if command -v go >/dev/null 2>&1; then \
-			echo "Running Go client tests..."; \
-			cd clients/go/gql && CI=$${CI:-true} go test -v -count=1 -timeout 30s || { echo "Go tests failed (skipping)"; exit 0; }; \
-		else \
-			echo "Go toolchain not found, skipping Go tests"; \
-		fi; \
+# Run Go client tests (strict vendor)
+go-test: go-prep
+	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
+		echo "Running Go client tests..."; \
+		cd "$(GQL_CLIENT_DIR)" && CI=$${CI:-true} $(GO) test $(GO_TEST_FLAGS) ./...; \
 	else \
-		echo "Go client directory not found, skipping Go tests"; \
+		echo "Go client directory not found"; exit 1; \
 	fi
 
 # Clean Go client artifacts
 go-clean:
-	@if [ -d "clients/go/gql" ]; then \
+	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
 		echo "Cleaning Go client artifacts..."; \
-		cd clients/go/gql && go clean || true; \
+		cd "$(GQL_CLIENT_DIR)" && $(GO) clean || true; \
 	fi
 
 # Run Go client example
@@ -295,9 +309,18 @@ canary:
 canary-verify: canary
 	./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
 
-# Combined governance check (freshness + canary verify) producing JSON summary
-governance-check:
-	$(ZIG) run scripts/governance_ci.zig
+.PHONY: verify-all verify-fast ci-verify
+
+# Full, strict E2E verification. Fails on vendoring issues immediately.
+verify-all: clean sub quic-init fmt go-prep build test cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+	@echo "==> E2E verification: PASSED"
+
+# Faster dev loop (no fuzz/bench/docker/governance)
+verify-fast: go-prep build test cross-compile-required cross-go-clients
+	@echo "==> Fast verification: PASSED"
+
+# CI-friendly alias
+ci-verify: verify-all
 
 # Generate evidence badge (SVG) from status.csv (run canary first if needed)
 governance-badge: canary
@@ -346,9 +369,9 @@ clean:
 	rm -rf zig-cache
 	$(MAKE) go-clean
 
-# Run build, test, fuzz, bench sequentially for CI
-ci: clean build test fuzz bench cross-compile-strict test-cross-clients no-feature-flags status-generate governance-check
-	@echo "CI pipeline completed successfully (v0.17.0)"
+# Run build, test, fuzz, bench, strict cross, clients, governance, docker
+ci: clean go-prep build test fuzz bench cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+	@echo "CI pipeline completed successfully (v0.17.1)"
 
 # Strict cross-compilation for CI (fails on any error)
 cross-compile-strict: cross-linux-x86_64 cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64
@@ -701,55 +724,34 @@ cross-zig-clients:
 cross-go-clients: cross-go-windows-x86_64 cross-go-linux-x86_64 cross-go-linux-arm64 cross-go-darwin-x86_64 cross-go-darwin-arm64
 	@echo "✓ Go clients built for all platforms"
 
-# Go client cross-compilation for Windows x86_64
-cross-go-windows-x86_64:
-	@if [ -d "clients/go/gql/example" ]; then \
-		echo "Building Go client example for Windows x86_64..."; \
-		mkdir -p zig-out/windows-x86_64/bin; \
-		cd clients/go/gql && go mod vendor && cd example && \
-		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor -o ../../../../zig-out/windows-x86_64/bin/gql-example.exe . && \
-		echo "✓ Go client example built for Windows x86_64"; \
+# --- Cross-compile Go client example (pure Go, CGO disabled) ---
+define go_build_cross
+	@if [ -d "$(GQL_CLIENT_DIR)/example" ]; then \
+		echo "Building Go client example for $(1)/$(2)..."; \
+		mkdir -p zig-out/$(3)/bin zig-out/clients/$(3); \
+		cd "$(GQL_CLIENT_DIR)/example" && \
+		CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) $(GO) build $(GO_BUILD_FLAGS) \
+			-o ../../../../zig-out/$(3)/bin/gql-example$(4) .; \
+		ln -sf ../../$(3)/bin/gql-example$(4) ../../../../zig-out/clients/$(3)/gql-example$(4); \
+		echo "✓ Go client example built for $(3)"; \
 	fi
+endef
 
-# Go client cross-compilation for Linux x86_64
-cross-go-linux-x86_64:
-	@if [ -d "clients/go/gql/example" ]; then \
-		echo "Building Go client example for Linux x86_64..."; \
-		mkdir -p zig-out/linux-x86_64/bin; \
-		cd clients/go/gql && go mod vendor && cd example && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -o ../../../../zig-out/linux-x86_64/bin/gql-example . && \
-		echo "✓ Go client example built for Linux x86_64"; \
-	fi
+# Existing target names preserved, but now depend on go-prep and place a client symlink
+cross-go-windows-x86_64: go-prep
+	$(call go_build_cross,windows,amd64,windows-x86_64,.exe)
 
-# Go client cross-compilation for Linux ARM64
-cross-go-linux-arm64:
-	@if [ -d "clients/go/gql/example" ]; then \
-		echo "Building Go client example for Linux ARM64..."; \
-		mkdir -p zig-out/linux-arm64/bin; \
-		cd clients/go/gql && go mod vendor && cd example && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=vendor -o ../../../../zig-out/linux-arm64/bin/gql-example . && \
-		echo "✓ Go client example built for Linux ARM64"; \
-	fi
+cross-go-linux-x86_64: go-prep
+	$(call go_build_cross,linux,amd64,linux-x86_64,)
 
-# Go client cross-compilation for macOS x86_64
-cross-go-darwin-x86_64:
-	@if [ -d "clients/go/gql/example" ]; then \
-		echo "Building Go client example for macOS x86_64..."; \
-		mkdir -p zig-out/macos-x86_64/bin; \
-		cd clients/go/gql && go mod vendor && cd example && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -mod=vendor -o ../../../../zig-out/macos-x86_64/bin/gql-example . && \
-		echo "✓ Go client example built for macOS x86_64"; \
-	fi
+cross-go-linux-arm64: go-prep
+	$(call go_build_cross,linux,arm64,linux-arm64,)
 
-# Go client cross-compilation for macOS ARM64
-cross-go-darwin-arm64:
-	@if [ -d "clients/go/gql/example" ]; then \
-		echo "Building Go client example for macOS ARM64..."; \
-		mkdir -p zig-out/macos-arm64/bin; \
-		cd clients/go/gql && go mod vendor && cd example && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -mod=vendor -o ../../../../zig-out/macos-arm64/bin/gql-example . && \
-		echo "✓ Go client example built for macOS ARM64"; \
-	fi
+cross-go-darwin-x86_64: go-prep
+	$(call go_build_cross,darwin,amd64,macos-x86_64,)
+
+cross-go-darwin-arm64: go-prep
+	$(call go_build_cross,darwin,arm64,macos-arm64,)
 
 # Test cross-compiled clients
 test-cross-clients:

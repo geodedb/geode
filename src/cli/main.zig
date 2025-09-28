@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const audit_cli = @import("audit_cli");
 
 // Error codes
 const ExitCode = enum(u8) {
@@ -654,8 +655,32 @@ pub fn main() !void {
         try cmdPolicy(ally, argv, 2);
     } else if (std.mem.eql(u8, subcommand, "grant")) {
         try cmdGrant(ally, argv, 2);
-    } else if (std.mem.eql(u8, subcommand, "revoke")) {
-        try cmdRevoke(ally, argv, 2);
+    } else if (std.mem.eql(u8, subcommand, "audit")) {
+        // geode audit verify --file <path> ...
+        var algo: audit_cli.HashAlgo = .sha256;
+        var path: []const u8 = "audit.jsonl";
+        var require_digest = false;
+        var pubkey: ?[32]u8 = null;
+        var i: usize = 2;
+        while (i < argv.len) : (i += 1) {
+            if (std.mem.eql(u8, argv[i], "verify")) {
+                continue;
+            } else if (std.mem.eql(u8, argv[i], "--file") and i + 1 < argv.len) {
+                path = argv[i + 1];
+                i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--algo") and i + 1 < argv.len) {
+                const a = argv[i + 1];
+                i += 1;
+                algo = if (std.mem.eql(u8, a, "blake3")) .blake3 else .sha256;
+            } else if (std.mem.eql(u8, argv[i], "--require-digest")) {
+                require_digest = true;
+            } else if (std.mem.eql(u8, argv[i], "--pubkey") and i + 1 < argv.len) {
+                pubkey = audit_cli.hex32(argv[i + 1]) catch null;
+                i += 1;
+            }
+        }
+        try audit_cli.verifyFile(path, algo, 100, require_digest, pubkey);
+        std.process.exit(@intFromEnum(ExitCode.success));
     } else {
         std.debug.print("Error: unknown subcommand '{s}'\n\n", .{subcommand});
         printMainUsage();
