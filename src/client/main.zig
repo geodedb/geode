@@ -61,6 +61,9 @@ pub fn main() !void {
             "  --rollback              Rollback transaction\n" ++
             "  --process <path>        Use stdio with server process\n" ++
             "  --server-arg <arg>      Pass argument to server (repeatable)\n" ++
+            "  --ca-cert <path>        PEM trust root to verify server (TLS)\n" ++
+            "  --client-cert <path>    Client certificate (PEM) for mTLS\n" ++
+            "  --client-key <path>     Client private key (PEM) for mTLS\n" ++
             "\n" ++
             "Examples:\n" ++
             "  geodec \"MATCH (n) RETURN n LIMIT 10\"\n" ++
@@ -98,6 +101,9 @@ pub fn main() !void {
     var opt_normalize_nfc = false;
     var opt_fold_case = false;
     var opt_utf16_input = false; // if true, treat provided query text as UTF-16 hex code units
+    var ca_cert_path: ?[]const u8 = null;
+    var client_cert_path: ?[]const u8 = null;
+    var client_key_path: ?[]const u8 = null;
 
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--test-wal-skip-ratio")) {
@@ -162,6 +168,12 @@ pub fn main() !void {
             opt_fold_case = true;
         } else if (std.mem.eql(u8, argv[i], "--utf16-input")) {
             opt_utf16_input = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert") and i + 1 < argv.len) {
+            ca_cert_path = argv[i + 1]; i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--client-cert") and i + 1 < argv.len) {
+            client_cert_path = argv[i + 1]; i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--client-key") and i + 1 < argv.len) {
+            client_key_path = argv[i + 1]; i += 1;
         }
     }
 
@@ -250,10 +262,17 @@ pub fn main() !void {
         defer client.deinit();
 
         var connected = true;
-        client.connect(server_address, server_port) catch |err| {
-            connected = false;
-            logger.warn("client.quic_connect_failed", .{.{ .key = "err", .value = @errorName(err) }});
-        };
+        if (ca_cert_path != null or (client_cert_path != null and client_key_path != null)) {
+            client.connectEx(server_address, server_port, ca_cert_path, client_cert_path, client_key_path) catch |err| {
+                connected = false;
+                logger.error("mTLS: client connect failed", .{.{ .key = "err", .value = @errorName(err) }});
+            };
+        } else {
+            client.connect(server_address, server_port) catch |err| {
+                connected = false;
+                logger.warn("client.quic_connect_failed", .{.{ .key = "err", .value = @errorName(err) }});
+            };
+        }
 
         if (connected) {
             const stream = try client.getStream();

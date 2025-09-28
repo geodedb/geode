@@ -38,6 +38,7 @@ pub const QuicTransport = struct {
         max_data: u64 = 100 * 1024 * 1024, // 100MB per connection
         cert_path: []const u8 = "certs/server.crt",
         key_path: []const u8 = "certs/server.key",
+        ca_path: ?[]const u8 = null,
     };
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !QuicTransport {
@@ -109,7 +110,7 @@ pub const QuicTransport = struct {
         const cfg = try self.allocator.create(quic_lib.QuicConfig);
         cfg.* = .{
             .version = .v1,
-            .allow_insecure = !use_tls, // allow insecure only when TLS unavailable
+            .allow_insecure = (!use_tls) and (self.config.ca_path == null), // allow insecure only when TLS unavailable and no CA provided
             .real_tls = use_tls, // disable real TLS if we fell back
             .alpn = &[_][]const u8{ "h3", "http/3" },
             .cc = .newreno,
@@ -126,7 +127,7 @@ pub const QuicTransport = struct {
             .max_udp_payload = 1350,
             .cert_path = self.cert_path,
             .key_path = self.key_path,
-            .ca_path = null,
+            .ca_path = if (self.config.ca_path) |p| p else null,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
             .inline_server_cert_der = null,
@@ -136,6 +137,9 @@ pub const QuicTransport = struct {
         self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
 
         // Print startup log in JSON format
+        if (self.config.ca_path != null) {
+            std.debug.print("{{\"level\":\"INFO\",\"msg\":\"mTLS: client certs required\"}}\n", .{});
+        }
         std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d}}}\n", .{self.config.port});
     }
 
@@ -419,7 +423,7 @@ pub const QuicClient = struct {
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
-
+        self.quic_config = cfg;
         // Create client endpoint
         const bind_addr = "0.0.0.0:0"; // Bind to any available port
         self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
@@ -429,8 +433,53 @@ pub const QuicClient = struct {
         self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
 
         self.is_quic = true;
-        std.debug.print("Connected to QUIC server at {s}\n", .{server_addr_str});
+        self.server_addr = address;
+        self.server_port = port;
+    }
 
+    pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca: ?[]const u8, cert: ?[]const u8, key: ?[]const u8) !void {
+        const server_addr_str = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
+        defer self.allocator.free(server_addr_str);
+
+        const cfg = try self.allocator.create(quic_lib.QuicConfig);
+        const has_ca = ca != null;
+        const use_tls = has_ca or (cert != null and key != null);
+        cfg.* = .{
+            .version = .v1,
+            .alpn = &[_][]const u8{ "h3", "http/3" },
+            .cc = .newreno,
+            .enable_datagram = false,
+            .enable_spin_bit = false,
+            .grease = true,
+            .compatible_vn = false,
+            .enable_retry = false,
+            .token_secret = null,
+            .token_expiry_ms = 60000,
+            .enable_pacing = false,
+            .max_datagram_size = 1200,
+            .max_idle_timeout_ms = 30000,
+            .max_udp_payload = 1350,
+            .cert_path = if (cert) |p| p else null,
+            .key_path = if (key) |p| p else null,
+            .ca_path = if (has_ca) ca.? else null,
+            .allow_insecure = !use_tls,
+            .aead_confidentiality_limit_override = null,
+            .aead_integrity_limit_override = null,
+            .real_tls = use_tls,
+            .inline_server_cert_der = null,
+            .inline_server_priv_p256 = null,
+        };
+        self.quic_config = cfg;
+
+        // Create client endpoint
+        const bind_addr = "0.0.0.0:0";
+        self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
+
+        // Connect to server
+        const sni = address;
+        self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
+
+        self.is_quic = true;
         self.server_addr = address;
         self.server_port = port;
     }

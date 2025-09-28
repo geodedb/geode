@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -89,11 +90,15 @@ type DB struct {
 	helloName string
 	helloVer  string
 	conf      string
+	caPath    string
+	clientCert string
+	clientKey  string
+	skipVerify bool
 }
 
 func Open(dsn string) (*DB, error) {
 	cfg := parseDSN(dsn)
-	return &DB{path: cfg.Path, addr: cfg.Addr, pageSize: cfg.PageSize, helloName: cfg.HelloName, helloVer: cfg.HelloVer, conf: cfg.Conformance}, nil
+	return &DB{path: cfg.Path, addr: cfg.Addr, pageSize: cfg.PageSize, helloName: cfg.HelloName, helloVer: cfg.HelloVer, conf: cfg.Conformance, caPath: cfg.CACertPath, clientCert: cfg.ClientCertPath, clientKey: cfg.ClientKeyPath, skipVerify: cfg.SkipVerify}, nil
 }
 
 type dsnConfig struct {
@@ -105,6 +110,10 @@ type dsnConfig struct {
 	HelloVer    string
 	Conformance string
 	UseQUIC     bool
+	CACertPath      string
+	ClientCertPath  string
+	ClientKeyPath   string
+	SkipVerify      bool
 }
 
 func parseDSN(dsn string) dsnConfig {
@@ -176,7 +185,7 @@ func parseDSN(dsn string) dsnConfig {
 			cfg.Addr = rest
 		}
 		if cfg.Addr == "" {
-			cfg.Addr = "127.0.0.1:7567"
+			cfg.Addr = "127.0.0.1:8443"
 		}
 		if q != "" {
 			for _, kv := range strings.Split(q, "&") {
@@ -206,6 +215,14 @@ func parseDSN(dsn string) dsnConfig {
 					if v != "" {
 						cfg.Conformance = v
 					}
+				case "ca_cert":
+					cfg.CACertPath = v
+				case "client_cert":
+					cfg.ClientCertPath = v
+				case "client_key":
+					cfg.ClientKeyPath = v
+				case "skip_verify", "tls_insecure_skip_verify":
+					cfg.SkipVerify = (v == "1" || strings.EqualFold(v, "true"))
 				}
 			}
 		}
@@ -244,12 +261,33 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		addr = strings.TrimPrefix(addr, "//")
 		if addr == "" {
 			addr = "127.0.0.1:8443"
-		} // v0.16.0: Default QUIC port
+		} // v0.18.0: Default QUIC port
 
 		tlsConf := &tls.Config{
-			InsecureSkipVerify: true, // For development; in production use proper cert validation
+			InsecureSkipVerify: db.skipVerify || db.caPath == "",
 			NextProtos:         []string{"geode/1"},
 			MinVersion:         tls.VersionTLS13,
+		}
+		if db.caPath != "" {
+			pool, err := loadRootCA(db.caPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load CA cert: %w", err)
+			}
+			tlsConf.RootCAs = pool
+			host, _, _ := net.SplitHostPort(addr)
+			if host != "" {
+				tlsConf.ServerName = host
+			}
+		}
+		if db.clientCert != "" || db.clientKey != "" {
+			if db.clientCert == "" || db.clientKey == "" {
+				return nil, fmt.Errorf("mTLS requires both client_cert and client_key")
+			}
+			pair, err := tls.LoadX509KeyPair(db.clientCert, db.clientKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load client cert/key: %w", err)
+			}
+			tlsConf.Certificates = []tls.Certificate{pair}
 		}
 
 		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
@@ -304,8 +342,29 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		addr = strings.TrimPrefix(addr, "//")
 		if addr == "" {
 			addr = "127.0.0.1:8443"
-		} // v0.16.0: Default QUIC port
-		tlsConf := &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"geode/1"}, MinVersion: tls.VersionTLS13}
+		} // v0.18.0: Default QUIC port
+		tlsConf := &tls.Config{InsecureSkipVerify: db.skipVerify || db.caPath == "", NextProtos: []string{"geode/1"}, MinVersion: tls.VersionTLS13}
+		if db.caPath != "" {
+			pool, err := loadRootCA(db.caPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load CA cert: %w", err)
+			}
+			tlsConf.RootCAs = pool
+			host, _, _ := net.SplitHostPort(addr)
+			if host != "" {
+				tlsConf.ServerName = host
+			}
+		}
+		if db.clientCert != "" || db.clientKey != "" {
+			if db.clientCert == "" || db.clientKey == "" {
+				return nil, fmt.Errorf("mTLS requires both client_cert and client_key")
+			}
+			pair, err := tls.LoadX509KeyPair(db.clientCert, db.clientKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load client cert/key: %w", err)
+			}
+			tlsConf.Certificates = []tls.Certificate{pair}
+		}
 		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
 		if err != nil {
 			return nil, err
@@ -825,6 +884,21 @@ func hexToBytes(s string) ([]byte, error) {
 	return b, nil
 }
 
+
+// loadRootCA loads a PEM CA bundle from path into a cert pool.
+func loadRootCA(path string) (*x509.CertPool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) {
+		return nil, fmt.Errorf("invalid CA PEM")
+	}
+	return pool, nil
+}
+
+// Protocol frame structure used by client and iterator
 type frame struct {
 	StatusClass    string `json:"status_class"`
 	StatusSubclass string `json:"status_subclass"`

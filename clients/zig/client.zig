@@ -12,6 +12,9 @@ pub const Config = struct {
     timeout_ms: u32 = 30000,
     client_name: []const u8 = "geode-zig",
     client_version: []const u8 = "1.0.0",
+    ca_cert_path: ?[]const u8 = null,
+    client_cert_path: ?[]const u8 = null,
+    client_key_path: ?[]const u8 = null,
 };
 
 // Value types matching geode's type system
@@ -252,7 +255,11 @@ pub const Client = struct {
     pub fn connect(self: *Self) !void {
         const qc = quic.QuicClient.init(self.allocator);
         self.quic_client = qc;
-        try quic.QuicClient.connect(&self.quic_client.?, self.config.host, self.config.port);
+        if (self.config.ca_cert_path != null or (self.config.client_cert_path != null and self.config.client_key_path != null)) {
+            try quic.QuicClient.connectEx(&self.quic_client.?, self.config.host, self.config.port, self.config.ca_cert_path, self.config.client_cert_path, self.config.client_key_path);
+        } else {
+            try quic.QuicClient.connect(&self.quic_client.?, self.config.host, self.config.port);
+        }
         self.quic_stream = try self.quic_client.?.getStream();
 
         try self.sendHello();

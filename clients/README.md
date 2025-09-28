@@ -190,11 +190,15 @@ See `clients/zig/example.zig` for comprehensive examples including:
 
 ## Connection Strings
 
-### QUIC (v0.16.0: Only Network Transport)
+### QUIC (v0.18.0: Only Network Transport + mTLS)
 
 ```
-quic://hostname:8443?page_size=100&hello_name=myapp
+quic://hostname:8443?page_size=100&hello_name=myapp&ca_cert=/path/ca.crt&client_cert=/path/client.crt&client_key=/path/client.key
 ```
+
+- ca_cert: PEM trust root to verify server (sets verify on)
+- client_cert/client_key: present client certificate for mTLS when server requires it
+- skip_verify=1 can be used in dev to skip server verification (not recommended)
 
 Default port is 8443. Server auto-generates self-signed certificates if missing.
 
