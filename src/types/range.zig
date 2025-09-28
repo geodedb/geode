@@ -110,7 +110,7 @@ pub fn Range(comptime T: type) type {
 
         fn compare(comptime ValueType: type, a: ValueType, b: ValueType) i8 {
             return switch (@typeInfo(ValueType)) {
-                .Int, .Float => if (a < b) -1 else if (a > b) 1 else 0,
+                .int, .float => if (a < b) -1 else if (a > b) 1 else 0,
                 else => @compileError("Unsupported type for range comparison"),
             };
         }

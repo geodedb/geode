@@ -35,15 +35,15 @@ pub fn IntervalTree(comptime T: type) type {
         }
 
         pub fn queryContains(self: Self, value: T, allocator: std.mem.Allocator) ![]usize {
-            var results = std.ArrayList(usize).init(allocator);
-            try queryContainsRec(self.root, value, &results);
-            return results.toOwnedSlice();
+            var results = std.ArrayList(usize).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            try queryContainsRec(allocator, self.root, value, &results);
+            return results.toOwnedSlice(allocator);
         }
 
         pub fn queryOverlaps(self: Self, query_range: RangeType, allocator: std.mem.Allocator) ![]usize {
-            var results = std.ArrayList(usize).init(allocator);
-            try queryOverlapsRec(self.root, query_range, &results);
-            return results.toOwnedSlice();
+            var results = std.ArrayList(usize).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            try queryOverlapsRec(allocator, self.root, query_range, &results);
+            return results.toOwnedSlice(allocator);
         }
 
         fn insertNode(allocator: std.mem.Allocator, node: ?*Node, new_node: *Node) !?*Node {
@@ -62,35 +62,35 @@ pub fn IntervalTree(comptime T: type) type {
             return n;
         }
 
-        fn queryContainsRec(node: ?*Node, value: T, results: *std.ArrayList(usize)) !void {
+        fn queryContainsRec(allocator: std.mem.Allocator, node: ?*Node, value: T, results: *std.ArrayList(usize)) !void {
             if (node == null) return;
             const n = node.?;
 
             if (n.interval.contains(value)) {
-                try results.append(n.data);
+                try results.append(allocator, n.data);
             }
 
             if (n.left != null and (n.left.?.max_upper == null or compare(T, value, n.left.?.max_upper.?) <= 0)) {
-                try queryContainsRec(n.left, value, results);
+                try queryContainsRec(allocator, n.left, value, results);
             }
             if (n.right != null) {
-                try queryContainsRec(n.right, value, results);
+                try queryContainsRec(allocator, n.right, value, results);
             }
         }
 
-        fn queryOverlapsRec(node: ?*Node, query_range: RangeType, results: *std.ArrayList(usize)) !void {
+        fn queryOverlapsRec(allocator: std.mem.Allocator, node: ?*Node, query_range: RangeType, results: *std.ArrayList(usize)) !void {
             if (node == null) return;
             const n = node.?;
 
             if (n.interval.overlaps(query_range)) {
-                try results.append(n.data);
+                try results.append(allocator, n.data);
             }
 
             if (n.left != null) {
-                try queryOverlapsRec(n.left, query_range, results);
+                try queryOverlapsRec(allocator, n.left, query_range, results);
             }
             if (n.right != null and shouldSearchRight(n, query_range)) {
-                try queryOverlapsRec(n.right, query_range, results);
+                try queryOverlapsRec(allocator, n.right, query_range, results);
             }
         }
 
@@ -129,7 +129,7 @@ pub fn IntervalTree(comptime T: type) type {
 
         fn compare(comptime ValueType: type, a: ValueType, b: ValueType) i8 {
             return switch (@typeInfo(ValueType)) {
-                .Int, .Float => if (a < b) -1 else if (a > b) 1 else 0,
+                .int, .float => if (a < b) -1 else if (a > b) 1 else 0,
                 else => @compileError("Unsupported type for comparison"),
             };
         }

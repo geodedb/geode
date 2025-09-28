@@ -86,26 +86,27 @@ pub const Url = struct {
     }
 
     pub fn toString(self: Url, allocator: std.mem.Allocator) ![]u8 {
-        var result = std.ArrayList(u8).init(allocator);
-        defer result.deinit();
+        var result = try std.ArrayList(u8).initCapacity(allocator, 256);
+        defer result.deinit(allocator);
 
-        try std.fmt.format(result.writer(), "{s}://{s}", .{ self.scheme, self.host });
+        const writer = result.writer(allocator);
+        try std.fmt.format(writer, "{s}://{s}", .{ self.scheme, self.host });
 
         if (self.port) |p| {
-            try std.fmt.format(result.writer(), ":{d}", .{p});
+            try std.fmt.format(writer, ":{d}", .{p});
         }
 
-        try result.appendSlice(self.path);
+        try result.appendSlice(allocator, self.path);
 
         if (self.query) |q| {
-            try std.fmt.format(result.writer(), "?{s}", .{q});
+            try std.fmt.format(writer, "?{s}", .{q});
         }
 
         if (self.fragment) |f| {
-            try std.fmt.format(result.writer(), "#{s}", .{f});
+            try std.fmt.format(writer, "#{s}", .{f});
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn getScheme(self: Url) []const u8 {
@@ -125,18 +126,18 @@ pub const Url = struct {
     }
 
     pub fn getOrigin(self: Url, allocator: std.mem.Allocator) ![]u8 {
-        var result = std.ArrayList(u8).init(allocator);
-        defer result.deinit();
+        var result = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer result.deinit(allocator);
 
-        try std.fmt.format(result.writer(), "{s}://{s}", .{ self.scheme, self.host });
+        try std.fmt.format(result.writer(allocator), "{s}://{s}", .{ self.scheme, self.host });
 
         if (self.port) |p| {
             if (!isDefaultPort(self.scheme, p)) {
-                try std.fmt.format(result.writer(), ":{d}", .{p});
+                try std.fmt.format(result.writer(allocator), ":{d}", .{p});
             }
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 
     fn isDefaultPort(scheme: []const u8, port: ?u16) bool {
@@ -158,10 +159,10 @@ pub const Domain = struct {
     pub fn fromString(allocator: std.mem.Allocator, domain_str: []const u8) Error!Domain {
         if (domain_str.len == 0 or domain_str.len > 253) return Error.InvalidDomain;
 
-        var labels = std.ArrayList([]const u8).init(allocator);
-        defer labels.deinit();
+        var labels = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        defer labels.deinit(allocator);
 
-        var label_iter = std.mem.split(u8, domain_str, ".");
+        var label_iter = std.mem.splitSequence(u8, domain_str, ".");
         while (label_iter.next()) |label| {
             if (label.len == 0 or label.len > 63) return Error.InvalidDomain;
 
@@ -172,10 +173,10 @@ pub const Domain = struct {
             if (label[0] == '-' or label[label.len - 1] == '-') return Error.InvalidDomain;
 
             const lower_label = try std.ascii.allocLowerString(allocator, label);
-            try labels.append(lower_label);
+            try labels.append(allocator, lower_label);
         }
 
-        return Domain{ .labels = try labels.toOwnedSlice() };
+        return Domain{ .labels = try labels.toOwnedSlice(allocator) };
     }
 
     pub fn toString(self: Domain, allocator: std.mem.Allocator) ![]u8 {

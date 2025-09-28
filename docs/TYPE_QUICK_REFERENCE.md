@@ -1,0 +1,274 @@
+# Geode Type System Quick Reference
+
+## Type Constructor Examples
+
+```gql
+-- Numeric Types
+SmallInt(42)                           -- i16
+Int(1000000)                           -- i32
+BigInt(9223372036854775807)            -- i64
+Real(3.14159)                          -- f32
+Double(2.718281828)                    -- f64
+Decimal("123.45", 2)                   -- Decimal128 with scale
+
+-- String Types
+Char("Hello", 10)                      -- Fixed 10 chars (trailing spaces ignored in comparison)
+Varchar("World", 50)                   -- Max 50 chars
+Text("Unlimited text...")              -- Unlimited length
+
+-- Temporal Types
+Date("2024-09-28")                     -- ISO date
+Time("14:30:00.123456")                -- Time with microseconds
+TimeTZ("14:30:00", 3600)               -- Time with timezone offset (seconds)
+Timestamp("2024-09-28 14:30:00")       -- Timestamp
+TimestampTZ("2024-09-28 14:30:00+02:00") -- Timestamp with timezone (stored as UTC)
+Interval("P1Y2M3DT4H5M6S")             -- ISO duration
+MakeInterval(12, 30, 1000000)          -- 12 months, 30 days, 1M microseconds
+
+-- Binary/JSON Types
+Bytea("\\xDEADBEEF")                   -- Binary data as hex
+Json('{"key": "value"}')               -- JSON text
+Jsonb('{"key": "value"}')              -- Binary JSON (canonical)
+Xml('<root><child/></root>')           -- Well-formed XML
+
+-- Network Types
+IpAddr("192.168.1.1")                  -- IPv4
+IpAddr("2001:db8::1")                  -- IPv6 (RFC 5952 canonical)
+Subnet("192.168.0.0/16")               -- CIDR notation
+Mac("AA:BB:CC:DD:EE:FF")               -- MAC address
+
+-- Cryptographic Types
+Hash("SHA3-256", "3a985da74fe225b2...")  -- Hash with algorithm
+
+-- Locale/Currency Types
+Currency("USD")                        -- ISO-4217 code (auto-uppercase)
+LanguageTag("en-US")                   -- BCP-47 (canonicalized)
+
+-- Geographic Types
+LatLon(51.5074, -0.1278)              -- London coordinates
+LatLonAlt(51.5074, -0.1278, 45.0, "ellipsoid")  -- With altitude
+GeometryFromText("POINT(30 10)")      -- WKT to geometry
+
+-- Physical Quantities
+Temperature(37.0, "C")                 -- 37°C (stored as Kelvin)
+Pressure(1013.25, "hPa")              -- Atmospheric pressure
+
+-- Advanced Types
+Url("https://example.com/path?q=1")   -- WHATWG normalized
+Domain("example.com")                  -- FQDN with punycode
+UUID("550e8400-e29b-41d4-a716-446655440000")  -- UUID
+Enum("Priority", "HIGH")               -- Enum type with value
+Array([1, 2, 3])                       -- Homogeneous array
+Bit("B'10101'")                        -- Bit string
+VarBit("B'10101'")                     -- Variable bit string
+Range("int4", 1, 10, "[)")            -- Half-open range [1, 10)
+
+-- Vector/ML Types
+Vector([0.1, 0.2, 0.3, 0.4])         -- Float32 vector
+```
+
+## Common Function Patterns
+
+### Numeric Operations
+```gql
+decimal_add(Decimal("10.50", 2), Decimal("5.25", 2))  -- 15.75
+decimal_mul(a, b)                                      -- Multiplication
+decimal_div(a, b)                                      -- Division (banker's rounding)
+```
+
+### String Functions
+```gql
+length_chars(text)                     -- Character count (Unicode)
+trim(text)                            -- Remove whitespace
+lower(text) / upper(text)             -- Case conversion
+```
+
+### Temporal Functions
+```gql
+now()                                  -- Current timestamp
+current_date / current_time           -- Current date/time
+date_add(date, interval)              -- Add interval
+ts_sub(timestamp, interval)           -- Subtract interval
+age(ts1, ts2)                        -- Interval between timestamps
+date_part("year", timestamp)         -- Extract component
+```
+
+### Network Predicates
+```gql
+ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))     -- true
+ip_overlaps(subnet1, subnet2)                              -- Check overlap
+ip_is_private(ip)                                          -- RFC private ranges
+ip_family(ip)                                              -- Returns 4 or 6
+```
+
+### MAC Address Functions
+```gql
+mac_is_local(mac)                     -- Check local admin bit
+mac_is_multicast(mac)                 -- Check multicast bit
+oui(mac)                              -- Extract OUI (vendor ID)
+```
+
+### Hash Operations
+```gql
+hash_equals(hash1, hash2)             -- Constant-time comparison
+hash_alg(hash)                        -- Get algorithm name
+```
+
+### Currency/Language Functions
+```gql
+minor_units(Currency("USD"))         -- Returns 2 (cents)
+minor_units(Currency("JPY"))         -- Returns 0 (no subunit)
+lang_canonicalize("EN-us")           -- Returns "en-US"
+lang_match(["fr-CA", "fr"], "fr-FR") -- Returns true
+```
+
+### Geographic Functions
+```gql
+distance_haversine(p1, p2)           -- Distance in meters
+latitude(point) / longitude(point)    -- Extract coordinates
+altitude(point) / alt_ref(point)      -- Extract altitude info
+```
+
+### Geometry Functions (OGC-style)
+```gql
+st_asText(geometry)                   -- Convert to WKT
+st_asGeoJSON(geometry)               -- Convert to GeoJSON
+st_contains(geom1, geom2)            -- Spatial containment
+st_intersects(geom1, geom2)          -- Spatial intersection
+st_within(geom1, geom2)              -- Spatial within test
+```
+
+### JSON/JSONB Functions
+```gql
+jsonb_get(doc, "$.path.to.value")    -- Extract by path
+jsonb_exists(doc, "key")             -- Check key existence
+jsonb_typeof(value)                  -- Get JSON type
+jsonb_set(doc, path, new_value)      -- Update value
+```
+
+### URL/Domain Functions
+```gql
+url_host(url)                        -- Extract host
+url_scheme(url)                      -- Extract scheme (http/https)
+url_path(url)                        -- Extract path
+url_query(url)                       -- Extract query string
+url_origin(url)                      -- Get origin
+domain_labels(domain)                -- Split into labels
+```
+
+### UUID Functions
+```gql
+uuid_v4()                            -- Generate version 4 UUID
+uuid_v7()                            -- Generate version 7 UUID
+uuid_equal(uuid1, uuid2)             -- Bytewise comparison
+```
+
+### Array Functions
+```gql
+array_length(arr)                    -- Get array length
+array_contains(arr, value)           -- Check membership
+array_get(arr, index)               -- Get element by index
+```
+
+### Bit String Functions
+```gql
+bit_and(bits1, bits2)               -- Bitwise AND
+bit_or(bits1, bits2)                -- Bitwise OR
+bit_xor(bits1, bits2)               -- Bitwise XOR
+bit_count(bits)                     -- Count set bits
+bit_get(bits, position)             -- Get bit at position
+bit_set(bits, position, value)     -- Set bit value
+```
+
+### Range Functions
+```gql
+range_contains(range, value)        -- Check if value in range
+range_overlaps(range1, range2)     -- Check range overlap
+lower(range)                        -- Get lower bound
+upper(range)                        -- Get upper bound
+bounds(range)                       -- Get bounds type ("[)", "[]", etc.)
+```
+
+### Vector Operations (ML/AI)
+```gql
+vector_dot(vec1, vec2)              -- Dot product
+vector_l2(vec1, vec2)               -- Euclidean distance
+vector_cosine(vec1, vec2)           -- Cosine similarity (NULL if zero-norm)
+vector_knn(property, query_vec, 5, "cosine")  -- K-nearest neighbors
+```
+
+## Index Usage Patterns
+
+### Automatic Index Selection
+```gql
+-- Patricia trie automatically used for:
+WHERE ip_contains(subnet_column, '192.168.1.5'::IpAddr)
+
+-- R-tree automatically used for:
+WHERE st_intersects(geom_column, query_geom)
+WHERE st_contains(geom_column, point)
+
+-- HNSW automatically used for:
+SELECT vector_knn(embedding, query_vector, 10, 'cosine')
+
+-- JSONB inverted index used for:
+WHERE jsonb_exists(doc_column, 'key')
+WHERE jsonb_get(doc_column, '$.path') = 'value'
+
+-- Domain trie used for:
+WHERE domain_suffix_match(domain_column, 'example.com')
+```
+
+## Common Type Conversions
+
+### Implicit Conversions
+```gql
+SmallInt → Int → BigInt              -- Numeric widening
+Real → Double                         -- Float widening
+Int → Decimal (scale 0)              -- Int to decimal
+Char → Varchar → Text                -- String widening
+```
+
+### Explicit Casts
+```gql
+CAST(value AS TypeName)              -- Standard SQL cast
+value::TypeName                      -- PostgreSQL-style cast
+```
+
+## Error Handling
+
+### Common Error Codes
+- `ERR_FLOAT_NAN` - NaN/Inf not allowed in Real/Double
+- `ERR_CHAR_LEN` - String exceeds char(n)/varchar(n) limit
+- `ERR_DEC_DIV_ZERO` - Decimal division by zero
+- `ERR_TIME_PARSE` - Invalid temporal format
+- `ERR_JSON_INVALID` - Malformed JSON
+- `ERR_URL_PARSE` - Invalid URL syntax
+- `ERR_ARRAY_ELEM_TYPE` - Mixed types in array
+- `ERR_INDEX` - Array index out of bounds
+
+## Storage Tags Reference
+
+| Tag Range | Type Category |
+|-----------|--------------|
+| 0x00-0x03 | Legacy core types (Null, Bool, Int, String) |
+| 0x04-0x11 | First-class types (Network, Hash, Geographic, etc.) |
+| 0x20-0x39 | Advanced types (Decimal, Temporal, JSON, etc.) |
+
+## Performance Tips
+
+1. **Use appropriate numeric types**: SmallInt for small ranges saves space
+2. **Prefer JSONB over JSON**: Binary format is faster and canonical
+3. **Use CIDR indexes**: Patricia tries make IP lookups O(prefix_bits)
+4. **Leverage SIMD vectors**: VectorF32 operations are hardware-accelerated
+5. **Consider HNSW for KNN**: Much faster than full scan for large datasets
+6. **Use appropriate string type**: char(n) for fixed-length, varchar(n) for bounded, text for unlimited
+
+## Type System Philosophy
+
+- **Fail closed**: Invalid data rejected at construction
+- **Canonical storage**: One normalized form per value
+- **NULL propagation**: SQL-compatible three-valued logic
+- **Type safety**: No implicit dangerous conversions
+- **Performance**: SIMD where possible, efficient encodings
+- **Persistence**: All indexes support snapshot + WAL

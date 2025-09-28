@@ -6,6 +6,7 @@ pub const XmlDocument = struct {
     pub const Error = error{
         NotWellFormed,
         InvalidEntity,
+        OutOfMemory,
     };
 
     pub fn fromString(data: []const u8) Error!XmlDocument {
@@ -19,8 +20,8 @@ pub const XmlDocument = struct {
     }
 
     fn validateWellFormed(data: []const u8) Error!void {
-        var tag_stack = std.ArrayList([]const u8).init(std.heap.page_allocator);
-        defer tag_stack.deinit();
+        var tag_stack = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 0);
+        defer tag_stack.deinit(std.heap.page_allocator);
 
         var i: usize = 0;
         var in_tag = false;
@@ -43,12 +44,12 @@ pub const XmlDocument = struct {
                 if (tag_content[0] == '/') {
                     const tag_name = tag_content[1..];
                     if (tag_stack.items.len == 0) return Error.NotWellFormed;
-                    const expected = tag_stack.pop();
+                    const expected = tag_stack.pop().?;
                     if (!std.mem.eql(u8, tag_name, expected)) return Error.NotWellFormed;
                 } else if (tag_content[tag_content.len - 1] == '/') {} else {
                     const space_pos = std.mem.indexOfScalar(u8, tag_content, ' ') orelse tag_content.len;
                     const tag_name = tag_content[0..space_pos];
-                    try tag_stack.append(tag_name);
+                    try tag_stack.append(std.heap.page_allocator, tag_name);
                 }
             } else if (c == '&') {
                 const end_pos = std.mem.indexOfScalarPos(u8, data, i, ';') orelse return Error.InvalidEntity;

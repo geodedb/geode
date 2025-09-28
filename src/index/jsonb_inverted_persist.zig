@@ -8,23 +8,34 @@ pub fn persistSnapshot(index: *JsonbInvertedIndex, file_path: []const u8) !void 
     const file = try std.fs.cwd().createFile(file_path, .{});
     defer file.close();
 
-    var writer = file.writer();
+    try file.writeAll(JSONB_MAGIC);
 
-    try writer.writeAll(JSONB_MAGIC);
-    try writer.writeInt(u16, JSONB_VERSION, .little);
-    try writer.writeInt(u64, @intCast(index.paths.count()), .little);
+    var version_buf: [2]u8 = undefined;
+    std.mem.writeInt(u16, &version_buf, JSONB_VERSION, .little);
+    try file.writeAll(&version_buf);
+
+    var count_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &count_buf, @intCast(index.paths.count()), .little);
+    try file.writeAll(&count_buf);
 
     var iter = index.paths.iterator();
     while (iter.next()) |entry| {
         const path = entry.key_ptr.*;
         const doc_ids = entry.value_ptr.items;
 
-        try writer.writeInt(u32, @intCast(path.len), .little);
-        try writer.writeAll(path);
-        try writer.writeInt(u32, @intCast(doc_ids.len), .little);
+        var path_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &path_len_buf, @intCast(path.len), .little);
+        try file.writeAll(&path_len_buf);
+        try file.writeAll(path);
+
+        var doc_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &doc_len_buf, @intCast(doc_ids.len), .little);
+        try file.writeAll(&doc_len_buf);
 
         for (doc_ids) |doc_id| {
-            try writer.writeInt(usize, doc_id, .little);
+            var doc_id_buf: [8]u8 = undefined;
+            std.mem.writeInt(usize, &doc_id_buf, doc_id, .little);
+            try file.writeAll(&doc_id_buf);
         }
     }
 }
@@ -33,30 +44,45 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, file_path: []const u8) !JsonbI
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
-    var reader = file.reader();
-
+    // Read and validate magic number
     var magic: [4]u8 = undefined;
-    try reader.readNoEof(&magic);
+    _ = try file.read(&magic);
     if (!std.mem.eql(u8, &magic, JSONB_MAGIC)) return error.InvalidMagic;
 
-    const version = try reader.readInt(u16, .little);
+    // Read version
+    var version_buf: [2]u8 = undefined;
+    _ = try file.read(&version_buf);
+    const version = std.mem.readInt(u16, &version_buf, .little);
     if (version != JSONB_VERSION) return error.UnsupportedVersion;
 
-    const entry_count = try reader.readInt(u64, .little);
+    // Read entry count
+    var count_buf: [8]u8 = undefined;
+    _ = try file.read(&count_buf);
+    const entry_count = std.mem.readInt(u64, &count_buf, .little);
 
     var index = JsonbInvertedIndex.init(allocator);
 
     for (0..entry_count) |_| {
-        const path_len = try reader.readInt(u32, .little);
-        const path = try allocator.alloc(u8, path_len);
-        try reader.readNoEof(path);
+        // Read path length
+        var path_len_buf: [4]u8 = undefined;
+        _ = try file.read(&path_len_buf);
+        const path_len = std.mem.readInt(u32, &path_len_buf, .little);
 
-        const doc_count = try reader.readInt(u32, .little);
-        var doc_list = std.ArrayList(usize).init(allocator);
+        const path = try allocator.alloc(u8, path_len);
+        _ = try file.read(path);
+
+        // Read doc count
+        var doc_count_buf: [4]u8 = undefined;
+        _ = try file.read(&doc_count_buf);
+        const doc_count = std.mem.readInt(u32, &doc_count_buf, .little);
+
+        var doc_list = std.ArrayList(usize).initCapacity(allocator, doc_count) catch return error.OutOfMemory;
 
         for (0..doc_count) |_| {
-            const doc_id = try reader.readInt(usize, .little);
-            try doc_list.append(doc_id);
+            var doc_id_buf: [8]u8 = undefined;
+            _ = try file.read(&doc_id_buf);
+            const doc_id = std.mem.readInt(usize, &doc_id_buf, .little);
+            try doc_list.append(allocator, doc_id);
         }
 
         try index.paths.put(path, doc_list);

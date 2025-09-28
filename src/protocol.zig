@@ -612,9 +612,190 @@ pub fn emitValueAsJson(writer: anytype, value: heap.Value, allocator: std.mem.Al
             try std.fmt.format(writer, "\"bounds\":\"{s}\"", .{r.bounds.toString()});
             try writer.writeAll("}");
         },
-        // Legacy types
-        .IpAddr, .Subnet, .Mac, .Hash, .Currency, .LanguageTag, .LatLon, .LatLonAlt, .Geometry, .Temperature, .Pressure, .VectorF32 => {
-            try writer.writeAll("null");
+        // First-class types
+        .IpAddr => |ip| {
+            try writer.writeAll("\"");
+            switch (ip) {
+                .v4 => |octets| try std.fmt.format(writer, "{}.{}.{}.{}", .{ octets[0], octets[1], octets[2], octets[3] }),
+                .v6 => |bytes| {
+                    // RFC 5952 canonical representation
+                    var words: [8]u16 = undefined;
+                    for (0..8) |i| {
+                        words[i] = (@as(u16, bytes[i * 2]) << 8) | bytes[i * 2 + 1];
+                    }
+                    // Find longest run of zeros for compression
+                    var max_start: usize = 0;
+                    var max_len: usize = 0;
+                    var curr_start: usize = 0;
+                    var curr_len: usize = 0;
+                    var in_zeros = false;
+                    for (words, 0..) |word, i| {
+                        if (word == 0) {
+                            if (!in_zeros) {
+                                curr_start = i;
+                                curr_len = 1;
+                                in_zeros = true;
+                            } else {
+                                curr_len += 1;
+                            }
+                        } else {
+                            if (in_zeros and curr_len > max_len) {
+                                max_start = curr_start;
+                                max_len = curr_len;
+                            }
+                            in_zeros = false;
+                        }
+                    }
+                    if (in_zeros and curr_len > max_len) {
+                        max_start = curr_start;
+                        max_len = curr_len;
+                    }
+                    // Format with compression
+                    if (max_len > 1) {
+                        for (0..max_start) |i| {
+                            if (i > 0) try writer.writeByte(':');
+                            try std.fmt.format(writer, "{x}", .{words[i]});
+                        }
+                        try writer.writeAll("::");
+                        for ((max_start + max_len)..8) |i| {
+                            if (i > max_start + max_len) try writer.writeByte(':');
+                            try std.fmt.format(writer, "{x}", .{words[i]});
+                        }
+                    } else {
+                        for (words, 0..) |word, i| {
+                            if (i > 0) try writer.writeByte(':');
+                            try std.fmt.format(writer, "{x}", .{word});
+                        }
+                    }
+                },
+            }
+            try writer.writeAll("\"");
+        },
+        .Subnet => |subnet| {
+            try writer.writeAll("\"");
+            switch (subnet.addr) {
+                .v4 => |octets| try std.fmt.format(writer, "{}.{}.{}.{}/{}", .{ octets[0], octets[1], octets[2], octets[3], subnet.prefix_len }),
+                .v6 => |bytes| {
+                    // Format IPv6 address part using same logic as above
+                    var words: [8]u16 = undefined;
+                    for (0..8) |i| {
+                        words[i] = (@as(u16, bytes[i * 2]) << 8) | bytes[i * 2 + 1];
+                    }
+                    // Find longest run of zeros for compression
+                    var max_start: usize = 0;
+                    var max_len: usize = 0;
+                    var curr_start: usize = 0;
+                    var curr_len: usize = 0;
+                    var in_zeros = false;
+                    for (words, 0..) |word, i| {
+                        if (word == 0) {
+                            if (!in_zeros) {
+                                curr_start = i;
+                                curr_len = 1;
+                                in_zeros = true;
+                            } else {
+                                curr_len += 1;
+                            }
+                        } else {
+                            if (in_zeros and curr_len > max_len) {
+                                max_start = curr_start;
+                                max_len = curr_len;
+                            }
+                            in_zeros = false;
+                        }
+                    }
+                    if (in_zeros and curr_len > max_len) {
+                        max_start = curr_start;
+                        max_len = curr_len;
+                    }
+                    // Format with compression
+                    if (max_len > 1) {
+                        for (0..max_start) |i| {
+                            if (i > 0) try writer.writeByte(':');
+                            try std.fmt.format(writer, "{x}", .{words[i]});
+                        }
+                        try writer.writeAll("::");
+                        for ((max_start + max_len)..8) |i| {
+                            if (i > max_start + max_len) try writer.writeByte(':');
+                            try std.fmt.format(writer, "{x}", .{words[i]});
+                        }
+                    } else {
+                        for (words, 0..) |word, i| {
+                            if (i > 0) try writer.writeByte(':');
+                            try std.fmt.format(writer, "{x}", .{word});
+                        }
+                    }
+                    try std.fmt.format(writer, "/{}", .{subnet.prefix_len});
+                },
+            }
+            try writer.writeAll("\"");
+        },
+        .Mac => |mac| {
+            try std.fmt.format(writer, "\"{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}\"", .{ mac.bytes[0], mac.bytes[1], mac.bytes[2], mac.bytes[3], mac.bytes[4], mac.bytes[5] });
+        },
+        .Hash => |hash| {
+            try writer.writeAll("\"");
+            const alg_name = switch (hash.alg) {
+                .SHA3_256 => "SHA3-256",
+                .SHA3_512 => "SHA3-512",
+                .BLAKE3 => "BLAKE3",
+            };
+            try writer.writeAll(alg_name);
+            try writer.writeAll(":");
+            for (hash.digest) |byte| {
+                try std.fmt.format(writer, "{x:0>2}", .{byte});
+            }
+            try writer.writeAll("\"");
+        },
+        .Currency => |cur| {
+            try std.fmt.format(writer, "\"{}{}{}\"", .{ cur.code[0], cur.code[1], cur.code[2] });
+        },
+        .LanguageTag => |lang| {
+            try std.fmt.format(writer, "\"{s}\"", .{lang.tag});
+        },
+        .LatLon => |ll| {
+            try std.fmt.format(writer, "{{\"lat\":{d},\"lon\":{d}}}", .{ ll.lat, ll.lon });
+        },
+        .LatLonAlt => |lla| {
+            const ref_str = switch (lla.ref) {
+                .ellipsoid => "ellipsoid",
+                .geoid => "geoid",
+            };
+            try std.fmt.format(writer, "{{\"lat\":{d},\"lon\":{d},\"alt\":{d},\"ref\":\"{s}\"}}", .{ lla.lat, lla.lon, lla.alt, ref_str });
+        },
+        .Geometry => |geom| {
+            // Assume WKB is stored and we output as GeoJSON
+            // For simplicity, output the raw WKB as hex for now
+            try writer.writeAll("\"WKB:");
+            for (geom.wkb) |byte| {
+                try std.fmt.format(writer, "{x:0>2}", .{byte});
+            }
+            try writer.writeAll("\"");
+        },
+        .Temperature => |temp| {
+            const unit_str = switch (temp.unit_in) {
+                .K => "K",
+                .C => "C",
+                .F => "F",
+            };
+            try std.fmt.format(writer, "{{\"value\":{d},\"unit\":\"{s}\"}}", .{ temp.value_K, unit_str });
+        },
+        .Pressure => |press| {
+            const unit_str = switch (press.unit_in) {
+                .Pa => "Pa",
+                .kPa => "kPa",
+                .bar => "bar",
+                .atm => "atm",
+            };
+            try std.fmt.format(writer, "{{\"value\":{d},\"unit\":\"{s}\"}}", .{ press.value_Pa, unit_str });
+        },
+        .VectorF32 => |vec| {
+            try writer.writeAll("[");
+            for (vec.data, 0..) |val, i| {
+                if (i > 0) try writer.writeAll(",");
+                try std.fmt.format(writer, "{d}", .{val});
+            }
+            try writer.writeAll("]");
         },
     }
 }

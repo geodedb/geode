@@ -83,7 +83,7 @@ pub const JsonbInvertedIndex = struct {
         const result = try self.paths.getOrPut(owned_path);
 
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(usize).init(self.allocator);
+            result.value_ptr.* = std.ArrayList(usize).initCapacity(self.allocator, 0) catch std.ArrayList(usize){};
         } else {
             self.allocator.free(owned_path);
         }
@@ -92,7 +92,7 @@ pub const JsonbInvertedIndex = struct {
             if (existing_id == doc_id) return;
         }
 
-        try result.value_ptr.append(doc_id);
+        try result.value_ptr.append(self.allocator, doc_id);
     }
 
     pub fn queryPath(self: JsonbInvertedIndex, path: []const u8, allocator: std.mem.Allocator) ![]usize {
@@ -106,7 +106,7 @@ pub const JsonbInvertedIndex = struct {
         var iter = self.paths.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(self.allocator);
         }
         self.paths.deinit();
     }

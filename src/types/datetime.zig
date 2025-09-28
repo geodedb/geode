@@ -96,7 +96,7 @@ pub const Time = struct {
             const frac_str = str[9..];
             if (frac_str.len > 6) return Date.Error.ParseError;
             const frac_val = std.fmt.parseInt(u32, frac_str, 10) catch return Date.Error.ParseError;
-            const scale = std.math.powi(u32, 10, 6 - frac_str.len) catch 1;
+            const scale = std.math.powi(u32, 10, @as(u32, @intCast(6 - frac_str.len))) catch 1;
             micros += @as(i64, frac_val * scale);
         }
 
@@ -141,14 +141,14 @@ pub const Timestamp = struct {
         if (str.len < 19) return Date.Error.ParseError;
 
         const date_part = str[0..10];
-        if (str[10] != 'T') return Date.Error.ParseError;
+        if (str[10] != 'T' and str[10] != ' ') return Date.Error.ParseError;
         const time_part = str[11..];
 
         const date = try Date.fromStr(date_part);
         const base_micros = @as(i64, date.days_since_epoch) * 24 * 3600 * 1_000_000;
 
-        const time_end = std.mem.indexOfAny(u8, time_part, "Z+-") orelse time_part.len;
-        const time = try Time.fromStr(time_part[0..time_end]);
+        // For plain Timestamp (without TZ), just take the full time_part
+        const time = try Time.fromStr(time_part);
 
         return Timestamp{ .micros_since_epoch = base_micros + time.micros_since_midnight };
     }
@@ -173,10 +173,11 @@ pub const TimestampTZ = struct {
     micros_since_epoch_utc: i64,
 
     pub fn fromStr(str: []const u8) Date.Error!TimestampTZ {
-        if (str.len < 19) return Date.Error.ParseError;
+        if (str.len < 20) return Date.Error.ParseError; // Need at least YYYY-MM-DDTHH:MM:SSZ
 
         const tz_start = std.mem.indexOfAny(u8, str, "Z+-") orelse return Date.Error.ParseError;
         const ts_part = str[0..tz_start];
+        if (ts_part.len < 19) return Date.Error.ParseError; // Timestamp needs at least 19 chars
         const ts = try Timestamp.fromStr(ts_part);
 
         var offset_seconds: i32 = 0;

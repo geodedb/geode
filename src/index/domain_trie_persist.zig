@@ -8,36 +8,44 @@ pub fn persistSnapshot(trie: *DomainTrie, file_path: []const u8) !void {
     const file = try std.fs.cwd().createFile(file_path, .{});
     defer file.close();
 
-    var writer = file.writer();
+    try file.writeAll(DOMAIN_MAGIC);
 
-    try writer.writeAll(DOMAIN_MAGIC);
-    try writer.writeInt(u16, DOMAIN_VERSION, .little);
+    var version_buf: [2]u8 = undefined;
+    std.mem.writeInt(u16, &version_buf, DOMAIN_VERSION, .little);
+    try file.writeAll(&version_buf);
 
     const node_count = countNodes(trie.root);
-    try writer.writeInt(u64, node_count, .little);
+    var count_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &count_buf, node_count, .little);
+    try file.writeAll(&count_buf);
 
-    try writeNodes(writer, trie.root);
+    try writeNodes(file, trie.root);
 }
 
 pub fn loadSnapshot(allocator: std.mem.Allocator, file_path: []const u8) !DomainTrie {
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
-    var reader = file.reader();
-
+    // Read and validate magic number
     var magic: [4]u8 = undefined;
-    try reader.readNoEof(&magic);
+    _ = try file.read(&magic);
     if (!std.mem.eql(u8, &magic, DOMAIN_MAGIC)) return error.InvalidMagic;
 
-    const version = try reader.readInt(u16, .little);
+    // Read version
+    var version_buf: [2]u8 = undefined;
+    _ = try file.read(&version_buf);
+    const version = std.mem.readInt(u16, &version_buf, .little);
     if (version != DOMAIN_VERSION) return error.UnsupportedVersion;
 
-    const node_count = try reader.readInt(u64, .little);
+    // Read node count
+    var count_buf: [8]u8 = undefined;
+    _ = try file.read(&count_buf);
+    const node_count = std.mem.readInt(u64, &count_buf, .little);
     _ = node_count;
 
     var trie = DomainTrie.init(allocator);
 
-    trie.root = try readNodes(allocator, reader);
+    trie.root = try readNodes(allocator, file);
 
     return trie;
 }
@@ -52,64 +60,96 @@ fn countNodes(node: ?*DomainTrie.Node) u64 {
     return count;
 }
 
-fn writeNodes(writer: anytype, node: ?*DomainTrie.Node) !void {
+fn writeNodes(file: std.fs.File, node: ?*DomainTrie.Node) !void {
     if (node == null) {
-        try writer.writeByte(0);
+        const zero: [1]u8 = .{0};
+        try file.writeAll(&zero);
         return;
     }
 
-    try writer.writeByte(1);
+    const one: [1]u8 = .{1};
+    try file.writeAll(&one);
     const n = node.?;
 
-    try writer.writeInt(u32, @intCast(n.label.len), .little);
-    try writer.writeAll(n.label);
-    try writer.writeByte(if (n.is_terminal) 1 else 0);
+    var label_len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &label_len_buf, @intCast(n.label.len), .little);
+    try file.writeAll(&label_len_buf);
+    try file.writeAll(n.label);
+
+    const terminal_byte: [1]u8 = .{if (n.is_terminal) 1 else 0};
+    try file.writeAll(&terminal_byte);
 
     if (n.is_terminal) {
-        try writer.writeByte(if (n.data != null) 1 else 0);
+        const has_data_byte: [1]u8 = .{if (n.data != null) 1 else 0};
+        try file.writeAll(&has_data_byte);
         if (n.data) |data| {
-            try writer.writeInt(usize, data, .little);
+            var data_buf: [8]u8 = undefined;
+            std.mem.writeInt(usize, &data_buf, data, .little);
+            try file.writeAll(&data_buf);
         }
     }
 
-    try writer.writeInt(u32, @intCast(n.children.count()), .little);
+    var child_count_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &child_count_buf, @intCast(n.children.count()), .little);
+    try file.writeAll(&child_count_buf);
 
     var iter = n.children.iterator();
     while (iter.next()) |entry| {
-        try writer.writeInt(u32, @intCast(entry.key_ptr.len), .little);
-        try writer.writeAll(entry.key_ptr.*);
-        try writeNodes(writer, entry.value_ptr.*);
+        var key_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &key_len_buf, @intCast(entry.key_ptr.len), .little);
+        try file.writeAll(&key_len_buf);
+        try file.writeAll(entry.key_ptr.*);
+        try writeNodes(file, entry.value_ptr.*);
     }
 }
 
-fn readNodes(allocator: std.mem.Allocator, reader: anytype) !?*DomainTrie.Node {
-    const has_node = try reader.readByte();
-    if (has_node == 0) return null;
+fn readNodes(allocator: std.mem.Allocator, file: std.fs.File) !?*DomainTrie.Node {
+    var has_node_buf: [1]u8 = undefined;
+    _ = try file.read(&has_node_buf);
+    if (has_node_buf[0] == 0) return null;
 
-    const label_len = try reader.readInt(u32, .little);
+    // Read label length
+    var label_len_buf: [4]u8 = undefined;
+    _ = try file.read(&label_len_buf);
+    const label_len = std.mem.readInt(u32, &label_len_buf, .little);
+
     const label = try allocator.alloc(u8, label_len);
-    try reader.readNoEof(label);
+    _ = try file.read(label);
 
     const node = try DomainTrie.Node.init(allocator, label);
     allocator.free(label);
 
-    node.is_terminal = (try reader.readByte()) != 0;
+    // Read is_terminal flag
+    var terminal_buf: [1]u8 = undefined;
+    _ = try file.read(&terminal_buf);
+    node.is_terminal = terminal_buf[0] != 0;
 
     if (node.is_terminal) {
-        const has_data = (try reader.readByte()) != 0;
+        var has_data_buf: [1]u8 = undefined;
+        _ = try file.read(&has_data_buf);
+        const has_data = has_data_buf[0] != 0;
         if (has_data) {
-            node.data = try reader.readInt(usize, .little);
+            var data_buf: [8]u8 = undefined;
+            _ = try file.read(&data_buf);
+            node.data = std.mem.readInt(usize, &data_buf, .little);
         }
     }
 
-    const child_count = try reader.readInt(u32, .little);
+    // Read child count
+    var child_count_buf: [4]u8 = undefined;
+    _ = try file.read(&child_count_buf);
+    const child_count = std.mem.readInt(u32, &child_count_buf, .little);
 
     for (0..child_count) |_| {
-        const key_len = try reader.readInt(u32, .little);
-        const key = try allocator.alloc(u8, key_len);
-        try reader.readNoEof(key);
+        // Read key length
+        var key_len_buf: [4]u8 = undefined;
+        _ = try file.read(&key_len_buf);
+        const key_len = std.mem.readInt(u32, &key_len_buf, .little);
 
-        const child = try readNodes(allocator, reader);
+        const key = try allocator.alloc(u8, key_len);
+        _ = try file.read(key);
+
+        const child = try readNodes(allocator, file);
         if (child) |c| {
             try node.children.put(key, c);
         } else {

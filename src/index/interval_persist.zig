@@ -8,56 +8,74 @@ pub fn persistSnapshot(comptime T: type, tree: *interval_tree.IntervalTree(T), f
     const file = try std.fs.cwd().createFile(file_path, .{});
     defer file.close();
 
-    var writer = file.writer();
-
-    try writer.writeAll(INTERVAL_MAGIC);
-    try writer.writeInt(u16, INTERVAL_VERSION, .little);
-    try writer.writeInt(u16, @sizeOf(T), .little);
+    try file.writeAll(INTERVAL_MAGIC);
+    var buf: [2]u8 = undefined;
+    std.mem.writeInt(u16, &buf, INTERVAL_VERSION, .little);
+    try file.writeAll(&buf);
+    std.mem.writeInt(u16, &buf, @intCast(@sizeOf(T)), .little);
+    try file.writeAll(&buf);
 
     const count = countNodes(tree.root);
-    try writer.writeInt(u64, count, .little);
+    var count_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &count_buf, count, .little);
+    try file.writeAll(&count_buf);
 
-    try writeNodes(T, writer, tree.root);
+    try writeNodesFile(T, file, tree.root);
 }
 
 pub fn loadSnapshot(comptime T: type, allocator: std.mem.Allocator, file_path: []const u8) !interval_tree.IntervalTree(T) {
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
-    var reader = file.reader();
-
+    // Read and validate magic number
     var magic: [4]u8 = undefined;
-    try reader.readNoEof(&magic);
+    _ = try file.read(&magic);
     if (!std.mem.eql(u8, &magic, INTERVAL_MAGIC)) return error.InvalidMagic;
 
-    const version = try reader.readInt(u16, .little);
+    // Read version
+    var version_buf: [2]u8 = undefined;
+    _ = try file.read(&version_buf);
+    const version = std.mem.readInt(u16, &version_buf, .little);
     if (version != INTERVAL_VERSION) return error.UnsupportedVersion;
 
-    const type_size = try reader.readInt(u16, .little);
+    // Read type size
+    var type_size_buf: [2]u8 = undefined;
+    _ = try file.read(&type_size_buf);
+    const type_size = std.mem.readInt(u16, &type_size_buf, .little);
     if (type_size != @sizeOf(T)) return error.TypeMismatch;
 
-    const count = try reader.readInt(u64, .little);
+    // Read count
+    var count_buf: [8]u8 = undefined;
+    _ = try file.read(&count_buf);
+    const count = std.mem.readInt(u64, &count_buf, .little);
 
     var tree = interval_tree.IntervalTree(T).init(allocator);
 
     for (0..count) |i| {
         _ = i;
-        const has_lower = (try reader.readByte()) != 0;
-        const has_upper = (try reader.readByte()) != 0;
-        const bounds_code = try reader.readByte();
+
+        // Read flags
+        var flags: [3]u8 = undefined;
+        _ = try file.read(&flags);
+        const has_lower = flags[0] != 0;
+        const has_upper = flags[1] != 0;
+        const bounds_code = flags[2];
         const bounds = std.meta.intToEnum(@import("../types/range.zig").Range(T).Bounds, bounds_code) catch return error.InvalidBounds;
 
         var lower: ?T = null;
         var upper: ?T = null;
 
         if (has_lower) {
-            lower = try readValue(T, reader);
+            lower = try readValueFile(T, file);
         }
         if (has_upper) {
-            upper = try readValue(T, reader);
+            upper = try readValueFile(T, file);
         }
 
-        const data = try reader.readInt(usize, .little);
+        // Read data
+        var data_buf: [8]u8 = undefined;
+        _ = try file.read(&data_buf);
+        const data = std.mem.readInt(usize, &data_buf, .little);
 
         const range_val = try @import("../types/range.zig").Range(T).init(lower, upper, bounds);
         try tree.insert(range_val, data);
@@ -71,39 +89,62 @@ fn countNodes(node: anytype) u64 {
     return 1 + countNodes(node.?.left) + countNodes(node.?.right);
 }
 
-fn writeNodes(comptime T: type, writer: anytype, node: anytype) !void {
+fn writeNodesFile(comptime T: type, file: std.fs.File, node: anytype) !void {
     if (node == null) return;
     const n = node.?;
 
-    try writer.writeByte(if (n.interval.lower != null) 1 else 0);
-    try writer.writeByte(if (n.interval.upper != null) 1 else 0);
-    try writer.writeByte(@intFromEnum(n.interval.bounds));
+    var flags: [3]u8 = undefined;
+    flags[0] = if (n.interval.lower != null) 1 else 0;
+    flags[1] = if (n.interval.upper != null) 1 else 0;
+    flags[2] = @intFromEnum(n.interval.bounds);
+    try file.writeAll(&flags);
 
     if (n.interval.lower) |l| {
-        try writeValue(T, writer, l);
+        try writeValueFile(T, file, l);
     }
     if (n.interval.upper) |u| {
-        try writeValue(T, writer, u);
+        try writeValueFile(T, file, u);
     }
 
-    try writer.writeInt(usize, n.data, .little);
+    var data_buf: [8]u8 = undefined;
+    std.mem.writeInt(usize, &data_buf, n.data, .little);
+    try file.writeAll(&data_buf);
 
-    try writeNodes(T, writer, n.left);
-    try writeNodes(T, writer, n.right);
+    try writeNodesFile(T, file, n.left);
+    try writeNodesFile(T, file, n.right);
 }
 
-fn readValue(comptime T: type, reader: anytype) !T {
+fn readValueFile(comptime T: type, file: std.fs.File) !T {
     return switch (@typeInfo(T)) {
-        .Int => try reader.readInt(T, .little),
-        .Float => @bitCast(try reader.readInt(std.meta.Int(.unsigned, @bitSizeOf(T)), .little)),
+        .int => {
+            var buf: [@sizeOf(T)]u8 = undefined;
+            _ = try file.read(&buf);
+            return std.mem.readInt(T, &buf, .little);
+        },
+        .float => {
+            var buf: [@sizeOf(T)]u8 = undefined;
+            _ = try file.read(&buf);
+            const IntType = std.meta.Int(.unsigned, @bitSizeOf(T));
+            const int_val = std.mem.readInt(IntType, &buf, .little);
+            return @bitCast(int_val);
+        },
         else => @compileError("Unsupported type for interval tree persistence"),
     };
 }
 
-fn writeValue(comptime T: type, writer: anytype, value: T) !void {
+fn writeValueFile(comptime T: type, file: std.fs.File, value: T) !void {
     return switch (@typeInfo(T)) {
-        .Int => writer.writeInt(T, value, .little),
-        .Float => writer.writeInt(std.meta.Int(.unsigned, @bitSizeOf(T)), @bitCast(value), .little),
+        .int => {
+            var buf: [@sizeOf(T)]u8 = undefined;
+            std.mem.writeInt(T, &buf, value, .little);
+            try file.writeAll(&buf);
+        },
+        .float => {
+            var buf: [@sizeOf(T)]u8 = undefined;
+            const IntType = std.meta.Int(.unsigned, @bitSizeOf(T));
+            std.mem.writeInt(IntType, &buf, @bitCast(value), .little);
+            try file.writeAll(&buf);
+        },
         else => @compileError("Unsupported type for interval tree persistence"),
     };
 }

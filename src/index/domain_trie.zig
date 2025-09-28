@@ -5,7 +5,7 @@ pub const DomainTrie = struct {
     root: ?*Node,
     allocator: std.mem.Allocator,
 
-    const Node = struct {
+    pub const Node = struct {
         label: []const u8,
         is_terminal: bool,
         data: ?usize,
@@ -83,9 +83,9 @@ pub const DomainTrie = struct {
     }
 
     pub fn querySuffix(self: DomainTrie, domain: url.Domain, allocator: std.mem.Allocator) ![]usize {
-        var results = std.ArrayList(usize).init(allocator);
+        var results = std.ArrayList(usize).initCapacity(allocator, 0) catch std.ArrayList(usize){};
 
-        if (self.root == null) return results.toOwnedSlice();
+        if (self.root == null) return results.toOwnedSlice(allocator);
 
         var current = self.root.?;
 
@@ -97,14 +97,14 @@ pub const DomainTrie = struct {
             if (current.children.get(label)) |child| {
                 current = child;
                 if (current.is_terminal and current.data != null) {
-                    try results.append(current.data.?);
+                    try results.append(allocator, current.data.?);
                 }
             } else {
                 break;
             }
         }
 
-        return results.toOwnedSlice();
+        return results.toOwnedSlice(allocator);
     }
 
     pub fn deinit(self: *DomainTrie) void {

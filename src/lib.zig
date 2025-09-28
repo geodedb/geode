@@ -74,6 +74,25 @@ pub const unicode_tables = @import("unicode/unicode_tables.zig");
 // Re-export extended evaluation registry and extended types for CANARY tests
 pub const eval_ext = @import("eval_extended.zig");
 pub const ext_types = @import("types/extended.zig");
+
+// Re-export type system modules
+pub const types = struct {
+    pub const evaluator_functions = @import("types/evaluator_functions.zig");
+    pub const network = @import("types/network.zig");
+    pub const decimal128 = @import("types/decimal128.zig");
+    pub const datetime = @import("types/datetime.zig");
+    pub const jsonb = @import("types/jsonb.zig");
+    pub const xml = @import("types/xml.zig");
+    pub const url = @import("types/url.zig");
+    pub const uuid = @import("types/uuid.zig");
+    pub const arrays = @import("types/arrays.zig");
+    pub const bitstring = @import("types/bitstring.zig");
+    pub const range = @import("types/range.zig");
+    pub const extended = @import("types/extended.zig");
+    pub const extended_functions = @import("types/extended_functions.zig");
+    pub const numeric_promotion = @import("types/numeric_promotion.zig");
+    pub const int256 = @import("types/i256.zig");
+};
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
@@ -90,7 +109,21 @@ pub const timeseries = @import("timeseries/timeseries.zig");
 pub const storage = struct {
     // Note: CSR is available to the server binary via build.zig module injection; tests import it directly.
     pub const csr = @import("storage/csr_adjacency.zig");
+    pub const heap = @import("storage/heap.zig");
     // pub const constraints = @import("storage/constraints.zig");
+};
+
+// Re-export index modules for specialized data types
+pub const index = struct {
+    pub const patricia = @import("index/patricia.zig");
+    pub const rtree = @import("index/rtree.zig");
+    pub const hnsw = @import("index/hnsw.zig");
+    pub const interval_tree = @import("index/interval_tree.zig");
+    pub const interval_persist = @import("index/interval_persist.zig");
+    pub const jsonb_inverted = @import("index/jsonb_inverted.zig");
+    pub const jsonb_inverted_persist = @import("index/jsonb_inverted_persist.zig");
+    pub const domain_trie = @import("index/domain_trie.zig");
+    pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
 };
 
 // Re-export wire protocol definitions for tests/benchmarks needing Value / frame types

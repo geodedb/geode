@@ -38,18 +38,14 @@ pub const JsonbDocument = struct {
         defer parsed.deinit();
 
         var current = &parsed.value;
-        var path_parts = std.mem.split(u8, path[2..], ".");
+        var path_parts = std.mem.splitScalar(u8, path[2..], '.');
 
         while (path_parts.next()) |part| {
             switch (current.*) {
-                .object => |obj| {
-                    if (obj.get(part)) |value| {
-                        current = value;
-                    } else {
-                        return null;
-                    }
+                .object => |*obj| {
+                    current = obj.getPtr(part) orelse return null;
                 },
-                .array => |arr| {
+                .array => |*arr| {
                     const index = std.fmt.parseInt(usize, part, 10) catch return null;
                     if (index >= arr.items.len) return null;
                     current = &arr.items[index];
@@ -88,11 +84,12 @@ pub const JsonbDocument = struct {
     }
 
     fn canonicalize(allocator: std.mem.Allocator, value: std.json.Value) Error![]u8 {
-        var result = std.ArrayList(u8).init(allocator);
-        defer result.deinit();
+        var result = std.ArrayList(u8).initCapacity(allocator, 256) catch return Error.OutOfMemory;
+        errdefer result.deinit(allocator);
 
-        try canonicalizeValue(result.writer(), value);
-        return result.toOwnedSlice();
+        const writer = result.writer(allocator);
+        try canonicalizeValue(writer, value);
+        return result.toOwnedSlice(allocator);
     }
 
     fn canonicalizeValue(writer: anytype, value: std.json.Value) Error!void {
@@ -126,12 +123,12 @@ pub const JsonbDocument = struct {
             },
             .object => |obj| {
                 try writer.writeByte('{');
-                var keys = std.ArrayList([]const u8).init(std.heap.page_allocator);
-                defer keys.deinit();
+                var keys = std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 0) catch return Error.OutOfMemory;
+                defer keys.deinit(std.heap.page_allocator);
 
                 var iter = obj.iterator();
                 while (iter.next()) |entry| {
-                    try keys.append(entry.key_ptr.*);
+                    try keys.append(std.heap.page_allocator, entry.key_ptr.*);
                 }
 
                 std.sort.insertion([]const u8, keys.items, {}, struct {
@@ -159,22 +156,22 @@ pub const JsonbDocument = struct {
             .number_string => |ns| .{ .number = std.fmt.parseFloat(f64, ns) catch 0.0 },
             .string => |s| .{ .string = s },
             .array => |arr| {
-                var jsonb_arr = std.ArrayList(JsonbValue).init(std.heap.page_allocator);
+                var jsonb_arr = std.ArrayList(JsonbValue).initCapacity(std.heap.page_allocator, 0) catch return .{ .array = &.{} };
                 for (arr.items) |item| {
-                    jsonb_arr.append(jsonValueToJsonb(item)) catch {};
+                    jsonb_arr.append(std.heap.page_allocator, jsonValueToJsonb(item)) catch {};
                 }
-                return .{ .array = jsonb_arr.toOwnedSlice() catch &.{} };
+                return .{ .array = jsonb_arr.toOwnedSlice(std.heap.page_allocator) catch &.{} };
             },
             .object => |obj| {
-                var jsonb_obj = std.ArrayList(JsonbValue.JsonbKeyValue).init(std.heap.page_allocator);
+                var jsonb_obj = std.ArrayList(JsonbValue.JsonbKeyValue).initCapacity(std.heap.page_allocator, 0) catch return .{ .object = &.{} };
                 var iter = obj.iterator();
                 while (iter.next()) |entry| {
-                    jsonb_obj.append(.{
+                    jsonb_obj.append(std.heap.page_allocator, .{
                         .key = entry.key_ptr.*,
                         .value = jsonValueToJsonb(entry.value_ptr.*),
                     }) catch {};
                 }
-                return .{ .object = jsonb_obj.toOwnedSlice() catch &.{} };
+                return .{ .object = jsonb_obj.toOwnedSlice(std.heap.page_allocator) catch &.{} };
             },
         };
     }

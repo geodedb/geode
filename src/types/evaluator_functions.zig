@@ -1,5 +1,6 @@
 const std = @import("std");
-const Value = @import("../storage/heap.zig").Value;
+const heap = @import("../storage/heap.zig");
+const Value = heap.Value;
 const decimal128 = @import("decimal128.zig");
 const datetime = @import("datetime.zig");
 const jsonb = @import("jsonb.zig");
@@ -9,6 +10,7 @@ const uuid = @import("uuid.zig");
 const arrays = @import("arrays.zig");
 const bitstring = @import("bitstring.zig");
 const range = @import("range.zig");
+const network = @import("network.zig");
 
 pub const EvaluatorError = error{
     TypeMismatch,
@@ -35,7 +37,159 @@ pub const EvaluatorError = error{
     IdnaError,
 };
 
-// Constructor functions
+// First-class type constructors
+pub fn IpAddr(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    _ = allocator;
+    const ip = network.IpAddr.parse(text) catch return EvaluatorError.InvalidFormat;
+    return Value{ .IpAddr = ip };
+}
+
+pub fn Subnet(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    _ = allocator;
+    const subnet = network.Subnet.parse(text) catch return EvaluatorError.InvalidFormat;
+    return Value{ .Subnet = subnet };
+}
+
+pub fn Mac(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    _ = allocator;
+    const mac = network.Mac.parse(text) catch return EvaluatorError.InvalidFormat;
+    return Value{ .Mac = mac };
+}
+
+pub fn Hash(allocator: std.mem.Allocator, alg: []const u8, hex: []const u8) EvaluatorError!Value {
+    const alg_enum = if (std.mem.eql(u8, alg, "SHA3-256"))
+        heap.HashAlg.SHA3_256
+    else if (std.mem.eql(u8, alg, "SHA3-512"))
+        heap.HashAlg.SHA3_512
+    else if (std.mem.eql(u8, alg, "BLAKE3"))
+        heap.HashAlg.BLAKE3
+    else
+        return EvaluatorError.InvalidFormat;
+
+    const expected_len = switch (alg_enum) {
+        .SHA3_256 => 32,
+        .SHA3_512 => 64,
+        .BLAKE3 => 32,
+    };
+
+    if (hex.len != expected_len * 2) return EvaluatorError.InvalidFormat;
+
+    const digest = try allocator.alloc(u8, expected_len);
+    for (0..expected_len) |i| {
+        const hi = std.fmt.charToDigit(hex[i * 2], 16) catch return EvaluatorError.HexFormatError;
+        const lo = std.fmt.charToDigit(hex[i * 2 + 1], 16) catch return EvaluatorError.HexFormatError;
+        digest[i] = (hi << 4) | lo;
+    }
+
+    return Value{ .Hash = .{ .alg = alg_enum, .digest = digest } };
+}
+
+pub fn Currency(text: []const u8) EvaluatorError!Value {
+    if (text.len != 3) return EvaluatorError.InvalidFormat;
+    var code: [3]u8 = undefined;
+    for (text, 0..) |c, i| {
+        code[i] = std.ascii.toUpper(c);
+    }
+    return Value{ .Currency = .{ .code = code } };
+}
+
+pub fn LanguageTag(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    // Simple canonicalization: language lowercase, region uppercase
+    var canonical = try allocator.alloc(u8, text.len);
+    var i: usize = 0;
+    var in_region = false;
+    for (text) |c| {
+        if (c == '-' or c == '_') {
+            canonical[i] = '-';
+            in_region = true;
+        } else if (in_region) {
+            canonical[i] = std.ascii.toUpper(c);
+        } else {
+            canonical[i] = std.ascii.toLower(c);
+        }
+        i += 1;
+    }
+    return Value{ .LanguageTag = .{ .tag = canonical } };
+}
+
+pub fn LatLon(lat: f64, lon: f64) EvaluatorError!Value {
+    if (std.math.isNan(lat) or std.math.isNan(lon)) return EvaluatorError.FloatNaN;
+    if (std.math.isInf(lat) or std.math.isInf(lon)) return EvaluatorError.FloatNaN;
+    return Value{ .LatLon = .{ .lat = lat, .lon = lon } };
+}
+
+pub fn LatLonAlt(lat: f64, lon: f64, alt: f64, ref: []const u8) EvaluatorError!Value {
+    if (std.math.isNan(lat) or std.math.isNan(lon) or std.math.isNan(alt)) return EvaluatorError.FloatNaN;
+    if (std.math.isInf(lat) or std.math.isInf(lon) or std.math.isInf(alt)) return EvaluatorError.FloatNaN;
+    const alt_ref = if (std.mem.eql(u8, ref, "ellipsoid"))
+        heap.AltRef.ellipsoid
+    else if (std.mem.eql(u8, ref, "geoid"))
+        heap.AltRef.geoid
+    else
+        return EvaluatorError.InvalidFormat;
+    return Value{ .LatLonAlt = .{ .lat = lat, .lon = lon, .alt = alt, .ref = alt_ref } };
+}
+
+pub fn GeometryFromText(allocator: std.mem.Allocator, wkt: []const u8) EvaluatorError!Value {
+    // For MVP, just store the WKT as WKB placeholder
+    const wkb = try allocator.dupe(u8, wkt);
+    return Value{ .Geometry = .{ .wkb = wkb } };
+}
+
+pub fn Temperature(value: f64, unit: []const u8) EvaluatorError!Value {
+    if (std.math.isNan(value) or std.math.isInf(value)) return EvaluatorError.FloatNaN;
+    const unit_enum = if (std.mem.eql(u8, unit, "K"))
+        heap.TempUnit.K
+    else if (std.mem.eql(u8, unit, "C"))
+        heap.TempUnit.C
+    else if (std.mem.eql(u8, unit, "F"))
+        heap.TempUnit.F
+    else
+        return EvaluatorError.InvalidFormat;
+
+    // Convert to Kelvin for canonical storage
+    const value_K = switch (unit_enum) {
+        .K => value,
+        .C => value + 273.15,
+        .F => (value - 32.0) * 5.0 / 9.0 + 273.15,
+    };
+
+    return Value{ .Temperature = .{ .value_K = value_K, .unit_in = unit_enum } };
+}
+
+pub fn Pressure(value: f64, unit: []const u8) EvaluatorError!Value {
+    if (std.math.isNan(value) or std.math.isInf(value)) return EvaluatorError.FloatNaN;
+    const unit_enum = if (std.mem.eql(u8, unit, "Pa"))
+        heap.PressureUnit.Pa
+    else if (std.mem.eql(u8, unit, "kPa"))
+        heap.PressureUnit.kPa
+    else if (std.mem.eql(u8, unit, "bar"))
+        heap.PressureUnit.bar
+    else if (std.mem.eql(u8, unit, "atm"))
+        heap.PressureUnit.atm
+    else
+        return EvaluatorError.InvalidFormat;
+
+    // Convert to Pascals for canonical storage
+    const value_Pa = switch (unit_enum) {
+        .Pa => value,
+        .kPa => value * 1000.0,
+        .bar => value * 100000.0,
+        .atm => value * 101325.0,
+    };
+
+    return Value{ .Pressure = .{ .value_Pa = value_Pa, .unit_in = unit_enum } };
+}
+
+pub fn Vector(allocator: std.mem.Allocator, values: []const f32) EvaluatorError!Value {
+    for (values) |v| {
+        if (std.math.isNan(v) or std.math.isInf(v)) return EvaluatorError.FloatNaN;
+    }
+    const data = try allocator.dupe(f32, values);
+    return Value{ .VectorF32 = .{ .dim = @intCast(values.len), .data = data } };
+}
+
+// Additional data type constructors
 pub fn SmallInt(val: Value) EvaluatorError!Value {
     return switch (val) {
         .Int => |i| {

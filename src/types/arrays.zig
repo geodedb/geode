@@ -63,18 +63,18 @@ pub const DynamicArray = struct {
     };
 
     pub fn fromInts(allocator: std.mem.Allocator, values: []const i64) Error!DynamicArray {
-        var data = std.ArrayList(u8).init(allocator);
-        defer data.deinit();
+        var data = std.ArrayList(u8).initCapacity(allocator, values.len * 8) catch return Error.OutOfMemory;
+        errdefer data.deinit(allocator);
 
         for (values) |val| {
             var bytes: [8]u8 = undefined;
             std.mem.writeInt(i64, &bytes, val, .little);
-            try data.appendSlice(&bytes);
+            try data.appendSlice(allocator, &bytes);
         }
 
         return DynamicArray{
             .elem_type = .int,
-            .data = try data.toOwnedSlice(),
+            .data = try data.toOwnedSlice(allocator),
             .allocator = allocator,
         };
     }
