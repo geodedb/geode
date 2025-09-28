@@ -7,7 +7,7 @@ pub const Tracer = struct {
     spans: std.ArrayList(Span),
     active_span: ?*Span,
     service_name: []const u8,
-    
+
     pub const SpanKind = enum {
         internal,
         server,
@@ -15,13 +15,13 @@ pub const Tracer = struct {
         producer,
         consumer,
     };
-    
+
     pub const SpanStatus = enum {
         unset,
         ok,
-        error,
+        err,
     };
-    
+
     pub const Span = struct {
         trace_id: [16]u8,
         span_id: [8]u8,
@@ -35,7 +35,7 @@ pub const Tracer = struct {
         events: std.ArrayList(Event),
         links: std.ArrayList(Link),
     };
-    
+
     pub const Attribute = union(enum) {
         string: []const u8,
         int: i64,
@@ -46,19 +46,19 @@ pub const Tracer = struct {
         float_array: []f64,
         bool_array: []bool,
     };
-    
+
     pub const Event = struct {
         name: []const u8,
         timestamp: i64,
         attributes: std.StringHashMap(Attribute),
     };
-    
+
     pub const Link = struct {
         trace_id: [16]u8,
         span_id: [8]u8,
         attributes: std.StringHashMap(Attribute),
     };
-    
+
     pub fn init(allocator: Allocator, service_name: []const u8) Tracer {
         return .{
             .allocator = allocator,
@@ -67,7 +67,7 @@ pub const Tracer = struct {
             .service_name = service_name,
         };
     }
-    
+
     pub fn deinit(self: *Tracer) void {
         for (self.spans.items) |*span| {
             span.attributes.deinit();
@@ -76,22 +76,22 @@ pub const Tracer = struct {
         }
         self.spans.deinit();
     }
-    
+
     // Start a new span
     pub fn startSpan(self: *Tracer, name: []const u8, kind: SpanKind) !*Span {
         var trace_id: [16]u8 = undefined;
         var span_id: [8]u8 = undefined;
-        
+
         // Generate IDs
         std.crypto.random.bytes(&trace_id);
         std.crypto.random.bytes(&span_id);
-        
+
         // Get parent span ID if there's an active span
         const parent_span_id = if (self.active_span) |parent|
             parent.span_id
         else
             null;
-        
+
         const span = Span{
             .trace_id = trace_id,
             .span_id = span_id,
@@ -105,30 +105,30 @@ pub const Tracer = struct {
             .events = std.ArrayList(Event){},
             .links = std.ArrayList(Link){},
         };
-        
+
         try self.spans.append(span);
         const span_ptr = &self.spans.items[self.spans.items.len - 1];
         self.active_span = span_ptr;
-        
+
         return span_ptr;
     }
-    
+
     // End a span
     pub fn endSpan(self: *Tracer, span: *Span) void {
         span.end_time = std.time.nanoTimestamp();
-        
+
         // Clear active span if it's the one being ended
         if (self.active_span == span) {
             self.active_span = null;
         }
     }
-    
+
     // Add attribute to span
     pub fn setAttribute(self: *Tracer, span: *Span, key: []const u8, value: Attribute) !void {
         _ = self;
         try span.attributes.put(key, value);
     }
-    
+
     // Add event to span
     pub fn addEvent(self: *Tracer, span: *Span, name: []const u8, attributes: ?std.StringHashMap(Attribute)) !void {
         const event = Event{
@@ -136,10 +136,10 @@ pub const Tracer = struct {
             .timestamp = std.time.nanoTimestamp(),
             .attributes = attributes orelse std.StringHashMap(Attribute).init(self.allocator),
         };
-        
+
         try span.events.append(event);
     }
-    
+
     // Set span status
     pub fn setStatus(self: *Tracer, span: *Span, status: SpanStatus, message: ?[]const u8) !void {
         span.status = status;
@@ -147,18 +147,18 @@ pub const Tracer = struct {
             try self.setAttribute(span, "status.message", .{ .string = msg });
         }
     }
-    
+
     // Export spans in JSON format (simplified OpenTelemetry format)
     pub fn exportJSON(self: *Tracer, writer: anytype) !void {
         try writer.writeAll("{\"resource_spans\":[{");
         try writer.print("\"resource\":{{\"attributes\":[{{\"key\":\"service.name\",\"value\":{{\"string_value\":\"{}\"}}}}]}},", .{self.service_name});
         try writer.writeAll("\"scope_spans\":[{\"spans\":[");
-        
+
         for (self.spans.items, 0..) |span, i| {
             if (i > 0) try writer.writeByte(',');
-            
+
             try writer.writeByte('{');
-            
+
             // Write trace and span IDs
             try writer.writeAll("\"trace_id\":\"");
             for (span.trace_id) |byte| {
@@ -169,7 +169,7 @@ pub const Tracer = struct {
                 try writer.print("{x:0>2}", .{byte});
             }
             try writer.writeAll("\"");
-            
+
             // Write parent span ID if present
             if (span.parent_span_id) |parent_id| {
                 try writer.writeAll(",\"parent_span_id\":\"");
@@ -178,20 +178,20 @@ pub const Tracer = struct {
                 }
                 try writer.writeAll("\"");
             }
-            
+
             // Write basic fields
             try writer.print(",\"name\":\"{}\",\"kind\":{},\"start_time_unix_nano\":{},", .{
                 span.name,
                 @intFromEnum(span.kind),
                 span.start_time,
             });
-            
+
             if (span.end_time) |end_time| {
                 try writer.print("\"end_time_unix_nano\":{},", .{end_time});
             }
-            
+
             try writer.print("\"status\":{{\"code\":{}}}", .{@intFromEnum(span.status)});
-            
+
             // Write attributes
             if (span.attributes.count() > 0) {
                 try writer.writeAll(",\"attributes\":[");
@@ -200,9 +200,9 @@ pub const Tracer = struct {
                 while (attr_it.next()) |entry| {
                     if (!first) try writer.writeByte(',');
                     first = false;
-                    
+
                     try writer.print("{{\"key\":\"{}\",\"value\":{{", .{entry.key_ptr.*});
-                    
+
                     switch (entry.value_ptr.*) {
                         .string => |s| try writer.print("\"string_value\":\"{}\"", .{s}),
                         .int => |i| try writer.print("\"int_value\":{}", .{i}),
@@ -210,12 +210,12 @@ pub const Tracer = struct {
                         .bool => |b| try writer.print("\"bool_value\":{}", .{b}),
                         else => try writer.writeAll("\"string_value\":\"complex\""),
                     }
-                    
+
                     try writer.writeAll("}}");
                 }
                 try writer.writeByte(']');
             }
-            
+
             // Write events
             if (span.events.items.len > 0) {
                 try writer.writeAll(",\"events\":[");
@@ -228,10 +228,10 @@ pub const Tracer = struct {
                 }
                 try writer.writeByte(']');
             }
-            
+
             try writer.writeByte('}');
         }
-        
+
         try writer.writeAll("]}]}]}");
     }
 };
@@ -242,40 +242,40 @@ pub const TraceContext = struct {
     span_id: [8]u8,
     trace_flags: u8,
     trace_state: ?[]const u8,
-    
+
     // Parse W3C Trace Context header
     pub fn parseTraceparent(header: []const u8) !TraceContext {
         // Format: version-trace_id-span_id-trace_flags
         // Example: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-        
+
         if (header.len != 55) return error.InvalidFormat;
-        
+
         var context: TraceContext = undefined;
         context.trace_state = null;
-        
+
         // Parse version (must be 00)
         if (!std.mem.eql(u8, header[0..2], "00")) return error.UnsupportedVersion;
-        
+
         // Parse trace ID (32 hex chars)
         var i: usize = 0;
         while (i < 16) : (i += 1) {
             const hex = header[3 + i * 2 .. 5 + i * 2];
             context.trace_id[i] = try std.fmt.parseInt(u8, hex, 16);
         }
-        
+
         // Parse span ID (16 hex chars)
         i = 0;
         while (i < 8) : (i += 1) {
             const hex = header[36 + i * 2 .. 38 + i * 2];
             context.span_id[i] = try std.fmt.parseInt(u8, hex, 16);
         }
-        
+
         // Parse trace flags (2 hex chars)
         context.trace_flags = try std.fmt.parseInt(u8, header[53..55], 16);
-        
+
         return context;
     }
-    
+
     // Format as W3C Trace Context header
     pub fn formatTraceparent(self: TraceContext, writer: anytype) !void {
         try writer.writeAll("00-");

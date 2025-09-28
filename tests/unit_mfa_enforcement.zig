@@ -7,7 +7,8 @@ const mfa_mod = @import("src/security/mfa.zig");
 // CANARY: REQ=REQ-GQL-MFA-002; FEATURE="MFA authentication enforcement"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/unit_mfa_enforcement.zig:1; OWNER=security; UPDATED=2025-09-26
 
 test "MFA enforcement: base auth returns MFARequired when user has MFA" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     flags_mod.global().mfa.enableForTests();
     defer flags_mod.global().mfa.disableForTests();
@@ -24,7 +25,8 @@ test "MFA enforcement: base auth returns MFARequired when user has MFA" {
 }
 
 test "MFA enforcement: authenticateWithMFA succeeds with correct code" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     flags_mod.global().mfa.enableForTests();
     defer flags_mod.global().mfa.disableForTests();
@@ -48,7 +50,7 @@ test "MFA enforcement: authenticateWithMFA succeeds with correct code" {
     // Attempt auth (may produce MFAVerificationFailed if time mismatch); we treat success as either user pointer return or explicit verification of code pre-step.
     const result = sm.authenticateWithMFA("bob", "Password1!", code);
     switch (result) {
-        error.MFAVerificationFailed => | | {
+        error.MFAVerificationFailed => {
             // fallback: ensure that code we generated matches module when using provided timestamp (confidence secret correctness)
             const regen = try mfa_mod.generateCodeFromBase32(allocator, enroll.secret_base32, now_ms, 30, 6);
             try testing.expectEqual(code, regen);
@@ -60,7 +62,8 @@ test "MFA enforcement: authenticateWithMFA succeeds with correct code" {
 }
 
 test "MFA enforcement: missing code fails" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     flags_mod.global().mfa.enableForTests();
     defer flags_mod.global().mfa.disableForTests();

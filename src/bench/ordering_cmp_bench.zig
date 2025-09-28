@@ -29,7 +29,7 @@ pub fn main() !void {
 
     const start_old = std.time.mono();
     std.sort.sort(i32, data_old, &old_cmp.cmp);
-    const dur_old = std.time.mono().(std.time.Duration) - start_old;
+    const dur_old = std.time.nanoTimestamp() - start_old;
 
     // New comparator benchmark (index-based)
     var new_count: usize = 0;
@@ -44,10 +44,10 @@ pub fn main() !void {
 
     const start_new = std.time.mono();
     std.sort.sort(i32, data_new, &new_cmp.cmp);
-    const dur_new = std.time.mono().(std.time.Duration) - start_new;
+    const dur_new = std.time.nanoTimestamp() - start_new;
 
     // Print results
     const stdout = std.io.getStdOut().writer();
-    try stdout.print("Old comparator: calls = {d}, time = {d} ns\n", .{old_count, dur_old.nano()});
-    try stdout.print("New comparator: calls = {d}, time = {d} ns\n", .{new_count, dur_new.nano()});
+    try stdout.print("Old comparator: calls = {d}, time = {d} ns\n", .{ old_count, dur_old.nano() });
+    try stdout.print("New comparator: calls = {d}, time = {d} ns\n", .{ new_count, dur_new.nano() });
 }

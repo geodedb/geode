@@ -169,11 +169,14 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, argv[i], "--utf16-input")) {
             opt_utf16_input = true;
         } else if (std.mem.eql(u8, argv[i], "--ca-cert") and i + 1 < argv.len) {
-            ca_cert_path = argv[i + 1]; i += 1;
+            ca_cert_path = argv[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--client-cert") and i + 1 < argv.len) {
-            client_cert_path = argv[i + 1]; i += 1;
+            client_cert_path = argv[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--client-key") and i + 1 < argv.len) {
-            client_key_path = argv[i + 1]; i += 1;
+            client_key_path = argv[i + 1];
+            i += 1;
         }
     }
 
@@ -265,7 +268,7 @@ pub fn main() !void {
         if (ca_cert_path != null or (client_cert_path != null and client_key_path != null)) {
             client.connectEx(server_address, server_port, ca_cert_path, client_cert_path, client_key_path) catch |err| {
                 connected = false;
-                logger.error("mTLS: client connect failed", .{.{ .key = "err", .value = @errorName(err) }});
+                logger.err("mTLS: client connect failed", .{.{ .key = "err", .value = @errorName(err) }});
             };
         } else {
             client.connect(server_address, server_port) catch |err| {

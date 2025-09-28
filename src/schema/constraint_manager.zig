@@ -83,7 +83,7 @@ pub const ValidationError = struct {
     property: ?[]const u8,
     message: []const u8,
     severity: Severity,
-    
+
     pub const Severity = enum {
         err,
         warning,
@@ -95,7 +95,7 @@ pub const EnumType = struct {
     id: u32,
     name: []const u8,
     values: [][]const u8,
-    
+
     pub fn getOrdinal(self: EnumType, value: []const u8) ?u32 {
         for (self.values, 0..) |enum_value, i| {
             if (std.mem.eql(u8, enum_value, value)) {
@@ -116,7 +116,7 @@ pub const ConstraintManager = struct {
     key_constraints: std.ArrayList(KeyConstraint),
     cardinality_constraints: std.ArrayList(CardinalityConstraint),
     enum_types: std.StringHashMap(EnumType),
-    
+
     pub const NodeConstraint = struct {
         name: []const u8,
         label: []const u8,
@@ -125,7 +125,7 @@ pub const ConstraintManager = struct {
         expression: ?[]const u8,
         message: ?[]const u8,
     };
-    
+
     pub const RelationshipConstraint = struct {
         name: []const u8,
         relationship_type: []const u8,
@@ -136,7 +136,7 @@ pub const ConstraintManager = struct {
         expression: ?[]const u8,
         message: ?[]const u8,
     };
-    
+
     pub const PropertyConstraint = struct {
         name: []const u8,
         entity_type: EntityType,
@@ -150,7 +150,7 @@ pub const ConstraintManager = struct {
         pattern: ?[]const u8,
         enum_values: ?[]Value,
     };
-    
+
     pub const UniqueConstraint = struct {
         name: []const u8,
         entity_type: EntityType,
@@ -158,7 +158,7 @@ pub const ConstraintManager = struct {
         properties: [][]const u8,
         index_name: ?[]const u8,
     };
-    
+
     pub const ExistenceConstraint = struct {
         name: []const u8,
         entity_type: EntityType,
@@ -166,14 +166,14 @@ pub const ConstraintManager = struct {
         property: []const u8,
         message: ?[]const u8,
     };
-    
+
     pub const KeyConstraint = struct {
         name: []const u8,
         entity_type: EntityType,
         label_or_type: []const u8,
         properties: [][]const u8,
     };
-    
+
     pub const CardinalityConstraint = struct {
         name: []const u8,
         relationship_type: []const u8,
@@ -183,12 +183,12 @@ pub const ConstraintManager = struct {
         max_cardinality: ?u32,
         direction: Direction,
     };
-    
+
     pub const EntityType = enum {
         node,
         relationship,
     };
-    
+
     pub const DataType = enum {
         boolean,
         integer,
@@ -226,13 +226,13 @@ pub const ConstraintManager = struct {
         map,
         any,
     };
-    
+
     pub const Direction = enum {
         outgoing,
         incoming,
         both,
     };
-    
+
     pub const Value = union(enum) {
         null,
         boolean: bool,
@@ -244,7 +244,7 @@ pub const ConstraintManager = struct {
         list: []Value,
         map: std.StringHashMap(Value),
     };
-    
+
     pub const ValidationError = struct {
         constraint_name: []const u8,
         constraint_type: ConstraintType,
@@ -252,22 +252,22 @@ pub const ConstraintManager = struct {
         property: ?[]const u8,
         message: []const u8,
         severity: Severity,
-        
+
         pub const Severity = enum {
             err,
             warning,
             info,
         };
     };
-    
+
     // Enum catalog management
-    enum_types: std.StringHashMap(EnumType),
-    
+    // enum_types moved into struct fields above; remove duplicate
+
     pub const EnumType = struct {
         id: u32,
         name: []const u8,
         values: [][]const u8,
-        
+
         pub fn getOrdinal(self: EnumType, value: []const u8) ?u32 {
             for (self.values, 0..) |enum_value, i| {
                 if (std.mem.eql(u8, enum_value, value)) {
@@ -277,7 +277,7 @@ pub const ConstraintManager = struct {
             return null;
         }
     };
-    
+
     pub fn init(allocator: Allocator) ConstraintManager {
         return .{
             .allocator = allocator,
@@ -291,7 +291,7 @@ pub const ConstraintManager = struct {
             .cardinality_constraints = std.ArrayList(CardinalityConstraint).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *ConstraintManager) void {
         self.node_constraints.deinit();
         self.relationship_constraints.deinit();
@@ -300,7 +300,7 @@ pub const ConstraintManager = struct {
         self.existence_constraints.deinit();
         self.key_constraints.deinit();
         self.cardinality_constraints.deinit();
-        
+
         var enum_iter = self.enum_types.iterator();
         while (enum_iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -312,34 +312,34 @@ pub const ConstraintManager = struct {
         }
         self.enum_types.deinit();
     }
-    
+
     // Create an enum type
     pub fn createEnumType(self: *ConstraintManager, name: []const u8, values: []const []const u8) !u32 {
         if (self.enum_types.get(name) != null) return error.EnumTypeExists;
-        
+
         const enum_id = @as(u32, @intCast(self.enum_types.count()));
         const owned_name = try self.allocator.dupe(u8, name);
         const owned_values = try self.allocator.alloc([]const u8, values.len);
-        
+
         for (values, 0..) |value, i| {
             owned_values[i] = try self.allocator.dupe(u8, value);
         }
-        
+
         const enum_type = EnumType{
             .id = enum_id,
             .name = owned_name,
             .values = owned_values,
         };
-        
+
         try self.enum_types.put(try self.allocator.dupe(u8, name), enum_type);
         return enum_id;
     }
-    
+
     // Get enum type by name
     pub fn getEnumType(self: ConstraintManager, name: []const u8) ?EnumType {
         return self.enum_types.get(name);
     }
-    
+
     // Validate enum value
     pub fn validateEnumValue(self: ConstraintManager, type_name: []const u8, value: []const u8) bool {
         if (self.getEnumType(type_name)) |enum_type| {
@@ -347,7 +347,7 @@ pub const ConstraintManager = struct {
         }
         return false;
     }
-    
+
     // Create a unique constraint
     pub fn createUniqueConstraint(
         self: *ConstraintManager,
@@ -360,11 +360,12 @@ pub const ConstraintManager = struct {
         for (properties, 0..) |prop, i| {
             props[i] = try self.allocator.dupe(u8, prop);
         }
-        
+
         // Normalize label_or_type to NFC for deterministic uniqueness key namespace
-    // CANARY: REQ=REQ-GQL-UNICODE-011; FEATURE="UnicodeUniqueKeys"; ASPECT=NormalizeLabel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize; OWNER=unicode; UPDATED=2025-09-27
+        // CANARY: REQ=REQ-GQL-UNICODE-011; FEATURE="UnicodeUniqueKeys"; ASPECT=NormalizeLabel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize; OWNER=unicode; UPDATED=2025-09-27
         const unicode = @import("../unicode/geode_unicode.zig");
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
         const alloc_tmp = gpa.allocator();
         const norm_label = unicode.nfcNormalize(alloc_tmp, label_or_type) catch label_or_type;
         defer if (norm_label.ptr != label_or_type.ptr) alloc_tmp.free(norm_label);
@@ -375,9 +376,9 @@ pub const ConstraintManager = struct {
             .properties = props,
             .index_name = null,
         };
-        
+
         try self.unique_constraints.append(constraint);
-        
+
         // Also create as node/relationship constraint
         if (entity_type == .node) {
             try self.node_constraints.append(.{
@@ -390,7 +391,7 @@ pub const ConstraintManager = struct {
             });
         }
     }
-    
+
     // Validate a node against constraints
     pub fn validateNode(
         self: *ConstraintManager,
@@ -399,11 +400,11 @@ pub const ConstraintManager = struct {
         properties: std.StringHashMap(Value),
     ) ![]ValidationError {
         var errors = std.ArrayList(ValidationError){};
-        
+
         // Check node constraints
         for (self.node_constraints.items) |constraint| {
             if (!std.mem.eql(u8, constraint.label, label)) continue;
-            
+
             switch (constraint.type) {
                 .unique => {
                     // Check uniqueness (would need index lookup)
@@ -422,7 +423,7 @@ pub const ConstraintManager = struct {
                                     "Property '{}' must exist on nodes with label '{}'",
                                     .{ prop, label },
                                 ),
-                                .severity = .error,
+                                .severity = .err,
                             });
                         }
                     }
@@ -430,7 +431,7 @@ pub const ConstraintManager = struct {
                 else => {},
             }
         }
-        
+
         return errors.toOwnedSlice();
     }
 };

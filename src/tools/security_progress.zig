@@ -90,18 +90,24 @@ fn parseCanaries(alloc: std.mem.Allocator, md: []const u8, out: *std.ArrayList(C
             var feature: []const u8 = "";
             var aspect: []const u8 = "";
             var status: []const u8 = "";
-            var test: []const u8 = "";
+            var test_name: []const u8 = "";
             while (parts_it.next()) |part_raw| {
                 const part = std.mem.trim(u8, part_raw, " \t");
                 if (part.len == 0) continue;
-                if (std.mem.startsWith(u8, part, "REQ=")) req = part[4..];
-                else if (std.mem.startsWith(u8, part, "FEATURE=")) feature = part[8..];
-                else if (std.mem.startsWith(u8, part, "ASPECT=")) aspect = part[7..];
-                else if (std.mem.startsWith(u8, part, "STATUS=")) status = part[7..];
-                else if (std.mem.startsWith(u8, part, "TEST=")) test = part[5..];
+                if (std.mem.startsWith(u8, part, "REQ=")) {
+                    req = part[4..];
+                } else if (std.mem.startsWith(u8, part, "FEATURE=")) {
+                    feature = part[8..];
+                } else if (std.mem.startsWith(u8, part, "ASPECT=")) {
+                    aspect = part[7..];
+                } else if (std.mem.startsWith(u8, part, "STATUS=")) {
+                    status = part[7..];
+                } else if (std.mem.startsWith(u8, part, "TEST=")) {
+                    test_name = part[5..];
+                }
             }
             if (req.len > 0) {
-                try out.append(.{ .req = req, .feature = feature, .aspect = aspect, .status = status, .test_name = test });
+                try out.append(.{ .req = req, .feature = feature, .aspect = aspect, .status = status, .test_name = test_name });
             }
         }
     }
@@ -121,16 +127,13 @@ fn writeBadge(alloc: std.mem.Allocator, path: []const u8, total: usize, tested: 
     const value_buf = try std.fmt.allocPrint(alloc, "{d}T {d}P {d}N", .{ tested, partial, pending });
     defer alloc.free(value_buf);
     const color = badgeColor(total, tested, partial, pending);
-    try f.writeAll(
-        \u003csvg xmlns='http://www.w3.org/2000/svg' width='150' height='20' role='img' aria-label='security progress'\u003e
-        \u003cg shape-rendering='crispEdges'\u003e
-        \u003crect x='0' y='0' width='70' height='20' fill='#555'/\u003e
-        \u003crect x='70' y='0' width='80' height='20' fill='\
-    );
+    try f.writeAll("<svg xmlns='http://www.w3.org/2000/svg' width='150' height='20' role='img' aria-label='security progress'>\n");
+    try f.writeAll("<g shape-rendering='crispEdges'>\n");
+    try f.writeAll("<rect x='0' y='0' width='70' height='20' fill='#555'/>\n");
+    try f.writeAll("<rect x='70' y='0' width='80' height='20' fill='");
     try f.writeAll(color);
-    try f.writeAll(
-        \'/\u003e\n\u003c/g\u003e\n\u003cg fill='#fff' text-anchor='middle' font-family='Verdana,Geneva,DejaVu Sans,sans-serif' font-size='11'\u003e\n\u003ctext x='35' y='14'>security\u003c/text>\n\u003ctext x='110' y='14'>
-    );
+    try f.writeAll("'/>\n</g>\n<g fill='#fff' text-anchor='middle' font-family='Verdana,Geneva,DejaVu Sans,sans-serif' font-size='11'>\n");
+    try f.writeAll("<text x='35' y='14'>security</text>\n<text x='110' y='14'>");
     try f.writeAll(value_buf);
     try f.writeAll("</text>\n</g>\n</svg>");
 }
@@ -141,7 +144,11 @@ fn writeJson(alloc: std.mem.Allocator, path: []const u8, rows: []const Row, cana
     var w = f.writer();
     try w.writeAll("{\n  \"areas\": [\n");
     for (rows, 0..) |r, i| {
-        const status_str = switch (r.status) { .COMPLETE => "COMPLETE", .PARTIAL => "PARTIAL", .PENDING => "PENDING" };
+        const status_str = switch (r.status) {
+            .COMPLETE => "COMPLETE",
+            .PARTIAL => "PARTIAL",
+            .PENDING => "PENDING",
+        };
         try w.print("    {{\n      \"area\": \"{s}\",\n      \"status\": \"{s}\",\n      \"evidence\": \"{s}\",\n      \"next_action\": \"{s}\",\n      \"risk\": \"{s}\"\n    }}{s}\n", .{ r.area, status_str, r.evidence, r.next_action, r.risk, if (i + 1 == rows.len) "" else "," });
     }
     try w.writeAll("  ],\n  \"canaries\": [\n");
@@ -153,9 +160,17 @@ fn writeJson(alloc: std.mem.Allocator, path: []const u8, rows: []const Row, cana
 
 fn findCanaryForFeature(canaries: []const Canary, area: []const u8) ?Canary {
     // Area vs Feature naming not always identical; attempt substring match ignoring spaces
-    const normArea = std.mem.filter(u8, area, struct { fn f(c: u8) bool { return c != ' ' and c != '-'; } }.f);
+    const normArea = std.mem.filter(u8, area, struct {
+        fn f(c: u8) bool {
+            return c != ' ' and c != '-';
+        }
+    }.f);
     for (canaries) |c| {
-        const normFeat = std.mem.filter(u8, c.feature, struct { fn f(c: u8) bool { return c != ' ' and c != '"' and c != '-'; } }.f);
+        const normFeat = std.mem.filter(u8, c.feature, struct {
+            fn f(c: u8) bool {
+                return c != ' ' and c != '"' and c != '-';
+            }
+        }.f);
         if (std.mem.indexOf(u8, normArea, normFeat) != null or std.mem.indexOf(u8, normFeat, normArea) != null) return c;
     }
     return null;
@@ -171,7 +186,7 @@ fn validate(rows: []const Row, canaries: []const Canary, stderr: anytype) !void 
                     tested_missing += 1;
                 }
             } else {
-                try stderr.print("Validation: area '{s}' COMPLETE but no CANARY found\n", .{ r.area });
+                try stderr.print("Validation: area '{s}' COMPLETE but no CANARY found\n", .{r.area});
                 tested_missing += 1;
             }
         }
@@ -193,11 +208,15 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.skip(); // prog
     while (args.next()) |a| {
-        if (std.mem.eql(u8, a, "--md")) md_path = args.next() orelse return error.Parse;
-        else if (std.mem.eql(u8, a, "--json")) json_path = args.next() orelse return error.Parse;
-        else if (std.mem.eql(u8, a, "--badge")) badge_path = args.next() orelse return error.Parse;
-        else if (std.mem.eql(u8, a, "--prev")) prev_path = args.next();
-        else if (std.mem.eql(u8, a, "--help")) {
+        if (std.mem.eql(u8, a, "--md")) {
+            md_path = args.next() orelse return error.Parse;
+        } else if (std.mem.eql(u8, a, "--json")) {
+            json_path = args.next() orelse return error.Parse;
+        } else if (std.mem.eql(u8, a, "--badge")) {
+            badge_path = args.next() orelse return error.Parse;
+        } else if (std.mem.eql(u8, a, "--prev")) {
+            prev_path = args.next();
+        } else if (std.mem.eql(u8, a, "--help")) {
             std.debug.print("security_progress --md <file> --json <out.json> --badge <out.svg> [--prev prev.json]\n", .{});
             return;
         }

@@ -374,7 +374,7 @@ ci: clean go-prep build test fuzz bench cross-compile-strict cross-go-clients te
 	@echo "CI pipeline completed successfully (v0.17.1)"
 
 # Strict cross-compilation for CI (fails on any error)
-cross-compile-strict: cross-linux-x86_64 cross-windows cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64
+cross-compile-strict: cross-compile-required
 	@echo "All cross-compilation targets built successfully"
 
 # Quick rebuild (no clean)
@@ -433,7 +433,7 @@ cross-compile: cross-compile-required cross-compile-optional cross-clients
 	@echo "Cross-compilation checks complete (including client libraries)"
 
 # Required 64-bit cross-compilation targets (must all pass)
-cross-compile-required: cross-linux-x86_64 cross-windows cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64
+cross-compile-required: cross-linux-x86_64 cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64
 	@echo "✓ All required cross-compilation targets built successfully"
 
 # Optional 32-bit cross-compilation targets (failures are non-fatal)

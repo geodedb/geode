@@ -84,13 +84,13 @@ type Page struct {
 }
 
 type DB struct {
-	path      string
-	addr      string
-	pageSize  int
-	helloName string
-	helloVer  string
-	conf      string
-	caPath    string
+	path       string
+	addr       string
+	pageSize   int
+	helloName  string
+	helloVer   string
+	conf       string
+	caPath     string
 	clientCert string
 	clientKey  string
 	skipVerify bool
@@ -102,18 +102,18 @@ func Open(dsn string) (*DB, error) {
 }
 
 type dsnConfig struct {
-	Mode        string // process or quic
-	Path        string // process path
-	Addr        string // quic address
-	PageSize    int
-	HelloName   string
-	HelloVer    string
-	Conformance string
-	UseQUIC     bool
-	CACertPath      string
-	ClientCertPath  string
-	ClientKeyPath   string
-	SkipVerify      bool
+	Mode           string // process or quic
+	Path           string // process path
+	Addr           string // quic address
+	PageSize       int
+	HelloName      string
+	HelloVer       string
+	Conformance    string
+	UseQUIC        bool
+	CACertPath     string
+	ClientCertPath string
+	ClientKeyPath  string
+	SkipVerify     bool
 }
 
 func parseDSN(dsn string) dsnConfig {
@@ -883,7 +883,6 @@ func hexToBytes(s string) ([]byte, error) {
 	}
 	return b, nil
 }
-
 
 // loadRootCA loads a PEM CA bundle from path into a cert pool.
 func loadRootCA(path string) (*x509.CertPool, error) {

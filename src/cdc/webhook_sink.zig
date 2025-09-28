@@ -5,30 +5,30 @@ const cdc = @import("core.zig");
 pub const WebhookConfig = struct {
     endpoint: []const u8,
     method: HttpMethod = .POST,
-    
+
     /// Custom HTTP headers for auth/routing
     custom_headers: []const Header = &.{},
-    
+
     /// Retry configuration
     max_retries: u32 = 3,
     retry_base_delay_ms: u64 = 100,
     retry_max_delay_ms: u64 = 30000,
     retry_jitter: bool = true,
-    
+
     /// Idempotency configuration
     enable_idempotency: bool = true,
     idempotency_header: []const u8 = "X-Idempotency-Key",
-    
+
     /// Dead letter queue configuration
     enable_dlq: bool = true,
     dlq_max_size: u64 = 10000,
     dlq_retention_ms: u64 = 7 * 24 * 60 * 60 * 1000, // 7 days
-    
+
     /// Delivery policy
     delivery_guarantee: DeliveryGuarantee = .at_least_once,
     batch_size: u32 = 100,
     batch_timeout_ms: u64 = 1000,
-    
+
     /// Connection settings
     connect_timeout_ms: u64 = 5000,
     request_timeout_ms: u64 = 30000,
@@ -66,9 +66,9 @@ pub const WebhookSink = struct {
     dlq: DeadLetterQueue,
     metrics: WebhookMetrics,
     last_flush_time: i64,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, config: WebhookConfig) !Self {
         return .{
             .allocator = allocator,
@@ -80,41 +80,41 @@ pub const WebhookSink = struct {
             .last_flush_time = std.time.milliTimestamp(),
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.batch_buffer.deinit();
         self.dlq.deinit();
         self.http_client.deinit();
     }
-    
+
     /// Send a CDC event to the webhook
     pub fn sendEvent(self: *Self, event: cdc.Event) !void {
         // Add to batch buffer
         try self.batch_buffer.append(event);
-        
+
         // Check if we should flush
         const should_flush = self.batch_buffer.items.len >= self.config.batch_size or
             (std.time.milliTimestamp() - self.last_flush_time) >= @as(i64, @intCast(self.config.batch_timeout_ms));
-        
+
         if (should_flush) {
             try self.flush();
         }
     }
-    
+
     /// Flush pending events
     pub fn flush(self: *Self) !void {
         if (self.batch_buffer.items.len == 0) return;
-        
+
         const events = try self.batch_buffer.toOwnedSlice();
         defer self.allocator.free(events);
-        
+
         // Generate idempotency key for batch
         const idempotency_key = if (self.config.enable_idempotency)
             try self.generateIdempotencyKey(events)
         else
             null;
         defer if (idempotency_key) |key| self.allocator.free(key);
-        
+
         // Attempt delivery with retries
         const result = self.deliverWithRetry(events, idempotency_key) catch |err| {
             // Add to DLQ on failure
@@ -123,33 +123,33 @@ pub const WebhookSink = struct {
             }
             return err;
         };
-        
+
         // Update metrics
         self.metrics.recordDelivery(events.len, result.attempts, result.latency_ms);
         self.last_flush_time = std.time.milliTimestamp();
     }
-    
+
     /// Deliver events with retry logic
     fn deliverWithRetry(self: *Self, events: []const cdc.Event, idempotency_key: ?[]const u8) !DeliveryResult {
         var attempt: u32 = 0;
         var last_error: anyerror = undefined;
-        
+
         while (attempt < self.config.max_retries) : (attempt += 1) {
             const start_time = std.time.milliTimestamp();
-            
+
             // Prepare request
             const payload = try self.serializeEvents(events);
             defer self.allocator.free(payload);
-            
+
             // Build headers
             var headers = std.ArrayList(Header).init(self.allocator);
             defer headers.deinit();
-            
+
             // Add custom headers
             for (self.config.custom_headers) |header| {
                 try headers.append(header);
             }
-            
+
             // Add idempotency header
             if (idempotency_key) |key| {
                 try headers.append(.{
@@ -157,7 +157,7 @@ pub const WebhookSink = struct {
                     .value = key,
                 });
             }
-            
+
             // Add standard headers
             try headers.append(.{
                 .name = "Content-Type",
@@ -168,7 +168,7 @@ pub const WebhookSink = struct {
                 .value = try std.fmt.allocPrint(self.allocator, "{}", .{attempt + 1}),
             });
             defer self.allocator.free(headers.items[headers.items.len - 1].value);
-            
+
             // Send request
             const response = self.http_client.request(
                 self.config.method,
@@ -177,17 +177,17 @@ pub const WebhookSink = struct {
                 payload,
             ) catch |err| {
                 last_error = err;
-                
+
                 // Calculate backoff delay
                 if (attempt < self.config.max_retries - 1) {
                     const delay = self.calculateBackoff(attempt);
                     std.time.sleep(delay * 1_000_000);
                 }
-                
+
                 continue;
             };
             defer response.deinit();
-            
+
             // Check response status
             if (response.status >= 200 and response.status < 300) {
                 // Success
@@ -203,82 +203,82 @@ pub const WebhookSink = struct {
             } else {
                 // Server error - retry
                 last_error = error.ServerError;
-                
+
                 if (attempt < self.config.max_retries - 1) {
                     const delay = self.calculateBackoff(attempt);
                     std.time.sleep(delay * 1_000_000);
                 }
             }
         }
-        
+
         return last_error;
     }
-    
+
     /// Calculate exponential backoff with jitter
     fn calculateBackoff(self: *Self, attempt: u32) u64 {
         const base_delay = self.config.retry_base_delay_ms;
         var delay = base_delay * std.math.pow(u64, 2, attempt);
-        
+
         // Cap at max delay
         delay = @min(delay, self.config.retry_max_delay_ms);
-        
+
         // Add jitter
         if (self.config.retry_jitter) {
             const jitter = std.crypto.random.int(u64) % (delay / 2);
             delay = delay + jitter;
         }
-        
+
         return delay;
     }
-    
+
     /// Generate idempotency key for event batch
     fn generateIdempotencyKey(self: *Self, events: []const cdc.Event) ![]const u8 {
         var hasher = std.hash.Wyhash.init(0);
-        
+
         for (events) |event| {
             hasher.update(std.mem.asBytes(&event.sequence_number));
             hasher.update(event.table_name);
         }
-        
+
         const hash = hasher.final();
         return try std.fmt.allocPrint(self.allocator, "{x}", .{hash});
     }
-    
+
     /// Serialize events to JSON
     fn serializeEvents(self: *Self, events: []const cdc.Event) ![]const u8 {
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
-        
+
         var writer = buffer.writer();
         try writer.writeAll("[");
-        
+
         for (events, 0..) |event, i| {
             if (i > 0) try writer.writeAll(",");
             try std.json.stringify(event, .{}, writer);
         }
-        
+
         try writer.writeAll("]");
-        
+
         return try buffer.toOwnedSlice();
     }
-    
+
     /// Add failed events to dead letter queue
     fn addToDLQ(self: *Self, events: []const cdc.Event, err: anyerror) !void {
         const entry = DLQEntry{
             .events = events,
-            .error = err,
+            .message = @errorName(err),
             .timestamp = std.time.milliTimestamp(),
             .retry_count = self.config.max_retries,
         };
-        
+
         try self.dlq.add(entry);
         self.metrics.dlq_events += @as(u64, @intCast(events.len));
     }
-    
+
     /// Process dead letter queue for redelivery
     pub fn processDLQ(self: *Self) !u64 {
         var processed: u64 = 0;
-        
+
         while (self.dlq.pop()) |entry| {
             // Check if entry is expired
             const age = std.time.milliTimestamp() - entry.timestamp;
@@ -287,11 +287,11 @@ pub const WebhookSink = struct {
                 self.metrics.dlq_expired += @as(u64, @intCast(entry.events.len));
                 continue;
             }
-            
+
             // Attempt redelivery
             const idempotency_key = try self.generateIdempotencyKey(entry.events);
             defer self.allocator.free(idempotency_key);
-            
+
             self.deliverWithRetry(entry.events, idempotency_key) catch {
                 // Failed again - re-add to DLQ with updated timestamp
                 var new_entry = entry;
@@ -300,11 +300,11 @@ pub const WebhookSink = struct {
                 try self.dlq.add(new_entry);
                 continue;
             };
-            
+
             processed += @as(u64, @intCast(entry.events.len));
             self.metrics.dlq_recovered += @as(u64, @intCast(entry.events.len));
         }
-        
+
         return processed;
     }
 };
@@ -314,7 +314,7 @@ const DeadLetterQueue = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayList(DLQEntry),
     max_size: u64,
-    
+
     fn init(allocator: std.mem.Allocator, max_size: u64) !DeadLetterQueue {
         return .{
             .allocator = allocator,
@@ -322,11 +322,11 @@ const DeadLetterQueue = struct {
             .max_size = max_size,
         };
     }
-    
+
     fn deinit(self: *DeadLetterQueue) void {
         self.entries.deinit();
     }
-    
+
     fn add(self: *DeadLetterQueue, entry: DLQEntry) !void {
         if (self.entries.items.len >= self.max_size) {
             // Remove oldest entry
@@ -334,7 +334,7 @@ const DeadLetterQueue = struct {
         }
         try self.entries.append(entry);
     }
-    
+
     fn pop(self: *DeadLetterQueue) ?DLQEntry {
         if (self.entries.items.len == 0) return null;
         return self.entries.orderedRemove(0);
@@ -343,7 +343,7 @@ const DeadLetterQueue = struct {
 
 const DLQEntry = struct {
     events: []const cdc.Event,
-    error: anyerror,
+    error_message: []const u8,
     timestamp: i64,
     retry_count: u32,
 };
@@ -352,18 +352,18 @@ const DLQEntry = struct {
 const HttpClient = struct {
     allocator: std.mem.Allocator,
     config: WebhookConfig,
-    
+
     fn init(allocator: std.mem.Allocator, config: WebhookConfig) !HttpClient {
         return .{
             .allocator = allocator,
             .config = config,
         };
     }
-    
+
     fn deinit(self: *HttpClient) void {
         _ = self;
     }
-    
+
     fn request(
         self: *HttpClient,
         method: HttpMethod,
@@ -376,7 +376,7 @@ const HttpClient = struct {
         _ = url;
         _ = headers;
         _ = body;
-        
+
         // TODO: Implement actual HTTP request
         return HttpResponse{
             .status = 200,
@@ -388,7 +388,7 @@ const HttpClient = struct {
 const HttpResponse = struct {
     status: u16,
     body: []const u8,
-    
+
     fn deinit(self: *const HttpResponse) void {
         _ = self;
     }
@@ -410,7 +410,7 @@ const WebhookMetrics = struct {
     dlq_recovered: u64,
     dlq_expired: u64,
     total_latency_ms: u64,
-    
+
     fn init() WebhookMetrics {
         return .{
             .total_events = 0,
@@ -423,7 +423,7 @@ const WebhookMetrics = struct {
             .total_latency_ms = 0,
         };
     }
-    
+
     fn recordDelivery(self: *WebhookMetrics, event_count: usize, attempts: u32, latency_ms: u64) void {
         self.total_events += @as(u64, @intCast(event_count));
         self.successful_deliveries += 1;

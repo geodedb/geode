@@ -5,19 +5,19 @@ const Allocator = std.mem.Allocator;
 pub const PatternMatcher = struct {
     allocator: Allocator,
     graph: *Graph,
-    
+
     pub const Pattern = struct {
         nodes: []NodePattern,
         edges: []EdgePattern,
         where_clause: ?WhereClause,
     };
-    
+
     pub const NodePattern = struct {
         variable: ?[]const u8,
         labels: []const u8,
         properties: ?PropertyMap,
     };
-    
+
     pub const EdgePattern = struct {
         variable: ?[]const u8,
         source: []const u8,
@@ -27,30 +27,30 @@ pub const PatternMatcher = struct {
         min_hops: usize = 1,
         max_hops: usize = 1,
     };
-    
+
     pub const PropertyMap = std.StringHashMap(Value);
-    
+
     pub const WhereClause = struct {
         predicates: []Predicate,
     };
-    
+
     pub const Predicate = union(enum) {
         equals: struct { left: Expression, right: Expression },
         greater_than: struct { left: Expression, right: Expression },
         less_than: struct { left: Expression, right: Expression },
         in: struct { expr: Expression, list: []Value },
         exists: Expression,
-        and: []Predicate,
-        or: []Predicate,
-        not: *Predicate,
+        _and: []Predicate,
+        _or: []Predicate,
+        _not: *Predicate,
     };
-    
+
     pub const Expression = union(enum) {
         property: struct { variable: []const u8, name: []const u8 },
         literal: Value,
         function_call: struct { name: []const u8, args: []Expression },
     };
-    
+
     pub const Value = union(enum) {
         null,
         boolean: bool,
@@ -60,22 +60,22 @@ pub const PatternMatcher = struct {
         list: []Value,
         map: PropertyMap,
     };
-    
+
     pub const MatchResult = struct {
         bindings: std.StringHashMap(Value),
     };
-    
+
     pub fn init(allocator: Allocator, graph: *Graph) PatternMatcher {
         return .{
             .allocator = allocator,
             .graph = graph,
         };
     }
-    
+
     pub fn match(self: *PatternMatcher, pattern: Pattern) ![]MatchResult {
         var results = std.ArrayList(MatchResult){};
         defer results.deinit();
-        
+
         // Start with node patterns
         for (pattern.nodes) |node_pattern| {
             const nodes = try self.findNodes(node_pattern);
@@ -83,11 +83,11 @@ pub const PatternMatcher = struct {
                 var binding = MatchResult{
                     .bindings = std.StringHashMap(Value).init(self.allocator),
                 };
-                
+
                 if (node_pattern.variable) |var_name| {
                     try binding.bindings.put(var_name, .{ .integer = @intCast(node.id) });
                 }
-                
+
                 // Match edges from this node
                 for (pattern.edges) |edge_pattern| {
                     if (std.mem.eql(u8, edge_pattern.source, node_pattern.variable orelse "")) {
@@ -101,13 +101,13 @@ pub const PatternMatcher = struct {
                         }
                     }
                 }
-                
+
                 if (pattern.edges.len == 0) {
                     try results.append(binding);
                 }
             }
         }
-        
+
         // Apply WHERE clause filtering
         if (pattern.where_clause) |where| {
             var filtered = std.ArrayList(MatchResult){};
@@ -119,16 +119,16 @@ pub const PatternMatcher = struct {
             results.deinit();
             results = filtered;
         }
-        
+
         return try results.toOwnedSlice();
     }
-    
+
     fn findNodes(self: *PatternMatcher, pattern: NodePattern) ![]Node {
         var nodes = std.ArrayList(Node){};
-        
+
         // Query graph for nodes matching labels and properties
         const all_nodes = try self.graph.getNodesByLabel(pattern.labels);
-        
+
         for (all_nodes) |node| {
             if (pattern.properties) |props| {
                 var matches = true;
@@ -147,22 +147,22 @@ pub const PatternMatcher = struct {
                 try nodes.append(node);
             }
         }
-        
+
         return try nodes.toOwnedSlice();
     }
-    
+
     fn findEdges(self: *PatternMatcher, source: Node, pattern: EdgePattern) ![]Edge {
         var edges = std.ArrayList(Edge){};
-        
+
         // Get edges from source node
         const all_edges = try self.graph.getEdgesFrom(source.id);
-        
+
         for (all_edges) |edge| {
             // Check edge type
             if (pattern.types.len > 0 and !std.mem.eql(u8, edge.type, pattern.types)) {
                 continue;
             }
-            
+
             // Check properties
             if (pattern.properties) |props| {
                 var matches = true;
@@ -176,13 +176,13 @@ pub const PatternMatcher = struct {
                 }
                 if (!matches) continue;
             }
-            
+
             try edges.append(edge);
         }
-        
+
         return try edges.toOwnedSlice();
     }
-    
+
     fn evaluateWhere(self: *PatternMatcher, result: MatchResult, where: WhereClause) !bool {
         for (where.predicates) |predicate| {
             if (!try self.evaluatePredicate(result, predicate)) {
@@ -191,7 +191,7 @@ pub const PatternMatcher = struct {
         }
         return true;
     }
-    
+
     fn evaluatePredicate(self: *PatternMatcher, result: MatchResult, predicate: Predicate) !bool {
         return switch (predicate) {
             .equals => |eq| {
@@ -220,24 +220,24 @@ pub const PatternMatcher = struct {
                 _ = try self.evaluateExpression(result, expr);
                 return true;
             },
-            .and => |predicates| {
+            ._and => |predicates| {
                 for (predicates) |p| {
                     if (!try self.evaluatePredicate(result, p)) return false;
                 }
                 return true;
             },
-            .or => |predicates| {
+            ._or => |predicates| {
                 for (predicates) |p| {
                     if (try self.evaluatePredicate(result, p)) return true;
                 }
                 return false;
             },
-            .not => |p| {
+            ._not => |p| {
                 return !try self.evaluatePredicate(result, p.*);
             },
         };
     }
-    
+
     fn evaluateExpression(self: *PatternMatcher, result: MatchResult, expr: Expression) !Value {
         return switch (expr) {
             .property => |prop| {
@@ -260,7 +260,7 @@ pub const PatternMatcher = struct {
             },
         };
     }
-    
+
     fn valuesEqual(self: *PatternMatcher, a: Value, b: Value) bool {
         _ = self;
         return switch (a) {
@@ -272,7 +272,7 @@ pub const PatternMatcher = struct {
             else => false,
         };
     }
-    
+
     fn valueGreaterThan(self: *PatternMatcher, a: Value, b: Value) bool {
         _ = self;
         return switch (a) {
@@ -281,7 +281,7 @@ pub const PatternMatcher = struct {
             else => false,
         };
     }
-    
+
     fn valueLessThan(self: *PatternMatcher, a: Value, b: Value) bool {
         _ = self;
         return switch (a) {
@@ -290,7 +290,7 @@ pub const PatternMatcher = struct {
             else => false,
         };
     }
-    
+
     fn cloneBinding(self: *PatternMatcher, binding: MatchResult) !MatchResult {
         var new_binding = MatchResult{
             .bindings = std.StringHashMap(Value).init(self.allocator),
@@ -310,7 +310,7 @@ pub const Graph = struct {
     edges: std.AutoHashMap(u64, Edge),
     node_index: std.StringHashMap(std.ArrayList(u64)), // label -> node_ids
     edge_index: std.AutoHashMap(u64, std.ArrayList(u64)), // source_id -> edge_ids
-    
+
     pub fn init(allocator: Allocator) Graph {
         return .{
             .allocator = allocator,
@@ -320,14 +320,14 @@ pub const Graph = struct {
             .edge_index = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *Graph) void {
         self.nodes.deinit();
         self.edges.deinit();
         self.node_index.deinit();
         self.edge_index.deinit();
     }
-    
+
     pub fn getNodesByLabel(self: *Graph, label: []const u8) ![]Node {
         const node_ids = self.node_index.get(label) orelse return &[_]Node{};
         var nodes = try self.allocator.alloc(Node, node_ids.items.len);
@@ -336,7 +336,7 @@ pub const Graph = struct {
         }
         return nodes;
     }
-    
+
     pub fn getEdgesFrom(self: *Graph, source_id: u64) ![]Edge {
         const edge_ids = self.edge_index.get(source_id) orelse return &[_]Edge{};
         var edges = try self.allocator.alloc(Edge, edge_ids.items.len);
@@ -345,7 +345,7 @@ pub const Graph = struct {
         }
         return edges;
     }
-    
+
     pub fn getEntity(self: *Graph, id: i64) !Entity {
         const uid = @as(u64, @intCast(id));
         if (self.nodes.get(uid)) |node| {
@@ -361,7 +361,7 @@ pub const Graph = struct {
 pub const Entity = union(enum) {
     node: Node,
     edge: Edge,
-    
+
     pub fn getProperty(self: Entity, name: []const u8) !PatternMatcher.Value {
         return switch (self) {
             .node => |n| n.getProperty(name),
@@ -374,7 +374,7 @@ pub const Node = struct {
     id: u64,
     labels: []const u8,
     properties: PatternMatcher.PropertyMap,
-    
+
     pub fn getProperty(self: Node, name: []const u8) !PatternMatcher.Value {
         return self.properties.get(name) orelse .null;
     }
@@ -386,7 +386,7 @@ pub const Edge = struct {
     target: u64,
     type: []const u8,
     properties: PatternMatcher.PropertyMap,
-    
+
     pub fn getProperty(self: Edge, name: []const u8) !PatternMatcher.Value {
         return self.properties.get(name) orelse .null;
     }
