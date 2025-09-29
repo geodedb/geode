@@ -359,6 +359,10 @@ jobs:
           go-version: '1.22'
       - name: Build server
         run: zig build
+      - name: Sync Go vendor
+        run: |
+          go mod vendor
+          cd clients/go/gql && go mod vendor
       - name: Start geoded (tcp)
         run: |
           ./zig-out/bin/geoded --listen-quic 127.0.0.1:7567 > server.out 2> server.err &

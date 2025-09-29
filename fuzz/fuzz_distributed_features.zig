@@ -1,5 +1,5 @@
 // Comprehensive fuzz testing for distributed features
-// CANARY: REQ=REQ-GQL-FUZZ; FEATURE="Distributed Features Fuzzing"; ASPECT=Fuzzing; STATUS=TESTED; TEST=FuzzCANARY_Distributed; OWNER=fuzz; UPDATED=2025-01-29
+// CANARY: REQ=REQ-GQL-FUZZ; FEATURE="Distributed Features Fuzzing"; ASPECT=Fuzzing; STATUS=TESTED; TEST=FuzzCANARY_Distributed; OWNER=fuzz; UPDATED=2025-09-29
 
 const std = @import("std");
 const testing = std.testing;

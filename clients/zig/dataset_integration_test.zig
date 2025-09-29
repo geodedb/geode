@@ -334,5 +334,4 @@ test "full-text search" {
     try testing.expect(matches >= 1);
 }
 
-// CANARY: REQ=REQ-GQL-DATASET-ZIG; FEATURE="DatasetIntegrationZigClient"; ASPECT=Testing; STATUS=TESTED;
-// TEST=dataset_integration_test.zig; BENCH=benchmark_dataset_client.zig; OWNER=client-team; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-DATASET-ZIG; FEATURE="DatasetIntegrationZigClient"; ASPECT=Testing; STATUS=TESTED; TEST=dataset_integration_test.zig; BENCH=benchmark_dataset_client.zig; OWNER=client-team; UPDATED=2025-09-29

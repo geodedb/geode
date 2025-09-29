@@ -93,7 +93,7 @@ pub const FullTextIndex = struct {
     }
 
     // Search for documents matching a query with enhanced BM25 scoring
-    // CANARY: REQ=REQ-GQL-FTS-001; FEATURE="BM25 Full-Text Search"; ASPECT=FTS; STATUS=IMPL; TEST=TestCANARY_BM25_Search; OWNER=index; UPDATED=2025-01-29
+    // CANARY: REQ=REQ-GQL-FTS-001; FEATURE="BM25 Full-Text Search"; ASPECT=FTS; STATUS=IMPL; TEST=TestCANARY_BM25_Search; OWNER=index; UPDATED=2025-09-29
     pub fn search(self: *FullTextIndex, query: []const u8, max_results: usize) ![]SearchResult {
         const query_tokens = try self.tokenize(query);
         defer self.allocator.free(query_tokens);
@@ -239,7 +239,7 @@ pub const FullTextIndex = struct {
     }
 
     // Index a new document
-    // CANARY: REQ=REQ-GQL-FTS-002; FEATURE="Document Indexing"; ASPECT=FTS; STATUS=IMPL; TEST=TestCANARY_DocumentIndexing; OWNER=index; UPDATED=2025-01-29
+    // CANARY: REQ=REQ-GQL-FTS-002; FEATURE="Document Indexing"; ASPECT=FTS; STATUS=IMPL; TEST=TestCANARY_DocumentIndexing; OWNER=index; UPDATED=2025-09-29
     pub fn indexDocument(self: *FullTextIndex, doc_id: u64, content: []const u8) !void {
         // Tokenize content
         const tokens = try self.tokenize(content);

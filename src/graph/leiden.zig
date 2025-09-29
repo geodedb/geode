@@ -1,5 +1,5 @@
 // Leiden community detection algorithm for graph partitioning
-// CANARY: REQ=REQ-GQL-GRAPH-001; FEATURE="Leiden Community Detection"; ASPECT=Graph; STATUS=IMPL; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-01-29
+// CANARY: REQ=REQ-GQL-GRAPH-001; FEATURE="Leiden Community Detection"; ASPECT=Graph; STATUS=IMPL; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-09-29
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

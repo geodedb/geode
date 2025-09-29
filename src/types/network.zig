@@ -1,6 +1,5 @@
 // Network type implementations: IpAddr, Subnet, Mac
-// CANARY: REQ=REQ-GQL-TYPES; FEATURE="NetworkTypes"; ASPECT=Implementation; STATUS=TESTED;
-// TEST=test_type_extensions.zig; BENCH=benchmark_patricia_trie.zig; OWNER=types-team; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TYPES; FEATURE="NetworkTypes"; ASPECT=Implementation; STATUS=TESTED; TEST=test_type_extensions.zig; BENCH=benchmark_patricia_trie.zig; OWNER=types-team; UPDATED=2025-09-29
 
 const std = @import("std");
 const testing = std.testing;

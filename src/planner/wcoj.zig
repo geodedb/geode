@@ -1,6 +1,6 @@
 // Worst-Case Optimal Join (WCOJ) implementation
 // Based on the Leapfrog Triejoin algorithm for efficient multi-way joins
-// CANARY: REQ=REQ-GQL-WCOJ-001; FEATURE="Worst-Case Optimal Joins"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_WCOJ; OWNER=planner; UPDATED=2025-01-29
+// CANARY: REQ=REQ-GQL-WCOJ-001; FEATURE="Worst-Case Optimal Joins"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_WCOJ; OWNER=planner; UPDATED=2025-09-29
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

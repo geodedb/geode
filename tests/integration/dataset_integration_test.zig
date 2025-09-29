@@ -279,5 +279,4 @@ test "transaction rollback works correctly" {
     try testing.expect(std.mem.indexOf(u8, result.stdout, "\"count\":0") != null);
 }
 
-// CANARY: REQ=REQ-GQL-DATASET; FEATURE="DatasetIntegrationTests"; ASPECT=Testing; STATUS=TESTED;
-// TEST=dataset_integration_test.zig; BENCH=benchmark_dataset_load.zig; OWNER=test-team; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-DATASET; FEATURE="DatasetIntegrationTests"; ASPECT=Testing; STATUS=TESTED; TEST=dataset_integration_test.zig; BENCH=benchmark_dataset_load.zig; OWNER=test-team; UPDATED=2025-09-29

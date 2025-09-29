@@ -1,5 +1,5 @@
 // Comprehensive test suite for BM25 full-text search
-// CANARY: REQ=REQ-GQL-FTS-TEST; FEATURE="FTS Test Suite"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_FTS_Suite; OWNER=test; UPDATED=2025-01-29
+// CANARY: REQ=REQ-GQL-FTS-TEST; FEATURE="FTS Test Suite"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_FTS_Suite; OWNER=test; UPDATED=2025-09-29
 
 const std = @import("std");
 const testing = std.testing;

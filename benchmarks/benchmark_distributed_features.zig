@@ -1,5 +1,5 @@
 // Comprehensive benchmarks for distributed features
-// CANARY: REQ=REQ-GQL-BENCH; FEATURE="Distributed Features Benchmark"; ASPECT=Performance; STATUS=TESTED; TEST=BenchmarkCANARY_Distributed; OWNER=bench; UPDATED=2025-01-29
+// CANARY: REQ=REQ-GQL-BENCH; FEATURE="Distributed Features Benchmark"; ASPECT=Performance; STATUS=TESTED; TEST=BenchmarkCANARY_Distributed; OWNER=bench; UPDATED=2025-09-29
 
 const std = @import("std");
 const testing = std.testing;

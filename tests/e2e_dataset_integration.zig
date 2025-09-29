@@ -123,5 +123,4 @@ test "dataset migration and basic queries" {
     }
 }
 
-// CANARY: REQ=REQ-GQL-DATASET-E2E; FEATURE="DatasetIntegrationE2E"; ASPECT=Testing; STATUS=TESTED;
-// TEST=e2e_dataset_integration.zig; BENCH=benchmark_dataset_e2e.zig; OWNER=test-team; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-DATASET-E2E; FEATURE="DatasetIntegrationE2E"; ASPECT=Testing; STATUS=TESTED; TEST=e2e_dataset_integration.zig; BENCH=benchmark_dataset_e2e.zig; OWNER=test-team; UPDATED=2025-09-29

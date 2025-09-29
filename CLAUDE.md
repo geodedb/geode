@@ -197,7 +197,7 @@ make ci
 The project uses a CANARY annotation system for tracking implementation status:
 
 ```zig
-// CANARY: REQ=REQ-GQL-XXX; FEATURE="FeatureName"; ASPECT=AspectName; STATUS=IMPL; TEST=TestName; OWNER=team; UPDATED=YYYY-MM-DD
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="FeatureName"; ASPECT=AspectName; STATUS=IMPL; TEST=TestName; OWNER=team; UPDATED=2025-09-29
 ```
 
 **Valid STATUS values**: `IMPL` (implemented), `TESTED` (tested), or `BENCHED` (benchmarked)

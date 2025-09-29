@@ -1,5 +1,5 @@
 // Comprehensive test suite for Leiden community detection
-// CANARY: REQ=REQ-GQL-LEIDEN-TEST; FEATURE="Leiden Test Suite"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_Leiden_Suite; OWNER=test; UPDATED=2025-01-29
+// CANARY: REQ=REQ-GQL-LEIDEN-TEST; FEATURE="Leiden Test Suite"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_Leiden_Suite; OWNER=test; UPDATED=2025-09-29
 
 const std = @import("std");
 const testing = std.testing;
