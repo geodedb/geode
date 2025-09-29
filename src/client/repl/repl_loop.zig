@@ -510,25 +510,93 @@ fn restoreTerminalMode(original: std.posix.termios) !void {
 fn printWelcomeMessage() !void {
     const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     
-    // Using simple ASCII box drawing for better compatibility
+    // Check if terminal supports colors
+    const use_color = std.posix.isatty(std.posix.STDOUT_FILENO);
+    const green = if (use_color) "\x1b[32m" else "";
+    const cyan = if (use_color) "\x1b[36m" else "";
+    const yellow = if (use_color) "\x1b[33m" else "";
+    const reset = if (use_color) "\x1b[0m" else "";
+    const bold = if (use_color) "\x1b[1m" else "";
+    
     try stdout.writeAll("\n");
-    try stdout.writeAll("+----------------------------------------------------------+\n");
-    try stdout.writeAll("|        Welcome to Geode Shell v0.18.0                   |\n");
-    try stdout.writeAll("|  Interactive GQL REPL (ISO/IEC 39075:2024 compliant)    |\n");
-    try stdout.writeAll("+----------------------------------------------------------+\n");
+    
+    // Box top
+    try stdout.writeAll(green);
+    try stdout.writeAll("    ");
+    var i: usize = 0;
+    while (i < 60) : (i += 1) {
+        try stdout.writeAll("=");
+    }
     try stdout.writeAll("\n");
-    try stdout.writeAll("Quick commands to get started:\n");
-    try stdout.writeAll("  \\help          Show all available commands\n");
-    try stdout.writeAll("  \\quit          Exit the shell (also \\exit)\n");
-    try stdout.writeAll("  \\clear         Clear screen\n");
-    try stdout.writeAll("  RETURN 1;      Execute a simple GQL query\n");
+    
+    // Title lines with proper spacing
+    try stdout.writeAll("    ");
+    try stdout.writeAll(bold);
+    try stdout.writeAll("            Welcome to Geode Shell v0.18.0");
+    try stdout.writeAll(reset);
+    try stdout.writeAll(green);
     try stdout.writeAll("\n");
-    try stdout.writeAll("Tips:\n");
-    try stdout.writeAll("  • Meta commands start with backslash (\\)\n");
-    try stdout.writeAll("  • End GQL statements with semicolon (;)\n");
-    try stdout.writeAll("  • Use Ctrl+C to cancel current input\n");
-    try stdout.writeAll("  • Use Ctrl+D to exit on empty line\n");
+    
+    try stdout.writeAll("    ");
+    try stdout.writeAll("    Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
     try stdout.writeAll("\n");
-    try stdout.writeAll("Type \\help for more information.\n");
+    
+    // Box bottom
+    try stdout.writeAll("    ");
+    i = 0;
+    while (i < 60) : (i += 1) {
+        try stdout.writeAll("=");
+    }
+    try stdout.writeAll(reset);
+    try stdout.writeAll("\n\n");
+    
+    // Commands section
+    try stdout.writeAll(cyan);
+    try stdout.writeAll("  Quick commands to get started:");
+    try stdout.writeAll(reset);
+    try stdout.writeAll("\n");
+    
+    try stdout.writeAll("    ");
+    try stdout.writeAll(yellow);
+    try stdout.writeAll("\\help");
+    try stdout.writeAll(reset);
+    try stdout.writeAll("          Show all available commands\n");
+    
+    try stdout.writeAll("    ");
+    try stdout.writeAll(yellow);
+    try stdout.writeAll("\\quit");
+    try stdout.writeAll(reset);
+    try stdout.writeAll("          Exit the shell (also \\exit)\n");
+    
+    try stdout.writeAll("    ");
+    try stdout.writeAll(yellow);
+    try stdout.writeAll("\\clear");
+    try stdout.writeAll(reset);
+    try stdout.writeAll("         Clear screen\n");
+    
+    try stdout.writeAll("    ");
+    try stdout.writeAll(yellow);
+    try stdout.writeAll("RETURN 1;");
+    try stdout.writeAll(reset);
+    try stdout.writeAll("      Execute a simple GQL query\n");
+    
+    try stdout.writeAll("\n");
+    
+    // Tips section
+    try stdout.writeAll(cyan);
+    try stdout.writeAll("  Tips:");
+    try stdout.writeAll(reset);
+    try stdout.writeAll("\n");
+    try stdout.writeAll("    • Meta commands start with backslash (\\)\n");
+    try stdout.writeAll("    • End GQL statements with semicolon (;)\n");
+    try stdout.writeAll("    • Use Ctrl+C to cancel current input\n");
+    try stdout.writeAll("    • Use Ctrl+D to exit on empty line\n");
+    
+    try stdout.writeAll("\n");
+    try stdout.writeAll("  Type ");
+    try stdout.writeAll(yellow);
+    try stdout.writeAll("\\help");
+    try stdout.writeAll(reset);
+    try stdout.writeAll(" for more information.\n");
     try stdout.writeAll("\n");
 }
