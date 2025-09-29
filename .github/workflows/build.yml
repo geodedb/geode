@@ -343,6 +343,10 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
       - name: Build server
         run: zig build
       - name: Start geoded (tcp)
