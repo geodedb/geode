@@ -31,7 +31,7 @@ pub const ReplLoop = struct {
             var mode: std.os.windows.DWORD = undefined;
             break :blk std.os.windows.kernel32.GetConsoleMode(handle, &mode) != 0;
         } else std.posix.isatty(std.posix.STDIN_FILENO);
-        
+
         if (!is_tty) {
             const stderr_file = platform.getStderrHandle();
             try stderr_file.writeAll("Error [GEODE-E0002]: interactive shell requires a TTY\n");
@@ -45,7 +45,7 @@ pub const ReplLoop = struct {
         // Initialize components
         const history_path = if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null;
         defer if (history_path) |path| opts.allocator.free(path);
-        
+
         var history = try repl_history.HistoryStore.init(opts.allocator, history_path, opts.history_enabled);
         defer history.deinit();
 
@@ -490,12 +490,12 @@ fn enterRawMode() !TerminalState {
         var mode: std.os.windows.DWORD = undefined;
         _ = std.os.windows.kernel32.GetConsoleMode(handle, &mode);
         const original = mode;
-        
+
         // Disable line input and echo
         mode &= ~@as(std.os.windows.DWORD, 0x0002); // ENABLE_LINE_INPUT
         mode &= ~@as(std.os.windows.DWORD, 0x0004); // ENABLE_ECHO_INPUT
         _ = std.os.windows.kernel32.SetConsoleMode(handle, mode);
-        
+
         return original;
     }
 
@@ -531,7 +531,7 @@ fn restoreTerminalMode(original: TerminalState) !void {
 
 fn printWelcomeMessage() !void {
     const stdout = platform.getStdoutHandle();
-    
+
     // Check if terminal supports colors
     const use_color = platform.isStdoutTty();
     const green = if (use_color) "\x1b[32m" else "";
@@ -539,9 +539,9 @@ fn printWelcomeMessage() !void {
     const yellow = if (use_color) "\x1b[33m" else "";
     const reset = if (use_color) "\x1b[0m" else "";
     const bold = if (use_color) "\x1b[1m" else "";
-    
+
     try stdout.writeAll("\n");
-    
+
     // Box top
     try stdout.writeAll(green);
     try stdout.writeAll("    ");
@@ -550,7 +550,7 @@ fn printWelcomeMessage() !void {
         try stdout.writeAll("=");
     }
     try stdout.writeAll("\n");
-    
+
     // Title lines with proper spacing
     try stdout.writeAll("    ");
     try stdout.writeAll(bold);
@@ -558,11 +558,11 @@ fn printWelcomeMessage() !void {
     try stdout.writeAll(reset);
     try stdout.writeAll(green);
     try stdout.writeAll("\n");
-    
+
     try stdout.writeAll("    ");
     try stdout.writeAll("    Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
     try stdout.writeAll("\n");
-    
+
     // Box bottom
     try stdout.writeAll("    ");
     i = 0;
@@ -571,39 +571,39 @@ fn printWelcomeMessage() !void {
     }
     try stdout.writeAll(reset);
     try stdout.writeAll("\n\n");
-    
+
     // Commands section
     try stdout.writeAll(cyan);
     try stdout.writeAll("  Quick commands to get started:");
     try stdout.writeAll(reset);
     try stdout.writeAll("\n");
-    
+
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\help");
     try stdout.writeAll(reset);
     try stdout.writeAll("          Show all available commands\n");
-    
+
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\quit");
     try stdout.writeAll(reset);
     try stdout.writeAll("          Exit the shell (also \\exit)\n");
-    
+
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\clear");
     try stdout.writeAll(reset);
     try stdout.writeAll("         Clear screen\n");
-    
+
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("RETURN 1;");
     try stdout.writeAll(reset);
     try stdout.writeAll("      Execute a simple GQL query\n");
-    
+
     try stdout.writeAll("\n");
-    
+
     // Tips section
     try stdout.writeAll(cyan);
     try stdout.writeAll("  Tips:");
@@ -613,7 +613,7 @@ fn printWelcomeMessage() !void {
     try stdout.writeAll("    • End GQL statements with semicolon (;)\n");
     try stdout.writeAll("    • Use Ctrl+C to cancel current input\n");
     try stdout.writeAll("    • Use Ctrl+D to exit on empty line\n");
-    
+
     try stdout.writeAll("\n");
     try stdout.writeAll("  Type ");
     try stdout.writeAll(yellow);

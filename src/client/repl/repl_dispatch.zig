@@ -69,14 +69,14 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         const cyan = if (use_color) "\x1b[36m" else "";
         const reset = if (use_color) "\x1b[0m" else "";
         const bold = if (use_color) "\x1b[1m" else "";
-        
+
         try stdout.writeAll("\n");
         try stdout.writeAll(green);
         try stdout.writeAll(bold);
         try stdout.writeAll("=== Geode Shell Commands ===\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(cyan);
         try stdout.writeAll("Meta-Commands (start with \\):\n");
         try stdout.writeAll(reset);
@@ -96,7 +96,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("            Clear screen\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(cyan);
         try stdout.writeAll("History:\n");
         try stdout.writeAll(reset);
@@ -111,7 +111,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("       Clear history\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(cyan);
         try stdout.writeAll("Connection:\n");
         try stdout.writeAll(reset);
@@ -126,7 +126,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("       Disconnect from server\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(cyan);
         try stdout.writeAll("Transactions:\n");
         try stdout.writeAll(reset);
@@ -146,7 +146,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("         Rollback transaction\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(cyan);
         try stdout.writeAll("Settings:\n");
         try stdout.writeAll(reset);
@@ -166,7 +166,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("  Set option (e.g., keymap emacs|vi)\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(cyan);
         try stdout.writeAll("Other:\n");
         try stdout.writeAll(reset);
@@ -181,7 +181,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("    Execute commands from file\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(green);
         try stdout.writeAll("Keyboard Shortcuts:\n");
         try stdout.writeAll(reset);
@@ -191,7 +191,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll("  Ctrl+P/N          Navigate history\n");
         try stdout.writeAll("  Ctrl+A/E          Move to beginning/end of line\n");
         try stdout.writeAll("\n");
-        
+
         try stdout.writeAll(green);
         try stdout.writeAll("GQL Queries:\n");
         try stdout.writeAll(reset);
