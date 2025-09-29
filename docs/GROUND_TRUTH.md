@@ -309,10 +309,7 @@ CREATE POLICY user_data_policy
 Unique system for tracking implementation evidence:
 
 ```zig
-// CANARY: REQ=REQ-GQL-XXX; FEATURE="Name"; 
-//         ASPECT=Aspect; STATUS=TESTED; 
-//         TEST=TestName; OWNER=team; 
-//         UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="Name"; ASPECT=Aspect; STATUS=TESTED; TEST=TestName; OWNER=team; UPDATED=2025-09-29
 ```
 
 **Status Levels**:
@@ -590,10 +587,7 @@ The CANARY system provides automated evidence tracking:
 
 ### Marker Format
 ```zig
-// CANARY: REQ=identifier; FEATURE="name"; 
-//         ASPECT=component; STATUS=level;
-//         TEST=test_name; BENCH=bench_name;
-//         OWNER=team; UPDATED=date
+// CANARY: REQ=identifier; FEATURE="name"; ASPECT=component; STATUS=IMPL; TEST=test_name; BENCH=bench_name; OWNER=team; UPDATED=2025-09-29
 ```
 
 ### Governance Workflow

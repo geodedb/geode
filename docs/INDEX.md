@@ -115,10 +115,7 @@
 ### CANARY Evidence System
 Every feature must have evidence:
 ```zig
-// CANARY: REQ=REQ-GQL-XXX; FEATURE="Name"; 
-//         ASPECT=Component; STATUS=TESTED;
-//         TEST=TestName; OWNER=team; 
-//         UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="Name"; ASPECT=Component; STATUS=TESTED; TEST=TestName; OWNER=team; UPDATED=2025-09-29
 ```
 
 ### Documentation Updates

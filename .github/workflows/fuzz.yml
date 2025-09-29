@@ -7,7 +7,11 @@ jobs:
   fuzz-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
@@ -23,7 +27,11 @@ jobs:
       matrix:
         target: [parser, hnsw_snapshot, hnsw_wal, txn_sequence, lfu_cache, protocol_hello, decimal_roundtrip, planner_prune]
     steps:
-      - uses: actions/checkout@v4
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:

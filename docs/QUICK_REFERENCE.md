@@ -319,10 +319,7 @@ bench_regress --baseline old.json --current new.json
 
 ### Adding Evidence
 ```zig
-// CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; 
-//         ASPECT=Component; STATUS=TESTED; 
-//         TEST=TestName; OWNER=team; 
-//         UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; STATUS=TESTED; TEST=TestName; OWNER=team; UPDATED=2025-09-29
 ```
 
 ### Status Levels
