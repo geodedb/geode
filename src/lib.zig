@@ -250,7 +250,10 @@ pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, para
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
     // Enforce ident-only ORDER BY keys and forbid function calls unless explicitly relaxed
-    const allow_expr = std.posix.getenv("GEODE_ORDER_KEYS_EXPR") != null;
+    const allow_expr = if (std.process.getEnvVarOwned(allocator, "GEODE_ORDER_KEYS_EXPR")) |v| blk: {
+        defer allocator.free(v);
+        break :blk true;
+    } else |_| false;
     const opts: ParseOptions = if (allow_expr) .{} else .{ .ident_order_only = true, .forbid_orderby_calls = true };
     return parseGqlOptions(src, allocator, opts);
 }

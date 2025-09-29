@@ -1,12 +1,19 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Extraction"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchExtractParse; OWNER=engine; UPDATED=2025-09-20
 // Reads stdin and emits JSON lines for recognized benchmark prefixes.
 
 pub fn main() !void {
     const ally = std.heap.page_allocator;
-    var stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    var stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    var stdin_file = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    var stdout_file = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
     defer buf.deinit(ally);
     var tmp: [4096]u8 = undefined;

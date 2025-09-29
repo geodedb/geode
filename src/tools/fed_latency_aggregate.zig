@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Federation mismatch latency multi-run aggregation tool.
 // Spawns the existing `bench_federation_mismatch_latency` executable multiple times,
@@ -124,16 +125,16 @@ pub fn main() !void {
     const ally = gpa.allocator();
 
     const runs: usize = blk: {
-        if (std.posix.getenv("FED_LATENCY_AGG_RUNS")) |v| {
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_AGG_RUNS")) |v| {
+            defer ally.free(v);
             if (std.fmt.parseInt(usize, v, 10)) |parsed| break :blk if (parsed == 0) 1 else parsed else |_| break :blk 5;
-        }
+        } else |_| {}
         break :blk 5;
     };
 
-    const bench_path: []const u8 = blk2: {
-        if (std.posix.getenv("FED_LATENCY_BENCH_PATH")) |p| break :blk2 p;
-        break :blk2 "zig-out/bin/bench_federation_mismatch_latency";
-    };
+    const bench_path_owned = std.process.getEnvVarOwned(ally, "FED_LATENCY_BENCH_PATH") catch null;
+    defer if (bench_path_owned) |p| ally.free(p);
+    const bench_path: []const u8 = bench_path_owned orelse "zig-out/bin/bench_federation_mismatch_latency";
 
     // Accumulators
     var total_cv: f128 = 0;
@@ -156,7 +157,9 @@ pub fn main() !void {
     var outlier_rs = try ally.alloc(f128, runs);
     defer ally.free(outlier_rs);
 
-    const verbose = std.posix.getenv("FED_LATENCY_VERBOSE") != null;
+    const verbose_env = std.process.getEnvVarOwned(ally, "FED_LATENCY_VERBOSE") catch null;
+    defer if (verbose_env) |v| ally.free(v);
+    const verbose = verbose_env != null;
     var verbose_storage: [4096]u8 = undefined;
     var verbose_fbs = std.io.fixedBufferStream(&verbose_storage);
     var verbose_written = false;
@@ -264,9 +267,10 @@ pub fn main() !void {
     var fbs = std.io.fixedBufferStream(&buf);
     const w = fbs.writer();
     const want_txt = blk_format: {
-        if (std.posix.getenv("FED_LATENCY_FORMAT")) |fmt| {
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
+            defer ally.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blk_format true;
-        }
+        } else |_| {}
         break :blk_format false;
     };
     // Pre-compute summary_reason for both txt and json paths.
@@ -316,11 +320,16 @@ pub fn main() !void {
             if (all_promotion) "ok" else summary_reason,
         });
         const out_txt = fbs.getWritten();
-        _ = try std.posix.write(std.posix.STDOUT_FILENO, out_txt);
+        const stdout = if (builtin.os.tag == .windows)
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        else
+            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        try stdout.writeAll(out_txt);
         if (!all_promotion) {
-            if (std.posix.getenv("FED_LATENCY_AGG_REQUIRE")) |v| {
+            if (std.process.getEnvVarOwned(ally, "FED_LATENCY_AGG_REQUIRE")) |v| {
+                defer ally.free(v);
                 if (v.len > 0 and v[0] == '1') return error.AggregatePromotionNotReady;
-            }
+            } else |_| {}
         }
         return;
     }
@@ -377,13 +386,19 @@ pub fn main() !void {
     }
     try w.writeAll("}\n");
     const line_out = fbs.getWritten();
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, line_out);
+    const stdout2 = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout2.writeAll(line_out);
 
     // Optional archival append & rotation.
-    if (std.posix.getenv("FED_LATENCY_ARCHIVE_PATH")) |ap| {
+    if (std.process.getEnvVarOwned(ally, "FED_LATENCY_ARCHIVE_PATH") catch null) |ap| {
+        defer ally.free(ap);
         var need_rotate = false;
         var max_lines: usize = 1000;
-        if (std.posix.getenv("FED_LATENCY_ARCHIVE_MAX_LINES")) |ml| {
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_ARCHIVE_MAX_LINES") catch null) |ml| {
+            defer ally.free(ml);
             if (std.fmt.parseInt(usize, ml, 10)) |parsed| {
                 if (parsed > 0) max_lines = parsed;
             } else |_| {}
@@ -435,9 +450,10 @@ pub fn main() !void {
     }
 
     if (!all_promotion) {
-        if (std.posix.getenv("FED_LATENCY_AGG_REQUIRE")) |v| {
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_AGG_REQUIRE")) |v| {
+            defer ally.free(v);
             if (v.len > 0 and v[0] == '1') return error.AggregatePromotionNotReady;
-        }
+        } else |_| {}
     }
 }
 

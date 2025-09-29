@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // fed_latency_validate: Validate a single JSON line produced by fed_latency_aggregate.
 // Checks for presence and basic numeric type of required fields.
@@ -96,7 +97,10 @@ pub fn main() !void {
             const f = std.fs.cwd().openFile(p, .{ .mode = .read_only }) catch return error.OpenFileFailed;
             break :blk f.reader(&buf);
         } else {
-            const stdin_file: std.fs.File = .{ .handle = std.posix.STDIN_FILENO };
+            const stdin_file: std.fs.File = if (builtin.os.tag == .windows)
+                .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+            else
+                .{ .handle = std.posix.STDIN_FILENO };
             break :blk stdin_file.reader(&buf);
         }
     };
@@ -106,7 +110,9 @@ pub fn main() !void {
 
     var total_lines: usize = 0;
     var failures: usize = 0;
-    const strict = std.posix.getenv("FED_VALIDATE_STRICT") != null;
+    const strict_env = std.process.getEnvVarOwned(ally, "FED_VALIDATE_STRICT") catch null;
+    defer if (strict_env) |s| ally.free(s);
+    const strict = strict_env != null;
 
     while (true) {
         line_buf.clearRetainingCapacity();
@@ -143,7 +149,10 @@ pub fn main() !void {
     }
 
     const want_txt = blkfmt: {
-        if (std.posix.getenv("FED_LATENCY_FORMAT")) |fmt| if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
+            defer ally.free(fmt);
+            if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
+        } else |_| {}
         break :blkfmt false;
     };
 
@@ -152,14 +161,22 @@ pub fn main() !void {
         var fbs = std.io.fixedBufferStream(&out_buf);
         try fbs.writer().print("FED_VALIDATE lines={d} failures={d} strict={s}\n", .{ total_lines, failures, if (strict) "yes" else "no" });
         const written = fbs.getWritten();
-        _ = try std.posix.write(std.posix.STDOUT_FILENO, written);
+        const stdout = if (builtin.os.tag == .windows)
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        else
+            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        try stdout.writeAll(written);
     } else {
         var out_buf: [256]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&out_buf);
         // Escape literal braces with doubling for Zig format string
         try fbs.writer().print("{{\"lines\":{d},\"failures\":{d},\"strict\":{s}}}\n", .{ total_lines, failures, if (strict) "true" else "false" });
         const written = fbs.getWritten();
-        _ = try std.posix.write(std.posix.STDOUT_FILENO, written);
+        const stdout = if (builtin.os.tag == .windows)
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        else
+            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        try stdout.writeAll(written);
     }
 
     if (failures > 0) std.process.exit(2);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // fed_latency_streak: Analyze a JSONL file (or stdin) of fed_latency_aggregate outputs
 // and compute current streak of promotion_ready=true lines, longest historical streak,
@@ -75,8 +76,11 @@ pub fn main() !void {
     // Zig 0.15.1 File.reader requires providing an external buffer.
     var file_buf: [8192]u8 = undefined;
     var stdin_buf2: [8192]u8 = undefined;
-    // Create a File for stdin via posix fd (0) for Zig 0.15.1 compatibility.
-    const stdin_file: std.fs.File = .{ .handle = std.posix.STDIN_FILENO };
+    // Create a File for stdin for cross-platform compatibility.
+    const stdin_file: std.fs.File = if (builtin.os.tag == .windows)
+        .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+    else
+        .{ .handle = std.posix.STDIN_FILENO };
     // Use stdin's reader directly when no file path provided.
     var reader = blk_reader: {
         if (file_path) |p| {
@@ -88,9 +92,10 @@ pub fn main() !void {
     };
 
     const min_streak: usize = blk: {
-        if (std.posix.getenv("FED_STREAK_MIN")) |v| {
+        if (std.process.getEnvVarOwned(ally, "FED_STREAK_MIN")) |v| {
+            defer ally.free(v);
             if (std.fmt.parseInt(usize, v, 10)) |n| break :blk if (n == 0) 1 else n else |_| break :blk 3;
-        }
+        } else |_| {}
         break :blk 3;
     };
 
@@ -144,7 +149,10 @@ pub fn main() !void {
     if (current_streak >= min_streak) eligible = true;
 
     const want_txt = blkfmt: {
-        if (std.posix.getenv("FED_LATENCY_FORMAT")) |fmt| if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
+            defer ally.free(fmt);
+            if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
+        } else |_| {}
         break :blkfmt false;
     };
 
@@ -156,7 +164,11 @@ pub fn main() !void {
             .{ current_streak, longest_streak, if (eligible) "yes" else "no", min_streak, last_reason, total },
         );
         const written = fbs2.getWritten();
-        _ = try std.posix.write(std.posix.STDOUT_FILENO, written);
+        const stdout = if (builtin.os.tag == .windows)
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        else
+            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        try stdout.writeAll(written);
         return;
     }
 
@@ -174,7 +186,11 @@ pub fn main() !void {
     if (last_ts.len > 0) try w.print(",\"last_timestamp\":\"{s}\"", .{last_ts});
     try w.writeAll("}\n");
     const out = fbs.getWritten();
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, out);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout.writeAll(out);
 }
 
 test "fed_latency_streak_basic" {

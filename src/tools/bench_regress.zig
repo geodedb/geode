@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Regression Check"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchRegressionCompare; OWNER=engine; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Regression JSON Summary"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchRegressionJsonSummary; OWNER=engine; UPDATED=2025-09-20
@@ -215,7 +216,10 @@ fn writeBaseline(path: []const u8, map: *MetricMap) !void {
 
 fn emitSummary(paths: *const struct { baseline_path: []const u8, current_path: []const u8 }, tol_pct: f64, failures: usize, total: usize, regressions: []const []const u8) !void {
     const ts = std.time.milliTimestamp();
-    var stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    var stdout_file = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var buf: [4096]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const ally = fba.allocator();

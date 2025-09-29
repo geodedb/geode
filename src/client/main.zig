@@ -471,7 +471,10 @@ pub fn main() !void {
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     // Optionally capture server stderr when requested (for tests/telemetry); otherwise inherit to avoid blocking
-    const capture_server_stderr = std.posix.getenv("GEODE_CAPTURE_SERVER_STDERR") != null;
+    const capture_server_stderr = if (std.process.getEnvVarOwned(gpa, "GEODE_CAPTURE_SERVER_STDERR")) |v| blk: {
+        defer gpa.free(v);
+        break :blk true;
+    } else |_| false;
     child.stderr_behavior = if (capture_server_stderr) .Pipe else .Inherit;
     try child.spawn();
     const child_stdin_file = child.stdin.?; // use direct file writes (simpler API under Zig 0.15)

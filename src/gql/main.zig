@@ -167,7 +167,7 @@ pub fn main() !void {
         .Ok => |ok| ok,
         .Err => |pe| {
             // Output structured JSON diagnostic to stderr
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDERR_FILENO };
             const stderr = stderr_file.deprecatedWriter();
             const gql_status = status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
             try status.writeJson(stderr, gql_status);

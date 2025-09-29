@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // fed_latency_governance: Summarize readiness using latest aggregate + streak + optional archive scan.
 // Inputs:
@@ -140,7 +141,10 @@ pub fn main() !void {
     }
 
     const want_txt = blkfmt: {
-        if (std.posix.getenv("FED_LATENCY_FORMAT")) |fmt| if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
+            defer ally.free(fmt);
+            if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
+        } else |_| {}
         break :blkfmt false;
     };
 
@@ -152,7 +156,11 @@ pub fn main() !void {
         try fbs.writer().print("{{\"readiness\":{s},\"reason\":\"{s}\",\"streak\":{d},\"recent_cv_iqr\":{d:.6},\"recent_cv_mad\":{d:.6},\"failures\":{d}}}\n", .{ if (gov.readiness) "true" else "false", gov.reason, gov.streak, gov.recent_cv_iqr, gov.recent_cv_mad, gov.failures });
     }
     const written = fbs.getWritten();
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, written);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout.writeAll(written);
 
     if (!gov.readiness) std.process.exit(2);
 }

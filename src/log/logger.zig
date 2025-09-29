@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Level = enum(u8) {
     trace,
@@ -114,7 +115,10 @@ pub fn log(l: Level, msg: []const u8, kvs: anytype) void {
     const out_slice = buf[0..fbs.pos];
     switch (g_sink) {
         .stderr => {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = if (builtin.os.tag == .windows)
+                std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+            else
+                std.fs.File{ .handle = std.posix.STDERR_FILENO };
             stderr_file.writeAll(out_slice) catch return;
         },
         .buffer => |list| list.appendSlice(std.heap.page_allocator, out_slice) catch return,

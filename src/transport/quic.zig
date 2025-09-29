@@ -281,7 +281,10 @@ pub const QuicStream = struct {
         // Best-effort, idempotent: avoid vendor close by default to reduce teardown races.
         // Enable explicit stream close only when GEODE_QUIC_FORCE_STREAM_CLOSE=1.
         if (self.quic_stream_id) |sid| {
-            const force_stream_close = std.posix.getenv("GEODE_QUIC_FORCE_STREAM_CLOSE") != null;
+            const force_stream_close = if (std.process.getEnvVarOwned(self.parent_connection.allocator, "GEODE_QUIC_FORCE_STREAM_CLOSE")) |v| blk: {
+                defer self.parent_connection.allocator.free(v);
+                break :blk true;
+            } else |_| false;
             if (force_stream_close) {
                 if (self.parent_connection.quic_connection) |qc| {
                     quic_lib.closeStream(qc, sid, 0) catch {};
@@ -366,7 +369,10 @@ pub const QuicClient = struct {
     pub fn deinit(self: *QuicClient) void {
         // Close connection first, then endpoint. The vendored QUIC may crash if closed during handshake;
         // skip active close by default and rely on endpoint teardown/OS to reclaim unless forced via env.
-        const force_close = std.posix.getenv("GEODE_QUIC_FORCE_CLOSE") != null;
+        const force_close = if (std.process.getEnvVarOwned(self.allocator, "GEODE_QUIC_FORCE_CLOSE")) |v| blk: {
+            defer self.allocator.free(v);
+            break :blk true;
+        } else |_| false;
         if (self.quic_connection) |conn| {
             if (force_close) {
                 quic_lib.closeConnectionSimple(conn) catch {};
@@ -543,7 +549,10 @@ pub const QuicClientStream = struct {
     pub fn deinit(self: *QuicClientStream) void {
         // Avoid vendor close by default; env-gated for explicit shutdown.
         if (self.quic_stream_id) |sid| {
-            const force_stream_close = std.posix.getenv("GEODE_QUIC_FORCE_STREAM_CLOSE") != null;
+            const force_stream_close = if (std.process.getEnvVarOwned(self.allocator, "GEODE_QUIC_FORCE_STREAM_CLOSE")) |v| blk: {
+                defer self.allocator.free(v);
+                break :blk true;
+            } else |_| false;
             if (force_stream_close) {
                 quic_lib.closeStream(self.quic_connection.?, sid, 0) catch {};
             }

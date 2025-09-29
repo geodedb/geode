@@ -2109,7 +2109,10 @@ fn handleQuicConnection(
 
     // Initialize state
     var state = ServerState{ .allocator = gpa };
-    state.telemetry_paging = std.posix.getenv("GEODE_TELEMETRY_PAGING") != null;
+    state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
+        defer gpa.free(v);
+        break :blk true;
+    } else |_| false;
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
     state.wal_ptr = @ptrCast(&wal);
@@ -2755,7 +2758,11 @@ pub fn main() !void {
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
         // vendor teardown crashes; enable passive teardown when --test-exit-after-first
         // or GEODE_QUIC_PASSIVE_TEARDOWN=1 is present.
-        const passive_teardown = (std.posix.getenv("GEODE_QUIC_PASSIVE_TEARDOWN") != null) or test_exit_after_first;
+        const passive_teardown_env = if (std.process.getEnvVarOwned(gpa, "GEODE_QUIC_PASSIVE_TEARDOWN")) |v| blk: {
+            defer gpa.free(v);
+            break :blk true;
+        } else |_| false;
+        const passive_teardown = passive_teardown_env or test_exit_after_first;
         defer {
             if (!passive_teardown) transport.deinit();
         }
@@ -2779,7 +2786,10 @@ pub fn main() !void {
     }
 
     var state = ServerState{ .allocator = gpa };
-    state.telemetry_paging = std.posix.getenv("GEODE_TELEMETRY_PAGING") != null;
+    state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
+        defer gpa.free(v);
+        break :blk true;
+    } else |_| false;
     // Initialize CDC engine if enabled via environment
     var cdc_engine_storage: @import("cdc_enhanced").CDCEngine = undefined;
     var cdc_inited = false;
