@@ -30,9 +30,9 @@ echo "[reality-delta] Running canaryscan verify..." >&2
   --out "${ROOT}/status.json" --csv "${ROOT}/status.csv" \
   --verify "${ROOT}/docs/GAP_ANALYSIS.md" --strict
 
-total=$(jq 'length' "${ROOT}/status.json")
-tested=$(jq '[ .[] | select(.Status=="TESTED") ] | length' "${ROOT}/status.json")
-benched=$(jq '[ .[] | select(.Status=="BENCHED") ] | length' "${ROOT}/status.json")
+total=$(jq '[.requirements[].features[]] | length' "${ROOT}/status.json")
+tested=$(jq '[.requirements[].features[] | select(.status=="TESTED")] | length' "${ROOT}/status.json")
+benched=$(jq '[.requirements[].features[] | select(.status=="BENCHED")] | length' "${ROOT}/status.json")
 
 # Extract documented counts (first occurrence patterns).
 doc_total=$(grep -Eo '([0-9]+) features' "${ROOT}/docs/IMPLEMENTATION_REALITY.md" | head -1 | awk '{print $1}' || echo 0)
