@@ -43,8 +43,8 @@ pub fn formatGqlError(allocator: std.mem.Allocator, err: anyerror) ![]u8 {
 
 test "dispatcher unknown meta" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
+    var output = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    defer output.deinit(allocator);
 
     const writer = output.writer();
     try printError(writer, .unknown_command, "Unknown command '\\connet'. Did you mean '\\connect'?", false);

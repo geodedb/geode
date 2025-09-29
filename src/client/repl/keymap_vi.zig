@@ -40,13 +40,13 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         'o' => {
             state.vi_mode = .insert;
             state.cursor = state.buffer.items.len;
-            state.buffer.append('\n') catch {};
+            state.buffer.append(state.allocator, '\n') catch {};
             state.cursor += 1;
             return .vi_insert_mode;
         },
         'O' => {
             state.vi_mode = .insert;
-            state.buffer.insert(0, '\n') catch {};
+            state.buffer.insert(state.allocator, 0, '\n') catch {};
             state.cursor = 0;
             return .vi_insert_mode;
         },
@@ -112,7 +112,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
                 'd' => {
                     // dd: delete line
                     state.kill_ring.clearRetainingCapacity();
-                    state.kill_ring.appendSlice(state.buffer.items) catch {};
+                    state.kill_ring.appendSlice(state.allocator, state.buffer.items) catch {};
                     state.buffer.clearRetainingCapacity();
                     state.cursor = 0;
                     state.last_was_kill = true;
@@ -123,7 +123,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
                     // dw: delete word
                     const end = findWordEnd(state.buffer.items, state.cursor);
                     state.kill_ring.clearRetainingCapacity();
-                    state.kill_ring.appendSlice(state.buffer.items[state.cursor..end]) catch {};
+                    state.kill_ring.appendSlice(state.allocator, state.buffer.items[state.cursor..end]) catch {};
                     while (state.cursor < end) {
                         _ = state.buffer.orderedRemove(state.cursor);
                     }
@@ -135,7 +135,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
                     // db: delete word backward
                     const start = findWordStart(state.buffer.items, state.cursor);
                     state.kill_ring.clearRetainingCapacity();
-                    state.kill_ring.appendSlice(state.buffer.items[start..state.cursor]) catch {};
+                    state.kill_ring.appendSlice(state.allocator, state.buffer.items[start..state.cursor]) catch {};
                     while (state.cursor > start) {
                         state.cursor -= 1;
                         _ = state.buffer.orderedRemove(state.cursor);
@@ -152,7 +152,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
                         end += 1;
                     }
                     state.kill_ring.clearRetainingCapacity();
-                    state.kill_ring.appendSlice(state.buffer.items[state.cursor..end]) catch {};
+                    state.kill_ring.appendSlice(state.allocator, state.buffer.items[state.cursor..end]) catch {};
                     while (state.cursor < end) {
                         _ = state.buffer.orderedRemove(state.cursor);
                     }
@@ -208,7 +208,7 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
 
     // Regular characters
     if (key.key >= 0x20 and key.key < 0x7f) {
-        state.buffer.insert(state.cursor, key.key) catch return .none;
+        state.buffer.insert(state.allocator, state.cursor, key.key) catch return .none;
         state.cursor += 1;
         return .insert;
     }

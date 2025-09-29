@@ -51,7 +51,7 @@ pub const ReplLoop = struct {
 
         var state = ReplState{
             .allocator = opts.allocator,
-            .buffer = std.ArrayList(u8).init(opts.allocator),
+            .buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
             .cursor = 0,
             .history = &history,
             .history_index = null,
@@ -62,9 +62,9 @@ pub const ReplLoop = struct {
             .session = &session,
             .in_txn = false,
             .quit_requested = false,
-            .kill_ring = std.ArrayList(u8).init(opts.allocator),
+            .kill_ring = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
             .last_was_kill = false,
-            .search_buffer = std.ArrayList(u8).init(opts.allocator),
+            .search_buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
             .searching = false,
             .completion_ctx = repl_complete.CompletionContext.init(opts.allocator),
         };
@@ -86,7 +86,7 @@ pub const ReplState = struct {
     history_index: ?usize,
     keymap: ReplLoop.Keymap,
     vi_mode: keymap_vi.ViMode,
-    format: enum { table, csv, json },
+    format: ReplLoop.Format,
     verbose: bool,
     session: *repl_dispatch.ClientSession,
     in_txn: bool,
@@ -99,9 +99,9 @@ pub const ReplState = struct {
     pending_operator: ?u8 = null,
 
     pub fn deinit(self: *ReplState) void {
-        self.buffer.deinit();
-        self.kill_ring.deinit();
-        self.search_buffer.deinit();
+        self.buffer.deinit(self.allocator);
+        self.kill_ring.deinit(self.allocator);
+        self.search_buffer.deinit(self.allocator);
         self.completion_ctx.deinit();
     }
 };
@@ -278,18 +278,18 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
         },
         .delete_to_eol => {
             state.kill_ring.clearRetainingCapacity();
-            try state.kill_ring.appendSlice(state.buffer.items[state.cursor..]);
+            try state.kill_ring.appendSlice(state.allocator, state.buffer.items[state.cursor..]);
             state.buffer.items.len = state.cursor;
             state.last_was_kill = true;
         },
         .delete_to_bol => {
             state.kill_ring.clearRetainingCapacity();
-            try state.kill_ring.appendSlice(state.buffer.items[0..state.cursor]);
+            try state.kill_ring.appendSlice(state.allocator, state.buffer.items[0..state.cursor]);
             const remaining = state.buffer.items[state.cursor..];
             const remaining_copy = try state.allocator.dupe(u8, remaining);
             defer state.allocator.free(remaining_copy);
             state.buffer.clearRetainingCapacity();
-            try state.buffer.appendSlice(remaining_copy);
+            try state.buffer.appendSlice(state.allocator, remaining_copy);
             state.cursor = 0;
             state.last_was_kill = true;
         },
@@ -323,7 +323,7 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
 
                 if (state.history_index) |idx| {
                     state.buffer.clearRetainingCapacity();
-                    try state.buffer.appendSlice(state.history.entries.items[idx]);
+                    try state.buffer.appendSlice(state.allocator, state.history.entries.items[idx]);
                     state.cursor = state.buffer.items.len;
                 }
             }
@@ -333,7 +333,7 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
                 if (idx < state.history.entries.items.len - 1) {
                     state.history_index = idx + 1;
                     state.buffer.clearRetainingCapacity();
-                    try state.buffer.appendSlice(state.history.entries.items[idx + 1]);
+                    try state.buffer.appendSlice(state.allocator, state.history.entries.items[idx + 1]);
                     state.cursor = state.buffer.items.len;
                 } else {
                     state.history_index = null;
@@ -360,13 +360,13 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
             // Handled in processInput
         },
         .yank => {
-            try state.buffer.insertSlice(state.cursor, state.kill_ring.items);
+            try state.buffer.insertSlice(state.allocator, state.cursor, state.kill_ring.items);
             state.cursor += state.kill_ring.items.len;
         },
         .undo => {
             // Simple undo - just use kill ring for now
             state.buffer.clearRetainingCapacity();
-            try state.buffer.appendSlice(state.kill_ring.items);
+            try state.buffer.appendSlice(state.allocator, state.kill_ring.items);
             state.cursor = state.buffer.items.len;
         },
         .vi_normal_mode => {
@@ -414,7 +414,7 @@ fn handleSearch(state: *ReplState) !void {
                 _ = state.search_buffer.pop();
             }
         } else if (search_buf[0] >= 0x20 and search_buf[0] < 0x7f) {
-            try state.search_buffer.append(search_buf[0]);
+            try state.search_buffer.append(state.allocator, search_buf[0]);
         }
 
         // Find in history
@@ -424,7 +424,7 @@ fn handleSearch(state: *ReplState) !void {
             const entry = state.history.entries.items[i - 1];
             if (std.mem.indexOf(u8, entry, state.search_buffer.items)) |_| {
                 state.buffer.clearRetainingCapacity();
-                try state.buffer.appendSlice(entry);
+                try state.buffer.appendSlice(state.allocator, entry);
                 state.cursor = state.buffer.items.len;
                 state.history_index = i - 1;
                 found = true;

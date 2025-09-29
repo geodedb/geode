@@ -23,7 +23,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
             'w' => blk: { // Ctrl+W: kill word backward
                 const start = findWordStart(state.buffer.items, state.cursor);
                 state.kill_ring.clearRetainingCapacity();
-                state.kill_ring.appendSlice(state.buffer.items[start..state.cursor]) catch {};
+                state.kill_ring.appendSlice(state.allocator, state.buffer.items[start..state.cursor]) catch {};
                 while (state.cursor > start) {
                     state.cursor -= 1;
                     _ = state.buffer.orderedRemove(state.cursor);
@@ -34,7 +34,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
             'y' => .yank, // Ctrl+Y: yank from kill ring
             'l' => blk: { // Ctrl+L: clear screen
                 const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-                stdout.writer().print("\x1b[2J\x1b[H", .{}) catch {};
+                stdout.writeAll("\x1b[2J\x1b[H") catch {};
                 break :blk .none;
             },
             'r' => .search, // Ctrl+R: reverse search
@@ -56,7 +56,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
 
     // Regular characters
     if (key.key >= 0x20 and key.key < 0x7f) {
-        state.buffer.insert(state.cursor, key.key) catch return .none;
+        state.buffer.insert(state.allocator, state.cursor, key.key) catch return .none;
         state.cursor += 1;
         return .insert;
     }

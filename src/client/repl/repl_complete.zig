@@ -8,7 +8,7 @@ pub const CompletionContext = struct {
     pub fn init(allocator: std.mem.Allocator) CompletionContext {
         return .{
             .allocator = allocator,
-            .candidates = std.ArrayList([]const u8).init(allocator),
+            .candidates = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
         };
     }
 
@@ -16,7 +16,7 @@ pub const CompletionContext = struct {
         for (self.candidates.items) |candidate| {
             self.allocator.free(candidate);
         }
-        self.candidates.deinit();
+        self.candidates.deinit(self.allocator);
     }
 };
 
@@ -91,7 +91,7 @@ pub fn complete(state: anytype) !void {
         for (meta_commands) |cmd| {
             if (std.mem.startsWith(u8, cmd, prefix)) {
                 const candidate = try state.allocator.dupe(u8, cmd);
-                try state.completion_ctx.candidates.append(candidate);
+                try state.completion_ctx.candidates.append(state.allocator, candidate);
             }
         }
     } else {
@@ -102,7 +102,7 @@ pub fn complete(state: anytype) !void {
         for (gql_keywords) |keyword| {
             if (std.mem.startsWith(u8, keyword, upper_prefix)) {
                 const candidate = try state.allocator.dupe(u8, keyword);
-                try state.completion_ctx.candidates.append(candidate);
+                try state.completion_ctx.candidates.append(state.allocator, candidate);
             }
         }
     }
@@ -121,12 +121,12 @@ pub fn complete(state: anytype) !void {
         }
 
         // Insert completion
-        try state.buffer.insertSlice(state.cursor, completion);
+        try state.buffer.insertSlice(state.allocator, state.cursor, completion);
         state.cursor += completion.len;
 
         // Add space after keyword
         if (completion[0] != '\\') {
-            try state.buffer.insert(state.cursor, ' ');
+            try state.buffer.insert(state.allocator, state.cursor, ' ');
             state.cursor += 1;
         }
     }

@@ -13,13 +13,13 @@ pub const ClientSession = struct {
         return ClientSession{
             .allocator = allocator,
             .server_addr = try allocator.dupe(u8, addr),
-            .mock_responses = std.ArrayList([]const u8).init(allocator),
+            .mock_responses = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
         };
     }
 
     pub fn deinit(self: *ClientSession) void {
         self.allocator.free(self.server_addr);
-        self.mock_responses.deinit();
+        self.mock_responses.deinit(self.allocator);
     }
 
     pub fn hello(self: *ClientSession) !void {
@@ -29,7 +29,7 @@ pub const ClientSession = struct {
     pub fn runGql(self: *ClientSession, gql: []const u8) !void {
         _ = gql;
         // Mock implementation
-        try self.mock_responses.append("{\"columns\":[\"a\"],\"data\":[[1]]}");
+        try self.mock_responses.append(self.allocator, "{\"columns\":[\"a\"],\"data\":[[1]]}");
     }
 
     pub fn begin(self: *ClientSession) !void {
@@ -61,29 +61,29 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     const args = if (space_idx) |idx| std.mem.trim(u8, input[idx + 2 ..], " \t") else "";
 
     if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "h") or std.mem.eql(u8, cmd, "?")) {
-        try writer.print("\nMeta-Commands:\n", .{});
-        try writer.print("  \\help, \\h, \\?     Show this help\n", .{});
-        try writer.print("  \\quit, \\q         Exit the shell\n", .{});
-        try writer.print("  \\history [n]      Show last n history entries\n", .{});
-        try writer.print("  \\history -c       Clear history\n", .{});
-        try writer.print("  \\clear            Clear screen\n", .{});
-        try writer.print("  \\connect <addr>   Connect to server\n", .{});
-        try writer.print("  \\disconnect       Disconnect from server\n", .{});
-        try writer.print("  \\begin            Start transaction\n", .{});
-        try writer.print("  \\commit           Commit transaction\n", .{});
-        try writer.print("  \\rollback         Rollback transaction\n", .{});
-        try writer.print("  \\timing on|off    Toggle query timing\n", .{});
-        try writer.print("  \\format <fmt>     Set output format (table|csv|json)\n", .{});
-        try writer.print("  \\set <opt> <val>  Set option\n", .{});
-        try writer.print("  \\echo <text>      Echo text\n", .{});
-        try writer.print("  \\source <file>    Execute commands from file\n", .{});
-        try writer.print("\n", .{});
+        try stdout.writeAll("\nMeta-Commands:\n");
+        try stdout.writeAll("  \\help, \\h, \\?     Show this help\n");
+        try stdout.writeAll("  \\quit, \\q         Exit the shell\n");
+        try stdout.writeAll("  \\history [n]      Show last n history entries\n");
+        try stdout.writeAll("  \\history -c       Clear history\n");
+        try stdout.writeAll("  \\clear            Clear screen\n");
+        try stdout.writeAll("  \\connect <addr>   Connect to server\n");
+        try stdout.writeAll("  \\disconnect       Disconnect from server\n");
+        try stdout.writeAll("  \\begin            Start transaction\n");
+        try stdout.writeAll("  \\commit           Commit transaction\n");
+        try stdout.writeAll("  \\rollback         Rollback transaction\n");
+        try stdout.writeAll("  \\timing on|off    Toggle query timing\n");
+        try stdout.writeAll("  \\format <fmt>     Set output format (table|csv|json)\n");
+        try stdout.writeAll("  \\set <opt> <val>  Set option\n");
+        try stdout.writeAll("  \\echo <text>      Echo text\n");
+        try stdout.writeAll("  \\source <file>    Execute commands from file\n");
+        try stdout.writeAll("\n");
     } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q")) {
         state.quit_requested = true;
     } else if (std.mem.eql(u8, cmd, "history")) {
         if (std.mem.eql(u8, args, "-c")) {
             try state.history.clear();
-            try writer.print("History cleared\n", .{});
+            try stdout.writeAll("History cleared\n");
         } else {
             const n = if (args.len > 0) std.fmt.parseInt(usize, args, 10) catch 10 else 10;
             const start = if (state.history.entries.items.len > n)
@@ -92,40 +92,52 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 0;
 
             for (state.history.entries.items[start..], start..) |entry, i| {
-                try writer.print("{d:4}: {s}\n", .{ i + 1, entry });
+                var buf: [1024]u8 = undefined;
+                const line = try std.fmt.bufPrint(&buf, "{d:4}: {s}\n", .{ i + 1, entry });
+                try stdout.writeAll(line);
             }
         }
     } else if (std.mem.eql(u8, cmd, "clear")) {
-        try writer.print("\x1b[2J\x1b[H", .{}); // Clear screen and home cursor
+        try stdout.writeAll("\x1b[2J\x1b[H"); // Clear screen and home cursor
     } else if (std.mem.eql(u8, cmd, "connect")) {
         if (args.len > 0) {
             state.session.deinit();
-            state.session = try ClientSession.connect(state.allocator, args);
+            state.session.* = try ClientSession.connect(state.allocator, args);
             try state.session.hello();
-            try writer.print("Connected to {s}\n", .{args});
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\n", .{args});
+            try stdout.writeAll(msg);
         } else {
-            try repl_errors.printError(writer, .usage_error, "Usage: \\connect <host:port>", state.verbose);
+            const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            var buf: [512]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\connect <host:port>\n", .{});
+            try stderr.writeAll(msg);
         }
     } else if (std.mem.eql(u8, cmd, "disconnect")) {
         state.session.connected = false;
-        try writer.print("Disconnected\n", .{});
+        try stdout.writeAll("Disconnected\n");
     } else if (std.mem.eql(u8, cmd, "begin")) {
         try state.session.begin();
         state.in_txn = true;
-        try writer.print("Transaction started\n", .{});
+        try stdout.writeAll("Transaction started\n");
     } else if (std.mem.eql(u8, cmd, "commit")) {
         try state.session.commit();
         state.in_txn = false;
-        try writer.print("Transaction committed\n", .{});
+        try stdout.writeAll("Transaction committed\n");
     } else if (std.mem.eql(u8, cmd, "rollback")) {
         try state.session.rollback();
         state.in_txn = false;
-        try writer.print("Transaction rolled back\n", .{});
+        try stdout.writeAll("Transaction rolled back\n");
     } else if (std.mem.eql(u8, cmd, "timing")) {
         if (std.mem.eql(u8, args, "on") or std.mem.eql(u8, args, "off")) {
-            try writer.print("Timing {s}\n", .{args});
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Timing {s}\n", .{args});
+            try stdout.writeAll(msg);
         } else {
-            try repl_errors.printError(writer, .usage_error, "Usage: \\timing on|off", state.verbose);
+            const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\timing on|off\n", .{});
+            try stderr.writeAll(msg);
         }
     } else if (std.mem.eql(u8, cmd, "format")) {
         if (std.mem.eql(u8, args, "table")) {
@@ -135,10 +147,15 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         } else if (std.mem.eql(u8, args, "json")) {
             state.format = .json;
         } else {
-            try repl_errors.printError(writer, .usage_error, "Usage: \\format table|csv|json", state.verbose);
+            const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\format table|csv|json\n", .{});
+            try stderr.writeAll(msg);
             return;
         }
-        try writer.print("Output format set to {s}\n", .{args});
+        var buf: [256]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Output format set to {s}\n", .{args});
+        try stdout.writeAll(msg);
     } else if (std.mem.eql(u8, cmd, "set")) {
         const parts = try splitOnce(state.allocator, args, ' ');
         defer state.allocator.free(parts[0]);
@@ -147,26 +164,37 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         if (std.mem.eql(u8, parts[0], "keymap")) {
             if (std.mem.eql(u8, parts[1], "emacs")) {
                 state.keymap = .emacs;
-                try writer.print("Keymap set to emacs\n", .{});
+                try stdout.writeAll("Keymap set to emacs\n");
             } else if (std.mem.eql(u8, parts[1], "vi")) {
                 state.keymap = .vi;
                 state.vi_mode = .insert;
-                try writer.print("Keymap set to vi\n", .{});
+                try stdout.writeAll("Keymap set to vi\n");
             } else {
-                try repl_errors.printError(writer, .usage_error, "Usage: \\set keymap emacs|vi", state.verbose);
+                const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+                var buf: [256]u8 = undefined;
+                const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\set keymap emacs|vi\n", .{});
+                try stderr.writeAll(msg);
             }
         } else {
-            try writer.print("Unknown option: {s}\n", .{parts[0]});
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\n", .{parts[0]});
+            try stdout.writeAll(msg);
         }
     } else if (std.mem.eql(u8, cmd, "echo")) {
-        try writer.print("{s}\n", .{args});
+        var buf: [512]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "{s}\n", .{args});
+        try stdout.writeAll(msg);
     } else if (std.mem.eql(u8, cmd, "source")) {
-        try repl_errors.printError(writer, .not_implemented, "\\source not yet implemented", state.verbose);
+        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        try stderr.writeAll("Error [GEODE-E2004]: \\source not yet implemented\n");
     } else if (std.mem.eql(u8, cmd, "connet")) { // Typo detection
         const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
-        try stderr.writer().print("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\n", .{});
+        try stderr.writeAll("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\n");
     } else {
-        try repl_errors.printError(writer, .unknown_command, try std.fmt.allocPrint(state.allocator, "Unknown command '\\{s}'", .{cmd}), state.verbose);
+        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        var buf: [256]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\n", .{cmd});
+        try stderr.writeAll(msg);
     }
 }
 
@@ -176,15 +204,13 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // Execute query
     try state.session.runGql(gql);
 
-    // Render results
-    var sink = repl_render.RenderSink{
-        .writer = writer,
-        .format = state.format,
-        .allocator = state.allocator,
-    };
-
-    try state.session.pullAll(&sink);
-    try writer.print("\n", .{});
+    // For now, just output the mock response directly
+    if (state.session.mock_responses.items.len > 0) {
+        const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
+        try stdout.writeAll(response);
+    }
+    
+    try stdout.writeAll("\n");
 }
 
 fn splitOnce(allocator: std.mem.Allocator, text: []const u8, delimiter: u8) ![2][]u8 {
