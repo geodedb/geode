@@ -63,8 +63,10 @@ jobs:
           # Validate the structure has expected fields
           jq -e '.result.json.profile_version' explain.json > /dev/null || \
             (echo "Missing profile_version in EXPLAIN output:" && cat explain.json && exit 1)
-          jq -e '.result.json.logical' explain.json > /dev/null || \
-            (echo "Missing logical plan in EXPLAIN output:" && cat explain.json && exit 1)
+          jq -e '.result.json.ops' explain.json > /dev/null || \
+            (echo "Missing ops in EXPLAIN output:" && cat explain.json && exit 1)
+          jq -e '.result.json.totals' explain.json > /dev/null || \
+            (echo "Missing totals in EXPLAIN output:" && cat explain.json && exit 1)
           
           echo "EXPLAIN output validation passed"
           
