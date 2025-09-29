@@ -74,12 +74,25 @@ pub const Mac = struct {
 pub const Hash = struct {
     alg: HashAlg,
     digest: []const u8,
+    // For Argon2, we may need to store salt and params
+    salt: ?[]const u8 = null,
+    params: ?Argon2Params = null,
 };
 
 pub const HashAlg = enum(u8) {
     SHA3_256 = 0,
     SHA3_512 = 1,
     BLAKE3 = 2,
+    BLAKE2B_256 = 3,
+    BLAKE2B_512 = 4,
+    BLAKE2S_256 = 5,
+    ARGON2ID = 6,
+};
+
+pub const Argon2Params = struct {
+    iterations: u32 = 3,
+    memory_kb: u32 = 4096,
+    parallelism: u8 = 1,
 };
 
 pub const Currency = struct {

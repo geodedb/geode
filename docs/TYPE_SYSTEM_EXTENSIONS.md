@@ -29,9 +29,17 @@ This document describes the new first-class types and persisted indexes added to
 
 #### Hash
 - **Constructor**: `Hash(algorithm, hex_string)`
-- **Algorithms**: SHA3-256, SHA3-512, BLAKE3 (optional)
-- **Storage**: Algorithm code + digest bytes
+- **Algorithms**: 
+  - SHA3-256 (32 bytes output)
+  - SHA3-512 (64 bytes output)
+  - BLAKE3 (32 bytes output)
+  - BLAKE2b-256 (32 bytes output)
+  - BLAKE2b-512 (64 bytes output)
+  - BLAKE2s-256 (32 bytes output)
+  - Argon2id (32 bytes output, password hashing)
+- **Storage**: Algorithm code + digest bytes + optional salt/params for Argon2id
 - **JSON**: `{"Hash": "SHA3-256:3a985da74fe..."}`
+- **Password Hashing**: `Argon2idHash(password, salt, iterations, memory_kb, parallelism)`
 
 ### Financial Types
 
@@ -104,6 +112,10 @@ This document describes the new first-class types and persisted indexes added to
 ### Hash Functions
 - `hash_equals(a, b) → bool` - Constant-time comparison
 - `hash_alg(hash) → string` - Get algorithm name
+- `HashData(algorithm, data) → Hash` - Create hash from data
+- `Argon2idHash(password, salt, iterations, memory_kb, parallelism) → Hash` - Password hashing
+- `Blake2bKdf(out_len, context, key) → Bytea` - Blake2b key derivation
+- `Blake2sKdf(out_len, context, key) → Bytea` - Blake2s key derivation (max 32 bytes)
 
 ### Currency Functions
 - `minor_units(currency) → u8` - Get decimal places (0 for JPY, 2 for USD, 3 for BHD)
@@ -229,7 +241,7 @@ Vectors: dim * f32 per row
 | 0x06 | Subnet4 | 6 |
 | 0x07 | Subnet6 | 18 |
 | 0x08 | Mac | 7 |
-| 0x09 | Hash | 2 + digest_len |
+| 0x09 | Hash | 2 + digest_len + salt_len + params |
 | 0x0A | Currency | 4 |
 | 0x0B | LanguageTag | 5 + len |
 | 0x0C | LatLon | 17 |
@@ -265,6 +277,15 @@ IpAddr("2001:db8::1")
 Subnet("192.168.0.0/16")
 Mac("aa-bb-cc-dd-ee-ff")
 Hash("SHA3-256", "3A985D...")
+Hash("BLAKE2b-256", "4B7F8E...")
+Hash("BLAKE2b-512", "A1B2C3...")
+Hash("BLAKE2s-256", "D4E5F6...")
+Hash("Argon2id", "789ABC...")
+HashData("BLAKE2b-256", "my data to hash")
+HashData("BLAKE2s-256", "compact data")
+Argon2idHash("password123", "saltsalt", 4, 65536, 1)
+Blake2bKdf(32, "context-v1", "master-key")
+Blake2sKdf(16, "auth", "secret")
 Currency("USD")
 LanguageTag("en-US")
 LatLon(51.5074, -0.1278)
@@ -279,6 +300,8 @@ Vector([1.0, 2.0, 3.0])
 ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))
 st_intersects(poly1, poly2)
 vector_knn("embedding", Vector([0.9, 0.1]), 2, "cosine")
+hash_equals(user.password_hash, Argon2idHash($password, user.salt, 4, 65536, 1))
+hash_alg(document.signature) = "BLAKE2b-512"
 ```
 
 ## Performance Characteristics
@@ -289,6 +312,10 @@ vector_knn("embedding", Vector([0.9, 0.1]), 2, "cosine")
 - **Patricia LPM**: O(prefix_bits)
 - **R-tree search**: Sub-linear with bbox filtering
 - **HNSW k-NN**: O(log N) with high recall
+- **BLAKE2b hashing**: ~500 MB/s throughput
+- **BLAKE2s hashing**: Optimized for 32-bit platforms
+- **Argon2id**: Memory-hard, configurable time/memory tradeoff
+- **Hash comparison**: Constant-time to prevent timing attacks
 
 ## Index Recovery
 

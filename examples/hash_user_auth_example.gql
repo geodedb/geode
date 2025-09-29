@@ -1,0 +1,300 @@
+-- ============================================================================
+-- User Authentication System with Modern Hash Functions
+-- Complete example showing registration, login, and password management
+-- ============================================================================
+
+-- ============================================================================
+-- 1. USER REGISTRATION
+-- ============================================================================
+
+-- Register new user with secure password hashing
+-- Note: In production, salt should be randomly generated
+CREATE (user:User {
+    id: UUID(),
+    username: $username,
+    email: $email,
+    salt: $generated_salt, -- Should be random 16+ bytes
+    -- Using Argon2id with interactive parameters for web applications
+    password_hash: Argon2idHash($password, $generated_salt, 4, 65536, 1),
+    created_at: DateTime(),
+    last_login: NULL,
+    failed_attempts: 0,
+    locked_until: NULL,
+    -- Additional security
+    backup_email_hash: HashData("BLAKE2b-256", lower($backup_email)),
+    account_recovery_key: Blake2bKdf(32, "recovery:" + $username, $master_recovery_key)
+})
+RETURN user.id, user.username, "User created successfully" AS message
+
+-- ============================================================================
+-- 2. USER LOGIN
+-- ============================================================================
+
+-- Authenticate user with constant-time password verification
+MATCH (user:User {username: $username})
+WHERE user.locked_until IS NULL OR user.locked_until < DateTime()
+WITH user,
+     hash_equals(
+         user.password_hash,
+         Argon2idHash($password, user.salt, 4, 65536, 1)
+     ) AS password_valid
+SET user.failed_attempts = CASE 
+    WHEN password_valid THEN 0 
+    ELSE user.failed_attempts + 1 
+END,
+user.last_login = CASE 
+    WHEN password_valid THEN DateTime() 
+    ELSE user.last_login 
+END,
+user.locked_until = CASE
+    WHEN user.failed_attempts >= 5 THEN DateTime() + Duration("PT30M")
+    ELSE NULL
+END
+RETURN 
+    CASE WHEN password_valid THEN user.id ELSE NULL END AS user_id,
+    CASE WHEN password_valid THEN "Login successful" 
+         WHEN user.failed_attempts >= 5 THEN "Account locked for 30 minutes"
+         ELSE "Invalid credentials" 
+    END AS message,
+    password_valid AS authenticated
+
+-- ============================================================================
+-- 3. PASSWORD RESET
+-- ============================================================================
+
+-- Generate password reset token
+MATCH (user:User {email: $email})
+CREATE (token:PasswordResetToken {
+    id: UUID(),
+    user_id: user.id,
+    token_hash: Blake2bKdf(32, "reset-token:" + user.id, $server_secret + ":" + DateTime()),
+    expires_at: DateTime() + Duration("PT1H"),
+    used: false
+})
+RETURN token.id AS reset_token_id
+
+-- Validate and use reset token
+MATCH (token:PasswordResetToken {id: $token_id})
+WHERE token.expires_at > DateTime() AND token.used = false
+MATCH (user:User {id: token.user_id})
+WHERE hash_equals(
+    token.token_hash,
+    Blake2bKdf(32, "reset-token:" + user.id, $provided_secret)
+)
+SET user.salt = $new_salt,
+    user.password_hash = Argon2idHash($new_password, $new_salt, 4, 65536, 1),
+    user.password_changed_at = DateTime(),
+    token.used = true,
+    token.used_at = DateTime()
+RETURN user.username, "Password reset successful" AS message
+
+-- ============================================================================
+-- 4. PASSWORD UPGRADE
+-- ============================================================================
+
+-- Upgrade password hashing parameters for existing users
+-- (e.g., when security requirements increase)
+MATCH (user:User)
+WHERE user.password_hash IS NOT NULL
+-- Check if using old parameters (this is pseudocode, actual implementation would differ)
+AND NOT exists(user.upgraded_hash)
+SET user.upgraded_hash = Argon2idHash(
+    $current_password, 
+    user.salt,
+    6,      -- Increased iterations
+    262144, -- Increased memory (256MB)
+    1       -- Parallelism
+),
+user.hash_upgraded_at = DateTime()
+RETURN count(*) AS upgraded_users
+
+-- ============================================================================
+-- 5. SESSION MANAGEMENT
+-- ============================================================================
+
+-- Create secure session with derived keys
+CREATE (session:Session {
+    id: UUID(),
+    user_id: $user_id,
+    -- Derive session keys from master session secret
+    session_token: Blake2bKdf(32, "session:" + $session_id, $session_master_key),
+    csrf_token: Blake2sKdf(16, "csrf:" + $session_id, $session_master_key),
+    created_at: DateTime(),
+    expires_at: DateTime() + Duration("PT24H"),
+    ip_address: $client_ip,
+    user_agent_hash: HashData("BLAKE2s-256", $user_agent)
+})
+RETURN session.id, session.csrf_token
+
+-- Validate session
+MATCH (session:Session {id: $session_id})
+WHERE session.expires_at > DateTime()
+  AND hash_equals(
+      session.session_token,
+      Blake2bKdf(32, "session:" + $session_id, $provided_token)
+  )
+  AND hash_equals(
+      session.user_agent_hash,
+      HashData("BLAKE2s-256", $current_user_agent)
+  )
+RETURN session.user_id, true AS valid
+
+-- ============================================================================
+-- 6. API KEY MANAGEMENT
+-- ============================================================================
+
+-- Generate API keys for service accounts
+CREATE (apikey:ApiKey {
+    id: UUID(),
+    name: $key_name,
+    -- Use different KDF contexts for different key types
+    key_hash: HashData("BLAKE2b-512", $generated_api_key),
+    permissions: $permissions_array,
+    rate_limit: $rate_limit,
+    created_at: DateTime(),
+    expires_at: DateTime() + Duration("P365D"),
+    last_used: NULL,
+    -- Derive signing key for request signatures
+    signing_key: Blake2bKdf(32, "api-signing:" + $key_id, $generated_api_key)
+})
+RETURN apikey.id, $generated_api_key AS api_key -- Only return once!
+
+-- Authenticate API request
+MATCH (apikey:ApiKey)
+WHERE hash_equals(
+    apikey.key_hash,
+    HashData("BLAKE2b-512", $provided_api_key)
+)
+AND apikey.expires_at > DateTime()
+SET apikey.last_used = DateTime(),
+    apikey.request_count = coalesce(apikey.request_count, 0) + 1
+RETURN apikey.id, apikey.permissions, apikey.rate_limit
+
+-- ============================================================================
+-- 7. TWO-FACTOR AUTHENTICATION
+-- ============================================================================
+
+-- Setup 2FA for user
+MATCH (user:User {id: $user_id})
+CREATE (twofa:TwoFactorAuth {
+    user_id: user.id,
+    secret: Blake2bKdf(20, "totp:" + user.id, $totp_master_secret),
+    backup_codes: [
+        HashData("BLAKE2s-256", $backup_code_1),
+        HashData("BLAKE2s-256", $backup_code_2),
+        HashData("BLAKE2s-256", $backup_code_3),
+        HashData("BLAKE2s-256", $backup_code_4),
+        HashData("BLAKE2s-256", $backup_code_5)
+    ],
+    enabled: false,
+    created_at: DateTime()
+})
+RETURN twofa.secret -- For QR code generation
+
+-- Verify 2FA code or backup code
+MATCH (user:User {id: $user_id})
+MATCH (twofa:TwoFactorAuth {user_id: user.id, enabled: true})
+WITH user, twofa,
+     -- Check if it's a backup code
+     [code IN twofa.backup_codes WHERE hash_equals(code, HashData("BLAKE2s-256", $provided_code))] AS matching_backup
+WHERE 
+    -- Either TOTP matches (would need proper TOTP implementation)
+    $totp_valid = true
+    -- Or backup code matches
+    OR size(matching_backup) > 0
+// Remove used backup code
+SET twofa.backup_codes = CASE
+    WHEN size(matching_backup) > 0 
+    THEN [code IN twofa.backup_codes WHERE NOT hash_equals(code, HashData("BLAKE2s-256", $provided_code))]
+    ELSE twofa.backup_codes
+END
+RETURN true AS authenticated
+
+-- ============================================================================
+-- 8. AUDIT LOGGING
+-- ============================================================================
+
+-- Create tamper-evident audit log
+MATCH (prev:AuditLog)
+WHERE NOT exists((prev)-[:NEXT]->())
+WITH prev
+OPTIONAL MATCH (user:User {id: $user_id})
+CREATE (audit:AuditLog {
+    id: UUID(),
+    timestamp: DateTime(),
+    user_id: $user_id,
+    action: $action,
+    ip_address: $ip_address,
+    details: $details,
+    -- Create hash chain
+    previous_hash: CASE 
+        WHEN prev IS NOT NULL THEN prev.entry_hash 
+        ELSE Hash("BLAKE2b-512", "0000000000000000000000000000000000000000000000000000000000000000")
+    END,
+    entry_hash: HashData("BLAKE2b-512", 
+        coalesce(prev.entry_hash, "genesis") + ":" + 
+        DateTime() + ":" + 
+        $user_id + ":" + 
+        $action + ":" + 
+        $details
+    )
+})
+CREATE (prev)-[:NEXT]->(audit)
+RETURN audit.id
+
+-- Verify audit log integrity
+MATCH path = (:AuditLog {previous_hash: Hash("BLAKE2b-512", "0000000000000000000000000000000000000000000000000000000000000000")})-[:NEXT*]->()
+WITH nodes(path) AS entries
+UNWIND range(1, length(entries)-1) AS i
+WITH entries[i-1] AS prev, entries[i] AS curr
+WHERE NOT hash_equals(curr.previous_hash, prev.entry_hash)
+RETURN curr.id AS tampering_detected_at, curr.timestamp
+LIMIT 1
+
+-- ============================================================================
+-- 9. DATA PRIVACY
+-- ============================================================================
+
+-- Anonymize user data for analytics
+MATCH (user:User)
+CREATE (anon:AnonymizedUser {
+    id: HashData("BLAKE2b-256", "user:" + user.id + ":" + $anonymization_salt),
+    age_group: 
+        CASE 
+            WHEN user.age < 25 THEN "18-24"
+            WHEN user.age < 35 THEN "25-34"
+            WHEN user.age < 45 THEN "35-44"
+            WHEN user.age < 55 THEN "45-54"
+            WHEN user.age < 65 THEN "55-64"
+            ELSE "65+"
+        END,
+    region_hash: HashData("BLAKE2s-256", substring(user.postal_code, 0, 3) + ":" + $region_salt),
+    created_at: DateTime()
+})
+RETURN count(*) AS anonymized_users
+
+-- ============================================================================
+-- 10. SECURITY MONITORING
+-- ============================================================================
+
+-- Detect potential password spraying attacks
+MATCH (attempt:LoginAttempt)
+WHERE attempt.timestamp > DateTime() - Duration("PT10M")
+  AND attempt.success = false
+WITH attempt.ip_address AS ip, 
+     collect(DISTINCT attempt.username) AS targeted_users,
+     count(*) AS attempt_count
+WHERE attempt_count > 10 OR size(targeted_users) > 5
+CREATE (alert:SecurityAlert {
+    id: UUID(),
+    type: "POSSIBLE_PASSWORD_SPRAY",
+    ip_address: ip,
+    ip_hash: HashData("BLAKE2b-256", ip + ":" + Date()),
+    targeted_users: targeted_users,
+    attempt_count: attempt_count,
+    detected_at: DateTime(),
+    signature: HashData("BLAKE2b-512", 
+        "SPRAY:" + ip + ":" + toString(targeted_users) + ":" + DateTime()
+    )
+})
+RETURN alert.id, alert.ip_address, alert.attempt_count

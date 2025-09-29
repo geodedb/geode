@@ -1,0 +1,328 @@
+-- ============================================================================
+-- Data Integrity and Content Verification Examples
+-- Using modern hash functions for data validation and deduplication
+-- ============================================================================
+
+-- ============================================================================
+-- 1. CONTENT-ADDRESSABLE STORAGE
+-- ============================================================================
+
+-- Store documents with content-based addressing
+CREATE (doc:Document {
+    -- Use BLAKE3 for fast content hashing
+    content_hash: HashData("BLAKE3", $content),
+    content: $content,
+    mime_type: $mime_type,
+    size_bytes: length($content),
+    created_at: DateTime(),
+    -- Use BLAKE2b for longer hash when needed
+    extended_hash: HashData("BLAKE2b-512", $content),
+    -- Fast hash for quick comparisons
+    quick_hash: HashData("BLAKE2s-256", substring($content, 0, 1024))
+})
+-- Ensure uniqueness by content
+WITH doc
+MERGE (hash_index:ContentHash {hash: doc.content_hash})
+CREATE (hash_index)-[:POINTS_TO]->(doc)
+RETURN doc.content_hash AS document_id
+
+-- Retrieve document by content hash
+MATCH (doc:Document)
+WHERE doc.content_hash = Hash("BLAKE3", $requested_hash)
+RETURN doc.content, doc.mime_type, doc.created_at
+
+-- ============================================================================
+-- 2. DEDUPLICATION SYSTEM
+-- ============================================================================
+
+-- Find and mark duplicate files
+MATCH (f1:File)
+WITH f1, HashData("BLAKE2b-256", f1.content) AS content_hash
+MATCH (f2:File)
+WHERE f1.id < f2.id
+  AND hash_equals(
+      HashData("BLAKE2b-256", f1.content),
+      HashData("BLAKE2b-256", f2.content)
+  )
+CREATE (f1)-[:DUPLICATE_OF {
+    detected_at: DateTime(),
+    hash_algorithm: "BLAKE2b-256",
+    hash_value: content_hash
+}]->(f2)
+RETURN f1.path, f2.path, content_hash
+
+-- Implement reference counting for deduplication
+MATCH (content:UniqueContent)
+WITH content, count{(content)<-[:REFERENCES]-()} AS ref_count
+WHERE ref_count = 0
+DELETE content
+RETURN count(*) AS deleted_orphans
+
+-- ============================================================================
+-- 3. MERKLE TREE FOR DATA VERIFICATION
+-- ============================================================================
+
+-- Build Merkle tree for dataset verification
+// Leaf nodes - actual data
+CREATE (leaf1:MerkleLeaf {
+    index: 0,
+    data: "Data block 1",
+    hash: HashData("BLAKE2b-256", "Data block 1")
+})
+CREATE (leaf2:MerkleLeaf {
+    index: 1,
+    data: "Data block 2",
+    hash: HashData("BLAKE2b-256", "Data block 2")
+})
+CREATE (leaf3:MerkleLeaf {
+    index: 2,
+    data: "Data block 3",
+    hash: HashData("BLAKE2b-256", "Data block 3")
+})
+CREATE (leaf4:MerkleLeaf {
+    index: 3,
+    data: "Data block 4",
+    hash: HashData("BLAKE2b-256", "Data block 4")
+})
+
+// Internal nodes
+CREATE (node1:MerkleNode {
+    level: 1,
+    hash: HashData("BLAKE2b-256", leaf1.hash + leaf2.hash)
+})
+CREATE (node2:MerkleNode {
+    level: 1,
+    hash: HashData("BLAKE2b-256", leaf3.hash + leaf4.hash)
+})
+
+// Root node
+CREATE (root:MerkleRoot {
+    hash: HashData("BLAKE2b-256", node1.hash + node2.hash),
+    timestamp: DateTime(),
+    version: 1
+})
+
+// Create relationships
+CREATE (leaf1)-[:CHILD_OF]->(node1)
+CREATE (leaf2)-[:CHILD_OF]->(node1)
+CREATE (leaf3)-[:CHILD_OF]->(node2)
+CREATE (leaf4)-[:CHILD_OF]->(node2)
+CREATE (node1)-[:CHILD_OF]->(root)
+CREATE (node2)-[:CHILD_OF]->(root)
+
+RETURN root.hash AS merkle_root
+
+-- Verify specific data block using Merkle proof
+MATCH path = (leaf:MerkleLeaf {index: $block_index})-[:CHILD_OF*]->(root:MerkleRoot)
+WITH nodes(path) AS proof_path
+RETURN [node IN proof_path | {level: node.level, hash: node.hash}] AS merkle_proof
+
+-- ============================================================================
+-- 4. CHANGE DETECTION SYSTEM
+-- ============================================================================
+
+-- Track document versions with hash chains
+MATCH (doc:Document {id: $doc_id})
+WITH doc, doc.current_hash AS old_hash
+SET doc.current_hash = HashData("BLAKE2b-512", $new_content),
+    doc.content = $new_content,
+    doc.modified_at = DateTime()
+CREATE (version:DocumentVersion {
+    document_id: doc.id,
+    version_number: coalesce(doc.version, 0) + 1,
+    content_hash: doc.current_hash,
+    previous_hash: old_hash,
+    change_hash: HashData("BLAKE2s-256", 
+        old_hash + ":" + doc.current_hash + ":" + DateTime()
+    ),
+    timestamp: DateTime(),
+    editor: $user_id
+})
+CREATE (doc)-[:HAS_VERSION]->(version)
+SET doc.version = version.version_number
+RETURN version.version_number, version.content_hash
+
+-- Detect unauthorized changes
+MATCH (doc:Document)
+WHERE NOT hash_equals(
+    doc.current_hash,
+    HashData("BLAKE2b-512", doc.content)
+)
+RETURN doc.id AS tampered_document, 
+       doc.current_hash AS expected_hash,
+       HashData("BLAKE2b-512", doc.content) AS actual_hash
+
+-- ============================================================================
+-- 5. DISTRIBUTED CONSENSUS
+-- ============================================================================
+
+-- Implement simple Byzantine fault tolerance with hash voting
+MATCH (replica:Replica)
+WITH replica.node_id AS node_id,
+     HashData("BLAKE3", replica.data_snapshot) AS snapshot_hash
+WITH snapshot_hash, collect(node_id) AS nodes, count(*) AS votes
+ORDER BY votes DESC
+LIMIT 1
+// Majority consensus
+WHERE votes > $total_nodes / 2
+SET (consensus:ConsensusState {
+    snapshot_hash: snapshot_hash,
+    agreeing_nodes: nodes,
+    vote_count: votes,
+    achieved_at: DateTime()
+})
+RETURN snapshot_hash AS consensus_hash, votes, nodes
+
+-- ============================================================================
+-- 6. CACHE VALIDATION
+-- ============================================================================
+
+-- Implement ETag-like cache validation
+MATCH (resource:CachedResource {url: $url})
+WITH resource,
+     HashData("BLAKE2s-256", resource.content + ":" + resource.last_modified) AS etag
+SET resource.etag = etag
+RETURN 
+    CASE 
+        WHEN resource.etag = $if_none_match_header 
+        THEN 304  -- Not Modified
+        ELSE 200  -- OK, content changed
+    END AS http_status,
+    resource.content,
+    etag
+
+-- ============================================================================
+-- 7. DATA PIPELINE INTEGRITY
+-- ============================================================================
+
+-- Track data lineage with hash chains
+CREATE (raw:DataStage {
+    stage: "RAW",
+    data: $raw_data,
+    hash: HashData("BLAKE2b-256", $raw_data),
+    timestamp: DateTime()
+})
+
+WITH raw
+CREATE (processed:DataStage {
+    stage: "PROCESSED",
+    data: $processed_data,
+    hash: HashData("BLAKE2b-256", $processed_data),
+    input_hash: raw.hash,
+    transformation: "normalize_and_clean",
+    timestamp: DateTime()
+})
+CREATE (raw)-[:TRANSFORMED_TO {
+    verification_hash: HashData("BLAKE2s-256", 
+        raw.hash + ":" + processed.hash + ":" + "normalize_and_clean"
+    )
+}]->(processed)
+
+WITH processed
+CREATE (final:DataStage {
+    stage: "FINAL",
+    data: $final_data,
+    hash: HashData("BLAKE2b-256", $final_data),
+    input_hash: processed.hash,
+    transformation: "aggregate_and_summarize",
+    timestamp: DateTime()
+})
+CREATE (processed)-[:TRANSFORMED_TO {
+    verification_hash: HashData("BLAKE2s-256",
+        processed.hash + ":" + final.hash + ":" + "aggregate_and_summarize"
+    )
+}]->(final)
+
+RETURN raw.hash AS raw_hash, 
+       processed.hash AS processed_hash, 
+       final.hash AS final_hash
+
+-- Verify pipeline integrity
+MATCH path = (:DataStage {stage: "RAW"})-[:TRANSFORMED_TO*]->(:DataStage {stage: "FINAL"})
+WITH nodes(path) AS stages, relationships(path) AS transforms
+UNWIND range(0, length(transforms)-1) AS i
+WITH stages[i] AS input, stages[i+1] AS output, transforms[i] AS transform
+WHERE NOT hash_equals(
+    transform.verification_hash,
+    HashData("BLAKE2s-256", 
+        input.hash + ":" + output.hash + ":" + transform.transformation
+    )
+)
+RETURN input.stage AS compromised_stage, transform.transformation AS compromised_step
+
+-- ============================================================================
+-- 8. SECURE MULTIPARTY COMPUTATION
+-- ============================================================================
+
+-- Commit-reveal scheme for sealed bid auction
+// Phase 1: Commit
+CREATE (bid:SealedBid {
+    bidder_id: $bidder_id,
+    auction_id: $auction_id,
+    commitment: HashData("BLAKE2b-512", 
+        toString($bid_amount) + ":" + $random_nonce
+    ),
+    committed_at: DateTime(),
+    revealed: false
+})
+RETURN bid.commitment
+
+// Phase 2: Reveal
+MATCH (bid:SealedBid {
+    bidder_id: $bidder_id,
+    auction_id: $auction_id,
+    revealed: false
+})
+WHERE hash_equals(
+    bid.commitment,
+    HashData("BLAKE2b-512", 
+        toString($revealed_amount) + ":" + $revealed_nonce
+    )
+)
+SET bid.amount = $revealed_amount,
+    bid.nonce = $revealed_nonce,
+    bid.revealed = true,
+    bid.revealed_at = DateTime()
+RETURN bid.amount
+
+-- ============================================================================
+-- 9. PROOF OF WORK
+-- ============================================================================
+
+-- Simple proof of work for rate limiting
+WITH $challenge AS challenge,
+     $difficulty AS difficulty  // Number of leading zeros required
+UNWIND range(0, 1000000) AS nonce
+WITH challenge, nonce, 
+     HashData("BLAKE2s-256", challenge + ":" + toString(nonce)) AS hash
+WHERE substring(hash, 0, difficulty) = repeat("0", difficulty)
+RETURN nonce AS proof_of_work, hash AS proof_hash
+LIMIT 1
+
+-- ============================================================================
+-- 10. COMPLIANCE AND AUDIT
+-- ============================================================================
+
+-- GDPR-compliant data deletion with verification
+MATCH (user:User {id: $user_id})
+// Store proof of deletion
+CREATE (proof:DeletionProof {
+    user_id_hash: HashData("BLAKE2b-256", user.id + ":" + $deletion_salt),
+    deleted_at: DateTime(),
+    data_categories: ["profile", "preferences", "activity"],
+    verification_hash: HashData("BLAKE2b-512",
+        user.id + ":" + 
+        user.email + ":" + 
+        DateTime() + ":" + 
+        $deletion_request_id
+    ),
+    request_id: $deletion_request_id
+})
+// Delete user data
+DETACH DELETE user
+RETURN proof.verification_hash AS deletion_proof
+
+-- Verify deletion completion
+MATCH (user:User)
+WHERE HashData("BLAKE2b-256", user.id + ":" + $deletion_salt) = $user_id_hash
+RETURN count(user) AS remaining_records // Should be 0

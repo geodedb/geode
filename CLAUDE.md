@@ -285,3 +285,4 @@ make test
 - QUIC library managed as git submodule in `vendor/quic/`
 - Initialize with: `git submodule update --init --recursive`
 - Check status with: `make quic-status`
+- Always ensure canaries are added for new additions, or when changes are made so that the canary scan tool tracks them. And run the canary scan regularly to keep the status.csv and status.json files up to date.

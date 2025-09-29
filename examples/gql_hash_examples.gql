@@ -1,0 +1,265 @@
+-- GQL Examples for Hash Types in Geode
+-- Demonstrates the new cryptographic hash functions added to the type system
+
+-- ============================================================================
+-- Basic Hash Creation and Comparison
+-- ============================================================================
+
+-- Create nodes with different hash types
+CREATE (doc1:Document {
+    id: 1,
+    content: "Important document",
+    checksum_blake2b: HashData("BLAKE2b-256", "Important document"),
+    checksum_blake2s: HashData("BLAKE2s-256", "Important document"),
+    checksum_sha3: HashData("SHA3-256", "Important document")
+})
+
+CREATE (doc2:Document {
+    id: 2,
+    content: "Another document", 
+    checksum: HashData("BLAKE2b-512", "Another document"),
+    signature: Hash("BLAKE2b-512", "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890abcd")
+})
+
+-- Query documents by hash algorithm
+MATCH (d:Document)
+WHERE hash_alg(d.checksum) = "BLAKE2b-512"
+RETURN d.id, d.content, d.checksum
+
+-- ============================================================================
+-- Password Hashing with Argon2id
+-- ============================================================================
+
+-- Create user with password hash (using interactive preset)
+CREATE (u:User {
+    username: "alice",
+    email: "alice@example.com",
+    salt: "random_salt_16_bytes",
+    password_hash: Argon2idHash("SecurePassword123!", "random_salt_16_bytes", 4, 65536, 1)
+})
+
+-- Verify password during authentication
+MATCH (u:User {username: "alice"})
+WHERE hash_equals(
+    u.password_hash,
+    Argon2idHash($password, u.salt, 4, 65536, 1)
+)
+RETURN u.username, u.email
+
+-- Create user with different security levels
+CREATE (u1:User {
+    username: "bob",
+    salt: "bobsalt123456789",
+    -- Interactive preset (fast, for user-facing operations)
+    password_hash: Argon2idHash("BobPassword", "bobsalt123456789", 4, 65536, 1)
+})
+
+CREATE (u2:User {
+    username: "charlie", 
+    salt: "charliesalt12345",
+    -- Moderate preset (balanced)
+    password_hash: Argon2idHash("CharliePassword", "charliesalt12345", 6, 262144, 1)
+})
+
+CREATE (u3:User {
+    username: "admin",
+    salt: "adminsalt1234567", 
+    -- Sensitive preset (high security)
+    password_hash: Argon2idHash("AdminPassword", "adminsalt1234567", 8, 1048576, 1)
+})
+
+-- ============================================================================
+-- Key Derivation Functions (KDF)
+-- ============================================================================
+
+-- Create API keys using Blake2b KDF
+CREATE (api:ApiKey {
+    id: "api_001",
+    master_key: "master_secret_key_xyz",
+    -- Derive different keys for different purposes
+    signing_key: Blake2bKdf(32, "signing-v1", "master_secret_key_xyz"),
+    encryption_key: Blake2bKdf(32, "encryption-v1", "master_secret_key_xyz"),
+    auth_token: Blake2sKdf(16, "auth-token", "master_secret_key_xyz")
+})
+
+-- Create derived keys for multi-tenant system
+MATCH (tenant:Tenant {id: $tenant_id})
+SET tenant.encryption_key = Blake2bKdf(32, 
+    "tenant-" + tenant.id + "-encryption", 
+    $master_key)
+SET tenant.signing_key = Blake2bKdf(32,
+    "tenant-" + tenant.id + "-signing",
+    $master_key)
+RETURN tenant.id
+
+-- ============================================================================
+-- Document Integrity and Signatures
+-- ============================================================================
+
+-- Create document with multiple checksums
+CREATE (doc:SecureDocument {
+    id: "doc_001",
+    title: "Contract ABC",
+    content: $document_content,
+    created_at: DateTime(),
+    -- Multiple hash algorithms for compatibility
+    sha3_hash: HashData("SHA3-512", $document_content),
+    blake2b_hash: HashData("BLAKE2b-512", $document_content),
+    blake3_hash: HashData("BLAKE3", $document_content)
+})
+
+-- Verify document integrity
+MATCH (doc:SecureDocument {id: "doc_001"})
+WHERE hash_equals(
+    doc.blake2b_hash,
+    HashData("BLAKE2b-512", $provided_content)
+)
+RETURN doc.id, doc.title, "Document integrity verified" AS status
+
+-- Find all documents with specific hash
+MATCH (doc:SecureDocument)
+WHERE doc.blake2b_hash = Hash("BLAKE2b-512", $hash_hex)
+RETURN doc.id, doc.title, doc.created_at
+
+-- ============================================================================
+-- Blockchain/Merkle Tree Example
+-- ============================================================================
+
+-- Create blockchain-like structure with hash pointers
+CREATE (block1:Block {
+    index: 1,
+    timestamp: DateTime("2024-01-01T00:00:00Z"),
+    data: "Genesis block",
+    previous_hash: Hash("BLAKE2b-256", "0000000000000000000000000000000000000000000000000000000000000000"),
+    hash: HashData("BLAKE2b-256", "1:Genesis block:0000000000000000000000000000000000000000000000000000000000000000")
+})
+
+CREATE (block2:Block {
+    index: 2,
+    timestamp: DateTime("2024-01-01T00:10:00Z"),
+    data: "Transaction data",
+    previous_hash: block1.hash,
+    hash: HashData("BLAKE2b-256", "2:Transaction data:" + block1.hash)
+})
+
+-- Verify blockchain integrity
+MATCH path = (genesis:Block {index: 1})-[:NEXT*]->(latest:Block)
+WITH nodes(path) AS blocks
+UNWIND range(1, length(blocks)-1) AS i
+WITH blocks[i-1] AS prev, blocks[i] AS curr
+WHERE hash_equals(
+    curr.previous_hash,
+    prev.hash
+)
+RETURN count(*) AS valid_links
+
+-- ============================================================================
+-- Deduplication Using Hashes
+-- ============================================================================
+
+-- Find duplicate files by content hash
+MATCH (f1:File), (f2:File)
+WHERE f1.id < f2.id
+  AND hash_equals(f1.content_hash, f2.content_hash)
+RETURN f1.path, f2.path, f1.content_hash AS duplicate_hash
+
+-- Create unique constraint using hash
+CREATE (file:File {
+    path: $file_path,
+    content: $file_content,
+    content_hash: HashData("BLAKE3", $file_content),
+    CONSTRAINT unique_content_hash: UNIQUE(content_hash)
+})
+
+-- ============================================================================
+-- Migration from Old to New Hash Algorithms
+-- ============================================================================
+
+-- Update legacy SHA3 hashes to BLAKE2b
+MATCH (doc:Document)
+WHERE hash_alg(doc.checksum) = "SHA3-256"
+SET doc.checksum_blake2b = HashData("BLAKE2b-256", doc.content),
+    doc.migration_date = DateTime()
+RETURN count(*) AS migrated_documents
+
+-- Dual hashing during transition period
+CREATE (item:Item {
+    id: $item_id,
+    data: $item_data,
+    -- Keep both for compatibility
+    legacy_hash: HashData("SHA3-256", $item_data),
+    modern_hash: HashData("BLAKE2b-256", $item_data)
+})
+
+-- ============================================================================
+-- Performance Comparison Query
+-- ============================================================================
+
+-- Compare hash computation times (hypothetical PROFILE usage)
+PROFILE
+WITH "Large data string repeated many times" * 1000 AS data
+RETURN 
+    HashData("SHA3-256", data) AS sha3,
+    HashData("BLAKE3", data) AS blake3,
+    HashData("BLAKE2b-256", data) AS blake2b,
+    HashData("BLAKE2s-256", data) AS blake2s
+
+-- ============================================================================
+-- Security Audit Trail
+-- ============================================================================
+
+-- Create audit log with tamper detection
+CREATE (audit:AuditEntry {
+    id: $audit_id,
+    timestamp: DateTime(),
+    user: $username,
+    action: $action,
+    details: $details,
+    -- Chain entries together
+    previous_entry_hash: $previous_hash,
+    entry_hash: HashData("BLAKE2b-512", 
+        $audit_id + ":" + $timestamp + ":" + $username + ":" + 
+        $action + ":" + $details + ":" + $previous_hash)
+})
+
+-- Verify audit trail integrity
+MATCH (a1:AuditEntry)-[:NEXT]->(a2:AuditEntry)
+WHERE NOT hash_equals(
+    a2.previous_entry_hash,
+    a1.entry_hash
+)
+RETURN a1.id AS tampered_after, a2.id AS tampered_entry
+
+-- ============================================================================
+-- Multi-factor Authentication with TOTP
+-- ============================================================================
+
+-- Generate TOTP secret using KDF
+CREATE (mfa:MfaSetup {
+    user_id: $user_id,
+    secret: Blake2bKdf(20, "totp-secret", $user_id + ":" + $master_secret),
+    backup_codes: [
+        Blake2sKdf(8, "backup-1", $user_id + ":" + $master_secret),
+        Blake2sKdf(8, "backup-2", $user_id + ":" + $master_secret),
+        Blake2sKdf(8, "backup-3", $user_id + ":" + $master_secret)
+    ],
+    created_at: DateTime()
+})
+
+-- ============================================================================
+-- Data Privacy and Anonymization
+-- ============================================================================
+
+-- Anonymize PII using consistent hashing
+MATCH (customer:Customer)
+SET customer.anonymized_id = HashData("BLAKE2b-256", 
+    "customer:" + customer.ssn + ":" + $anonymization_salt)
+REMOVE customer.ssn, customer.name, customer.email
+RETURN count(*) AS anonymized_customers
+
+-- Create privacy-preserving analytics
+MATCH (user:User)
+RETURN 
+    HashData("BLAKE2s-256", user.postal_code + ":" + $salt) AS location_hash,
+    count(*) AS user_count
+GROUP BY location_hash

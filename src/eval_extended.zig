@@ -284,12 +284,20 @@ fn constructHash(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue
         .SHA3_512
     else if (std.ascii.eqlIgnoreCase(alg_str, "blake3"))
         .BLAKE3
+    else if (std.ascii.eqlIgnoreCase(alg_str, "blake2b-256"))
+        .BLAKE2B_256
+    else if (std.ascii.eqlIgnoreCase(alg_str, "blake2b-512"))
+        .BLAKE2B_512
+    else if (std.ascii.eqlIgnoreCase(alg_str, "blake2s-256"))
+        .BLAKE2S_256
+    else if (std.ascii.eqlIgnoreCase(alg_str, "argon2id"))
+        .ARGON2ID
     else
         return error.InvalidHashAlg;
 
     const expected_len: usize = switch (alg) {
-        .SHA3_256, .BLAKE3 => 64,
-        .SHA3_512 => 128,
+        .SHA3_256, .BLAKE3, .BLAKE2B_256, .BLAKE2S_256, .ARGON2ID => 64,
+        .SHA3_512, .BLAKE2B_512 => 128,
     };
 
     if (hex_str.len != expected_len) return error.InvalidHashLength;
@@ -734,6 +742,10 @@ fn hashAlg(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         .SHA3_256 => "SHA3-256",
         .SHA3_512 => "SHA3-512",
         .BLAKE3 => "BLAKE3",
+        .BLAKE2B_256 => "BLAKE2b-256",
+        .BLAKE2B_512 => "BLAKE2b-512",
+        .BLAKE2S_256 => "BLAKE2s-256",
+        .ARGON2ID => "Argon2id",
     };
 
     return .{ .Str = alg_str };

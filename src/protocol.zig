@@ -739,11 +739,29 @@ pub fn emitValueAsJson(writer: anytype, value: heap.Value, allocator: std.mem.Al
                 .SHA3_256 => "SHA3-256",
                 .SHA3_512 => "SHA3-512",
                 .BLAKE3 => "BLAKE3",
+                .BLAKE2B_256 => "BLAKE2b-256",
+                .BLAKE2B_512 => "BLAKE2b-512",
+                .BLAKE2S_256 => "BLAKE2s-256",
+                .ARGON2ID => "Argon2id",
             };
             try writer.writeAll(alg_name);
             try writer.writeAll(":");
             for (hash.digest) |byte| {
                 try std.fmt.format(writer, "{x:0>2}", .{byte});
+            }
+            // For Argon2, also include salt and params if present
+            if (hash.salt) |salt| {
+                try writer.writeAll("$salt:");
+                for (salt) |byte| {
+                    try std.fmt.format(writer, "{x:0>2}", .{byte});
+                }
+            }
+            if (hash.params) |params| {
+                try std.fmt.format(writer, "$t:{d}$m:{d}$p:{d}", .{
+                    params.iterations,
+                    params.memory_kb,
+                    params.parallelism,
+                });
             }
             try writer.writeAll("\"");
         },

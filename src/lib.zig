@@ -92,6 +92,7 @@ pub const types = struct {
     pub const extended_functions = @import("types/extended_functions.zig");
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
     pub const int256 = @import("types/i256.zig");
+    pub const hash = @import("types/hash.zig");
 };
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)

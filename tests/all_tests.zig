@@ -97,6 +97,13 @@ const _e2e_graph_algos_new = @import("e2e_graph_algos_new.zig");
 // const _e2e_materialized_views = @import("e2e_materialized_views.zig");
 // const _e2e_rls_enhanced = @import("e2e_rls_enhanced.zig");
 
+// Hash algorithm tests for new cryptographic types
+const _test_hash_algorithms = @import("test_hash_algorithms.zig");
+const _integration_hash_types = @import("integration_hash_types.zig");
+const _test_gql_hash_parsing = @import("test_gql_hash_parsing.zig");
+const _test_hash_evaluator = @import("test_hash_evaluator.zig");
+const _e2e_hash_functions = @import("e2e_hash_functions.zig");
+
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 
