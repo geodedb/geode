@@ -29,7 +29,16 @@ RUN chmod +x /tmp/install-zig.sh && \
 # Set working directory
 WORKDIR /build
 
-# Copy source code
+# Copy build configuration files first (for better caching)
+COPY build.zig build.zig.zon ./
+
+# Create empty src directory to satisfy build.zig
+RUN mkdir -p src && touch src/main.zig
+
+# Pre-fetch dependencies if any (this layer will be cached)
+RUN zig build --help > /dev/null 2>&1 || true
+
+# Now copy the actual source code
 COPY . .
 
 # Build geode binaries and tools
