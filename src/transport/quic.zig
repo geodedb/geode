@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const quic_lib = @import("vendor_quic");
 const tls = std.crypto.tls;
 
@@ -167,13 +168,16 @@ pub const QuicTransport = struct {
         }
 
         // Set secure permissions (0600)
-        const cert_file = try std.fs.cwd().openFile(self.cert_path, .{});
-        defer cert_file.close();
-        try cert_file.chmod(0o600);
+        // On Windows, chmod is not supported, so we skip permission changes
+        if (builtin.os.tag != .windows) {
+            const cert_file = try std.fs.cwd().openFile(self.cert_path, .{});
+            defer cert_file.close();
+            try cert_file.chmod(0o600);
 
-        const key_file = try std.fs.cwd().openFile(self.key_path, .{});
-        defer key_file.close();
-        try key_file.chmod(0o600);
+            const key_file = try std.fs.cwd().openFile(self.key_path, .{});
+            defer key_file.close();
+            try key_file.chmod(0o600);
+        }
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {

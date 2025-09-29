@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fed_flag = @import("src/distributed/federation_flag.zig");
 
 // Benchmark / guard: ensure federation ordering mismatch flag does NOT fire for consistent metadata
@@ -72,5 +73,9 @@ pub fn main() !void {
     try w.print("\"mismatch_count\":{}", .{mismatch_count});
     try w.writeAll("}\n");
     const line = fbs.getWritten();
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, line);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout.writeAll(line);
 }

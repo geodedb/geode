@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fed_flag = @import("src/distributed/federation_flag.zig");
 
 // Federation mismatch latency variance envelope benchmark (skeleton, unpromoted).
@@ -154,13 +155,14 @@ pub fn runFederationMismatchLatencyVariance() !void {
     var metrics: Metrics = undefined;
     var pass: usize = 0;
     const stabilize = blk: {
-        if (std.posix.getenv("FED_LATENCY_STABILIZE")) |v| {
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_STABILIZE")) |v| {
+            defer ally.free(v);
             if (v.len > 0 and v[0] == '1') {
                 break :blk true;
             } else {
                 break :blk false;
             }
-        } else {
+        } else |_| {
             break :blk false;
         }
     };
@@ -195,10 +197,15 @@ pub fn runFederationMismatchLatencyVariance() !void {
     try w.print("\"outlier_ratio\":{d:.6}", .{metrics.outlier_ratio});
     try w.writeAll("}\n");
     const line = fbs.getWritten();
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, line);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout.writeAll(line);
 
     if (metrics.cv > 0.22 or metrics.p95_mean_ratio > 2.55) {
-        if (std.posix.getenv("FED_LATENCY_ENFORCE")) |v| {
+        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_ENFORCE") catch null) |v| {
+            defer ally.free(v);
             if (v.len > 0 and v[0] == '1') {
                 std.debug.print(
                     "Federation mismatch latency variance envelope breached: cv={d:.4} p95/mean={d:.4} trim_cv={d:.4} passes={}\n",

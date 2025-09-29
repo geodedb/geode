@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const seed = @import("src/planner/cost_seed.zig");
 
 // Benchmark to measure variance (CV) of clamp streak lengths under synthetic workloads.
@@ -110,5 +111,9 @@ pub fn main() !void {
     // Output JSON line summarizing metrics (for future aggregation)
     var out_buf: [384]u8 = undefined;
     const line = try std.fmt.bufPrint(&out_buf, "{{\"bench\":\"BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope\",\"stable_mean\":{d:.3},\"stable_cv\":{d:.3},\"volatile_mean\":{d:.3},\"volatile_cv\":{d:.3},\"stable_count\":{d},\"volatile_count\":{d},\"stable_saturation_ratio\":{d:.4},\"volatile_saturation_ratio\":{d:.4}}}\n", .{ stable_stats.mean, stable_stats.cv, volatile_stats.mean, volatile_stats.cv, stable_res.streaks.len, volatile_res.streaks.len, stable_ratio, volatile_ratio });
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, line);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout.writeAll(line);
 }

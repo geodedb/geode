@@ -6,11 +6,13 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
-    var args = std.process.args();
-    _ = args.next(); // prog
-    const status_path = args.next() orelse "status.json";
-    const out_path = args.next() orelse "docs/IMPLEMENTATION_REALITY.md";
-    const prev_path = args.next() orelse "docs/.implementation_reality_prev.json";
+    
+    const args_list = try std.process.argsAlloc(ally);
+    defer std.process.argsFree(ally, args_list);
+    
+    const status_path = if (args_list.len > 1) args_list[1] else "status.json";
+    const out_path = if (args_list.len > 2) args_list[2] else "docs/IMPLEMENTATION_REALITY.md";
+    const prev_path = if (args_list.len > 3) args_list[3] else "docs/.implementation_reality_prev.json";
 
     const curr_json = try readFile(ally, status_path);
     defer ally.free(curr_json);

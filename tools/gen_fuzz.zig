@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn main() !void {
     const args = try std.process.argsAlloc(std.heap.page_allocator);
@@ -43,11 +44,19 @@ pub fn main() !void {
 
     const out = try std.fmt.allocPrint(std.heap.page_allocator, "Created fuzz target: fuzz/targets/{s}_fuzz.zig (canary={s})\n", .{ derived, id });
     defer std.heap.page_allocator.free(out);
-    _ = std.posix.write(std.posix.STDOUT_FILENO, out) catch {};
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    stdout.writeAll(out) catch {};
 }
 
 fn usage(code: u8) noreturn {
-    _ = std.posix.write(std.posix.STDERR_FILENO, "USAGE: zig build gen-fuzz -- --canary <ID|TestName> [--module <path>]\n") catch {};
+    const stderr = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+    stderr.writeAll("USAGE: zig build gen-fuzz -- --canary <ID|TestName> [--module <path>]\n") catch {};
     std.process.exit(code);
 }
 

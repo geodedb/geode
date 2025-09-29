@@ -499,6 +499,10 @@ pub fn build(b: *std.Build) void {
         .name = "geoded",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/server/main.zig"), .target = target, .optimize = optimize }),
     });
+    // Link libc on Windows for socket operations in QUIC
+    if (target.result.os.tag == .windows) {
+        geoded_exe.linkLibC();
+    }
     geoded_exe.root_module.addImport("geode", root_mod);
     // GQL is accessed through geode module now
     // Planner cost model modules (enumeration seed, explain) with distinct aliases
