@@ -37,7 +37,10 @@ pub const ReplLoop = struct {
         defer restoreTerminalMode(original_termios) catch {};
 
         // Initialize components
-        var history = try repl_history.HistoryStore.init(opts.allocator, if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null, opts.history_enabled);
+        const history_path = if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null;
+        defer if (history_path) |path| opts.allocator.free(path);
+        
+        var history = try repl_history.HistoryStore.init(opts.allocator, history_path, opts.history_enabled);
         defer history.deinit();
 
         if (opts.history_enabled) {
@@ -521,10 +524,10 @@ fn printWelcomeMessage() !void {
     try stdout.writeAll("╔══════════════════════════════════════════════════════════════╗\n");
     try stdout.writeAll("║  ");
     try stdout.writeAll(bold);
-    try stdout.writeAll("Welcome to Geode Shell v0.18.0");
+    try stdout.writeAll("Welcome to Geode Shell v0.18.0                           ");
     try stdout.writeAll(reset);
     try stdout.writeAll(blue);
-    try stdout.writeAll("                           ║\n");
+    try stdout.writeAll("║\n");
     try stdout.writeAll("║  Interactive GQL REPL (ISO/IEC 39075:2024 compliant)        ║\n");
     try stdout.writeAll("╚══════════════════════════════════════════════════════════════╝\n");
     try stdout.writeAll(reset);
@@ -542,7 +545,7 @@ fn printWelcomeMessage() !void {
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\quit");
     try stdout.writeAll(reset);
-    try stdout.writeAll("          Exit the shell\n");
+    try stdout.writeAll("          Exit the shell (also \\exit)\n");
     try stdout.writeAll("  ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\clear");

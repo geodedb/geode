@@ -85,9 +85,9 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll("     Show this help\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
-        try stdout.writeAll("\\quit, \\q");
+        try stdout.writeAll("\\quit, \\q, \\exit");
         try stdout.writeAll(reset);
-        try stdout.writeAll("         Exit the shell\n");
+        try stdout.writeAll(" Exit the shell\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\clear");
@@ -200,7 +200,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("\n");
         try stdout.writeAll("\n");
-    } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q")) {
+    } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "exit")) {
         state.quit_requested = true;
     } else if (std.mem.eql(u8, cmd, "history")) {
         if (std.mem.eql(u8, args, "-c")) {
