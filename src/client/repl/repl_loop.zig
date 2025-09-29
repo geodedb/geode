@@ -188,11 +188,16 @@ fn processInput(state: *ReplState) !void {
                 } else if (repl_parse.isComplete(input)) {
                     // Save to history if not starting with space
                     if (input.len > 0 and input[0] != ' ' and state.history.enabled) {
-                        try state.history.append(input);
+                        state.history.append(input) catch {};
                     }
 
                     // Execute GQL
-                    try repl_dispatch.executeGql(state, input);
+                    repl_dispatch.executeGql(state, input) catch |err| {
+                        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+                        stderr.writeAll("REPL error: ") catch {};
+                        stderr.writeAll(@errorName(err)) catch {};
+                        stderr.writeAll("\n") catch {};
+                    };
                     state.buffer.clearRetainingCapacity();
                     state.cursor = 0;
                 }

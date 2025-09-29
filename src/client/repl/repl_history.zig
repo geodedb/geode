@@ -99,7 +99,16 @@ pub const HistoryStore = struct {
             self.file_mutex.lock();
             defer self.file_mutex.unlock();
 
-            const file = try std.fs.cwd().createFile(path, .{ .truncate = false });
+            // Ensure directory exists
+            if (std.fs.path.dirname(path)) |dir| {
+                std.fs.cwd().makePath(dir) catch {};
+            }
+
+            const file = std.fs.cwd().createFile(path, .{ .truncate = false }) catch |err| {
+                // If we can't save history, just continue without persisting
+                if (err == error.FileNotFound) return;
+                return err;
+            };
             defer file.close();
 
             try file.seekFromEnd(0);
@@ -120,7 +129,15 @@ pub const HistoryStore = struct {
             self.file_mutex.lock();
             defer self.file_mutex.unlock();
 
-            const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+            // Ensure directory exists
+            if (std.fs.path.dirname(path)) |dir| {
+                std.fs.cwd().makePath(dir) catch {};
+            }
+
+            const file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch {
+                // If we can't clear the file, just continue
+                return;
+            };
             file.close();
         }
     }
