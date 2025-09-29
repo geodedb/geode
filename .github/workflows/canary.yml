@@ -27,10 +27,11 @@ jobs:
           go-version: '1.23'
       - name: Sync vendor directory
         run: |
+          go mod vendor
           cd clients/go/gql && go mod vendor && cd -
           cd tools/canaryscan && go mod tidy && cd -
       - name: Build scanner
-        run: go build -o ./bin/canaryscan ./tools/canaryscan
+        run: cd tools/canaryscan && go build -o ../../bin/canaryscan .
       - name: Generate status
         run: ./bin/canaryscan --root . --out status.json --csv status.csv
       - name: Verify GAP + Strict freshness

@@ -24,7 +24,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-zig-
       - name: Build canary scanner
-        run: go build -o ./bin/canaryscan ./tools/canaryscan
+        run: cd tools/canaryscan && go build -o ../../bin/canaryscan .
       - name: Run scanner (non-strict) and write evidence
         run: ./bin/canaryscan --root . --out status.json --csv status.csv
       - name: Governance badge

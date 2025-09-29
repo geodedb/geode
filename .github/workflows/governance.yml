@@ -43,7 +43,7 @@ jobs:
         with:
           go-version: '1.22'
       - name: Build canary scanner
-        run: go build -o ./bin/canaryscan ./tools/canaryscan
+        run: cd tools/canaryscan && go build -o ../../bin/canaryscan .
       - name: Strict verify GAP_ANALYSIS vs evidence
         run: ./bin/canaryscan --root . --out status.json --csv status.csv --verify docs/GAP_ANALYSIS.md --strict
       - name: Governance summary
