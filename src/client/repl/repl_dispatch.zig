@@ -309,13 +309,13 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         const msg = try std.fmt.bufPrint(&buf, "{s}\n", .{args});
         try stdout.writeAll(msg);
     } else if (std.mem.eql(u8, cmd, "source")) {
-        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        const stderr = platform.getStderrHandle();
         try stderr.writeAll("Error [GEODE-E2004]: \\source not yet implemented\n");
     } else if (std.mem.eql(u8, cmd, "connet")) { // Typo detection
-        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        const stderr = platform.getStderrHandle();
         try stderr.writeAll("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\n");
     } else {
-        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        const stderr = platform.getStderrHandle();
         var buf: [256]u8 = undefined;
         const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\n", .{cmd});
         try stderr.writeAll(msg);
