@@ -11,6 +11,11 @@ on:
       - main
   workflow_dispatch:
 
+# Cancel in-progress runs for non-tag pushes
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}

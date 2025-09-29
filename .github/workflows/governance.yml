@@ -8,6 +8,12 @@ on:
         description: 'Set to 1 to enforce telemetry smoke test failures'
         required: false
         default: '0'
+
+# Cancel in-progress runs when new commits are pushed
+concurrency:
+  group: governance-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   canary-governance:
     runs-on:

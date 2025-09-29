@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancel in-progress runs when new commits are pushed
+concurrency:
+  group: build-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
