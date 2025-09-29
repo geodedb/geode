@@ -62,18 +62,20 @@
           devShell = pkgs.mkShell {
             shellHook = '''';
             env = { };
-            packages =
+            packages = builtins.filter (p: p != null) (
               (with dev-env.packages.${system}; [
                 zigPackages
                 goPackages
                 commonPackages
               ])
               ++ (with pkgs; [
-                glibc
+                # glibc is Linux-specific, so only include it on Linux systems
+                (if pkgs.stdenv.isLinux then glibc else null)
                 file
                 # wine should only be included on x86_64-linux
                 (if system == "x86_64-linux" then wine else null)
-              ]);
+              ])
+            );
           };
         };
     in

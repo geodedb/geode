@@ -29,6 +29,10 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.1
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
       - name: Zig version
         run: zig version
       - name: Build and Test
@@ -67,6 +71,10 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.1
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
       - name: Build
         run: zig build
       - name: Unit tests
@@ -264,6 +272,10 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: ${{ matrix.zig }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
       - name: Build
         run: make build
       - name: Run tests

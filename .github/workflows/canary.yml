@@ -16,6 +16,14 @@ jobs:
           git-credentials: ${{ secrets.GIT_CREDENTIALS }}
           gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Sync vendor directory
+        run: |
+          cd clients/go/gql && go mod vendor && cd -
+          cd tools/canaryscan && go mod tidy && cd -
       - name: Build scanner
         run: go build -o ./bin/canaryscan ./tools/canaryscan
       - name: Generate status

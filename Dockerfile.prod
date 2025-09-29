@@ -38,6 +38,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     zig build tools -Doptimize=ReleaseFast -Dtarget=$ZIG_TARGET && \
     # Only strip if we're building for the native architecture
     if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "" ]; then \
+        strip /build/zig-out/bin/geode || true; \
         strip /build/zig-out/bin/geoded || true; \
         strip /build/zig-out/bin/geodec || true; \
     fi
@@ -47,6 +48,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 # Copy binaries
 COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geode /usr/local/bin/geode
+COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geoded /usr/local/bin/geoded
 COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geodec /usr/local/bin/geodec
 COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/cert_gen /usr/local/bin/cert_gen
 
