@@ -1,6 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 // Import real page encryption engine (AES-256-GCM with per-page DEK derivation)
-const storage_crypto = @import("../src/storage/crypto.zig");
+const storage_crypto = @import("storage_crypto");
 
 // benchmark_tde_encrypt_pages.zig
 // Real encryption benchmark invoking PageCrypto.encryptPage for a sequence of synthetic pages.
@@ -10,7 +11,7 @@ const storage_crypto = @import("../src/storage/crypto.zig");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const alloc = &gpa.allocator;
+    const alloc = gpa.allocator();
 
     // Configuration (keep CI friendly); can be raised locally via env override later
     const page_count: usize = 10_000;
@@ -31,7 +32,7 @@ pub fn main() !void {
         },
     };
 
-    var crypto_engine = try storage_crypto.PageCrypto.init(alloc.*, master_key, null);
+    var crypto_engine = try storage_crypto.PageCrypto.init(alloc, master_key, null);
     defer crypto_engine.deinit();
 
     // Buffers: plaintext page and ciphertext (nonce + page + tag = +28 bytes)
@@ -41,7 +42,7 @@ pub fn main() !void {
     defer alloc.free(ciphertext);
 
     // Initialize page with pattern; mutate per-iteration to avoid constant folding
-    std.mem.set(u8, plaintext, 0x5A);
+    @memset(plaintext, 0x5A);
 
     var total_encrypt_ns: u128 = 0;
     var i: usize = 0;
@@ -59,13 +60,14 @@ pub fn main() !void {
     const seconds: f64 = (@as(f64, @floatFromInt(total_encrypt_ns)) / 1_000_000_000.0);
     const throughput_mb_s = if (seconds == 0) 0 else (total_bytes / (1024.0 * 1024.0)) / seconds;
 
-    var stdout = std.io.getStdOut().writer();
-    const out_obj = .{
-        .bench = "BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001",
-        .pages = page_count,
-        .page_size = page_size,
-        .mean_encrypt_ns = mean_encrypt_ns,
-        .throughput_mb_s = throughput_mb_s,
-    };
-    try stdout.print("{s}\n", .{try std.json.stringifyAlloc(alloc, out_obj, .{})});
+    const out = try std.fmt.allocPrint(alloc, 
+        \\{{"bench":"BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001","pages":{},"page_size":{},"mean_encrypt_ns":{d},"throughput_mb_s":{d}}}
+        \\
+    , .{ page_count, page_size, mean_encrypt_ns, throughput_mb_s });
+    defer alloc.free(out);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    stdout.writeAll(out) catch {};
 }

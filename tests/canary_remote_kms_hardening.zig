@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const kms = @import("security/kms_remote"); // Provided via build.zig for zig build test; direct zig test on file unsupported
 const quic = @import("transport/quic");
 
@@ -164,7 +165,11 @@ pub fn runUnwrapConcurrencyVariance() !void {
     try w.print("{d:.4}", .{p95_mean_ratio});
     try w.writeAll("}\n");
     const line = fbs.getWritten();
-    _ = try std.posix.write(std.posix.STDOUT_FILENO, line);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    _ = try stdout.writeAll(line);
 }
 
 test "BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance_Run" {

@@ -93,12 +93,15 @@ pub fn build(b: *std.Build) void {
     // --- Benchmarks ---
     // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
     const tde_bench_exe = b.addExecutable(.{ .name = "benchmark_tde_overhead", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_overhead.zig"), .target = target, .optimize = optimize }) });
+    tde_bench_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     const run_tde_bench = b.addRunArtifact(tde_bench_exe);
     const bench_step = b.step("bench", "Run performance benchmarks (subset)");
     bench_step.dependOn(&run_tde_bench.step);
 
     // Real path encryption benchmark skeleton (invokes placeholder hashing until wired to encryptPage)
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
+    const storage_crypto_mod = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize });
+    tde_encrypt_pages_exe.root_module.addImport("storage_crypto", storage_crypto_mod);
     const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
     bench_step.dependOn(&run_tde_encrypt_pages.step);
 
@@ -197,6 +200,9 @@ pub fn build(b: *std.Build) void {
     transport_quic_mod_tests.addImport("vendor_quic", vendor_quic_mod_tests);
     custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
     custom_tests.root_module.addImport("vendor_quic", vendor_quic_mod_tests);
+    if (target.result.os.tag == .windows) {
+        custom_tests.linkLibC();
+    }
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     const test_step = b.step("test", "Run unit tests");
@@ -311,7 +317,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&redo_canary_test.step);
 
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
+    if (target.result.os.tag == .windows) {
+        quic_tls_tests.linkLibC();
+    }
     const zig_client_quic_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_zig_client_quic.zig"), .target = target, .optimize = optimize }) });
+    if (target.result.os.tag == .windows) {
+        zig_client_quic_test.linkLibC();
+    }
     // Provide clients/zig client file as a module import path
     const zig_client_mod = b.createModule(.{ .root_source_file = b.path("clients/zig/client.zig"), .target = target, .optimize = optimize });
     zig_client_quic_test.root_module.addImport("clients/zig/client.zig", zig_client_mod);
@@ -644,6 +656,9 @@ pub fn build(b: *std.Build) void {
     // kms_remote depends on transport/quic
     kms_remote_mod.addImport("transport/quic", transport_quic_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    if (target.result.os.tag == .windows) {
+        remote_kms_tests.linkLibC();
+    }
     test_step.dependOn(&remote_kms_tests.step);
 
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
@@ -651,6 +666,9 @@ pub fn build(b: *std.Build) void {
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
     remote_kms_hardening_tests.root_module.addImport("vendor_quic", vendor_quic_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    if (target.result.os.tag == .windows) {
+        remote_kms_hardening_tests.linkLibC();
+    }
     test_step.dependOn(&remote_kms_hardening_tests.step);
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
@@ -658,6 +676,9 @@ pub fn build(b: *std.Build) void {
     remote_kms_concurrency_bench.root_module.addImport("transport/quic", transport_quic_mod);
     remote_kms_concurrency_bench.root_module.addImport("vendor_quic", vendor_quic_mod);
     remote_kms_concurrency_bench.root_module.addImport("security/kms_remote", kms_remote_mod);
+    if (target.result.os.tag == .windows) {
+        remote_kms_concurrency_bench.linkLibC();
+    }
     b.installArtifact(remote_kms_concurrency_bench);
     const run_remote_kms_concurrency_bench = b.addRunArtifact(remote_kms_concurrency_bench);
     test_step.dependOn(&run_remote_kms_concurrency_bench.step);

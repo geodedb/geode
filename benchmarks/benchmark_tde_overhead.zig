@@ -1,5 +1,6 @@
 const std = @import("std");
-const page_manager = @import("../src/storage/page_manager.zig");
+const builtin = @import("builtin");
+const page_manager = @import("storage_page_manager");
 
 // BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead
 // Measures approximate relative overhead of encrypted vs unencrypted page write/read cycles.
@@ -23,7 +24,7 @@ pub fn main() !void {
             timer.reset();
             // Placeholder: simulate page write + read cost
             var buf: [4096]u8 = undefined;
-            std.mem.set(u8, &buf, @as(u8, @intCast(i & 0xFF)));
+            @memset(&buf, @as(u8, @intCast(i & 0xFF)));
             // pretend checksum/hash
             var h = std.hash.Wyhash.init(0);
             h.update(&buf);
@@ -38,7 +39,7 @@ pub fn main() !void {
         while (i < iters) : (i += 1) {
             timer.reset();
             var buf: [4096]u8 = undefined;
-            std.mem.set(u8, &buf, @as(u8, @intCast((i * 31) & 0xFF)));
+            @memset(&buf, @as(u8, @intCast((i * 31) & 0xFF)));
             // simulate encrypt = two wyhash rounds + tag gen
             var h1 = std.hash.Wyhash.init(1);
             h1.update(&buf);
@@ -50,8 +51,16 @@ pub fn main() !void {
         }
     }
 
-    const overhead_pct = if (plain_total == 0) 0 else @as(f64, @floatFromInt(enc_total - plain_total)) / @as(f64, @floatFromInt(plain_total)) * 100.0;
+    const overhead_pct = if (plain_total == 0) 0 else blk: {
+        const diff = if (enc_total >= plain_total) enc_total - plain_total else 0;
+        break :blk @as(f64, @floatFromInt(diff)) / @as(f64, @floatFromInt(plain_total)) * 100.0;
+    };
 
-    var stdout = std.io.getStdOut().writer();
-    try stdout.print("TDE_SIM_OVERHEAD iters={} plain_ns={} enc_ns={} overhead_pct={d:.2}\n", .{ iters, plain_total, enc_total, overhead_pct });
+    const out = try std.fmt.allocPrint(gpa.allocator(), "TDE_SIM_OVERHEAD iters={} plain_ns={} enc_ns={} overhead_pct={d:.2}\n", .{ iters, plain_total, enc_total, overhead_pct });
+    defer gpa.allocator().free(out);
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    stdout.writeAll(out) catch {};
 }
