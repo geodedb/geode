@@ -71,7 +71,8 @@
               ++ (with pkgs; [
                 glibc
                 file
-                wine
+                # wine should only be included on x86_64-linux
+                (if system == "x86_64-linux" then wine else null)
               ]);
           };
         };

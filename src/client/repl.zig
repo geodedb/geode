@@ -1,6 +1,8 @@
 const std = @import("std");
+const repl_history = @import("repl/repl_history.zig");
+const repl_parse = @import("repl/repl_parse.zig");
 
-// Minimal interactive REPL skeleton for initial CANARY promotion.
+// Facade for backward compatibility - delegates to new modules
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=HistoryPersistence; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_HistoryPersistence; OWNER=client; UPDATED=2025-09-23
@@ -10,7 +12,7 @@ const std = @import("std");
 
 pub const Repl = struct {
     allocator: std.mem.Allocator,
-    buffer: std.ArrayListUnmanaged(u8) = .{}, // multiline accumulation
+    buffer: std.ArrayListUnmanaged(u8) = .{},
     history: ?History = null,
     quit_requested: bool = false,
     in_txn: bool = false,
@@ -43,15 +45,10 @@ pub const Repl = struct {
         return if (self.in_txn) "geode(txn)> " else "geode> ";
     }
 
-    /// Cancels the current multiline input (e.g. on Ctrl-C) without persisting.
     pub fn cancelBuffer(self: *Repl) void {
         self.buffer.clearRetainingCapacity();
     }
 
-    /// Ingest a line (without trailing newline). Returns optional full statement when complete.
-    /// Termination rules (initial policy):
-    /// 1. Any line containing a ';' (semicolon) finalizes the statement (keeps content up to semicolon, ignores remainder for now)
-    /// 2. A blank line when buffer has content finalizes accumulated statement.
     pub fn ingest(self: *Repl, line: []const u8) !?[]const u8 {
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len > 0 and trimmed[0] == ':') {

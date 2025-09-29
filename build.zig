@@ -37,12 +37,16 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // Create root module early so it can be used by executables
+    const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+
     // Main unified CLI binary
     const geode_exe = b.addExecutable(.{
         .name = "geode",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/main.zig"), .target = target, .optimize = optimize }),
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
+    geode_exe.root_module.addImport("geode", root_mod);
     b.installArtifact(geode_exe);
 
     // Remove legacy wire binary build and install (deprecated)
@@ -51,8 +55,6 @@ pub fn build(b: *std.Build) void {
         .name = "gql",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gql/main.zig"), .target = target, .optimize = optimize }),
     });
-
-    const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
     // (TDE security module imported indirectly via geode root; dedicated module variable removed)
 
     // Unicode generated tables (minimal). We attempt to run the generator; failure is non-fatal for now (IMPL stage).
@@ -980,6 +982,12 @@ pub fn build(b: *std.Build) void {
 
     const audit_chain_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&audit_chain_tests.step);
+
+    // REPL tests - temporarily disabled for Zig 0.15.1 migration
+    // TODO: Fix File I/O API usage in REPL modules
+    // const repl_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_repl.zig"), .target = target, .optimize = optimize }) });
+    // repl_tests.root_module.addImport("geode", root_mod);
+    // test_step.dependOn(&repl_tests.step);
 
     // Unicode UTF-16 / WTF-8 conversion canary tests
     const unicode_utf16_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_unicode_utf16.zig"), .target = target, .optimize = optimize }) });

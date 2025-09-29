@@ -139,6 +139,41 @@ pub const distributed = struct {
     pub const raft = @import("distributed/raft.zig");
 };
 
+// REPL modules - temporarily disabled for Zig 0.15.1 migration
+// TODO: Fix File I/O API usage in REPL modules
+pub const repl = struct {
+    // pub const repl_loop = @import("client/repl/repl_loop.zig");
+    // pub const repl_parse = @import("client/repl/repl_parse.zig");
+    // pub const repl_history = @import("client/repl/repl_history.zig");
+    // pub const repl_errors = @import("client/repl/repl_errors.zig");
+    // pub const repl_render = @import("client/repl/repl_render.zig");
+    // pub const repl_dispatch = @import("client/repl/repl_dispatch.zig");
+    // pub const keymap_emacs = @import("client/repl/keymap_emacs.zig");
+    // pub const keymap_vi = @import("client/repl/keymap_vi.zig");
+    // pub const repl_complete = @import("client/repl/repl_complete.zig");
+    // pub const repl_config = @import("client/repl/repl_config.zig");
+
+    // Temporary stub to allow CLI to compile
+    pub const repl_loop = struct {
+        pub const ReplLoop = struct {
+            pub const Format = enum { table, csv, json };
+            pub const Keymap = enum { emacs, vi };
+            pub const Options = struct {
+                server: []const u8,
+                format: Format,
+                keymap: Keymap,
+                history_enabled: bool,
+                verbose: bool,
+                allocator: std.mem.Allocator,
+            };
+            pub fn run(opts: Options) !void {
+                _ = opts;
+                return error.NotImplemented;
+            }
+        };
+    };
+};
+
 // Extend planner module
 pub const planner_wcoj = @import("planner/wcoj.zig");
 

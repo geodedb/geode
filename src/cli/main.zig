@@ -98,6 +98,7 @@ fn printShellUsage() void {
         "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
         "  --no-history           Disable command history\n" ++
         "  --format <fmt>         Default output format: json|table|csv (default: table)\n" ++
+        "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -341,11 +342,85 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
-    _ = argv;
-    _ = start_idx;
-    std.debug.print("Error: shell command not yet implemented\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.general_error));
+    // Get REPL types
+    const geode = @import("geode");
+    const repl_loop = geode.repl.repl_loop;
+
+    // Parse arguments
+    var server: []const u8 = "127.0.0.1:8443";
+    var format: repl_loop.ReplLoop.Format = .table;
+    var keymap: repl_loop.ReplLoop.Keymap = .emacs;
+    var history_enabled = true;
+    var verbose = false;
+
+    var i = start_idx;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
+            printShellUsage();
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, argv[i], "--server")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --server requires an argument\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            server = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--format")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --format requires an argument\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            const fmt = argv[i + 1];
+            if (std.mem.eql(u8, fmt, "table")) {
+                format = .table;
+            } else if (std.mem.eql(u8, fmt, "csv")) {
+                format = .csv;
+            } else if (std.mem.eql(u8, fmt, "json")) {
+                format = .json;
+            } else {
+                std.debug.print("Error: invalid format: {s}\n", .{fmt});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--keymap")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --keymap requires an argument\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            const km = argv[i + 1];
+            if (std.mem.eql(u8, km, "emacs")) {
+                keymap = .emacs;
+            } else if (std.mem.eql(u8, km, "vi")) {
+                keymap = .vi;
+            } else {
+                std.debug.print("Error: invalid keymap: {s}\n", .{km});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--no-history")) {
+            history_enabled = false;
+        } else if (std.mem.eql(u8, argv[i], "--verbose")) {
+            verbose = true;
+        } else {
+            std.debug.print("Error: unknown option: {s}\n", .{argv[i]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+    }
+
+    // Launch the REPL
+    const options = repl_loop.ReplLoop.Options{
+        .server = server,
+        .format = format,
+        .keymap = keymap,
+        .history_enabled = history_enabled,
+        .verbose = verbose,
+        .allocator = ally,
+    };
+
+    repl_loop.ReplLoop.run(options) catch |err| {
+        std.debug.print("REPL error: {s}\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
