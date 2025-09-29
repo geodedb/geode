@@ -16,7 +16,7 @@ pub fn main() !void {
     // Write test output that the Wine test will look for
     try stdout.writeAll("Test stdout\n");
     try stderr.writeAll("Test stderr\n");
-    
+
     // Exit successfully
     std.process.exit(0);
 }
