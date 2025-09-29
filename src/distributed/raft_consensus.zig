@@ -1,7 +1,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const txn_coordinator = @import("txn_coordinator.zig");
 
 const log = std.log.scoped(.raft);
+
+// Type aliases
+pub const TxnCoordinator = txn_coordinator.TxnCoordinator;
+
+// Client response structure for pending responses
+pub const ClientResponse = struct {
+    prepare_result: ?bool = null,
+    decision: ?[]const u8 = null,
+    xid: u64,
+};
 
 // Clock abstraction for deterministic elections & tests
 pub const Clock = struct {
@@ -40,6 +51,20 @@ pub const Command = union(enum) {
     schema_change: SchemaChange,
     config_change: ConfigChange,
     snapshot_pointer: SnapshotPointer,
+    txn_prepare: TxnPrepare,
+    txn_decide: TxnDecide,
+};
+
+pub const TxnPrepare = struct {
+    xid: u64,
+    shard_id: u64,
+    write_set: []const u8, // Serialized operations
+    metadata: []const u8,
+};
+
+pub const TxnDecide = struct {
+    xid: u64,
+    commit: bool,
 };
 
 pub const GraphMutation = struct {
@@ -670,6 +695,8 @@ pub const RaftNode = struct {
                 .snapshots_sent = 0,
                 .snapshots_received = 0,
             },
+            .txn_coordinator = null,
+            .pending_responses = std.StringHashMap(ClientResponse).init(allocator),
         };
 
         // Add initial noop entry to simplify log indexing
@@ -692,6 +719,8 @@ pub const RaftNode = struct {
         if (self.match_index) |*mi| mi.deinit();
         if (self.transport) |t| t.deinit();
         if (self.storage) |s| s.close();
+        if (self.txn_coordinator) |*coord| coord.deinit();
+        self.pending_responses.deinit();
     }
 
     pub fn setTransport(self: *RaftNode, transport: *Transport) void {
@@ -728,6 +757,32 @@ pub const RaftNode = struct {
         self.apply_callback = apply_fn;
         self.snapshot_callback = snapshot_fn;
         self.restore_callback = restore_fn;
+    }
+
+    pub fn proposeCommand(self: *RaftNode, command: Command) !bool {
+        // Only leaders can propose commands
+        if (self.state != .leader) return false;
+
+        // Create log entry
+        const entry = LogEntry{
+            .term = self.current_term,
+            .index = self.log.items.len,
+            .command = command,
+            .timestamp = self.clock.nowMillis(),
+            .client_id = null,
+            .serial_number = null,
+        };
+
+        // Append to local log
+        try self.log.append(self.allocator, entry);
+        self.stats.entries_appended += 1;
+
+        // Replicate to followers
+        for (self.peers) |peer| {
+            try self.sendAppendEntries(peer);
+        }
+
+        return true;
     }
 
     pub fn tick(self: *RaftNode) !void {
@@ -1183,14 +1238,34 @@ pub const RaftNode = struct {
                                 break;
                             }
                         }
-                    } else if (cc.change_type == .update_server) {
-                        if (cc.server_endpoint) |ep2| {
-                            for (self.peers) |*p| {
-                                if (p.id == cc.server_id) {
-                                    p.endpoint = ep2;
-                                    if (cc.server_port) |sp| p.port = sp;
-                                }
-                            }
+                    }
+                },
+
+                .txn_prepare => |prepare| {
+                    // Handle distributed transaction prepare phase
+                    // CANARY: REQ=REQ-GQL-2PC-004; FEATURE="2PC Raft Integration"; ASPECT=2PC; STATUS=IMPL; TEST=TestCANARY_2PC_RaftIntegration; OWNER=distributed; UPDATED=2025-01-29
+                    if (self.txn_coordinator) |*coordinator| {
+                        const can_commit = try coordinator.handlePrepare(prepare);
+                        // Store result for client response
+                        if (entry.client_id) |client| {
+                            try self.pending_responses.put(client, .{
+                                .prepare_result = can_commit,
+                                .xid = prepare.xid,
+                            });
+                        }
+                    }
+                },
+
+                .txn_decide => |decide| {
+                    // Handle distributed transaction decision
+                    if (self.txn_coordinator) |*coordinator| {
+                        try coordinator.handleDecide(decide);
+                        // Notify client of completion
+                        if (entry.client_id) |client| {
+                            try self.pending_responses.put(client, .{
+                                .decision = if (decide.commit) "committed" else "aborted",
+                                .xid = decide.xid,
+                            });
                         }
                     }
                 },

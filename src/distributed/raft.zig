@@ -366,8 +366,6 @@ pub const RaftNode = struct {
     }
 
     fn handleRequestVote(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        _ = from;
-
         const request = std.json.parseFromSlice(RequestVoteRequest, self.allocator, payload, .{}) catch return;
         defer request.deinit();
 
@@ -454,8 +452,6 @@ pub const RaftNode = struct {
     }
 
     fn handleAppendEntries(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        _ = from;
-
         const request = std.json.parseFromSlice(AppendEntriesRequest, self.allocator, payload, .{}) catch return;
         defer request.deinit();
 

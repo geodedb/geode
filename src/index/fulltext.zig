@@ -92,7 +92,8 @@ pub const FullTextIndex = struct {
         self.stopwords.deinit();
     }
 
-    // Search for documents matching a query
+    // Search for documents matching a query with enhanced BM25 scoring
+    // CANARY: REQ=REQ-GQL-FTS-001; FEATURE="BM25 Full-Text Search"; ASPECT=FTS; STATUS=IMPL; TEST=TestCANARY_BM25_Search; OWNER=index; UPDATED=2025-01-29
     pub fn search(self: *FullTextIndex, query: []const u8, max_results: usize) ![]SearchResult {
         const query_tokens = try self.tokenize(query);
         defer self.allocator.free(query_tokens);
@@ -100,27 +101,48 @@ pub const FullTextIndex = struct {
         var scores = std.AutoHashMap(u64, f32).init(self.allocator);
         defer scores.deinit();
 
-        // Calculate BM25 scores
-        const k1: f32 = 1.2;
-        const b: f32 = 0.75;
+        // Enhanced BM25 parameters with saturation tuning
+        const k1: f32 = 1.2; // Term frequency saturation parameter
+        const b: f32 = 0.75; // Length normalization parameter
+        const k3: f32 = 7.0; // Query term frequency saturation (for repeated query terms)
+
         const avg_doc_len = try self.getAverageDocumentLength();
+        const total_docs = @as(f32, @floatFromInt(self.documents.count()));
+
+        // Count query term frequencies for BM25F variant
+        var query_term_freq = std.StringHashMap(f32).init(self.allocator);
+        defer query_term_freq.deinit();
 
         for (query_tokens) |token| {
             if (self.stopwords.contains(token.text)) continue;
-
             const normalized = try self.normalize(token.text);
             defer self.allocator.free(normalized);
 
-            if (self.inverted_index.get(normalized)) |posting_list| {
+            const current = query_term_freq.get(normalized) orelse 0;
+            try query_term_freq.put(normalized, current + 1.0);
+        }
+
+        // Calculate scores with query term frequency consideration
+        var it = query_term_freq.iterator();
+        while (it.next()) |entry| {
+            const term = entry.key_ptr.*;
+            const qtf = entry.value_ptr.*;
+
+            if (self.inverted_index.get(term)) |posting_list| {
+                // Enhanced IDF calculation with smoothing
+                const doc_freq = @as(f32, @floatFromInt(posting_list.documents.len));
+                const idf = std.math.log(f32, std.math.e, ((total_docs - doc_freq + 0.5) / (doc_freq + 0.5)) + 1.0);
+
                 for (posting_list.documents) |posting| {
                     const doc = self.documents.get(posting.doc_id) orelse continue;
                     const doc_len = @as(f32, @floatFromInt(doc.tokens.len));
 
-                    // BM25 scoring
+                    // BM25 with query term frequency
                     const tf = posting.tf;
-                    const idf = posting_list.idf;
                     const norm_factor = 1.0 - b + b * (doc_len / avg_doc_len);
-                    const score = idf * ((tf * (k1 + 1.0)) / (tf + k1 * norm_factor));
+                    const doc_score = (tf * (k1 + 1.0)) / (tf + k1 * norm_factor);
+                    const query_score = (qtf * (k3 + 1.0)) / (qtf + k3);
+                    const score = idf * doc_score * query_score;
 
                     const current_score = scores.get(posting.doc_id) orelse 0;
                     try scores.put(posting.doc_id, current_score + score);
@@ -140,9 +162,9 @@ pub const FullTextIndex = struct {
         }
 
         // Sort by score descending
-        std.sort.sort(SearchResult, results.items, {}, struct {
-            fn lessThan(_: void, a: SearchResult, b: SearchResult) bool {
-                return a.score > b.score;
+        std.mem.sort(SearchResult, results.items, {}, struct {
+            fn lessThan(_: void, lhs: SearchResult, rhs: SearchResult) bool {
+                return lhs.score > rhs.score;
             }
         }.lessThan);
 
@@ -153,7 +175,7 @@ pub const FullTextIndex = struct {
 
     // Helper functions
     fn tokenize(self: *FullTextIndex, text: []const u8) ![]Token {
-        var tokens = std.ArrayList(Token){};
+        var tokens = try std.ArrayList(Token).initCapacity(self.allocator, 0);
         var i: usize = 0;
 
         while (i < text.len) {
@@ -214,5 +236,119 @@ pub const FullTextIndex = struct {
         }
 
         return @as(f32, @floatFromInt(total_length)) / @as(f32, @floatFromInt(self.documents.count()));
+    }
+
+    // Index a new document
+    // CANARY: REQ=REQ-GQL-FTS-002; FEATURE="Document Indexing"; ASPECT=FTS; STATUS=IMPL; TEST=TestCANARY_DocumentIndexing; OWNER=index; UPDATED=2025-01-29
+    pub fn indexDocument(self: *FullTextIndex, doc_id: u64, content: []const u8) !void {
+        // Tokenize content
+        const tokens = try self.tokenize(content);
+        defer self.allocator.free(tokens);
+
+        // Store document
+        const doc = Document{
+            .id = doc_id,
+            .content = try self.allocator.dupe(u8, content),
+            .tokens = tokens,
+            .vector = null, // Vector embeddings can be added later
+        };
+        try self.documents.put(doc_id, doc);
+
+        // Build inverted index
+        var term_positions = std.StringHashMap(std.ArrayList(usize)).init(self.allocator);
+        defer {
+            var it = term_positions.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            term_positions.deinit();
+        }
+
+        // Collect term positions
+        for (tokens, 0..) |token, pos| {
+            if (self.stopwords.contains(token.text)) continue;
+
+            const normalized = try self.normalize(token.text);
+
+            var positions = term_positions.get(normalized) orelse try std.ArrayList(usize).initCapacity(self.allocator, 0);
+            try positions.append(pos);
+            try term_positions.put(normalized, positions);
+        }
+
+        // Update inverted index
+        var it = term_positions.iterator();
+        while (it.next()) |entry| {
+            const term = entry.key_ptr.*;
+            const positions = entry.value_ptr.*;
+
+            // Calculate term frequency
+            const tf = @as(f32, @floatFromInt(positions.items.len)) / @as(f32, @floatFromInt(tokens.len));
+
+            // Get or create posting list
+            var posting_list = self.inverted_index.get(term) orelse PostingList{
+                .term = try self.allocator.dupe(u8, term),
+                .documents = &[_]PostingEntry{},
+                .idf = 0,
+            };
+
+            // Add posting entry
+            const posting = PostingEntry{
+                .doc_id = doc_id,
+                .positions = try self.allocator.dupe(usize, positions.items),
+                .tf = tf,
+                .tf_idf = 0, // Will be updated when IDF is recalculated
+            };
+
+            // Append to documents array
+            var new_docs = try self.allocator.alloc(PostingEntry, posting_list.documents.len + 1);
+            std.mem.copy(PostingEntry, new_docs[0..posting_list.documents.len], posting_list.documents);
+            new_docs[posting_list.documents.len] = posting;
+
+            if (posting_list.documents.len > 0) {
+                self.allocator.free(posting_list.documents);
+            }
+            posting_list.documents = new_docs;
+
+            try self.inverted_index.put(term, posting_list);
+        }
+
+        // Update IDF scores
+        try self.updateIdfScores();
+    }
+
+    // Remove a document from the index
+    pub fn removeDocument(self: *FullTextIndex, doc_id: u64) !void {
+        // Remove from documents
+        if (self.documents.fetchRemove(doc_id)) |entry| {
+            self.allocator.free(entry.value.content);
+            self.allocator.free(entry.value.tokens);
+            if (entry.value.vector) |vec| {
+                self.allocator.free(vec);
+            }
+        }
+
+        // Remove from inverted index
+        var it = self.inverted_index.iterator();
+        while (it.next()) |entry| {
+            var posting_list = entry.value_ptr.*;
+
+            // Filter out the document
+            var new_docs = try std.ArrayList(PostingEntry).initCapacity(self.allocator, 0);
+            for (posting_list.documents) |posting| {
+                if (posting.doc_id != doc_id) {
+                    try new_docs.append(posting);
+                } else {
+                    self.allocator.free(posting.positions);
+                }
+            }
+
+            if (posting_list.documents.len > 0) {
+                self.allocator.free(posting_list.documents);
+            }
+            posting_list.documents = new_docs.toOwnedSlice();
+        }
+
+        // Update IDF scores
+        try self.updateIdfScores();
     }
 };

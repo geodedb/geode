@@ -125,10 +125,22 @@ pub const index = struct {
     pub const jsonb_inverted_persist = @import("index/jsonb_inverted_persist.zig");
     pub const domain_trie = @import("index/domain_trie.zig");
     pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
+    pub const fulltext = @import("index/fulltext.zig");
 };
 
 // Re-export wire protocol definitions for tests/benchmarks needing Value / frame types
 pub const protocol = @import("protocol.zig");
+
+// Distributed systems modules
+pub const distributed = struct {
+    pub const raft_consensus = @import("distributed/raft_consensus.zig");
+    pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
+    pub const cluster = @import("distributed/cluster_simple.zig");
+    pub const raft = @import("distributed/raft.zig");
+};
+
+// Extend planner module
+pub const planner_wcoj = @import("planner/wcoj.zig");
 
 // Graph analytics (lightweight builders and centrality algorithms)
 pub const graph = struct {
@@ -146,6 +158,7 @@ pub const graph = struct {
     pub const cycle_directed = @import("graph/cycle_detect_directed.zig");
     pub const cycle_undirected = @import("graph/cycle_detect_undirected.zig");
     pub const dag_shortest = @import("graph/shortest_dag_path.zig");
+    pub const leiden = @import("graph/leiden.zig");
     pub const flow = struct {
         pub const edmonds_karp = @import("graph/flow_edmonds_karp.zig");
         pub const dinic = @import("graph/flow_dinic.zig");
