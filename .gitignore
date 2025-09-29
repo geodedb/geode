@@ -55,3 +55,4 @@ vendor/*
 
 # ignore mac files
 .DS_Store
+clients/go/gql/zig-cache/

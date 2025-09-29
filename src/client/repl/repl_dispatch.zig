@@ -1,6 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
+const platform = @import("platform.zig");
 
 pub const ClientSession = struct {
     allocator: std.mem.Allocator,
@@ -53,7 +55,7 @@ pub const ClientSession = struct {
 };
 
 pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = platform.getStdoutHandle();
 
     // Parse command
     const space_idx = std.mem.indexOf(u8, input[1..], " ");
@@ -61,7 +63,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     const args = if (space_idx) |idx| std.mem.trim(u8, input[idx + 2 ..], " \t") else "";
 
     if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "h") or std.mem.eql(u8, cmd, "?")) {
-        const use_color = std.posix.isatty(std.posix.STDOUT_FILENO);
+        const use_color = platform.isStdoutTty();
         const green = if (use_color) "\x1b[32m" else "";
         const yellow = if (use_color) "\x1b[33m" else "";
         const cyan = if (use_color) "\x1b[36m" else "";
@@ -230,7 +232,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\n", .{args});
             try stdout.writeAll(msg);
         } else {
-            const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr = platform.getStderrHandle();
             var buf: [512]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\connect <host:port>\n", .{});
             try stderr.writeAll(msg);
@@ -256,7 +258,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             const msg = try std.fmt.bufPrint(&buf, "Timing {s}\n", .{args});
             try stdout.writeAll(msg);
         } else {
-            const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr = platform.getStderrHandle();
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\timing on|off\n", .{});
             try stderr.writeAll(msg);
@@ -269,7 +271,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         } else if (std.mem.eql(u8, args, "json")) {
             state.format = .json;
         } else {
-            const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr = platform.getStderrHandle();
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\format table|csv|json\n", .{});
             try stderr.writeAll(msg);
@@ -292,7 +294,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 state.vi_mode = .insert;
                 try stdout.writeAll("Keymap set to vi\n");
             } else {
-                const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+                const stderr = platform.getStderrHandle();
                 var buf: [256]u8 = undefined;
                 const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\set keymap emacs|vi\n", .{});
                 try stderr.writeAll(msg);
@@ -321,7 +323,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
 }
 
 pub fn executeGql(state: anytype, gql: []const u8) !void {
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = platform.getStdoutHandle();
 
     // Execute query
     try state.session.runGql(gql);

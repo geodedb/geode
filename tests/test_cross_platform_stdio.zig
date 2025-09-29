@@ -5,17 +5,17 @@ test "cross-platform stdio handles" {
     // Test that we can correctly create File handles for stdin, stdout, stderr
     // on both Windows and POSIX systems
     const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse unreachable }
+        std.fs.File{ .handle = try std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 
     const stderr = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse unreachable }
+        std.fs.File{ .handle = try std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) }
     else
         std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
     const stdin = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse unreachable }
+        std.fs.File{ .handle = try std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) }
     else
         std.fs.File{ .handle = std.posix.STDIN_FILENO };
 

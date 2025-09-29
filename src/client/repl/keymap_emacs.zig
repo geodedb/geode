@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const repl_loop = @import("repl_loop.zig");
+const platform = @import("platform.zig");
 
 pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
     if (key.ctrl) {
@@ -33,7 +35,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
             },
             'y' => .yank, // Ctrl+Y: yank from kill ring
             'l' => blk: { // Ctrl+L: clear screen
-                const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                const stdout = platform.getStdoutHandle();
                 stdout.writeAll("\x1b[2J\x1b[H") catch {};
                 break :blk .none;
             },

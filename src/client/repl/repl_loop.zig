@@ -9,6 +9,7 @@ const repl_config = @import("repl_config.zig");
 const repl_errors = @import("repl_errors.zig");
 const keymap_emacs = @import("keymap_emacs.zig");
 const keymap_vi = @import("keymap_vi.zig");
+const platform = @import("platform.zig");
 
 pub const ReplLoop = struct {
     pub const Keymap = enum { emacs, vi };
@@ -25,9 +26,14 @@ pub const ReplLoop = struct {
 
     pub fn run(opts: Options) !void {
         // Check for TTY
-        const stdin_fd = std.posix.STDIN_FILENO;
-        if (!std.posix.isatty(stdin_fd)) {
-            const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        const is_tty = if (builtin.os.tag == .windows) blk: {
+            const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch break :blk false;
+            var mode: std.os.windows.DWORD = undefined;
+            break :blk std.os.windows.kernel32.GetConsoleMode(handle, &mode) != 0;
+        } else std.posix.isatty(std.posix.STDIN_FILENO);
+        
+        if (!is_tty) {
+            const stderr_file = platform.getStderrHandle();
             try stderr_file.writeAll("Error [GEODE-E0002]: interactive shell requires a TTY\n");
             std.process.exit(2);
         }
@@ -145,7 +151,7 @@ pub const KeyAction = enum {
 };
 
 fn renderPrompt(state: *ReplState) !void {
-    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout_file = platform.getStdoutHandle();
 
     // Clear line
     try stdout_file.writeAll("\r\x1b[K");
@@ -163,7 +169,7 @@ fn renderPrompt(state: *ReplState) !void {
 }
 
 fn processInput(state: *ReplState) !void {
-    const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin = platform.getStdinHandle();
     var buf: [16]u8 = undefined;
 
     while (true) {
@@ -199,7 +205,7 @@ fn processInput(state: *ReplState) !void {
 
                     // Execute GQL
                     repl_dispatch.executeGql(state, input) catch |err| {
-                        const stderr = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+                        const stderr = platform.getStderrHandle();
                         stderr.writeAll("REPL error: ") catch {};
                         stderr.writeAll(@errorName(err)) catch {};
                         stderr.writeAll("\n") catch {};
@@ -218,7 +224,7 @@ fn processInput(state: *ReplState) !void {
                 state.buffer.clearRetainingCapacity();
                 state.cursor = 0;
             }
-            const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const stdout = platform.getStdoutHandle();
             try stdout.writeAll("\n");
             break;
         }
@@ -395,12 +401,12 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
 
 fn handleSearch(state: *ReplState) !void {
     // Simplified search - just find in history
-    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout_file = platform.getStdoutHandle();
     try stdout_file.writeAll("\n(reverse-i-search)`': ");
 
     state.search_buffer.clearRetainingCapacity();
 
-    const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin = platform.getStdinHandle();
     var search_buf: [1]u8 = undefined;
 
     while (true) {
@@ -475,13 +481,25 @@ fn findWordEnd(text: []const u8, pos: usize) usize {
     return i;
 }
 
-fn enterRawMode() !std.posix.termios {
+const TerminalState = if (builtin.os.tag == .windows) std.os.windows.DWORD else std.posix.termios;
+
+fn enterRawMode() !TerminalState {
     if (builtin.os.tag == .windows) {
         // Windows terminal setup
-        return std.posix.termios{}; // Placeholder
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        var mode: std.os.windows.DWORD = undefined;
+        _ = std.os.windows.kernel32.GetConsoleMode(handle, &mode);
+        const original = mode;
+        
+        // Disable line input and echo
+        mode &= ~@as(std.os.windows.DWORD, 0x0002); // ENABLE_LINE_INPUT
+        mode &= ~@as(std.os.windows.DWORD, 0x0004); // ENABLE_ECHO_INPUT
+        _ = std.os.windows.kernel32.SetConsoleMode(handle, mode);
+        
+        return original;
     }
 
-    const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin = platform.getStdinHandle();
     const original = try std.posix.tcgetattr(stdin.handle);
 
     var raw = original;
@@ -500,18 +518,22 @@ fn enterRawMode() !std.posix.termios {
     return original;
 }
 
-fn restoreTerminalMode(original: std.posix.termios) !void {
-    if (builtin.os.tag == .windows) return;
+fn restoreTerminalMode(original: TerminalState) !void {
+    if (builtin.os.tag == .windows) {
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return;
+        _ = std.os.windows.kernel32.SetConsoleMode(handle, original);
+        return;
+    }
 
-    const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin = platform.getStdinHandle();
     try std.posix.tcsetattr(stdin.handle, .FLUSH, original);
 }
 
 fn printWelcomeMessage() !void {
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = platform.getStdoutHandle();
     
     // Check if terminal supports colors
-    const use_color = std.posix.isatty(std.posix.STDOUT_FILENO);
+    const use_color = platform.isStdoutTty();
     const green = if (use_color) "\x1b[32m" else "";
     const cyan = if (use_color) "\x1b[36m" else "";
     const yellow = if (use_color) "\x1b[33m" else "";
