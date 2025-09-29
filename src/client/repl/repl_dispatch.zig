@@ -209,7 +209,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
         try stdout.writeAll(response);
     }
-    
+
     try stdout.writeAll("\n");
 }
 

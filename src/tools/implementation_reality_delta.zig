@@ -6,10 +6,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
-    
+
     const args_list = try std.process.argsAlloc(ally);
     defer std.process.argsFree(ally, args_list);
-    
+
     const status_path = if (args_list.len > 1) args_list[1] else "status.json";
     const out_path = if (args_list.len > 2) args_list[2] else "docs/IMPLEMENTATION_REALITY.md";
     const prev_path = if (args_list.len > 3) args_list[3] else "docs/.implementation_reality_prev.json";
