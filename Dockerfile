@@ -30,13 +30,10 @@ RUN chmod +x /tmp/install-zig.sh && \
 WORKDIR /build
 
 # Copy build configuration files first (for better caching)
-COPY build.zig build.zig.zon ./
+COPY build.zig ./
 
 # Create empty src directory to satisfy build.zig
 RUN mkdir -p src && touch src/main.zig
-
-# Pre-fetch dependencies if any (this layer will be cached)
-RUN zig build --help > /dev/null 2>&1 || true
 
 # Now copy the actual source code
 COPY . .
