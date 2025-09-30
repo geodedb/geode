@@ -312,7 +312,7 @@ jobs:
           fi
 
   dev-release:
-    name: Create or update dev release with tarball
+    name: Create or update dev release with binaries
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build-test]
     runs-on: ubuntu-latest
@@ -325,16 +325,77 @@ jobs:
           gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+          
+      - name: Build cross-platform binaries
+        run: |
+          # Build native release first
+          zig build -Doptimize=ReleaseSafe
+          
+          # Build for multiple platforms
+          zig build -Dtarget=x86_64-linux-gnu -p zig-out/linux-x86_64 -Doptimize=ReleaseSafe
+          zig build -Dtarget=aarch64-linux-gnu -p zig-out/linux-arm64 -Doptimize=ReleaseSafe
+          zig build -Dtarget=x86_64-windows-msvc -p zig-out/windows-x86_64 -Doptimize=ReleaseSafe
+          zig build -Dtarget=x86_64-macos -p zig-out/macos-x86_64 -Doptimize=ReleaseSafe
+          zig build -Dtarget=aarch64-macos -p zig-out/macos-arm64 -Doptimize=ReleaseSafe
+          
+      - name: Archive binaries
+        run: |
+          # Create architecture-specific archives
+          for arch in linux-x86_64 linux-arm64 windows-x86_64 macos-x86_64 macos-arm64; do
+            if [ -d "zig-out/$arch/bin" ]; then
+              if [[ "$arch" == *"windows"* ]]; then
+                # Windows uses ZIP
+                cd "zig-out/$arch" && zip -r "../../geode-$arch.zip" bin/ && cd ../..
+              else
+                # Unix uses tar.gz
+                tar -czf "geode-$arch.tar.gz" -C "zig-out/$arch" bin
+              fi
+            fi
+          done
+          
       - name: Create source tarball
-        run: git archive --format=tar.gz -o quic-dev.tar.gz --prefix=quic-dev/ HEAD
+        run: git archive --format=tar.gz -o geode-dev-source.tar.gz --prefix=geode-dev/ HEAD
+        
+      - name: Delete old dev release if exists
+        run: |
+          gh release delete dev --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Create dev tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f dev
+          git push origin dev --force
+          
       - name: Create/update dev release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: dev
-          name: dev
-          body: 'Automated dev release for ${{ github.sha }}'
+          name: Dev Release (auto-updated)
+          body: |
+            Automated development build from commit ${{ github.sha }}
+            
+            ## Available Binaries
+            - `geode-linux-x86_64.tar.gz` - Linux x86_64
+            - `geode-linux-arm64.tar.gz` - Linux ARM64  
+            - `geode-windows-x86_64.zip` - Windows x86_64
+            - `geode-macos-x86_64.tar.gz` - macOS Intel
+            - `geode-macos-arm64.tar.gz` - macOS Apple Silicon
+            - `geode-dev-source.tar.gz` - Source code
+            
+            Built with Zig 0.15.1 in ReleaseSafe mode.
+            
+            These binaries are automatically updated on every push to main and can be used for testing the latest development version.
           prerelease: true
-          files: quic-dev.tar.gz
+          files: |
+            geode-*.tar.gz
+            geode-*.zip
           fail_on_unmatched_files: true
 
   tcp-go-client:
