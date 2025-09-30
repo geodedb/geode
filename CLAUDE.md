@@ -13,6 +13,8 @@ Geode is an open-source, ACID-compliant graph database implementing ISO/IEC 3907
 - Federated reads via distributed coordinator/shards
 - S3 backups (full/incremental); CDC webhooks
 - Tamper‑evident audit log (hash chain + signed digests)
+- **Enterprise audit logging**: Multi-platform support (JSON files, Windows Event Log, syslog)
+- **Security compliance**: CLI command tracking, authentication logging, SIEM integration
 - Evidence governance via CANARY with generated status.csv
 - **Comprehensive type system**: 50+ data types including network, spatial, temporal, JSON, and vector types
 - **Advanced indexing**: Patricia trie (CIDR), R-tree (spatial), HNSW (vector KNN), with persistence
@@ -154,6 +156,154 @@ make verify-fast
 make ci
 ```
 
+## Audit Logging & Security Monitoring
+
+Geode provides comprehensive audit logging capabilities for enterprise security compliance and monitoring. The audit system logs CLI operations, authentication events, and command execution across multiple output formats.
+
+### Supported Audit Outputs
+
+#### 1. JSON File Logging (Cross-Platform)
+```bash
+# Enable file-based audit logging
+geode --audit --audit-file /var/log/geode/cli-audit.log <command>
+
+# Environment variable configuration
+export GEODE_AUDIT_ENABLED=true
+export GEODE_AUDIT_FILE_ENABLED=true
+export GEODE_AUDIT_FILE_PATH=/var/log/geode/cli-audit.log
+```
+
+**JSON Event Format:**
+```json
+{"timestamp":1759264693,"category":"auth","action":"login","outcome":"success","actor":"geode-cli"}
+{"timestamp":1759264693,"category":"command","action":"query","outcome":"started","actor":"geode-cli"}
+{"timestamp":1759264693,"category":"cli","action":"startup","outcome":"success","actor":"geode-cli"}
+```
+
+#### 2. Windows Event Log Integration (Windows Only)
+```bash
+# Enable Windows Event Log with default source "Geode"
+geode --audit --audit-eventlog <command>
+
+# Custom event source name
+geode --audit --audit-eventlog "MyGeodeApp" <command>
+
+# Environment variable configuration
+set GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED=true
+set GEODE_AUDIT_WINDOWS_EVENTLOG_SOURCE=MyGeodeApp
+```
+
+**Windows Event Log Features:**
+- **Native Integration**: Events appear in Windows Event Viewer
+- **Event Categories**: Structured event IDs (1000-1003) for filtering
+- **SIEM Compatibility**: Windows Event Forwarding (WEF) support
+- **Event Types**: Information, Warning, Error based on outcome
+
+#### 3. Syslog Integration (Planned)
+```bash
+# Syslog server configuration (future feature)
+geode --audit --audit-syslog syslog.example.com:514 <command>
+
+# Environment variables
+export GEODE_AUDIT_SYSLOG_ENABLED=true
+export GEODE_AUDIT_SYSLOG_HOST=syslog.example.com
+export GEODE_AUDIT_SYSLOG_PORT=514
+```
+
+### Event Categories & Classifications
+
+#### Authentication Events (Event ID: 1001)
+- **Login attempts**: Success/failure with user context
+- **Logout events**: Session termination tracking
+- **Password resets**: Forced password change events
+
+#### Command Execution Events (Event ID: 1002)
+- **All CLI commands**: serve, shell, query, backup, restore, etc.
+- **Execution context**: Timestamp, command type, outcome
+- **Error tracking**: Failed command attempts with error codes
+
+#### CLI Lifecycle Events (Event ID: 1003)
+- **Startup events**: CLI initialization
+- **Shutdown events**: Clean termination
+- **Configuration loading**: Audit config initialization
+
+#### General Events (Event ID: 1000)
+- **Fallback category**: Miscellaneous audit events
+- **System events**: Configuration changes, errors
+
+### Multi-Output Configuration
+
+#### Combined Audit Outputs
+```bash
+# Log to both file and Windows Event Log simultaneously
+geode --audit --audit-file audit.log --audit-eventlog MyApp <command>
+
+# Mixed environment and CLI configuration
+export GEODE_AUDIT_FILE_ENABLED=true
+export GEODE_AUDIT_FILE_PATH=/var/log/geode/audit.log
+geode --audit --audit-eventlog query "MATCH (n) RETURN n"
+```
+
+#### Cross-Platform Behavior
+- **Windows systems**: All outputs available (file + Windows Event Log)
+- **Non-Windows systems**: File and syslog outputs (graceful Windows Event Log warning)
+- **Error handling**: Continues operation if audit outputs fail
+
+### Enterprise Integration
+
+#### SIEM Integration
+- **Windows Event Viewer**: Native Windows monitoring integration
+- **JSON structured logs**: Compatible with ELK, Splunk, and other log aggregators
+- **Event correlation**: Consistent event IDs for alerting and filtering
+- **PowerShell queries**: `Get-WinEvent -FilterHashtable @{LogName="Application"; ProviderName="Geode"}`
+
+#### Security Compliance
+- **Audit trail**: Complete command and authentication logging
+- **Tamper resistance**: Windows Event Log native protection
+- **Non-repudiation**: Timestamped, categorized event logging
+- **Regulatory compliance**: Meets enterprise logging requirements (SOX, PCI-DSS, HIPAA)
+
+#### Monitoring Examples
+```bash
+# Monitor authentication failures
+Get-WinEvent -FilterHashtable @{LogName="Application"; ProviderName="Geode"; ID=1001} | 
+  Where-Object {$_.Message -like "*failure*"}
+
+# Track command execution patterns
+grep '"category":"command"' /var/log/geode/audit.log | jq -r '.action' | sort | uniq -c
+
+# Real-time audit monitoring
+tail -f /var/log/geode/audit.log | jq -r '[.timestamp, .category, .action, .outcome] | @csv'
+```
+
+### Configuration Reference
+
+#### Environment Variables
+```bash
+# Core audit settings
+GEODE_AUDIT_ENABLED=true                           # Enable audit logging
+GEODE_AUDIT_FILE_ENABLED=true                     # Enable file output
+GEODE_AUDIT_FILE_PATH=/var/log/geode/audit.log    # File path
+
+# Windows Event Log settings
+GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED=true         # Enable Windows Event Log
+GEODE_AUDIT_WINDOWS_EVENTLOG_SOURCE=MyApp         # Custom source name
+GEODE_AUDIT_WINDOWS_EVENTLOG_LOG=Application      # Target log (future use)
+
+# Syslog settings (planned)
+GEODE_AUDIT_SYSLOG_ENABLED=true                   # Enable syslog
+GEODE_AUDIT_SYSLOG_HOST=syslog.example.com        # Syslog server
+GEODE_AUDIT_SYSLOG_PORT=514                       # Syslog port
+```
+
+#### CLI Flags
+```bash
+--audit                              # Enable audit logging
+--audit-file <path>                 # File output path
+--audit-eventlog [source]           # Windows Event Log (optional source name)
+--audit-syslog <host:port>          # Syslog server (planned)
+```
+
 ## Architecture Overview
 
 ### Core Components
@@ -288,3 +438,5 @@ make test
 - Initialize with: `git submodule update --init --recursive`
 - Check status with: `make quic-status`
 - Always ensure canaries are added for new additions, or when changes are made so that the canary scan tool tracks them. And run the canary scan regularly to keep the status.csv and status.json files up to date.
+- remember to run `make verify-fast` to ensure builds work after changes and for large changes to run `make verify-all` and correct issues iteratively until all issues are resolved
+- remember to use std.os.getenv instead of std.posix.getenv because it's compatible accross OSes

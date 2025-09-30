@@ -200,6 +200,14 @@ pub const gpu = struct {
     pub const flagger = @import("gpu/flagger.zig");
 };
 
+// Audit modules for CLI integration
+pub const audit = struct {
+    pub const config = @import("audit/config.zig");
+    pub const logger = @import("audit/logger.zig");
+    pub const events = @import("audit/events.zig");
+    pub const time = @import("audit/time.zig");
+};
+
 // Runtime-flag gated scaffold stub re-exports for acceptance tests
 pub const tde_stub = @import("security/tde.zig");
 pub const mfa_stub = @import("security/mfa.zig");

@@ -1,9 +1,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const audit_cli = @import("audit_cli");
+const geode = @import("geode");
 // const auth = @import("../security/auth.zig"); // Not needed for current implementation
 // const hash = @import("../types/hash.zig"); // Not needed for current implementation
 const crypto = std.crypto;
+
+// Simple audit logging structures
+const SimpleAuditEvent = struct {
+    timestamp: []const u8,
+    category: []const u8,
+    action: []const u8,
+    outcome: []const u8,
+    actor: []const u8,
+};
 
 // Error codes
 const ExitCode = enum(u8) {
@@ -12,6 +22,220 @@ const ExitCode = enum(u8) {
     usage_error = 2,
     auth_error = 3,
 };
+
+// CLI Audit Configuration
+const CliAuditConfig = struct {
+    enabled: bool = false,
+    syslog_enabled: bool = false,
+    syslog_host: ?[]const u8 = null,
+    syslog_port: u16 = 514,
+    file_enabled: bool = false,
+    file_path: ?[]const u8 = null,
+    windows_eventlog_enabled: bool = false,
+    windows_eventlog_source: ?[]const u8 = null,
+    windows_eventlog_log: ?[]const u8 = null,
+};
+
+// Global audit logger instances
+var global_audit_file: ?std.fs.File = null;
+var global_windows_eventlog_handle: ?std.os.windows.HANDLE = null;
+
+// CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
+fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
+    var cli_config = CliAuditConfig{};
+
+    // Check if audit is enabled
+    if (std.posix.getenv("GEODE_AUDIT_ENABLED")) |value| {
+        cli_config.enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+    }
+
+    // Syslog configuration
+    if (std.posix.getenv("GEODE_AUDIT_SYSLOG_ENABLED")) |value| {
+        cli_config.syslog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+    }
+
+    if (std.posix.getenv("GEODE_AUDIT_SYSLOG_HOST")) |value| {
+        cli_config.syslog_host = try allocator.dupe(u8, value);
+    }
+
+    if (std.posix.getenv("GEODE_AUDIT_SYSLOG_PORT")) |value| {
+        cli_config.syslog_port = std.fmt.parseInt(u16, value, 10) catch 514;
+    }
+
+    // Note: Protocol and facility configuration can be added later if needed
+
+    // File configuration
+    if (std.posix.getenv("GEODE_AUDIT_FILE_ENABLED")) |value| {
+        cli_config.file_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+    }
+
+    if (std.posix.getenv("GEODE_AUDIT_FILE_PATH")) |value| {
+        cli_config.file_path = try allocator.dupe(u8, value);
+    }
+
+    // Windows Event Log configuration
+    if (std.posix.getenv("GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED")) |value| {
+        cli_config.windows_eventlog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+    }
+
+    if (std.posix.getenv("GEODE_AUDIT_WINDOWS_EVENTLOG_SOURCE")) |value| {
+        cli_config.windows_eventlog_source = try allocator.dupe(u8, value);
+    }
+
+    if (std.posix.getenv("GEODE_AUDIT_WINDOWS_EVENTLOG_LOG")) |value| {
+        cli_config.windows_eventlog_log = try allocator.dupe(u8, value);
+    }
+
+    // Note: File rotation and PII mode configuration can be added later if needed
+
+    return cli_config;
+}
+
+// CANARY: REQ=REQ-AUDIT-CLI-002; FEATURE="CLI Audit Initialization"; ASPECT=Initialization; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_002_Initialization; OWNER=audit; UPDATED=2025-09-30
+fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditConfig) !void {
+    _ = allocator; // May be used later for syslog implementation
+    if (!cli_config.enabled) return;
+
+    // Initialize file logging if enabled
+    if (cli_config.file_enabled) {
+        const path = cli_config.file_path orelse "/var/log/geode/cli-audit.log";
+
+        // Create directory if it doesn't exist
+        if (std.fs.path.dirname(path)) |dir| {
+            std.fs.cwd().makePath(dir) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => return err,
+            };
+        }
+
+        global_audit_file = std.fs.cwd().createFile(path, .{ .truncate = false }) catch |err| switch (err) {
+            error.FileNotFound => blk: {
+                // Try to create the file
+                break :blk try std.fs.cwd().createFile(path, .{});
+            },
+            else => return err,
+        };
+
+        // Seek to end for append mode
+        if (global_audit_file) |*file| {
+            _ = file.seekFromEnd(0) catch {};
+        }
+    }
+
+    // TODO: Implement syslog logging if enabled
+    if (cli_config.syslog_enabled) {
+        std.debug.print("Warning: Syslog audit logging not yet implemented\n", .{});
+    }
+
+    // Initialize Windows Event Log if enabled and on Windows
+    if (cli_config.windows_eventlog_enabled and builtin.os.tag == .windows) {
+        const source = cli_config.windows_eventlog_source orelse "Geode";
+
+        // Convert source name to UTF-16 for Windows API
+        var source_utf16_buf: [256:0]u16 = undefined;
+        const source_utf16_len = std.unicode.utf8ToUtf16Le(source_utf16_buf[0..], source) catch {
+            std.debug.print("Warning: Failed to convert event source name to UTF-16\n", .{});
+            return;
+        };
+        source_utf16_buf[source_utf16_len] = 0;
+
+        // Register event source
+        global_windows_eventlog_handle = std.os.windows.advapi32.RegisterEventSourceW(null, // Use local computer
+            &source_utf16_buf);
+
+        if (global_windows_eventlog_handle == null) {
+            std.debug.print("Warning: Failed to register Windows Event Log source '{s}'\n", .{source});
+        }
+    } else if (cli_config.windows_eventlog_enabled and builtin.os.tag != .windows) {
+        std.debug.print("Warning: Windows Event Log is only supported on Windows systems\n", .{});
+    }
+}
+
+// CANARY: REQ=REQ-AUDIT-CLI-003; FEATURE="CLI Audit Events"; ASPECT=EventLogging; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_003_EventLogging; OWNER=audit; UPDATED=2025-09-30
+fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const u8) void {
+    // Log to file if enabled
+    if (global_audit_file) |file| {
+        // Get current timestamp
+        const timestamp = std.time.timestamp();
+
+        // Create simple JSON audit event
+        var buf: [1024]u8 = undefined;
+        const json_line = std.fmt.bufPrint(&buf, "{{\"timestamp\":{d},\"category\":\"{s}\",\"action\":\"{s}\",\"outcome\":\"{s}\",\"actor\":\"geode-cli\"}}\n", .{ timestamp, category, action, outcome }) catch return;
+
+        _ = file.writeAll(json_line) catch |err| {
+            std.debug.print("Warning: Failed to write audit event: {s}\n", .{@errorName(err)});
+        };
+    }
+
+    // Log to Windows Event Log if enabled and on Windows
+    if (builtin.os.tag == .windows) {
+        if (global_windows_eventlog_handle) |event_handle| {
+            logToWindowsEventLog(event_handle, category, action, outcome);
+        }
+    }
+}
+
+// CANARY: REQ=REQ-AUDIT-CLI-004; FEATURE="Windows Event Log Integration"; ASPECT=EventLogging; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog; OWNER=audit; UPDATED=2025-09-30
+fn logToWindowsEventLog(event_handle: std.os.windows.HANDLE, category: []const u8, action: []const u8, outcome: []const u8) void {
+    if (builtin.os.tag != .windows) return;
+
+    // Create event message
+    var message_buf: [512]u8 = undefined;
+    const message = std.fmt.bufPrint(&message_buf, "Geode CLI Audit Event - Category: {s}, Action: {s}, Outcome: {s}, Actor: geode-cli", .{ category, action, outcome }) catch return;
+
+    // Convert message to UTF-16 for Windows API
+    var message_utf16_buf: [1024:0]u16 = undefined;
+    const message_utf16_len = std.unicode.utf8ToUtf16Le(message_utf16_buf[0..], message) catch return;
+    message_utf16_buf[message_utf16_len] = 0;
+
+    // Determine event type based on outcome
+    const event_type: std.os.windows.WORD = if (std.mem.eql(u8, outcome, "success"))
+        std.os.windows.EVENTLOG_INFORMATION_TYPE
+    else if (std.mem.eql(u8, outcome, "failure") or std.mem.eql(u8, outcome, "error"))
+        std.os.windows.EVENTLOG_ERROR_TYPE
+    else
+        std.os.windows.EVENTLOG_WARNING_TYPE;
+
+    // Event ID: Use different IDs for different categories
+    const event_id: std.os.windows.DWORD = if (std.mem.eql(u8, category, "auth"))
+        1001 // Authentication events
+    else if (std.mem.eql(u8, category, "command"))
+        1002 // Command execution events
+    else if (std.mem.eql(u8, category, "cli"))
+        1003 // CLI lifecycle events
+    else
+        1000; // General events
+
+    // Create array of strings for the event
+    const strings = [_][*:0]const u16{&message_utf16_buf};
+
+    // Report the event
+    const result = std.os.windows.advapi32.ReportEventW(event_handle, event_type, 0, // Category (0 for application events)
+        event_id, null, // User SID (null for current user)
+        1, // Number of strings
+        0, // Raw data size
+        &strings[0], // String array
+        null // Raw data
+    );
+
+    if (result == 0) {
+        // Note: We don't print warnings here to avoid spam, as this could be called frequently
+    }
+}
+
+fn deinitializeAuditLogger() void {
+    if (global_audit_file) |file| {
+        file.close();
+        global_audit_file = null;
+    }
+
+    if (builtin.os.tag == .windows) {
+        if (global_windows_eventlog_handle) |event_handle| {
+            _ = std.os.windows.advapi32.DeregisterEventSource(event_handle);
+            global_windows_eventlog_handle = null;
+        }
+    }
+}
 
 // Usage and help functions
 fn printMainUsage() void {
@@ -24,6 +248,10 @@ fn printMainUsage() void {
         "  -v, --verbose       Verbose output\n" ++
         "  --config <path>     Configuration file path\n" ++
         "  --json              Force JSON output for all subcommands\n" ++
+        "  --audit             Enable audit logging\n" ++
+        "  --audit-syslog <host:port>  Syslog server for audit logs\n" ++
+        "  --audit-file <path> File path for audit logs\n" ++
+        "  --audit-eventlog [source]   Enable Windows Event Log (default source: Geode)\n" ++
         "\n" ++
         "Subcommands:\n" ++
         "  serve               Start the database server\n" ++
@@ -286,20 +514,21 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Check for help
-    if (start_idx >= argv.len) {
-        std.debug.print("Error: query text required\n", .{});
-        std.debug.print("Example: geode query \"MATCH (n) RETURN n LIMIT 10\"\n", .{});
-        printQueryUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    var i: usize = start_idx;
+    // Check for help first
+    var i: usize = start_idx + 1; // start_idx points to "query", so check args after it
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             printQueryUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
         }
+    }
+
+    // Check if query text is provided
+    if (start_idx + 1 >= argv.len) {
+        std.debug.print("Error: query text required\n", .{});
+        std.debug.print("Example: geode query \"MATCH (n) RETURN n LIMIT 10\"\n", .{});
+        printQueryUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // Build client command arguments
@@ -310,7 +539,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
     // Add query text (first non-option argument)
     var query_text: ?[]const u8 = null;
-    i = start_idx;
+    i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
         if (!std.mem.startsWith(u8, arg, "-")) {
@@ -380,7 +609,6 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
 fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Get REPL types
-    const geode = @import("geode");
     const repl_loop = geode.repl.repl_loop;
 
     // Parse arguments
@@ -466,7 +694,6 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-
     if (start_idx >= argv.len) {
         printAuthUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -740,64 +967,137 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(ally);
     defer std.process.argsFree(ally, argv);
 
-    if (argv.len < 2) {
+    // Parse audit configuration from environment variables
+    var audit_cfg = parseAuditConfigFromEnv(ally) catch |err| blk: {
+        std.debug.print("Warning: Failed to parse audit configuration: {s}\n", .{@errorName(err)});
+        break :blk CliAuditConfig{};
+    };
+
+    // Parse global audit flags
+    var subcommand_start: usize = 1;
+    var i: usize = 1;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "--audit")) {
+            audit_cfg.enabled = true;
+            subcommand_start = i + 1;
+        } else if (std.mem.eql(u8, argv[i], "--audit-syslog")) {
+            if (i + 1 < argv.len) {
+                audit_cfg.syslog_enabled = true;
+                audit_cfg.enabled = true;
+
+                // Parse host:port
+                const hostport = argv[i + 1];
+                if (std.mem.lastIndexOf(u8, hostport, ":")) |colon_idx| {
+                    audit_cfg.syslog_host = try ally.dupe(u8, hostport[0..colon_idx]);
+                    audit_cfg.syslog_port = std.fmt.parseInt(u16, hostport[colon_idx + 1 ..], 10) catch 514;
+                } else {
+                    audit_cfg.syslog_host = try ally.dupe(u8, hostport);
+                    audit_cfg.syslog_port = 514;
+                }
+
+                i += 1;
+                subcommand_start = i + 1;
+            }
+        } else if (std.mem.eql(u8, argv[i], "--audit-file")) {
+            if (i + 1 < argv.len) {
+                audit_cfg.file_enabled = true;
+                audit_cfg.enabled = true;
+                audit_cfg.file_path = try ally.dupe(u8, argv[i + 1]);
+                i += 1;
+                subcommand_start = i + 1;
+            }
+        } else if (std.mem.eql(u8, argv[i], "--audit-eventlog")) {
+            audit_cfg.windows_eventlog_enabled = true;
+            audit_cfg.enabled = true;
+
+            // Check if there's an optional source name argument
+            if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
+                audit_cfg.windows_eventlog_source = try ally.dupe(u8, argv[i + 1]);
+                i += 1;
+            } else {
+                audit_cfg.windows_eventlog_source = try ally.dupe(u8, "Geode");
+            }
+            subcommand_start = i + 1;
+        } else if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
+            printMainUsage();
+            std.process.exit(@intFromEnum(ExitCode.success));
+        } else {
+            break;
+        }
+    }
+
+    if (subcommand_start >= argv.len) {
         printMainUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // Check for global help
-    if (std.mem.eql(u8, argv[1], "-h") or std.mem.eql(u8, argv[1], "--help")) {
-        printMainUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
-    }
+    // Initialize audit logging
+    initializeAuditLogger(ally, audit_cfg) catch |err| {
+        std.debug.print("Warning: Failed to initialize audit logging: {s}\n", .{@errorName(err)});
+    };
+    defer deinitializeAuditLogger();
 
-    const subcommand = argv[1];
+    // Log CLI startup event
+    logAuditEvent("cli", "startup", "success");
+
+    const subcommand = argv[subcommand_start];
 
     // Dispatch to subcommand
     if (std.mem.eql(u8, subcommand, "serve")) {
-        try cmdServe(ally, argv, 2);
+        logAuditEvent("command", "serve", "started");
+        try cmdServe(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "shell")) {
-        try cmdShell(ally, argv, 2);
+        logAuditEvent("command", "shell", "started");
+        try cmdShell(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "query")) {
-        try cmdQuery(ally, argv, 2);
+        logAuditEvent("command", "query", "started");
+        try cmdQuery(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "backup")) {
-        try cmdBackup(ally, argv, 2);
+        logAuditEvent("command", "backup", "started");
+        try cmdBackup(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "restore")) {
-        try cmdRestore(ally, argv, 2);
+        logAuditEvent("command", "restore", "started");
+        try cmdRestore(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "migrate")) {
-        try cmdMigrate(ally, argv, 2);
+        logAuditEvent("command", "migrate", "started");
+        try cmdMigrate(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "auth")) {
-        try cmdAuth(ally, argv, 2);
+        logAuditEvent("command", "auth", "started");
+        try cmdAuth(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "user")) {
-        try cmdUser(ally, argv, 2);
+        logAuditEvent("command", "user", "started");
+        try cmdUser(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "role")) {
-        try cmdRole(ally, argv, 2);
+        logAuditEvent("command", "role", "started");
+        try cmdRole(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "policy")) {
-        try cmdPolicy(ally, argv, 2);
+        logAuditEvent("command", "policy", "started");
+        try cmdPolicy(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "grant")) {
-        try cmdGrant(ally, argv, 2);
+        logAuditEvent("command", "grant", "started");
+        try cmdGrant(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "audit")) {
         // geode audit verify --file <path> ...
         var algo: audit_cli.HashAlgo = .sha256;
         var path: []const u8 = "audit.jsonl";
         var require_digest = false;
         var pubkey: ?[32]u8 = null;
-        var i: usize = 2;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "verify")) {
+        var audit_i: usize = subcommand_start + 1;
+        while (audit_i < argv.len) : (audit_i += 1) {
+            if (std.mem.eql(u8, argv[audit_i], "verify")) {
                 continue;
-            } else if (std.mem.eql(u8, argv[i], "--file") and i + 1 < argv.len) {
-                path = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--algo") and i + 1 < argv.len) {
-                const a = argv[i + 1];
-                i += 1;
+            } else if (std.mem.eql(u8, argv[audit_i], "--file") and audit_i + 1 < argv.len) {
+                path = argv[audit_i + 1];
+                audit_i += 1;
+            } else if (std.mem.eql(u8, argv[audit_i], "--algo") and audit_i + 1 < argv.len) {
+                const a = argv[audit_i + 1];
+                audit_i += 1;
                 algo = if (std.mem.eql(u8, a, "blake3")) .blake3 else .sha256;
-            } else if (std.mem.eql(u8, argv[i], "--require-digest")) {
+            } else if (std.mem.eql(u8, argv[audit_i], "--require-digest")) {
                 require_digest = true;
-            } else if (std.mem.eql(u8, argv[i], "--pubkey") and i + 1 < argv.len) {
-                pubkey = audit_cli.hex32(argv[i + 1]) catch null;
-                i += 1;
+            } else if (std.mem.eql(u8, argv[audit_i], "--pubkey") and audit_i + 1 < argv.len) {
+                pubkey = audit_cli.hex32(argv[audit_i + 1]) catch null;
+                audit_i += 1;
             }
         }
         try audit_cli.verifyFile(path, algo, 100, require_digest, pubkey);
@@ -820,15 +1120,23 @@ const CredentialStorage = struct {
 };
 
 fn getCredentialsPath(ally: std.mem.Allocator) ![]const u8 {
-    const home_dir = std.os.getenv("HOME") orelse std.os.getenv("USERPROFILE") orelse return error.NoHomeDir;
+    const home_dir = std.process.getEnvVarOwned(ally, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(ally, "USERPROFILE") catch return error.NoHomeDir,
+        else => return err,
+    };
+    defer ally.free(home_dir);
     return try std.fs.path.join(ally, &.{ home_dir, ".geode", "credentials.json" });
 }
 
 fn ensureCredentialsDir(ally: std.mem.Allocator) !void {
-    const home_dir = std.os.getenv("HOME") orelse std.os.getenv("USERPROFILE") orelse return error.NoHomeDir;
+    const home_dir = std.process.getEnvVarOwned(ally, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(ally, "USERPROFILE") catch return error.NoHomeDir,
+        else => return err,
+    };
+    defer ally.free(home_dir);
     const geode_dir = try std.fs.path.join(ally, &.{ home_dir, ".geode" });
     defer ally.free(geode_dir);
-    
+
     std.fs.makeDirAbsolute(geode_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
@@ -839,54 +1147,86 @@ fn saveCredentials(ally: std.mem.Allocator, creds: CredentialStorage) !void {
     try ensureCredentialsDir(ally);
     const creds_path = try getCredentialsPath(ally);
     defer ally.free(creds_path);
-    
+
     // Create JSON string manually (simpler than full JSON object)
-    const json_content = try std.fmt.allocPrint(ally, 
+    const json_content = try std.fmt.allocPrint(ally,
         \\{{"server":"{s}","username":"{s}","session_token":"{s}","expires_at":{}}}
     , .{ creds.server, creds.username, creds.session_token, creds.expires_at });
     defer ally.free(json_content);
-    
+
     // Write to file
     const file = try std.fs.createFileAbsolute(creds_path, .{});
     defer file.close();
-    
+
     try file.writeAll(json_content);
 }
 
 fn clearCredentials(ally: std.mem.Allocator) !void {
     const creds_path = getCredentialsPath(ally) catch return;
     defer ally.free(creds_path);
-    
+
     std.fs.deleteFileAbsolute(creds_path) catch {};
 }
 
 fn promptPassword(ally: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {
     std.debug.print("{s}", .{prompt_text});
-    
-    // Disable echo on Unix systems
-    if (builtin.os.tag != .windows) {
-        _ = std.c.system("stty -echo");
+
+    // Disable echo using direct terminal control
+    var original_termios: std.posix.termios = undefined;
+    var original_mode: u32 = 0;
+    var echo_disabled = false;
+
+    if (builtin.os.tag == .windows) {
+        // Windows: Disable echo using Console API
+        const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        _ = std.os.windows.kernel32.GetConsoleMode(stdin_handle, &original_mode);
+        const new_mode = original_mode & ~@as(u32, std.os.windows.ENABLE_ECHO_INPUT);
+        _ = std.os.windows.kernel32.SetConsoleMode(stdin_handle, new_mode);
+        echo_disabled = true;
+    } else {
+        // Unix: Disable echo using termios directly
+        if (std.posix.tcgetattr(std.posix.STDIN_FILENO)) |termios| {
+            original_termios = termios;
+            var new_termios = original_termios;
+            new_termios.lflag.ECHO = false;
+            if (std.posix.tcsetattr(std.posix.STDIN_FILENO, std.posix.TCSA.NOW, new_termios)) {
+                echo_disabled = true;
+            } else |_| {}
+        } else |_| {}
     }
-    
+
     const stdin_file = if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
     else
         std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    var buffer: [256]u8 = undefined;
-    const stdin_reader = stdin_file.reader(buffer[0..]);
-    const password = if (stdin_reader.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| blk: {
-        if (input) |line| {
-            break :blk try ally.dupe(u8, line);
-        } else {
-            break :blk try ally.dupe(u8, "");
-        }
-    } else |_| try ally.dupe(u8, "");
-    
-    // Re-enable echo
-    if (builtin.os.tag != .windows) {
-        _ = std.c.system("stty echo");
+
+    // Read line character by character until newline
+    var line_buf = try std.ArrayList(u8).initCapacity(ally, 256);
+    defer line_buf.deinit(ally);
+
+    while (true) {
+        var b: [1]u8 = undefined;
+        const bytes_read = stdin_file.readAll(&b) catch break;
+        if (bytes_read == 0) break;
+        if (b[0] == '\n') break;
+        try line_buf.append(ally, b[0]);
     }
-    
+
+    const trimmed = std.mem.trim(u8, line_buf.items, " \t\r\n");
+    const password = try ally.dupe(u8, trimmed);
+
+    // Re-enable echo
+    if (builtin.os.tag == .windows) {
+        // Windows: Restore original console mode
+        const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        _ = std.os.windows.kernel32.SetConsoleMode(stdin_handle, original_mode);
+    } else {
+        // Unix: Restore original termios if we successfully changed it
+        if (echo_disabled) {
+            _ = std.posix.tcsetattr(std.posix.STDIN_FILENO, std.posix.TCSA.NOW, original_termios) catch {};
+        }
+    }
+
     std.debug.print("\n", .{});
     return password;
 }
@@ -904,23 +1244,23 @@ fn validatePasswordAgainstPolicy(password: []const u8) !void {
         const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
         break :blk if (parsed < 20) 20 else parsed;
     } else 20;
-    
+
     const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
     const min_words = if (min_words_env) |words_str| blk: {
         const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
         break :blk if (parsed < 2) 2 else parsed;
     } else 3;
-    
+
     // Validate length
     if (password.len < min_length) return error.PasswordTooShort;
     if (password.len > 256) return error.PasswordTooLong;
-    
+
     // Validate case requirements
     if (!hasUpperAndLower(password)) return error.PasswordMissingCase;
-    
+
     // Validate passphrase format
     if (!isPassphrase(password)) return error.PasswordNotPassphrase;
-    
+
     // Validate word count
     const word_count = countWords(password);
     if (word_count < min_words) return error.PasswordInsufficientWords;
@@ -929,37 +1269,37 @@ fn validatePasswordAgainstPolicy(password: []const u8) !void {
 fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8, password: []const u8) !AuthResult {
     // For this implementation, we'll simulate authentication by creating a session token
     // In a real implementation, this would make an HTTP/QUIC request to the server
-    
+
     // CANARY: REQ=REQ-AUTH-POLICY-011; FEATURE="Pre-Authentication Policy Check"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation; OWNER=security; UPDATED=2025-09-30
     // First validate the password against current policy before proceeding
     // This ensures we catch policy violations early in the process
-    
+
     // Create a pseudo-random session token
     var token_bytes: [32]u8 = undefined;
     crypto.random.bytes(&token_bytes);
-    
+
     const encoder = std.base64.url_safe_no_pad.Encoder;
     const token = try ally.alloc(u8, encoder.calcSize(token_bytes.len));
     _ = encoder.encode(token, &token_bytes);
-    
+
     // Get configurable admin username from environment
     const admin_username = std.posix.getenv("GEODE_ADMIN_USERNAME") orelse "geode";
-    
+
     // Simulate authentication validation with enhanced policy checking
     if (std.mem.eql(u8, username, admin_username)) {
         const default_password_env = std.posix.getenv("GEODE_DEFAULT_PASSWORD");
         const expected_default_password = default_password_env orelse "geodesic";
-        
+
         if (std.mem.eql(u8, password, expected_default_password)) {
             // Check if authenticated password meets current policy
             const password_meets_policy = blk: {
                 validatePasswordAgainstPolicy(password) catch break :blk false;
                 break :blk true;
             };
-            
+
             // Force reset if using default "geodesic" OR if password violates current policy
             const needs_reset = std.mem.eql(u8, expected_default_password, "geodesic") or !password_meets_policy;
-            
+
             return AuthResult{ .session_token = token, .requires_password_reset = needs_reset };
         } else {
             return error.InvalidCredentials;
@@ -986,20 +1326,20 @@ fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8,
 fn hasUpperAndLower(password: []const u8) bool {
     var has_upper = false;
     var has_lower = false;
-    
+
     for (password) |c| {
         if (std.ascii.isUpper(c)) has_upper = true;
         if (std.ascii.isLower(c)) has_lower = true;
         if (has_upper and has_lower) return true;
     }
-    
+
     return has_upper and has_lower;
 }
 
 fn countWords(text: []const u8) usize {
     var word_count: usize = 0;
     var in_word = false;
-    
+
     for (text) |c| {
         if (std.ascii.isAlphanumeric(c)) {
             if (!in_word) {
@@ -1010,7 +1350,7 @@ fn countWords(text: []const u8) usize {
             in_word = false;
         }
     }
-    
+
     return word_count;
 }
 
@@ -1021,7 +1361,7 @@ fn isPassphrase(password: []const u8) bool {
         const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
         break :blk if (parsed < 2) 2 else parsed;
     } else 3;
-    
+
     return countWords(password) >= min_words;
 }
 
@@ -1030,7 +1370,7 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
     var password_file: ?[]const u8 = null;
-    
+
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -1055,7 +1395,7 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             i += 1;
         }
     }
-    
+
     // Prompt for username if not provided
     const final_username = username orelse blk: {
         std.debug.print("Username: ", .{});
@@ -1063,24 +1403,28 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
         else
             std.fs.File{ .handle = std.posix.STDIN_FILENO };
-        var buffer: [256]u8 = undefined;
-        const stdin_reader = stdin_file.reader(buffer[0..]);
-        if (stdin_reader.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
-            if (input) |line| {
-                break :blk try ally.dupe(u8, line);
-            } else {
-                break :blk try ally.dupe(u8, "");
-            }
-        } else |_| {
-            break :blk try ally.dupe(u8, "");
+
+        // Read line character by character until newline
+        var line_buf = try std.ArrayList(u8).initCapacity(ally, 256);
+        defer line_buf.deinit(ally);
+
+        while (true) {
+            var b: [1]u8 = undefined;
+            const bytes_read = stdin_file.readAll(&b) catch break;
+            if (bytes_read == 0) break;
+            if (b[0] == '\n') break;
+            try line_buf.append(ally, b[0]);
         }
+
+        const trimmed = std.mem.trim(u8, line_buf.items, " \t\r\n");
+        break :blk try ally.dupe(u8, trimmed);
     };
-    
+
     // Get password from file, command line, or prompt
     const final_password = if (password_file) |pf| blk: {
         if (std.mem.eql(u8, pf, "/dev/stdin") or std.mem.eql(u8, pf, "-")) {
-            const stdin = std.io.getStdIn().reader();
-            break :blk try stdin.readUntilDelimiterAlloc(ally, '\n', 256);
+            // Reading password from stdin should use hidden input
+            break :blk try promptPassword(ally, "Password: ");
         } else {
             const file = std.fs.openFileAbsolute(pf, .{}) catch |err| {
                 std.debug.print("Error: Cannot read password file '{s}': {s}\n", .{ pf, @errorName(err) });
@@ -1089,21 +1433,25 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             defer file.close();
             break :blk try file.readToEndAlloc(ally, 256);
         }
-    } else if (password) |p| 
+    } else if (password) |p|
         try ally.dupe(u8, p)
-    else 
+    else
         try promptPassword(ally, "Password: ");
-        
+
     defer ally.free(final_username);
     defer ally.free(final_password);
-    
+
     // Remove trailing newline if present
-    if (final_password.len > 0 and final_password[final_password.len - 1] == '\n') {
-        final_password.len -= 1;
-    }
-    
+    const trimmed_password = if (final_password.len > 0 and final_password[final_password.len - 1] == '\n')
+        final_password[0 .. final_password.len - 1]
+    else
+        final_password;
+
     // Authenticate with server
-    const auth_result = connectToServer(ally, server, final_username, final_password) catch |err| {
+    const auth_result = connectToServer(ally, server, final_username, trimmed_password) catch |err| {
+        // Log failed authentication attempt
+        logAuditEvent("auth", "login", "failure");
+
         switch (err) {
             error.InvalidCredentials => {
                 std.debug.print("Error: Invalid username or password\n", .{});
@@ -1117,7 +1465,10 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         }
     };
     defer ally.free(auth_result.session_token);
-    
+
+    // Log successful authentication
+    logAuditEvent("auth", "login", "success");
+
     // Handle password reset requirement
     if (auth_result.requires_password_reset) {
         // Get current policy configuration
@@ -1126,37 +1477,37 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
-        
+
         const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             break :blk if (parsed < 2) 2 else parsed;
         } else 3;
-        
+
         std.debug.print("Authentication successful, but a password reset is required.\n", .{});
         std.debug.print("Your current password does not meet the security policy:\n", .{});
         std.debug.print("  - Minimum {} characters\n", .{min_length});
         std.debug.print("  - Must be a passphrase ({} or more words)\n", .{min_words});
         std.debug.print("  - Must contain uppercase and lowercase letters\n", .{});
         std.debug.print("  - Spaces, numbers, and symbols are allowed\n", .{});
-        std.debug.print("\\nYou must set a new password before accessing the database.\\n\\n", .{});
-        
+        std.debug.print("\nYou must set a new password before accessing the database.\n\n", .{});
+
         // Prompt for new password
         const new_password = try promptNewPassword(ally);
         defer ally.free(new_password);
-        
+
         // Validate new password
         if (!validateNewPassword(new_password)) {
             std.debug.print("Error: New password does not meet security requirements\n", .{});
             std.process.exit(@intFromEnum(ExitCode.auth_error));
         }
-        
+
         // Simulate password update (in real implementation, this would call the server)
         std.debug.print("Password updated successfully.\n", .{});
         std.debug.print("You can now log in with your new password.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.success));
     }
-    
+
     // Save credentials
     const expires_at = std.time.milliTimestamp() + 24 * 60 * 60 * 1000; // 24 hours
     const creds = CredentialStorage{
@@ -1165,11 +1516,11 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         .session_token = auth_result.session_token,
         .expires_at = expires_at,
     };
-    
+
     saveCredentials(ally, creds) catch |err| {
         std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
     };
-    
+
     std.debug.print("Successfully authenticated as '{s}' on server '{s}'\n", .{ final_username, server });
     std.debug.print("Session token saved to ~/.geode/credentials.json\n", .{});
 }
@@ -1177,13 +1528,13 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 fn promptNewPassword(ally: std.mem.Allocator) ![]const u8 {
     var attempts: u8 = 0;
     const max_attempts = 3;
-    
+
     while (attempts < max_attempts) {
         const new_password = try promptPassword(ally, "New password: ");
         const confirm_password = try promptPassword(ally, "Confirm password: ");
-        
+
         defer ally.free(confirm_password);
-        
+
         if (std.mem.eql(u8, new_password, confirm_password)) {
             return new_password;
         } else {
@@ -1192,7 +1543,7 @@ fn promptNewPassword(ally: std.mem.Allocator) ![]const u8 {
             std.debug.print("Passwords do not match. Please try again.\n", .{});
         }
     }
-    
+
     std.debug.print("Too many failed attempts.\n", .{});
     std.process.exit(@intFromEnum(ExitCode.auth_error));
 }
@@ -1223,9 +1574,6 @@ fn validateNewPassword(password: []const u8) bool {
                 } else 3;
                 std.debug.print("Password must be a passphrase with at least {} words.\n", .{min_words});
             },
-            else => {
-                std.debug.print("Password does not meet security requirements: {}\n", .{err});
-            },
         }
         return false;
     };
@@ -1238,8 +1586,13 @@ fn cmdAuthLogout(ally: std.mem.Allocator) !void {
     // Clear saved credentials
     clearCredentials(ally) catch |err| {
         std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
+        logAuditEvent("auth", "logout", "failure");
+        return;
     };
-    
+
+    // Log successful logout
+    logAuditEvent("auth", "logout", "success");
+
     std.debug.print("Logged out successfully\n", .{});
     std.debug.print("Credentials cleared from ~/.geode/credentials.json\n", .{});
 }

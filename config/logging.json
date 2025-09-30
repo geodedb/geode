@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "service": {
+    "name": "authsvc",
+    "host": "app-host",
+    "pid": 1234
+  },
+  "identity": {
+    "cef": {
+      "vendor": "DEVNW",
+      "product": "GEODE",
+      "version": "0.1.0"
+    }
+  },
+  "sinks": {
+    "file": {
+      "enabled": true,
+      "path": "zig-out/tmp/audit.log",
+      "max_bytes": 1048576,
+      "backup_count": 5
+    },
+    "syslog": {
+      "enabled": true,
+      "protocol": "udp",
+      "host": "{{SYSLOG_HOST}}",
+      "port": 514,
+      "rfc5424": {
+        "facility": "local4"
+      }
+    }
+  },
+  "filters": {
+    "default_deny": true,
+    "allow_fields": [
+      "actor_id",
+      "subject_id",
+      "request_id",
+      "session_id",
+      "source_ip",
+      "trace_id",
+      "span_id",
+      "category",
+      "action",
+      "outcome",
+      "severity",
+      "db.operation",
+      "db.table",
+      "db.rowCount",
+      "duration_ms"
+    ],
+    "deny_key_patterns": [
+      "password",
+      "secret"
+    ],
+    "pii_mode": "mask",
+    "pci_mode": true
+  }
+}

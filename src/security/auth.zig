@@ -154,13 +154,13 @@ pub const PasswordPolicy = struct {
     min_words: usize, // Minimum number of words for passphrase
     max_age_days: u32,
     history_count: u32,
-    
+
     pub fn default() PasswordPolicy {
         // CANARY: REQ=REQ-AUTH-POLICY-004; FEATURE="Unified Password Policy"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_004_UnifiedPolicy; OWNER=security; UPDATED=2025-09-30
         // All users now follow the same minimum security standard as admins
         return geodeSecure();
     }
-    
+
     pub fn geodeSecure() PasswordPolicy {
         // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="Configurable Password Policy"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy; OWNER=security; UPDATED=2025-09-30
         const min_length_env = std.posix.getenv("GEODE_PASSWORD_MIN_LENGTH");
@@ -169,26 +169,26 @@ pub const PasswordPolicy = struct {
             // Enforce absolute minimum of 20 characters for security
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
-        
+
         const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             // Enforce minimum of 2 words
             break :blk if (parsed < 2) 2 else parsed;
         } else 3;
-        
-        return .{ 
-            .min_length = min_length, 
-            .max_length = 256, 
-            .require_uppercase = true, 
-            .require_lowercase = true, 
+
+        return .{
+            .min_length = min_length,
+            .max_length = 256,
+            .require_uppercase = true,
+            .require_lowercase = true,
             .require_digit = false, // Optional for passphrases
             .require_special = false, // Optional for passphrases
             .allow_spaces = true,
             .require_passphrase = true,
             .min_words = min_words,
-            .max_age_days = 90, 
-            .history_count = 5 
+            .max_age_days = 90,
+            .history_count = 5,
         };
     }
 };
@@ -674,7 +674,7 @@ pub const SecurityManager = struct {
         hasher.update(salt);
         var digest: [32]u8 = undefined;
         hasher.final(&digest);
-        
+
         // Return as hex string for now
         const hex_chars = "0123456789abcdef";
         const result = try self.allocator.alloc(u8, 64);
@@ -682,16 +682,16 @@ pub const SecurityManager = struct {
             result[i * 2] = hex_chars[byte >> 4];
             result[i * 2 + 1] = hex_chars[byte & 0xf];
         }
-        
+
         return result;
     }
-    
+
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
         // For now, regenerate hash and compare
         // TODO: Replace with proper Argon2id verification when API is stabilized
         const computed_hash = try self.hashPassword(password);
         defer self.allocator.free(computed_hash);
-        
+
         return std.mem.eql(u8, computed_hash, stored_hash);
     }
     // Create user helper
@@ -729,14 +729,14 @@ pub const SecurityManager = struct {
     pub fn validatePassword(self: *Self, password: []const u8) !void {
         if (password.len < self.password_policy.min_length) return error.PasswordTooShort;
         if (password.len > self.password_policy.max_length) return error.PasswordTooLong;
-        
+
         // Check for spaces if not allowed
         if (!self.password_policy.allow_spaces) {
             for (password) |c| {
                 if (c == ' ') return error.PasswordContainsSpaces;
             }
         }
-        
+
         if (self.password_policy.require_uppercase) {
             var up = false;
             for (password) |c| {
@@ -777,7 +777,7 @@ pub const SecurityManager = struct {
             }
             if (!sp) return error.PasswordMissingSpecial;
         }
-        
+
         // Passphrase validation
         if (self.password_policy.require_passphrase) {
             const word_count = self.countWords(password);
@@ -786,12 +786,12 @@ pub const SecurityManager = struct {
             }
         }
     }
-    
+
     fn countWords(self: *Self, text: []const u8) usize {
         _ = self;
         var word_count: usize = 0;
         var in_word = false;
-        
+
         for (text) |c| {
             if (std.ascii.isAlphanumeric(c)) {
                 if (!in_word) {
@@ -802,15 +802,15 @@ pub const SecurityManager = struct {
                 in_word = false;
             }
         }
-        
+
         return word_count;
     }
-    
+
     // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30
     fn initializeDefaultUser(self: *Self) !void {
         // Get configurable admin username from environment or use default
         const admin_username = std.posix.getenv("GEODE_ADMIN_USERNAME") orelse "geode";
-        
+
         // Check if default user already exists
         var it = self.users.iterator();
         while (it.next()) |entry| {
@@ -818,18 +818,18 @@ pub const SecurityManager = struct {
                 return; // Default user already exists
             }
         }
-        
+
         // Get default password from environment or use default
         const default_password = std.posix.getenv("GEODE_DEFAULT_PASSWORD") orelse "geodesic";
         const password_from_env = std.posix.getenv("GEODE_DEFAULT_PASSWORD") != null;
-        
+
         // Create default user
         const id = @as(UserId, @intCast(self.users.count() + 1));
         const attrs = std.StringHashMap([]const u8).init(self.allocator);
-        
+
         // Hash the password
         const password_hash = try self.hashPassword(default_password);
-        
+
         // Check if password meets security standards
         const needs_reset = blk: {
             if (password_from_env) {
@@ -843,7 +843,7 @@ pub const SecurityManager = struct {
                 break :blk true; // Default "geodesic" always requires reset
             }
         };
-        
+
         const user = User{
             .id = id,
             .username = try self.allocator.dupe(u8, admin_username),
@@ -861,10 +861,10 @@ pub const SecurityManager = struct {
             .is_default_user = true,
             .password_set_by_env = password_from_env,
         };
-        
+
         try self.users.put(id, user);
         try self.audit_log.logUserCreated(id, admin_username);
-        
+
         if (password_from_env) {
             if (needs_reset) {
                 try self.audit_log.append(.user_created, id, "Default user created with env password (insecure, reset required)", .{});
@@ -875,13 +875,13 @@ pub const SecurityManager = struct {
             try self.audit_log.append(.user_created, id, "Default user created with default password (reset required)", .{});
         }
     }
-    
+
     // Check if a user requires password reset
     pub fn requiresPasswordReset(self: *Self, user_id: UserId) !bool {
         const user = self.users.get(user_id) orelse return error.UserNotFound;
         return user.password_reset_required;
     }
-    
+
     // Force password reset for a user
     pub fn forcePasswordReset(self: *Self, user_id: UserId) !void {
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
@@ -889,26 +889,26 @@ pub const SecurityManager = struct {
         user.updated_at = std.time.milliTimestamp();
         try self.audit_log.append(.user_updated, user_id, "Password reset forced", .{});
     }
-    
+
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
         // CANARY: REQ=REQ-AUTH-POLICY-009; FEATURE="Password Update Policy Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation; OWNER=security; UPDATED=2025-09-30
         // Validate new password against current policy before accepting
         try self.validatePasswordAgainstCurrentPolicy(new_password);
-        
+
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
-        
+
         // Hash new password
         const new_hash = try self.hashPassword(new_password);
-        
+
         // Free old password hash
         self.allocator.free(user.password_hash);
-        
+
         // Update user
         user.password_hash = new_hash;
         user.password_reset_required = false;
         user.updated_at = std.time.milliTimestamp();
-        
+
         try self.audit_log.append(.user_updated, user_id, "Password updated", .{});
     }
     fn initializeDefaultRoles(self: *Self) !void {
@@ -929,16 +929,16 @@ pub const SecurityManager = struct {
         // Pre-hash validation against current policy
         try self.validatePassword(password);
     }
-    
+
     // Check if stored password hash meets current policy requirements
     // CANARY: REQ=REQ-AUTH-POLICY-006; FEATURE="Post-Authentication Policy Check"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck; OWNER=security; UPDATED=2025-09-30
-    pub fn checkStoredPasswordMeetsCurrentPolicy(self: *Self, user: *User, password: []const u8) bool {
+    pub fn checkStoredPasswordMeetsCurrentPolicy(self: *Self, _: *User, password: []const u8) bool {
         // Since we can't reverse the hash, we validate the plaintext password
         // that was just successfully authenticated against current policy
         self.validatePassword(password) catch return false;
         return true;
     }
-    
+
     // ---- Authentication ----
     // Basic password authentication. Returns session token if successful and MFA not required or already satisfied.
     // If MFA required, returns error.MFARequired after logging issuance.
@@ -959,7 +959,7 @@ pub const SecurityManager = struct {
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
         }
-        
+
         // CANARY: REQ=REQ-AUTH-POLICY-007; FEATURE="Mandatory Password Policy Enforcement"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement; OWNER=security; UPDATED=2025-09-30
         // Check if the authenticated password meets current policy requirements
         // This is non-bypassable - if password violates policy, force reset
@@ -970,7 +970,7 @@ pub const SecurityManager = struct {
             user.updated_at = std.time.milliTimestamp();
             try self.audit_log.append(.user_updated, user.id, "Password reset forced due to policy violation after successful authentication", .{});
         }
-        
+
         // Evaluate MFA requirement
         const policy_requires = self.evaluateMfaPolicies(user);
         if (policy_requires and user.mfa_enabled and user.mfa_secret != null) {
@@ -979,10 +979,10 @@ pub const SecurityManager = struct {
         }
         // Check if password reset is required (includes policy violations)
         if (user.password_reset_required) {
-            try self.audit_log.append(.user_login, user.id, "Login successful but password reset required", .{});
+            try self.audit_log.append(.login_success, user.id, "Login successful but password reset required", .{});
             return error.PasswordResetRequired;
         }
-        
+
         const token = try self.createSession(user.id);
         try self.audit_log.logSuccessfulLogin(user.id, user.username);
         return token;
