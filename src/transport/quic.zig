@@ -239,7 +239,7 @@ pub const QuicConnection = struct {
             .allocator = self.allocator,
             .quic_stream_id = stream_id,
             .parent_connection = self,
-            .stream_id = @intCast(stream_id orelse 0),
+            .stream_id = @intCast(stream_id),
         };
 
         if (!self.streams_init) {
@@ -262,7 +262,7 @@ pub const QuicConnection = struct {
             .allocator = self.allocator,
             .quic_stream_id = stream_id,
             .parent_connection = self,
-            .stream_id = @intCast(stream_id orelse 0),
+            .stream_id = @intCast(stream_id),
         };
 
         if (!self.streams_init) {
