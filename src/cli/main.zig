@@ -40,50 +40,74 @@ const CliAuditConfig = struct {
 var global_audit_file: ?std.fs.File = null;
 var global_windows_eventlog_handle: ?std.os.windows.HANDLE = null;
 
+// Windows Event Log API declarations for cross-platform compatibility
+const windows = std.os.windows;
+const EVENTLOG_SUCCESS: windows.WORD = 0x0000;
+const EVENTLOG_ERROR_TYPE: windows.WORD = 0x0001;
+const EVENTLOG_WARNING_TYPE: windows.WORD = 0x0002;
+const EVENTLOG_INFORMATION_TYPE: windows.WORD = 0x0004;
+
+// Windows API function declarations (Windows only)
+const WindowsEventLogAPI = if (builtin.os.tag == .windows) struct {
+    extern "advapi32" fn RegisterEventSourceW(?windows.LPCWSTR, windows.LPCWSTR) ?windows.HANDLE;
+    extern "advapi32" fn ReportEventW(windows.HANDLE, windows.WORD, windows.WORD, windows.DWORD, ?*anyopaque, windows.WORD, windows.DWORD, ?*const [*:0]const u16, ?*const anyopaque) windows.BOOL;
+    extern "advapi32" fn DeregisterEventSource(windows.HANDLE) windows.BOOL;
+} else struct {};
+
+// Cross-platform environment variable helper
+fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch null;
+}
+
 // CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
 fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     var cli_config = CliAuditConfig{};
 
     // Check if audit is enabled
-    if (std.posix.getenv("GEODE_AUDIT_ENABLED")) |value| {
+    if (getEnvVar(allocator, "GEODE_AUDIT_ENABLED")) |value| {
+        defer allocator.free(value);
         cli_config.enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
     }
 
     // Syslog configuration
-    if (std.posix.getenv("GEODE_AUDIT_SYSLOG_ENABLED")) |value| {
+    if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_ENABLED")) |value| {
+        defer allocator.free(value);
         cli_config.syslog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
     }
 
-    if (std.posix.getenv("GEODE_AUDIT_SYSLOG_HOST")) |value| {
-        cli_config.syslog_host = try allocator.dupe(u8, value);
+    if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_HOST")) |value| {
+        cli_config.syslog_host = value; // Keep ownership
     }
 
-    if (std.posix.getenv("GEODE_AUDIT_SYSLOG_PORT")) |value| {
+    if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_PORT")) |value| {
+        defer allocator.free(value);
         cli_config.syslog_port = std.fmt.parseInt(u16, value, 10) catch 514;
     }
 
     // Note: Protocol and facility configuration can be added later if needed
 
     // File configuration
-    if (std.posix.getenv("GEODE_AUDIT_FILE_ENABLED")) |value| {
+    if (getEnvVar(allocator, "GEODE_AUDIT_FILE_ENABLED")) |value| {
+        defer allocator.free(value);
         cli_config.file_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
     }
 
-    if (std.posix.getenv("GEODE_AUDIT_FILE_PATH")) |value| {
-        cli_config.file_path = try allocator.dupe(u8, value);
+    if (getEnvVar(allocator, "GEODE_AUDIT_FILE_PATH")) |value| {
+        cli_config.file_path = value; // Keep ownership
     }
 
     // Windows Event Log configuration
-    if (std.posix.getenv("GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED")) |value| {
+    if (getEnvVar(allocator, "GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED")) |value| {
+        defer allocator.free(value);
         cli_config.windows_eventlog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
     }
 
-    if (std.posix.getenv("GEODE_AUDIT_WINDOWS_EVENTLOG_SOURCE")) |value| {
-        cli_config.windows_eventlog_source = try allocator.dupe(u8, value);
+    if (getEnvVar(allocator, "GEODE_AUDIT_WINDOWS_EVENTLOG_SOURCE")) |value| {
+        cli_config.windows_eventlog_source = value; // Keep ownership
     }
 
-    if (std.posix.getenv("GEODE_AUDIT_WINDOWS_EVENTLOG_LOG")) |value| {
-        cli_config.windows_eventlog_log = try allocator.dupe(u8, value);
+    if (getEnvVar(allocator, "GEODE_AUDIT_WINDOWS_EVENTLOG_LOG")) |value| {
+        cli_config.windows_eventlog_log = value; // Keep ownership
     }
 
     // Note: File rotation and PII mode configuration can be added later if needed
@@ -140,7 +164,7 @@ fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditConfi
         source_utf16_buf[source_utf16_len] = 0;
 
         // Register event source
-        global_windows_eventlog_handle = std.os.windows.advapi32.RegisterEventSourceW(null, // Use local computer
+        global_windows_eventlog_handle = WindowsEventLogAPI.RegisterEventSourceW(null, // Use local computer
             &source_utf16_buf);
 
         if (global_windows_eventlog_handle == null) {
@@ -189,15 +213,15 @@ fn logToWindowsEventLog(event_handle: std.os.windows.HANDLE, category: []const u
     message_utf16_buf[message_utf16_len] = 0;
 
     // Determine event type based on outcome
-    const event_type: std.os.windows.WORD = if (std.mem.eql(u8, outcome, "success"))
-        std.os.windows.EVENTLOG_INFORMATION_TYPE
+    const event_type: windows.WORD = if (std.mem.eql(u8, outcome, "success"))
+        EVENTLOG_INFORMATION_TYPE
     else if (std.mem.eql(u8, outcome, "failure") or std.mem.eql(u8, outcome, "error"))
-        std.os.windows.EVENTLOG_ERROR_TYPE
+        EVENTLOG_ERROR_TYPE
     else
-        std.os.windows.EVENTLOG_WARNING_TYPE;
+        EVENTLOG_WARNING_TYPE;
 
     // Event ID: Use different IDs for different categories
-    const event_id: std.os.windows.DWORD = if (std.mem.eql(u8, category, "auth"))
+    const event_id: windows.DWORD = if (std.mem.eql(u8, category, "auth"))
         1001 // Authentication events
     else if (std.mem.eql(u8, category, "command"))
         1002 // Command execution events
@@ -210,7 +234,7 @@ fn logToWindowsEventLog(event_handle: std.os.windows.HANDLE, category: []const u
     const strings = [_][*:0]const u16{&message_utf16_buf};
 
     // Report the event
-    const result = std.os.windows.advapi32.ReportEventW(event_handle, event_type, 0, // Category (0 for application events)
+    const result = WindowsEventLogAPI.ReportEventW(event_handle, event_type, 0, // Category (0 for application events)
         event_id, null, // User SID (null for current user)
         1, // Number of strings
         0, // Raw data size
@@ -231,7 +255,7 @@ fn deinitializeAuditLogger() void {
 
     if (builtin.os.tag == .windows) {
         if (global_windows_eventlog_handle) |event_handle| {
-            _ = std.os.windows.advapi32.DeregisterEventSource(event_handle);
+            _ = WindowsEventLogAPI.DeregisterEventSource(event_handle);
             global_windows_eventlog_handle = null;
         }
     }
@@ -1180,7 +1204,8 @@ fn promptPassword(ally: std.mem.Allocator, prompt_text: []const u8) ![]const u8 
         // Windows: Disable echo using Console API
         const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
         _ = std.os.windows.kernel32.GetConsoleMode(stdin_handle, &original_mode);
-        const new_mode = original_mode & ~@as(u32, std.os.windows.ENABLE_ECHO_INPUT);
+        const ENABLE_ECHO_INPUT: u32 = 0x0004;
+        const new_mode = original_mode & ~ENABLE_ECHO_INPUT;
         _ = std.os.windows.kernel32.SetConsoleMode(stdin_handle, new_mode);
         echo_disabled = true;
     } else {
@@ -1239,13 +1264,19 @@ const AuthResult = struct {
 // CANARY: REQ=REQ-AUTH-POLICY-010; FEATURE="CLI Password Policy Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation; OWNER=security; UPDATED=2025-09-30
 fn validatePasswordAgainstPolicy(password: []const u8) !void {
     // Get current policy configuration from environment
-    const min_length_env = std.posix.getenv("GEODE_PASSWORD_MIN_LENGTH");
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    
+    const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
+    defer if (min_length_env) |env| allocator.free(env);
     const min_length = if (min_length_env) |len_str| blk: {
         const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
         break :blk if (parsed < 20) 20 else parsed;
     } else 20;
 
-    const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
+    const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
+    defer if (min_words_env) |env| allocator.free(env);
     const min_words = if (min_words_env) |words_str| blk: {
         const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
         break :blk if (parsed < 2) 2 else parsed;
@@ -1283,11 +1314,18 @@ fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8,
     _ = encoder.encode(token, &token_bytes);
 
     // Get configurable admin username from environment
-    const admin_username = std.posix.getenv("GEODE_ADMIN_USERNAME") orelse "geode";
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    
+    const admin_username_env = getEnvVar(allocator, "GEODE_ADMIN_USERNAME");
+    defer if (admin_username_env) |env| allocator.free(env);
+    const admin_username = admin_username_env orelse "geode";
 
     // Simulate authentication validation with enhanced policy checking
     if (std.mem.eql(u8, username, admin_username)) {
-        const default_password_env = std.posix.getenv("GEODE_DEFAULT_PASSWORD");
+        const default_password_env = getEnvVar(allocator, "GEODE_DEFAULT_PASSWORD");
+        defer if (default_password_env) |env| allocator.free(env);
         const expected_default_password = default_password_env orelse "geodesic";
 
         if (std.mem.eql(u8, password, expected_default_password)) {
@@ -1355,8 +1393,13 @@ fn countWords(text: []const u8) usize {
 }
 
 fn isPassphrase(password: []const u8) bool {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    
     // Use configurable minimum words for passphrase validation
-    const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
+    const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
+    defer if (min_words_env) |env| allocator.free(env);
     const min_words = if (min_words_env) |words_str| blk: {
         const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
         break :blk if (parsed < 2) 2 else parsed;
@@ -1472,13 +1515,19 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     // Handle password reset requirement
     if (auth_result.requires_password_reset) {
         // Get current policy configuration
-        const min_length_env = std.posix.getenv("GEODE_PASSWORD_MIN_LENGTH");
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    
+    const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
+    defer if (min_length_env) |env| allocator.free(env);
         const min_length = if (min_length_env) |len_str| blk: {
             const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
 
-        const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
+        const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
+    defer if (min_words_env) |env| allocator.free(env);
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             break :blk if (parsed < 2) 2 else parsed;
@@ -1553,7 +1602,12 @@ fn validateNewPassword(password: []const u8) bool {
     validatePasswordAgainstPolicy(password) catch |err| {
         switch (err) {
             error.PasswordTooShort => {
-                const min_length_env = std.posix.getenv("GEODE_PASSWORD_MIN_LENGTH");
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    
+    const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
+    defer if (min_length_env) |env| allocator.free(env);
                 const min_length = if (min_length_env) |len_str| blk: {
                     const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
                     break :blk if (parsed < 20) 20 else parsed;
@@ -1567,7 +1621,12 @@ fn validateNewPassword(password: []const u8) bool {
                 std.debug.print("Password must contain both uppercase and lowercase letters.\n", .{});
             },
             error.PasswordNotPassphrase, error.PasswordInsufficientWords => {
-                const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
+                var gpa2 = std.heap.GeneralPurposeAllocator(.{}){}; 
+                defer _ = gpa2.deinit();
+                const allocator2 = gpa2.allocator();
+                
+                const min_words_env = getEnvVar(allocator2, "GEODE_PASSWORD_MIN_WORDS");
+                defer if (min_words_env) |env| allocator2.free(env);
                 const min_words = if (min_words_env) |words_str| blk: {
                     const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
                     break :blk if (parsed < 2) 2 else parsed;

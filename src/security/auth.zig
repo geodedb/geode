@@ -163,14 +163,20 @@ pub const PasswordPolicy = struct {
 
     pub fn geodeSecure() PasswordPolicy {
         // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="Configurable Password Policy"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy; OWNER=security; UPDATED=2025-09-30
-        const min_length_env = std.posix.getenv("GEODE_PASSWORD_MIN_LENGTH");
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
+        
+        const min_length_env = std.process.getEnvVarOwned(allocator, "GEODE_PASSWORD_MIN_LENGTH") catch null;
+        defer if (min_length_env) |env| allocator.free(env);
         const min_length = if (min_length_env) |len_str| blk: {
             const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
             // Enforce absolute minimum of 20 characters for security
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
 
-        const min_words_env = std.posix.getenv("GEODE_PASSWORD_MIN_WORDS");
+        const min_words_env = std.process.getEnvVarOwned(allocator, "GEODE_PASSWORD_MIN_WORDS") catch null;
+        defer if (min_words_env) |env| allocator.free(env);
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             // Enforce minimum of 2 words
@@ -809,7 +815,9 @@ pub const SecurityManager = struct {
     // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30
     fn initializeDefaultUser(self: *Self) !void {
         // Get configurable admin username from environment or use default
-        const admin_username = std.posix.getenv("GEODE_ADMIN_USERNAME") orelse "geode";
+        const admin_username_env = std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME") catch null;
+        defer if (admin_username_env) |env| self.allocator.free(env);
+        const admin_username = admin_username_env orelse "geode";
 
         // Check if default user already exists
         var it = self.users.iterator();
@@ -820,8 +828,10 @@ pub const SecurityManager = struct {
         }
 
         // Get default password from environment or use default
-        const default_password = std.posix.getenv("GEODE_DEFAULT_PASSWORD") orelse "geodesic";
-        const password_from_env = std.posix.getenv("GEODE_DEFAULT_PASSWORD") != null;
+        const default_password_env = std.process.getEnvVarOwned(self.allocator, "GEODE_DEFAULT_PASSWORD") catch null;
+        const password_from_env = default_password_env != null;
+        const default_password = default_password_env orelse "geodesic";
+        defer if (default_password_env) |env| self.allocator.free(env);
 
         // Create default user
         const id = @as(UserId, @intCast(self.users.count() + 1));
