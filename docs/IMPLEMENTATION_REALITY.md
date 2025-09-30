@@ -2,6 +2,12 @@
 
 This is the ground truth synchronized with docs/status.csv and current source. Claims elsewhere must not exceed this document.
 
+## Evidence Summary
+**735 features** tracked with CANARY markers across the codebase.
+- 504 TESTED with comprehensive test coverage
+- 225 BENCHED with performance benchmarks
+- 6 IMPL (implemented but not yet tested)
+
 ## Transport
 - QUIC+TLS only; auto‑generated self‑signed certs. Implemented.
 
@@ -43,4 +49,4 @@ This is the ground truth synchronized with docs/status.csv and current source. C
 - Audit append latency target ≤ 500 µs/event (excluding fsync).
 - Commit flush default: always.
 
-For evidence counts and freshness, see docs/status.csv and docs/GAP_ANALYSIS.md. All claims here match CANARY markers, tests, and benches in source.
+For detailed evidence and freshness, see docs/status.csv and docs/GAP_ANALYSIS.md. All claims here match the 735 CANARY markers (504 TESTED, 225 BENCHED) tracked in source.

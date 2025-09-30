@@ -82,6 +82,19 @@ jobs:
           # Create a combined archive with native Linux binaries
           tar -czf geode-binaries.tar.gz -C zig-out/linux-x86_64 bin
           
+      - name: Delete old dev-snapshot release if exists
+        run: |
+          gh release delete dev-snapshot --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Create dev-snapshot tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f dev-snapshot
+          git push origin dev-snapshot --force
+          
       - name: Publish / Update Dev Release
         uses: softprops/action-gh-release@v2
         with:
@@ -109,3 +122,4 @@ jobs:
           files: |
             geode-*.tar.gz
           fail_on_unmatched_files: false
+          generate_release_notes: false
