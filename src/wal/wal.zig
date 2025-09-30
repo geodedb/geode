@@ -570,7 +570,7 @@ pub const Wal = struct {
             const plen = std.mem.readInt(u32, buf[9..13], .little);
             const lsn_v = std.mem.readInt(u64, buf[13..21], .little);
             if (typ == .Checkpoint) {
-                last_ckpt = try f.getPos();
+                last_ckpt = @intCast(try f.getPos());
                 last_ckpt_lsn = lsn_v;
             }
             const prev_lsn_v = std.mem.readInt(u64, buf[21..29], .little);

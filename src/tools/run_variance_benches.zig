@@ -106,7 +106,7 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
             q_head += 1;
             work_acc +%= item.node * 1315423911;
             if (item.depth >= 5) continue;
-            const neigh = neighbors[item.node];
+            const neigh = neighbors[@intCast(item.node)];
             for (neigh) |dst| {
                 if (q_tail < queue.len) {
                     queue[q_tail] = .{ .node = dst, .depth = item.depth + 1 };

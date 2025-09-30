@@ -441,7 +441,7 @@ pub const PageManager = struct {
         // Encrypted (AES-GCM) pages store Overhead + page_size. Legacy XOR keeps same size.
         var raw: []u8 = undefined;
         if (file_size == self.page_size or file_size == self.page_size + 28) { // 28 = nonce + tag (page_encryption.Overhead)
-            raw = try self.allocator.alloc(u8, file_size);
+            raw = try self.allocator.alloc(u8, @intCast(file_size));
         } else {
             return error.UnexpectedSize;
         }

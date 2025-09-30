@@ -138,7 +138,9 @@ jobs:
         run: |
           if [ -d "clients/go/gql" ]; then
             cd clients/go/gql
-            go build -v ./...
+            # Sync vendor directory or use mod download
+            go mod download
+            go build -mod=readonly -v ./...
             cd ../../..
           fi
 
@@ -152,7 +154,7 @@ jobs:
           # Run Go tests if available
           if [ -d "clients/go/gql" ]; then
             cd clients/go/gql
-            CI=true go test -v -count=1 -timeout 30s || true
+            CI=true go test -mod=readonly -v -count=1 -timeout 30s || true
             cd ../../..
           fi
 

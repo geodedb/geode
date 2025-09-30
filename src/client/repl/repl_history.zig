@@ -49,7 +49,7 @@ pub const HistoryStore = struct {
 
         // Read entire file
         const file_size = try file.getEndPos();
-        const content = try self.allocator.alloc(u8, file_size);
+        const content = try self.allocator.alloc(u8, @intCast(file_size));
         defer self.allocator.free(content);
         _ = try file.read(content);
 
