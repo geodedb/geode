@@ -1,0 +1,315 @@
+// GQL Graph Migration: 004_dns.gql
+// Converts VDB DNS schema to graph-based DNS hierarchy
+// Based on ../../../vdb/migrations/004_dns.sql
+
+// --- Graph Schema Definition ---
+
+// DNS entity types
+CREATE LABEL Domain;
+CREATE LABEL ResourceRecord;
+CREATE LABEL Nameserver;
+CREATE LABEL Registrar;
+
+// DNS hierarchy is naturally represented as a graph
+CREATE LABEL TLD; // Top-level domain (extends Domain)
+
+// --- Node Type Definitions ---
+
+// Domain entity with hierarchical structure (template)
+// CREATE (domain:Domain:Entity {
+//   id: uuid_v4(),
+//   name: $domain_name, // Fully qualified domain name
+//   is_tld: false,
+//   registered: DateTime(),
+//   expires: DateTime(),
+//   status: ['ACTIVE'], // Domain status codes
+//   created_at: DateTime(),
+//   updated_at: DateTime(),
+//   metadata: Jsonb('{}')
+// });
+
+// Resource Record entity (template)
+// CREATE (rr:ResourceRecord:Entity {
+//   id: uuid_v4(),
+//   name: $record_name, // Record name
+//   rrtype: $record_type, // A, AAAA, CNAME, MX, etc.
+//   rdata: $record_data, // Record data
+//   ttl: 3600,
+//   priority: $priority, // For MX, SRV records
+//   weight: $weight,   // For SRV records
+//   port: $port,     // For SRV records
+//   target: $target,    // For SRV, CNAME records
+//   created_at: DateTime(),
+//   updated_at: DateTime(),
+//   metadata: Jsonb('{}')
+// });
+
+// Nameserver entity (template)
+// CREATE (ns:Nameserver:Entity {
+//   id: uuid_v4(),
+//   hostname: $hostname,
+//   ip_address: $ip_address,
+//   created_at: DateTime(),
+//   updated_at: DateTime(),
+//   metadata: Jsonb('{}')
+// });
+
+// Registrar entity (template)
+// CREATE (registrar:Registrar:Entity {
+//   id: uuid_v4(),
+//   name: $registrar_name,
+//   iana_id: $iana_id,
+//   url: $registrar_url,
+//   created_at: DateTime(),
+//   updated_at: DateTime(),
+//   metadata: Jsonb('{}')
+// });
+
+// --- Edge Types for DNS Hierarchy ---
+
+// Domain hierarchy relationships
+CREATE LABEL TYPE EDGE PARENT_OF; // Domain -> Domain (parent-child)
+CREATE LABEL TYPE EDGE SUBDOMAIN_OF; // Domain -> Domain (child-parent)
+
+// DNS delegation and authority
+CREATE LABEL TYPE EDGE AUTHORITATIVE_FOR; // Nameserver -> Domain
+CREATE LABEL TYPE EDGE DELEGATES_TO; // Domain -> Nameserver
+
+// Registration relationships
+CREATE LABEL TYPE EDGE REGISTERED_BY; // Domain -> Registrar
+CREATE LABEL TYPE EDGE MANAGES; // Registrar -> Domain
+
+// Resource record relationships
+CREATE LABEL TYPE EDGE HAS_RECORD; // Domain -> ResourceRecord
+CREATE LABEL TYPE EDGE POINTS_TO; // ResourceRecord -> Domain (for CNAME, PTR)
+CREATE LABEL TYPE EDGE SERVES; // Nameserver -> ResourceRecord
+
+// --- Constraints and Indexes ---
+// Note: Constraint and index syntax is implementation-specific, not standardized in GQL
+
+// Conceptual constraints (would be enforced by application logic or Geode's validation):
+// - Domain names should be unique
+// - Domain names should match FQDN format ending with dot
+
+// - Resource record IDs should be unique
+// - Resource record types should be valid DNS record types (A, AAAA, CNAME, MX, etc.)
+
+// - Nameserver hostnames should be unique
+// - Registrar names should be unique
+
+
+// Conceptual indexes (would be created through Geode's indexing system):
+// - domain_name_idx: Index on Domain.name for fast DNS lookups
+// - domain_tld_idx: Index on Domain.is_tld for TLD queries
+// - domain_expires_idx: Index on Domain.expires for expiration monitoring
+// - rr_name_type_idx: Composite index on ResourceRecord.name and rrtype
+// - rr_type_idx: Index on ResourceRecord.rrtype for record type queries
+// - ns_hostname_idx: Index on Nameserver.hostname for nameserver lookups
+
+// --- Graph-Based DNS Query Patterns ---
+// Note: GQL does not support user-defined functions. These are common
+// query patterns for DNS operations.
+
+// Function to create domain with automatic parent hierarchy
+CREATE FUNCTION create_domain(domain_name STRING) RETURNS STRING {
+  
+  // Ensure domain name ends with dot
+  IF NOT domain_name MATCHES '\.$' THEN
+    SET domain_name = domain_name + '.';
+  END IF;
+  
+  // Check if domain already exists
+  OPTIONAL MATCH (existing:Domain WHERE existing.name = domain_name)
+  IF existing IS NOT NULL THEN
+    RETURN domain_name;
+  END IF;
+  
+  // Parse domain parts
+  DECLARE parts LIST<STRING> = split(trim_end(domain_name, '.'), '.');
+  DECLARE is_tld BOOLEAN = (size(parts) = 1);
+  
+  // Create the domain
+  CREATE (domain:Domain:Entity {
+    id: gen_random_uuid(),
+    name: domain_name,
+    is_tld: is_tld,
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  // Add TLD label if applicable
+  IF is_tld THEN
+    SET domain:TLD;
+  END IF;
+  
+  // Create parent domain if needed (not for TLD)
+  IF NOT is_tld THEN
+    DECLARE parent_parts LIST<STRING> = parts[1..];
+    DECLARE parent_name STRING = join(parent_parts, '.') + '.';
+    
+    // Recursively create parent
+    CALL create_domain(parent_name);
+    
+    // Link to parent
+    MATCH (parent:Domain WHERE parent.name = parent_name)
+    CREATE (parent)-[:PARENT_OF]->(domain);
+    CREATE (domain)-[:SUBDOMAIN_OF]->(parent);
+  ELSE
+    // TLD has root as parent (represented by special relationship)
+    CREATE (domain)-[:SUBDOMAIN_OF {is_root: true}]->(:Domain {name: '.', is_tld: false});
+  END IF;
+  
+  RETURN domain_name;
+};
+
+// Function to add resource record
+CREATE FUNCTION add_resource_record(
+  domain_name STRING,
+  record_name STRING,
+  record_type STRING,
+  record_data STRING,
+  ttl INTEGER DEFAULT 3600,
+  priority INTEGER DEFAULT NULL,
+  weight INTEGER DEFAULT NULL,
+  port INTEGER DEFAULT NULL,
+  target STRING DEFAULT NULL
+) RETURNS UUID {
+  
+  // Ensure domain exists
+  CALL create_domain(domain_name);
+  
+  // Create resource record
+  CREATE (rr:ResourceRecord:Entity {
+    id: gen_random_uuid(),
+    name: record_name,
+    rrtype: record_type,
+    rdata: record_data,
+    ttl: ttl,
+    priority: priority,
+    weight: weight,
+    port: port,
+    target: target,
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  // Link to domain
+  MATCH (domain:Domain WHERE domain.name = domain_name)
+  CREATE (domain)-[:HAS_RECORD]->(rr);
+  
+  // Special handling for CNAME and PTR records
+  IF record_type IN ['CNAME', 'PTR'] AND target IS NOT NULL THEN
+    CALL create_domain(target);
+    MATCH (target_domain:Domain WHERE target_domain.name = target)
+    CREATE (rr)-[:POINTS_TO]->(target_domain);
+  END IF;
+  
+  RETURN rr.id;
+};
+
+// Function to set nameservers for a domain
+CREATE FUNCTION set_nameservers(
+  domain_name STRING,
+  nameserver_list LIST<STRING>
+) {
+  
+  MATCH (domain:Domain WHERE domain.name = domain_name)
+  
+  // Remove existing nameserver relationships
+  MATCH (domain)-[rel:DELEGATES_TO]->(:Nameserver)
+  DELETE rel;
+  
+  // Add new nameservers
+  FOR ns_name IN nameserver_list DO
+    // Create nameserver if it doesn't exist
+    MERGE (ns:Nameserver:Entity {hostname: ns_name})
+    ON CREATE SET 
+      ns.id = gen_random_uuid(),
+      ns.created_at = CURRENT_TIMESTAMP();
+    
+    // Create delegation relationship
+    CREATE (domain)-[:DELEGATES_TO]->(ns);
+    CREATE (ns)-[:AUTHORITATIVE_FOR]->(domain);
+  END FOR;
+  
+  // Update domain metadata
+  CALL touch_entity(domain.id);
+};
+
+// Function to register domain
+CREATE FUNCTION register_domain(
+  domain_name STRING,
+  registrar_name STRING,
+  registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  expiration_date TIMESTAMP DEFAULT NULL
+) {
+  
+  // Ensure domain exists
+  CALL create_domain(domain_name);
+  
+  // Create or find registrar
+  MERGE (registrar:Registrar:Entity {name: registrar_name})
+  ON CREATE SET 
+    registrar.id = gen_random_uuid(),
+    registrar.created_at = CURRENT_TIMESTAMP();
+  
+  // Update domain registration info
+  MATCH (domain:Domain WHERE domain.name = domain_name)
+  SET domain.registered = registration_date,
+      domain.expires = expiration_date;
+  
+  // Create registration relationship
+  CREATE (domain)-[:REGISTERED_BY]->(registrar);
+  CREATE (registrar)-[:MANAGES]->(domain);
+  
+  CALL touch_entity(domain.id);
+};
+
+// --- Query Patterns ---
+
+// DNS hierarchy traversal - get all subdomains
+MATCH (parent:Domain WHERE parent.name = $domain_name)-[:PARENT_OF*]->(subdomain:Domain)
+RETURN subdomain
+ORDER BY subdomain.name;
+
+// Reverse DNS hierarchy - get domain path to root
+MATCH path = (domain:Domain WHERE domain.name = $domain_name)-[:SUBDOMAIN_OF*]->(root)
+RETURN path;
+
+// Get all resource records for a domain
+MATCH (domain:Domain WHERE domain.name = $domain_name)-[:HAS_RECORD]->(rr:ResourceRecord)
+RETURN rr
+ORDER BY rr.rrtype, rr.name;
+
+// DNS resolution simulation
+MATCH (domain:Domain WHERE domain.name = $domain_name)-[:HAS_RECORD]->(rr:ResourceRecord WHERE rr.rrtype = $record_type)
+RETURN rr.rdata AS answer, rr.ttl;
+
+// Get authoritative nameservers
+MATCH (domain:Domain WHERE domain.name = $domain_name)-[:DELEGATES_TO]->(ns:Nameserver)
+RETURN ns.hostname;
+
+// Find domains by registrar
+MATCH (registrar:Registrar WHERE registrar.name = $registrar_name)-[:MANAGES]->(domain:Domain)
+RETURN domain;
+
+// Find expiring domains
+MATCH (domain:Domain)
+WHERE domain.expires IS NOT NULL AND domain.expires < (CURRENT_TIMESTAMP() + duration('P30D'))
+RETURN domain
+ORDER BY domain.expires;
+
+// Get TLD statistics
+MATCH (tld:Domain WHERE tld.is_tld = true)
+OPTIONAL MATCH (tld)-[:PARENT_OF*]->(subdomain:Domain)
+RETURN tld.name, count(subdomain) AS subdomain_count
+ORDER BY subdomain_count DESC;
+
+// --- Migration Notes ---
+// This GQL migration creates a graph-based DNS hierarchy:
+// 1. Domain nodes replace the dns.domain table with natural parent-child relationships
+// 2. PARENT_OF/SUBDOMAIN_OF edges replace the parent foreign key
+// 3. ResourceRecord nodes with HAS_RECORD edges replace separate RR tables
+// 4. Nameserver delegation represented through DELEGATES_TO edges
+// 5. Domain registration tracked via REGISTERED_BY edges to Registrar nodes
+// 6. Graph traversal enables efficient DNS hierarchy navigation
+// 7. Automatic parent domain creation maintains referential integrity
+// 8. Uses Geode's built-in audit system (no explicit audit node creation needed)

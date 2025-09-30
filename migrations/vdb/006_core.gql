@@ -1,0 +1,296 @@
+// GQL Graph Migration: 006_core.gql
+// Converts VDB core schema to graph-based core entities
+// Based on ../../../vdb/migrations/006_core.sql
+
+// --- Graph Schema Definition ---
+
+// Core entity types
+CREATE LABEL Address;
+CREATE LABEL Country; // Will be linked from i18n migration
+CREATE LABEL Version;
+
+// --- Node Type Definitions ---
+
+// Semantic Version type (replaces SQL domain)
+CREATE CONSTRAINT semver_pattern ON (:Version) 
+  ASSERT version_string MATCHES '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$';
+
+// Address entity (extends Entity base type)
+CREATE (addr:Address:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  street: STRING NOT NULL,
+  street2: STRING,
+  street3: STRING, 
+  street4: STRING,
+  city: STRING,
+  state: STRING,
+  territory: STRING,
+  postal_code: STRING,
+  country_code: STRING, // Will reference Country nodes
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// Version entity for semantic versioning
+CREATE (version:Version:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  version_string: STRING NOT NULL,
+  major: INTEGER NOT NULL,
+  minor: INTEGER NOT NULL,
+  patch: INTEGER NOT NULL,
+  prerelease: STRING,
+  build_metadata: STRING,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// --- Edge Types ---
+
+// Links address to country
+CREATE LABEL TYPE EDGE LOCATED_IN;
+
+// Links entities to their versions
+CREATE LABEL TYPE EDGE HAS_VERSION;
+
+// Links versions in sequence
+CREATE LABEL TYPE EDGE PREDECESSOR_OF;
+
+// --- Constraints and Indexes ---
+
+// Address constraints
+CREATE CONSTRAINT address_id_unique ON (:Address) ASSERT id IS UNIQUE;
+CREATE CONSTRAINT address_street_required ON (:Address) ASSERT street IS NOT NULL;
+
+// Version constraints  
+CREATE CONSTRAINT version_id_unique ON (:Version) ASSERT id IS UNIQUE;
+CREATE CONSTRAINT version_string_unique ON (:Version) ASSERT version_string IS UNIQUE;
+CREATE CONSTRAINT version_parts_required ON (:Version) 
+  ASSERT major IS NOT NULL AND minor IS NOT NULL AND patch IS NOT NULL;
+
+// Indexes for performance
+CREATE INDEX address_country_idx ON (:Address) (country_code);
+CREATE INDEX address_city_state_idx ON (:Address) (city, state);
+CREATE INDEX address_postal_idx ON (:Address) (postal_code);
+CREATE INDEX version_string_idx ON (:Version) (version_string);
+CREATE INDEX version_major_minor_idx ON (:Version) (major, minor);
+
+// --- Graph-Based Core Functions ---
+
+// Function to create address with country validation
+CREATE FUNCTION create_address(
+  street STRING,
+  street2 STRING DEFAULT NULL,
+  street3 STRING DEFAULT NULL,
+  street4 STRING DEFAULT NULL,
+  city STRING DEFAULT NULL,
+  state STRING DEFAULT NULL,
+  postal_code STRING DEFAULT NULL,
+  territory STRING DEFAULT NULL,
+  country_code STRING DEFAULT NULL
+) RETURNS (address_id UUID, country_alpha3 STRING) {
+  
+  // Validate required street
+  IF street IS NULL THEN
+    THROW 'Street is required';
+  END IF;
+  
+  // Validate country code if provided
+  DECLARE country_alpha3 STRING DEFAULT NULL;
+  IF country_code IS NOT NULL AND country_code != '' THEN
+    MATCH (c:Country WHERE c.alpha2 = UPPER(country_code))
+    WITH c.alpha3 AS alpha3
+    IF alpha3 IS NULL THEN
+      THROW 'Country not found: ' + country_code + '. Please provide a valid ISO 3166-1 alpha-2 country code';
+    END IF;
+    SET country_alpha3 = alpha3;
+  END IF;
+  
+  // Create the address
+  CREATE (addr:Address:Entity {
+    id: gen_random_uuid(),
+    street: street,
+    street2: street2,
+    street3: street3,
+    street4: street4,
+    city: city,
+    state: state,
+    postal_code: postal_code,
+    territory: territory,
+    country_code: country_alpha3,
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  // Link to country if valid
+  IF country_alpha3 IS NOT NULL THEN
+    MATCH (country:Country WHERE country.alpha3 = country_alpha3)
+    CREATE (addr)-[:LOCATED_IN]->(country);
+  END IF;
+  
+  RETURN {address_id: addr.id, country_alpha3: country_alpha3};
+};
+
+// Function to parse and create semantic version
+CREATE FUNCTION create_version(version_string STRING) RETURNS UUID {
+  
+  // Validate semver format
+  IF NOT version_string MATCHES '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' THEN
+    THROW 'Invalid semantic version format: ' + version_string;
+  END IF;
+  
+  // Parse version components
+  DECLARE parts LIST<STRING> = split(version_string, '.');
+  DECLARE major INTEGER = to_integer(parts[0]);
+  DECLARE minor INTEGER = to_integer(parts[1]);
+  
+  // Handle patch with possible prerelease/build
+  DECLARE patch_part STRING = parts[2];
+  DECLARE patch INTEGER;
+  DECLARE prerelease STRING DEFAULT NULL;
+  DECLARE build_metadata STRING DEFAULT NULL;
+  
+  // Parse patch, prerelease, and build metadata
+  IF patch_part CONTAINS '-' THEN
+    DECLARE patch_split LIST<STRING> = split(patch_part, '-', 2);
+    SET patch = to_integer(patch_split[0]);
+    DECLARE remainder STRING = patch_split[1];
+    
+    IF remainder CONTAINS '+' THEN
+      DECLARE pre_build LIST<STRING> = split(remainder, '+', 2);
+      SET prerelease = pre_build[0];
+      SET build_metadata = pre_build[1];
+    ELSE
+      SET prerelease = remainder;
+    END IF;
+  ELSEIF patch_part CONTAINS '+' THEN
+    DECLARE patch_build LIST<STRING> = split(patch_part, '+', 2);
+    SET patch = to_integer(patch_build[0]);
+    SET build_metadata = patch_build[1];
+  ELSE
+    SET patch = to_integer(patch_part);
+  END IF;
+  
+  // Create version node
+  CREATE (v:Version:Entity {
+    id: gen_random_uuid(),
+    version_string: version_string,
+    major: major,
+    minor: minor,
+    patch: patch,
+    prerelease: prerelease,
+    build_metadata: build_metadata,
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  // Link to predecessor version if exists
+  OPTIONAL MATCH (prev:Version)
+  WHERE (prev.major < major) OR 
+        (prev.major = major AND prev.minor < minor) OR
+        (prev.major = major AND prev.minor = minor AND prev.patch < patch)
+  WITH prev, v
+  ORDER BY prev.major DESC, prev.minor DESC, prev.patch DESC
+  LIMIT 1
+  WHERE prev IS NOT NULL
+  CREATE (prev)-[:PREDECESSOR_OF]->(v);
+  
+  RETURN v.id;
+};
+
+// Function to update address
+CREATE FUNCTION update_address(
+  address_id UUID,
+  street STRING DEFAULT NULL,
+  street2 STRING DEFAULT NULL,
+  street3 STRING DEFAULT NULL,
+  street4 STRING DEFAULT NULL,
+  city STRING DEFAULT NULL,
+  state STRING DEFAULT NULL,
+  postal_code STRING DEFAULT NULL,
+  territory STRING DEFAULT NULL,
+  country_code STRING DEFAULT NULL
+) {
+  
+  MATCH (addr:Address WHERE addr.id = address_id)
+  
+  // Update only provided fields
+  IF street IS NOT NULL THEN SET addr.street = street; END IF;
+  IF street2 IS NOT NULL THEN SET addr.street2 = street2; END IF;
+  IF street3 IS NOT NULL THEN SET addr.street3 = street3; END IF;
+  IF street4 IS NOT NULL THEN SET addr.street4 = street4; END IF;
+  IF city IS NOT NULL THEN SET addr.city = city; END IF;
+  IF state IS NOT NULL THEN SET addr.state = state; END IF;
+  IF postal_code IS NOT NULL THEN SET addr.postal_code = postal_code; END IF;
+  IF territory IS NOT NULL THEN SET addr.territory = territory; END IF;
+  
+  // Handle country code change
+  IF country_code IS NOT NULL THEN
+    // Validate new country
+    MATCH (c:Country WHERE c.alpha2 = UPPER(country_code))
+    WITH c.alpha3 AS alpha3
+    IF alpha3 IS NULL THEN
+      THROW 'Country not found: ' + country_code;
+    END IF;
+    
+    // Remove old country relationship
+    MATCH (addr)-[rel:LOCATED_IN]->(:Country)
+    DELETE rel;
+    
+    // Create new country relationship
+    MATCH (country:Country WHERE country.alpha3 = alpha3)
+    CREATE (addr)-[:LOCATED_IN]->(country);
+    
+    SET addr.country_code = alpha3;
+  END IF;
+  
+  // Update timestamp
+  CALL touch_entity(address_id);
+};
+
+// --- Query Patterns ---
+
+// Find addresses by country
+MATCH (addr:Address)-[:LOCATED_IN]->(c:Country WHERE c.alpha2 = $country_code)
+RETURN addr;
+
+// Find addresses in a city/state
+MATCH (addr:Address WHERE addr.city = $city AND addr.state = $state)
+RETURN addr;
+
+// Get version history for an entity
+MATCH (entity)-[:HAS_VERSION]->(v:Version)
+OPTIONAL MATCH path = (v)-[:PREDECESSOR_OF*]->(latest:Version)
+RETURN v, path
+ORDER BY v.major DESC, v.minor DESC, v.patch DESC;
+
+// Find latest version
+MATCH (v:Version)
+WHERE NOT (v)-[:PREDECESSOR_OF]->()
+RETURN v
+ORDER BY v.major DESC, v.minor DESC, v.patch DESC
+LIMIT 1;
+
+// Version comparison queries
+MATCH (v1:Version WHERE v1.version_string = $version1),
+      (v2:Version WHERE v2.version_string = $version2)
+RETURN 
+  CASE 
+    WHEN v1.major > v2.major THEN 'v1 > v2'
+    WHEN v1.major < v2.major THEN 'v1 < v2'
+    WHEN v1.minor > v2.minor THEN 'v1 > v2'
+    WHEN v1.minor < v2.minor THEN 'v1 < v2'
+    WHEN v1.patch > v2.patch THEN 'v1 > v2'
+    WHEN v1.patch < v2.patch THEN 'v1 < v2'
+    ELSE 'v1 = v2'
+  END AS comparison;
+
+// --- Migration Notes ---
+// This GQL migration creates graph equivalents of the SQL core schema:
+// 1. Address nodes replace the core.address table
+// 2. Version nodes handle semantic versioning with proper parsing
+// 3. LOCATED_IN edges replace foreign key to country
+// 4. PREDECESSOR_OF edges create version chains
+// 5. Graph functions replace SQL stored procedures
+// 6. Constraints ensure data integrity
+// 7. Indexes optimize common query patterns
+// 8. Uses Geode's built-in audit system for change tracking

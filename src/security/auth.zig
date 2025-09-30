@@ -166,7 +166,7 @@ pub const PasswordPolicy = struct {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         defer _ = gpa.deinit();
         const allocator = gpa.allocator();
-        
+
         const min_length_env = std.process.getEnvVarOwned(allocator, "GEODE_PASSWORD_MIN_LENGTH") catch null;
         defer if (min_length_env) |env| allocator.free(env);
         const min_length = if (min_length_env) |len_str| blk: {

@@ -1264,10 +1264,10 @@ const AuthResult = struct {
 // CANARY: REQ=REQ-AUTH-POLICY-010; FEATURE="CLI Password Policy Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation; OWNER=security; UPDATED=2025-09-30
 fn validatePasswordAgainstPolicy(password: []const u8) !void {
     // Get current policy configuration from environment
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
     defer if (min_length_env) |env| allocator.free(env);
     const min_length = if (min_length_env) |len_str| blk: {
@@ -1314,10 +1314,10 @@ fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8,
     _ = encoder.encode(token, &token_bytes);
 
     // Get configurable admin username from environment
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     const admin_username_env = getEnvVar(allocator, "GEODE_ADMIN_USERNAME");
     defer if (admin_username_env) |env| allocator.free(env);
     const admin_username = admin_username_env orelse "geode";
@@ -1393,10 +1393,10 @@ fn countWords(text: []const u8) usize {
 }
 
 fn isPassphrase(password: []const u8) bool {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Use configurable minimum words for passphrase validation
     const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
     defer if (min_words_env) |env| allocator.free(env);
@@ -1515,19 +1515,19 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     // Handle password reset requirement
     if (auth_result.requires_password_reset) {
         // Get current policy configuration
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    
-    const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
-    defer if (min_length_env) |env| allocator.free(env);
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
+
+        const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
+        defer if (min_length_env) |env| allocator.free(env);
         const min_length = if (min_length_env) |len_str| blk: {
             const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
 
         const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
-    defer if (min_words_env) |env| allocator.free(env);
+        defer if (min_words_env) |env| allocator.free(env);
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             break :blk if (parsed < 2) 2 else parsed;
@@ -1602,12 +1602,12 @@ fn validateNewPassword(password: []const u8) bool {
     validatePasswordAgainstPolicy(password) catch |err| {
         switch (err) {
             error.PasswordTooShort => {
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    
-    const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
-    defer if (min_length_env) |env| allocator.free(env);
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const allocator = gpa.allocator();
+
+                const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
+                defer if (min_length_env) |env| allocator.free(env);
                 const min_length = if (min_length_env) |len_str| blk: {
                     const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
                     break :blk if (parsed < 20) 20 else parsed;
@@ -1621,10 +1621,10 @@ fn validateNewPassword(password: []const u8) bool {
                 std.debug.print("Password must contain both uppercase and lowercase letters.\n", .{});
             },
             error.PasswordNotPassphrase, error.PasswordInsufficientWords => {
-                var gpa2 = std.heap.GeneralPurposeAllocator(.{}){}; 
+                var gpa2 = std.heap.GeneralPurposeAllocator(.{}){};
                 defer _ = gpa2.deinit();
                 const allocator2 = gpa2.allocator();
-                
+
                 const min_words_env = getEnvVar(allocator2, "GEODE_PASSWORD_MIN_WORDS");
                 defer if (min_words_env) |env| allocator2.free(env);
                 const min_words = if (min_words_env) |words_str| blk: {

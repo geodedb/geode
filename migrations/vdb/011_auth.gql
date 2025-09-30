@@ -1,0 +1,439 @@
+// GQL Graph Migration: 011_auth.gql
+// Converts VDB authentication/authorization system to graph-based auth schema
+// Based on ../../../vdb/migrations/011_auth.sql
+
+// --- Graph Schema Definition ---
+
+// Authentication entity types
+CREATE LABEL AuthMethod;
+CREATE LABEL AuthType;
+CREATE LABEL AuthProvider;
+CREATE LABEL Account;
+CREATE LABEL Role;
+CREATE LABEL Permission;
+CREATE LABEL Session;
+CREATE LABEL Email; // Will be linked from core migration
+
+// --- Node Type Definitions ---
+
+// Authentication method (IANA standard methods)
+CREATE (method:AuthMethod:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  name: STRING NOT NULL,
+  description: STRING,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// Authentication type
+CREATE (auth_type:AuthType:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  name: STRING NOT NULL,
+  description: STRING,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// Authentication provider (OAuth, SAML, etc.)
+CREATE (provider:AuthProvider:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  name: STRING NOT NULL,
+  description: STRING,
+  url: STRING,
+  configuration: JSONB, // Provider-specific config
+  is_active: BOOLEAN DEFAULT TRUE,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// User account
+CREATE (account:Account:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  username: STRING NOT NULL,
+  password_hash: STRING, // For local auth
+  is_active: BOOLEAN DEFAULT TRUE,
+  is_verified: BOOLEAN DEFAULT FALSE,
+  last_login: TIMESTAMP,
+  failed_login_attempts: INTEGER DEFAULT 0,
+  locked_until: TIMESTAMP,
+  password_changed_at: TIMESTAMP,
+  mfa_enabled: BOOLEAN DEFAULT FALSE,
+  mfa_secret: STRING, // Encrypted MFA secret
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// Role (RBAC)
+CREATE (role:Role:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  name: STRING NOT NULL,
+  description: STRING,
+  is_system_role: BOOLEAN DEFAULT FALSE,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// Permission
+CREATE (permission:Permission:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  name: STRING NOT NULL,
+  description: STRING,
+  resource: STRING, // Resource being protected
+  action: STRING, // Action being permitted (read, write, delete, etc.)
+  scope: STRING, // Scope of permission (global, organization, project, etc.)
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// Session
+CREATE (session:Session:Entity:Timestamped {
+  id: UUID DEFAULT gen_random_uuid(),
+  token: STRING NOT NULL,
+  expires_at: TIMESTAMP NOT NULL,
+  is_active: BOOLEAN DEFAULT TRUE,
+  ip_address: STRING,
+  user_agent: STRING,
+  device_fingerprint: STRING,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  last_accessed: TIMESTAMP,
+  metadata: JSONB
+});
+
+// --- Edge Types for Authentication Graph ---
+
+// Authentication method relationships
+CREATE LABEL TYPE EDGE IMPLEMENTS; // AuthType -> AuthMethod
+CREATE LABEL TYPE EDGE PROVIDED_BY; // AuthType -> AuthProvider
+
+// Account relationships
+CREATE LABEL TYPE EDGE HAS_EMAIL; // Account -> Email
+CREATE LABEL TYPE EDGE AUTHENTICATED_VIA; // Account -> AuthProvider
+CREATE LABEL TYPE EDGE HAS_SESSION; // Account -> Session
+CREATE LABEL TYPE EDGE BELONGS_TO; // Session -> Account
+
+// RBAC relationships
+CREATE LABEL TYPE EDGE HAS_ROLE; // Account -> Role
+CREATE LABEL TYPE EDGE HAS_PERMISSION; // Role -> Permission
+CREATE LABEL TYPE EDGE GRANTED; // Permission granted relationships
+CREATE LABEL TYPE EDGE INHERITS_FROM; // Role inheritance
+
+// Authorization relationships
+CREATE LABEL TYPE EDGE AUTHORIZED_FOR; // Authorization grants
+CREATE LABEL TYPE EDGE REVOKED_FROM; // Permission revocations
+
+// --- Constraints and Indexes ---
+
+// Account constraints
+CREATE CONSTRAINT account_id_unique ON (:Account) ASSERT id IS UNIQUE;
+CREATE CONSTRAINT account_username_unique ON (:Account) ASSERT username IS UNIQUE;
+
+// Role and permission constraints
+CREATE CONSTRAINT role_name_unique ON (:Role) ASSERT name IS UNIQUE;
+CREATE CONSTRAINT permission_name_unique ON (:Permission) ASSERT name IS UNIQUE;
+
+// Provider constraints
+CREATE CONSTRAINT provider_name_unique ON (:AuthProvider) ASSERT name IS UNIQUE;
+
+// Session constraints
+CREATE CONSTRAINT session_token_unique ON (:Session) ASSERT token IS UNIQUE;
+
+// Indexes for authentication performance
+CREATE INDEX account_username_idx ON (:Account) (username);
+CREATE INDEX account_active_idx ON (:Account) (is_active, is_verified);
+CREATE INDEX session_token_idx ON (:Session) (token);
+CREATE INDEX session_expires_idx ON (:Session) (expires_at);
+CREATE INDEX role_name_idx ON (:Role) (name);
+CREATE INDEX permission_resource_action_idx ON (:Permission) (resource, action);
+
+// --- Graph-Based Authentication Functions ---
+
+// Function to create user account
+CREATE FUNCTION create_account(
+  username STRING,
+  email STRING,
+  password_hash STRING,
+  initial_roles LIST<STRING> DEFAULT []
+) RETURNS UUID {
+  
+  // Validate username uniqueness
+  OPTIONAL MATCH (existing:Account WHERE existing.username = username)
+  IF existing IS NOT NULL THEN
+    THROW 'Username already exists: ' + username;
+  END IF;
+  
+  // Create account
+  CREATE (account:Account:Entity {
+    id: gen_random_uuid(),
+    username: username,
+    password_hash: password_hash,
+    password_changed_at: CURRENT_TIMESTAMP(),
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  // Link to email if provided
+  IF email IS NOT NULL THEN
+    // Create or find email
+    MERGE (email_node:Email:Entity {address: email})
+    ON CREATE SET email_node.id = gen_random_uuid(),
+                  email_node.created_at = CURRENT_TIMESTAMP();
+    
+    CREATE (account)-[:HAS_EMAIL {is_primary: true}]->(email_node);
+  END IF;
+  
+  // Assign initial roles
+  FOR role_name IN initial_roles DO
+    MATCH (role:Role WHERE role.name = role_name)
+    CREATE (account)-[:HAS_ROLE {granted_at: CURRENT_TIMESTAMP()}]->(role);
+  END FOR;
+  
+  RETURN account.id;
+};
+
+// Function to authenticate user
+CREATE FUNCTION authenticate_user(
+  username STRING,
+  password_hash STRING,
+  ip_address STRING DEFAULT NULL,
+  user_agent STRING DEFAULT NULL
+) RETURNS (account_id UUID, session_token STRING) {
+  
+  // Find account
+  MATCH (account:Account WHERE account.username = username AND account.is_active = true)
+  
+  // Check if account is locked
+  IF account.locked_until IS NOT NULL AND account.locked_until > CURRENT_TIMESTAMP() THEN
+    THROW 'Account is temporarily locked';
+  END IF;
+  
+  // Verify password
+  IF account.password_hash != password_hash THEN
+    // Increment failed attempts
+    SET account.failed_login_attempts = account.failed_login_attempts + 1;
+    
+    // Lock account after 5 failed attempts
+    IF account.failed_login_attempts >= 5 THEN
+      SET account.locked_until = CURRENT_TIMESTAMP() + duration('PT1H');
+    END IF;
+    
+    CALL touch_entity(account.id);
+    THROW 'Invalid credentials';
+  END IF;
+  
+  // Reset failed attempts on successful login
+  SET account.failed_login_attempts = 0,
+      account.locked_until = NULL,
+      account.last_login = CURRENT_TIMESTAMP();
+  
+  // Create session
+  CREATE (session:Session:Entity:Timestamped {
+    id: gen_random_uuid(),
+    token: gen_random_uuid(), // In practice, use proper session token generation
+    expires_at: CURRENT_TIMESTAMP() + duration('PT8H'), // 8 hour session
+    ip_address: ip_address,
+    user_agent: user_agent,
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  // Link session to account
+  CREATE (account)-[:HAS_SESSION]->(session);
+  CREATE (session)-[:BELONGS_TO]->(account);
+  
+  CALL touch_entity(account.id);
+  
+  RETURN {account_id: account.id, session_token: session.token};
+};
+
+// Function to check permissions
+CREATE FUNCTION check_permission(
+  account_id UUID,
+  resource STRING,
+  action STRING
+) RETURNS BOOLEAN {
+  
+  // Check if user has direct or role-based permission
+  MATCH (account:Account WHERE account.id = account_id)
+  OPTIONAL MATCH (account)-[:HAS_ROLE]->(role:Role)-[:HAS_PERMISSION]->(perm:Permission)
+  WHERE perm.resource = resource AND (perm.action = action OR perm.action = '*')
+  
+  RETURN count(perm) > 0;
+};
+
+// Function to grant role to account
+CREATE FUNCTION grant_role(
+  account_id UUID,
+  role_name STRING,
+  granted_by UUID DEFAULT NULL
+) {
+  
+  MATCH (account:Account WHERE account.id = account_id),
+        (role:Role WHERE role.name = role_name)
+  
+  // Check if already has role
+  OPTIONAL MATCH (account)-[existing:HAS_ROLE]->(role)
+  IF existing IS NOT NULL THEN
+    RETURN; // Already has role
+  END IF;
+  
+  // Grant role
+  CREATE (account)-[:HAS_ROLE {
+    granted_at: CURRENT_TIMESTAMP(),
+    granted_by: granted_by
+  }]->(role);
+  
+  CALL touch_entity(account.id);
+};
+
+// Function to create permission
+CREATE FUNCTION create_permission(
+  name STRING,
+  resource STRING,
+  action STRING,
+  scope STRING DEFAULT 'global',
+  description STRING DEFAULT NULL
+) RETURNS UUID {
+  
+  CREATE (perm:Permission:Entity {
+    id: gen_random_uuid(),
+    name: name,
+    resource: resource,
+    action: action,
+    scope: scope,
+    description: description,
+    created_at: CURRENT_TIMESTAMP()
+  });
+  
+  RETURN perm.id;
+};
+
+// Function to invalidate session
+CREATE FUNCTION logout_session(session_token STRING) {
+  
+  MATCH (session:Session WHERE session.token = session_token)
+  SET session.is_active = false;
+  
+  CALL touch_entity(session.id);
+};
+
+// --- Query Patterns ---
+
+// Get user's effective permissions
+MATCH (account:Account WHERE account.id = $account_id)
+-[:HAS_ROLE]->(role:Role)-[:HAS_PERMISSION]->(perm:Permission)
+RETURN DISTINCT perm.resource, perm.action, perm.scope
+ORDER BY perm.resource, perm.action;
+
+// Find accounts with specific permission
+MATCH (account:Account)-[:HAS_ROLE]->(role:Role)
+-[:HAS_PERMISSION]->(perm:Permission)
+WHERE perm.resource = $resource AND perm.action = $action
+RETURN DISTINCT account;
+
+// Get active sessions for an account
+MATCH (account:Account WHERE account.id = $account_id)
+-[:HAS_SESSION]->(session:Session)
+WHERE session.is_active = true AND session.expires_at > CURRENT_TIMESTAMP()
+RETURN session;
+
+// Find role hierarchy
+MATCH path = (role:Role)-[:INHERITS_FROM*]->(parent:Role)
+WHERE role.name = $role_name
+RETURN path;
+
+// Find expired sessions
+MATCH (session:Session)
+WHERE session.expires_at < CURRENT_TIMESTAMP() AND session.is_active = true
+RETURN session;
+
+// Get provider usage statistics
+MATCH (account:Account)-[:AUTHENTICATED_VIA]->(provider:AuthProvider)
+RETURN provider.name, count(account) AS user_count
+ORDER BY user_count DESC;
+
+// --- Setup Standard Auth Data ---
+
+// Create standard authentication methods
+CREATE (password_method:AuthMethod:Entity {
+  id: gen_random_uuid(),
+  name: 'password',
+  description: 'Username and password authentication',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+CREATE (oauth2_method:AuthMethod:Entity {
+  id: gen_random_uuid(),
+  name: 'oauth2',
+  description: 'OAuth 2.0 authentication',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+CREATE (saml_method:AuthMethod:Entity {
+  id: gen_random_uuid(),
+  name: 'saml',
+  description: 'SAML 2.0 authentication',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+// Create standard roles
+CREATE (admin_role:Role:Entity {
+  id: gen_random_uuid(),
+  name: 'admin',
+  description: 'System administrator',
+  is_system_role: true,
+  created_at: CURRENT_TIMESTAMP()
+});
+
+CREATE (user_role:Role:Entity {
+  id: gen_random_uuid(),
+  name: 'user',
+  description: 'Standard user',
+  is_system_role: true,
+  created_at: CURRENT_TIMESTAMP()
+});
+
+CREATE (viewer_role:Role:Entity {
+  id: gen_random_uuid(),
+  name: 'viewer',
+  description: 'Read-only access',
+  is_system_role: true,
+  created_at: CURRENT_TIMESTAMP()
+});
+
+// Create standard permissions
+CALL create_permission('read_all', '*', 'read', 'global', 'Read access to all resources');
+CALL create_permission('write_all', '*', 'write', 'global', 'Write access to all resources');
+CALL create_permission('admin_all', '*', '*', 'global', 'Full administrative access');
+
+// Link roles to permissions
+MATCH (admin:Role WHERE admin.name = 'admin'),
+      (user:Role WHERE user.name = 'user'),
+      (viewer:Role WHERE viewer.name = 'viewer'),
+      (read_perm:Permission WHERE read_perm.name = 'read_all'),
+      (write_perm:Permission WHERE write_perm.name = 'write_all'),
+      (admin_perm:Permission WHERE admin_perm.name = 'admin_all')
+
+CREATE (admin)-[:HAS_PERMISSION]->(admin_perm);
+CREATE (user)-[:HAS_PERMISSION]->(read_perm);
+CREATE (user)-[:HAS_PERMISSION]->(write_perm);
+CREATE (viewer)-[:HAS_PERMISSION]->(read_perm);
+
+// Role inheritance
+CREATE (admin)-[:INHERITS_FROM]->(user);
+CREATE (user)-[:INHERITS_FROM]->(viewer);
+
+// --- Migration Notes ---
+// This GQL migration creates a comprehensive authentication/authorization graph:
+// 1. Account nodes replace auth.account tables
+// 2. RBAC implemented through HAS_ROLE and HAS_PERMISSION edges
+// 3. Session management with temporal validity using Timestamped entities
+// 4. Provider integration for federated authentication
+// 5. Permission checking through graph traversal
+// 6. Role inheritance through INHERITS_FROM edges
+// 7. MFA support with encrypted secrets
+// 8. Uses Geode's built-in audit system for security event tracking

@@ -1,0 +1,342 @@
+// GQL Graph Migration: 015_orgs.gql
+// Converts VDB organizations data to graph-based organization entities
+// Based on ../../../vdb/migrations/015_orgs.sql
+
+// --- Organization Schema Definition ---
+
+CREATE LABEL Organization;
+
+// Organization entity
+CREATE (org:Organization:Entity {
+  id: UUID DEFAULT gen_random_uuid(),
+  name: STRING NOT NULL,
+  acronym: STRING,
+  description: STRING,
+  organization_type: STRING, // standards_body, non_profit, government_agency, etc.
+  founded: DATE,
+  website: STRING,
+  country: STRING,
+  created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  updated_at: TIMESTAMP,
+  metadata: JSONB
+});
+
+// --- Edge Types for Organization Relationships ---
+
+CREATE LABEL TYPE EDGE OWNS_DOMAIN; // Organization -> Domain
+CREATE LABEL TYPE EDGE COLLABORATES_WITH; // Organization -> Organization
+CREATE LABEL TYPE EDGE OPERATES_UNDER; // Organization -> Organization
+CREATE LABEL TYPE EDGE RELATED_TO; // Organization -> Organization
+CREATE LABEL TYPE EDGE COORDINATES_WITH; // Organization -> Organization
+CREATE LABEL TYPE EDGE CONTRACTS_WITH; // Organization -> Organization
+
+// --- Constraints and Indexes ---
+
+CREATE CONSTRAINT org_id_unique ON (:Organization) ASSERT id IS UNIQUE;
+CREATE CONSTRAINT org_name_unique ON (:Organization) ASSERT name IS UNIQUE;
+
+CREATE INDEX org_acronym_idx ON (:Organization) (acronym);
+CREATE INDEX org_type_idx ON (:Organization) (organization_type);
+CREATE INDEX org_country_idx ON (:Organization) (country);
+CREATE INDEX org_founded_idx ON (:Organization) (founded);
+
+// --- Create Standard Organizations ---
+
+// Internet Engineering Task Force
+CALL create_domain('ietf.org');
+CREATE (ietf:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'Internet Engineering Task Force',
+  acronym: 'IETF',
+  description: 'Develops and maintains Internet standards and protocols',
+  organization_type: 'standards_body',
+  founded: date('1986-01-01'),
+  website: 'https://ietf.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+// Link IETF to its domain
+MATCH (ietf_domain:Domain WHERE ietf_domain.name = 'ietf.org.')
+CREATE (ietf)-[:OWNS_DOMAIN]->(ietf_domain);
+
+// Internet Corporation for Assigned Names and Numbers
+CALL create_domain('icann.org');
+CREATE (icann:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'Internet Corporation for Assigned Names and Numbers',
+  acronym: 'ICANN',
+  description: 'Coordinates global Internet unique identifier systems',
+  organization_type: 'non_profit',
+  founded: date('1998-09-18'),
+  website: 'https://icann.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (icann_domain:Domain WHERE icann_domain.name = 'icann.org.')
+CREATE (icann)-[:OWNS_DOMAIN]->(icann_domain);
+
+// Internet Assigned Numbers Authority
+CALL create_domain('iana.org');
+CREATE (iana:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'Internet Assigned Numbers Authority',
+  acronym: 'IANA',
+  description: 'Manages global coordination of DNS root, IP addressing, and other Internet protocol resources',
+  organization_type: 'authority',
+  founded: date('1988-01-01'),
+  website: 'https://iana.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (iana_domain:Domain WHERE iana_domain.name = 'iana.org.')
+CREATE (iana)-[:OWNS_DOMAIN]->(iana_domain);
+
+// World Wide Web Consortium
+CALL create_domain('w3.org');
+CREATE (w3c:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'World Wide Web Consortium',
+  acronym: 'W3C',
+  description: 'Develops Web standards and guidelines',
+  organization_type: 'standards_body',
+  founded: date('1994-10-01'),
+  website: 'https://w3.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (w3c_domain:Domain WHERE w3c_domain.name = 'w3.org.')
+CREATE (w3c)-[:OWNS_DOMAIN]->(w3c_domain);
+
+// International Organization for Standardization
+CALL create_domain('iso.org');
+CREATE (iso:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'International Organization for Standardization',
+  acronym: 'ISO',
+  description: 'Develops and publishes international standards',
+  organization_type: 'standards_body',
+  founded: date('1947-02-23'),
+  website: 'https://iso.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (iso_domain:Domain WHERE iso_domain.name = 'iso.org.')
+CREATE (iso)-[:OWNS_DOMAIN]->(iso_domain);
+
+// International Telecommunication Union
+CALL create_domain('itu.int');
+CREATE (itu:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'International Telecommunication Union',
+  acronym: 'ITU',
+  description: 'UN specialized agency for information and communication technologies',
+  organization_type: 'international_organization',
+  founded: date('1865-05-17'),
+  website: 'https://itu.int',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (itu_domain:Domain WHERE itu_domain.name = 'itu.int.')
+CREATE (itu)-[:OWNS_DOMAIN]->(itu_domain);
+
+// OASIS (Organization for the Advancement of Structured Information Standards)
+CALL create_domain('oasis-open.org');
+CREATE (oasis:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'Organization for the Advancement of Structured Information Standards',
+  acronym: 'OASIS',
+  description: 'Develops open standards for security, IoT, energy, content tech, emergency management, and other areas',
+  organization_type: 'standards_body',
+  founded: date('1993-01-01'),
+  website: 'https://oasis-open.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (oasis_domain:Domain WHERE oasis_domain.name = 'oasis-open.org.')
+CREATE (oasis)-[:OWNS_DOMAIN]->(oasis_domain);
+
+// International Electrotechnical Commission
+CALL create_domain('iec.ch');
+CREATE (iec:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'International Electrotechnical Commission',
+  acronym: 'IEC',
+  description: 'Prepares and publishes international standards for electrical and electronic technologies',
+  organization_type: 'standards_body',
+  founded: date('1906-06-26'),
+  website: 'https://iec.ch',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (iec_domain:Domain WHERE iec_domain.name = 'iec.ch.')
+CREATE (iec)-[:OWNS_DOMAIN]->(iec_domain);
+
+// Institute of Electrical and Electronics Engineers
+CALL create_domain('ieee.org');
+CALL create_domain('ieeexplore.ieee.org');
+CREATE (ieee:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'Institute of Electrical and Electronics Engineers',
+  acronym: 'IEEE',
+  description: 'Professional association for electronic engineering and electrical engineering',
+  organization_type: 'professional_association',
+  founded: date('1963-01-01'),
+  website: 'https://ieee.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (ieee_domain:Domain WHERE ieee_domain.name = 'ieee.org.')
+MATCH (ieee_explore:Domain WHERE ieee_explore.name = 'ieeexplore.ieee.org.')
+CREATE (ieee)-[:OWNS_DOMAIN]->(ieee_domain);
+CREATE (ieee)-[:OWNS_DOMAIN]->(ieee_explore);
+
+// Association for Computing Machinery
+CALL create_domain('acm.org');
+CALL create_domain('dl.acm.org');
+CREATE (acm:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'Association for Computing Machinery',
+  acronym: 'ACM',
+  description: 'International learned society for computing',
+  organization_type: 'professional_association',
+  founded: date('1947-01-01'),
+  website: 'https://acm.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (acm_domain:Domain WHERE acm_domain.name = 'acm.org.')
+MATCH (acm_dl:Domain WHERE acm_dl.name = 'dl.acm.org.')
+CREATE (acm)-[:OWNS_DOMAIN]->(acm_domain);
+CREATE (acm)-[:OWNS_DOMAIN]->(acm_dl);
+
+// MITRE Corporation
+CALL create_domain('mitre.org');
+CREATE (mitre:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'MITRE Corporation',
+  acronym: 'MITRE',
+  description: 'Not-for-profit organization that operates federally funded R&D centers',
+  organization_type: 'research_organization',
+  founded: date('1958-01-01'),
+  website: 'https://mitre.org',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (mitre_domain:Domain WHERE mitre_domain.name = 'mitre.org.')
+CREATE (mitre)-[:OWNS_DOMAIN]->(mitre_domain);
+
+// National Institute of Standards and Technology
+CALL create_domain('nist.gov');
+CALL create_domain('nvd.nist.gov');
+CREATE (nist:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'National Institute of Standards and Technology',
+  acronym: 'NIST',
+  description: 'US federal agency that develops and promotes measurement, standards, and technology',
+  organization_type: 'government_agency',
+  founded: date('1901-03-03'),
+  website: 'https://nist.gov',
+  country: 'USA',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (nist_domain:Domain WHERE nist_domain.name = 'nist.gov.')
+MATCH (nvd_domain:Domain WHERE nvd_domain.name = 'nvd.nist.gov.')
+CREATE (nist)-[:OWNS_DOMAIN]->(nist_domain);
+CREATE (nist)-[:OWNS_DOMAIN]->(nvd_domain);
+
+// American National Standards Institute
+CALL create_domain('ansi.org');
+CREATE (ansi:Organization:Entity {
+  id: gen_random_uuid(),
+  name: 'American National Standards Institute',
+  acronym: 'ANSI',
+  description: 'Private non-profit organization that oversees development of voluntary consensus standards',
+  organization_type: 'standards_body',
+  founded: date('1918-10-19'),
+  website: 'https://ansi.org',
+  country: 'USA',
+  created_at: CURRENT_TIMESTAMP()
+});
+
+MATCH (ansi_domain:Domain WHERE ansi_domain.name = 'ansi.org.')
+CREATE (ansi)-[:OWNS_DOMAIN]->(ansi_domain);
+
+// --- Create Organization Relationships ---
+
+// Standards collaboration relationships
+MATCH (iso:Organization WHERE iso.acronym = 'ISO'),
+      (iec:Organization WHERE iec.acronym = 'IEC')
+CREATE (iso)-[:COLLABORATES_WITH {type: 'joint_standards', established: date('1976-01-01')}]->(iec);
+
+// IANA operates under ICANN
+MATCH (iana:Organization WHERE iana.acronym = 'IANA'),
+      (icann:Organization WHERE icann.acronym = 'ICANN')
+CREATE (iana)-[:OPERATES_UNDER]->(icann);
+
+// IEEE and ACM are both computing professional associations
+MATCH (ieee:Organization WHERE ieee.acronym = 'IEEE'),
+      (acm:Organization WHERE acm.acronym = 'ACM')
+CREATE (ieee)-[:RELATED_TO {type: 'professional_peers', domain: 'computing'}]->(acm);
+
+// Government/research relationships
+MATCH (nist:Organization WHERE nist.acronym = 'NIST'),
+      (ansi:Organization WHERE ansi.acronym = 'ANSI'),
+      (mitre:Organization WHERE mitre.acronym = 'MITRE')
+CREATE (nist)-[:COORDINATES_WITH]->(ansi);
+CREATE (nist)-[:CONTRACTS_WITH]->(mitre);
+
+// International coordination
+MATCH (itu:Organization WHERE itu.acronym = 'ITU'),
+      (ietf:Organization WHERE ietf.acronym = 'IETF'),
+      (icann:Organization WHERE icann.acronym = 'ICANN')
+CREATE (itu)-[:COORDINATES_WITH {scope: 'telecommunications'}]->(ietf);
+CREATE (itu)-[:COORDINATES_WITH {scope: 'internet_governance'}]->(icann);
+
+// --- Query Examples ---
+
+// Find all standards organizations
+MATCH (org:Organization WHERE org.organization_type = 'standards_body')
+RETURN org.name, org.acronym, org.founded
+ORDER BY org.founded;
+
+// Get organization hierarchy and relationships
+MATCH (org:Organization WHERE org.acronym = $acronym)
+OPTIONAL MATCH (org)-[rel]-(related:Organization)
+RETURN org, type(rel) AS relationship_type, related.name AS related_org;
+
+// Find organizations by domain
+MATCH (org:Organization)-[:OWNS_DOMAIN]->(domain:Domain WHERE domain.name = $domain_name)
+RETURN org;
+
+// Get all domains owned by an organization
+MATCH (org:Organization WHERE org.acronym = $acronym)-[:OWNS_DOMAIN]->(domain:Domain)
+RETURN domain.name
+ORDER BY domain.name;
+
+// Find organizations founded in a specific time period
+MATCH (org:Organization)
+WHERE org.founded >= date($start_date) AND org.founded <= date($end_date)
+RETURN org
+ORDER BY org.founded;
+
+// Find collaborative networks
+MATCH path = (org1:Organization)-[:COLLABORATES_WITH|COORDINATES_WITH*1..3]-(org2:Organization)
+WHERE org1.acronym = $acronym
+RETURN path;
+
+// Get organization influence score (based on connections)
+MATCH (org:Organization)
+OPTIONAL MATCH (org)-[rel]-(connected:Organization)
+RETURN org.name, org.acronym, count(connected) AS connection_count
+ORDER BY connection_count DESC;
+
+// --- Migration Notes ---
+// This GQL migration creates a graph representation of key organizations:
+// 1. Organization nodes replace organization tables with rich metadata
+// 2. OWNS_DOMAIN edges link organizations to their domains
+// 3. Relationship edges (COLLABORATES_WITH, OPERATES_UNDER, etc.) model org interactions
+// 4. Graph structure enables complex organizational relationship queries
+// 5. Domain ownership is explicitly modeled for DNS authority tracking
+// 6. Uses Geode's built-in audit system for tracking organizational changes
+// 7. Natural representation of collaborative networks and hierarchies
