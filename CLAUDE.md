@@ -144,6 +144,34 @@ make docker-test
 make docker-ci
 ```
 
+### Nix Commands
+```bash
+# Build with Nix
+nix build                    # Build default package
+nix build .#geode-debug      # Build debug version
+nix build .#geode-static     # Build static version
+nix build .#geode-docker     # Build Docker image
+
+# Run with Nix
+nix run                      # Run Geode
+nix run . -- serve --help    # Run with arguments
+nix run .#geode-debug        # Run debug version
+
+# Development environments
+nix develop                  # Enter default dev shell
+nix develop .#ci             # CI environment
+nix develop .#deploy         # Deployment environment
+
+# Templates and deployment
+nix flake init -t .#geode-service     # Create NixOS service template
+nix flake init -t .#geode-dev         # Create dev environment template
+nix run .#generate-docker-compose     # Generate docker-compose.yml
+nix run .#generate-k8s-manifests      # Generate Kubernetes manifests
+
+# Testing Nix configurations
+nix flake check              # Validate all configurations
+```
+
 ### Development Verification
 ```bash
 # Full E2E verification (strict)
@@ -417,8 +445,11 @@ make dataset-integration-test
 - Go (for client libraries)
 - Docker (for containerized testing)
 - Git submodules: `git submodule update --init --recursive`
+- **Optional**: Nix (for declarative builds and deployment)
 
 ### Quick Start
+
+#### Traditional Build (Zig/Make)
 ```bash
 # Initialize development environment
 make dev-setup
@@ -431,6 +462,26 @@ make test
 
 # Start development server
 ./zig-out/bin/geoded --data_dir ./data --log_json
+```
+
+#### Nix Build (Declarative)
+```bash
+# Build and run with Nix
+nix run
+
+# Enter development environment
+nix develop
+
+# Build Docker image
+nix build .#geode-docker && docker load < result
+
+# Deploy on NixOS (see nix/README.md for full configuration)
+# Add to configuration.nix:
+services.geode = {
+  enable = true;
+  network.quicPort = 8443;
+  performance.memoryLimit = "4GB";
+};
 ```
 
 ### Submodules

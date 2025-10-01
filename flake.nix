@@ -1,5 +1,5 @@
 {
-  description = "dev";
+  description = "Geode Graph Database - Open-source ACID-compliant graph database implementing ISO/IEC 39075:2024 GQL";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -24,62 +24,260 @@
           pkgs = import nixpkgs {
             inherit system;
             config = { allowUnfree = true; };
+            overlays = [ self.overlays.default ];
           };
 
           zigPkg = dev-env.packages.${system}.zigPackages;
           quicPkg = quic.packages.${system}.quic;
           quicDebugPkg = quic.packages.${system}.quic-debug;
 
-          # Build zcap packages - use dev-env zig (0.15.1)
-          zcapPkg = pkgs.callPackage ./nix/zcap.nix {
+          # Geode package variants
+          geodePackage = pkgs.callPackage ./nix/packages/geode.nix {
+            zig = zigPkg;
+            quic = quicPkg;
+            enableOptimization = true;
+            enableQuic = true;
+          };
+
+          geodeDebugPackage = pkgs.callPackage ./nix/packages/geode.nix {
+            zig = zigPkg;
+            quic = quicDebugPkg;
+            enableOptimization = false;
+            enableQuic = true;
+            enableSentinel = true;
+          };
+
+          geodeStaticPackage = pkgs.callPackage ./nix/packages/geode.nix {
+            zig = zigPkg;
+            quic = quicPkg;
+            enableOptimization = true;
+            enableQuic = true;
+          };
+
+          # Build zcap packages for compatibility (if needed)
+          zcapPkg = pkgs.callPackage ./nix/packages/zcap.nix {
             zig = zigPkg;
             optimize = "ReleaseFast";
             enableXdp = false;
           };
           
-          zcapStaticPkg = pkgs.callPackage ./nix/zcap.nix {
-            zig = zigPkg;
-            optimize = "ReleaseFast";
-            enableXdp = false;
-            # For static builds, we might want different flags
-          };
-          
-          # Single source of truth for the development environment packages
+          # Development shell packages
           devShellPackages = [
             quicPkg
             quicDebugPkg
-            pkgs.zigPkg
+            zigPkg
             pkgs.tcpdump
             pkgs.file
+            pkgs.openssl
+            pkgs.pkg-config
+            pkgs.docker
+            pkgs.docker-compose
+            pkgs.systemd
+            pkgs.prometheus
+            pkgs.grafana
           ];
+
+          # Documentation packages
+          docs = pkgs.stdenv.mkDerivation {
+            name = "geode-docs";
+            src = ./docs;
+            buildCommand = ''
+              mkdir -p $out/share/doc/geode
+              cp -r $src/* $out/share/doc/geode/
+            '';
+          };
+
         in
         {
           packages = {
+            # Main Geode packages
+            geode = geodePackage;
+            geode-debug = geodeDebugPackage;
+            geode-static = geodeStaticPackage;
+            
+            # Legacy compatibility
             zcap = zcapPkg;
-            zcap-static = zcapStaticPkg;
-            default = zcapPkg;
+            zcap-static = zcapPkg;
+            
+            # Documentation
+            docs = docs;
+            
+            # Default package
+            default = geodePackage;
           };
-          devShell = pkgs.mkShell {
-            shellHook = '''';
-            env = { };
-            packages = builtins.filter (p: p != null) (
-              (with dev-env.packages.${system}; [
-                zigPackages
-                goPackages
-                commonPackages
-              ])
-              ++ (with pkgs; [
-                # glibc is Linux-specific, so only include it on Linux systems
-                (if pkgs.stdenv.isLinux then glibc else null)
-                file
-                # wine should only be included on x86_64-linux
-                (if system == "x86_64-linux" then wine else null)
-              ])
-            );
+
+          # Development shell with all necessary tools
+          devShells = {
+            default = pkgs.mkShell {
+              name = "geode-dev";
+              shellHook = ''
+                echo "🔺 Geode Development Environment"
+                echo "Zig version: $(zig version)"
+                echo "Available commands:"
+                echo "  make build      - Build Geode"
+                echo "  make test       - Run tests"
+                echo "  make release    - Build release version"
+                echo "  make serve      - Start development server"
+                echo "  nix run         - Run Geode daemon"
+                echo ""
+                echo "For NixOS module usage, see: ./nix/modules/geode-daemon.nix"
+              '';
+              
+              env = {
+                GEODE_DEV = "1";
+                GEODE_NIX_BUILD = "1";
+              };
+              
+              packages = builtins.filter (p: p != null) (
+                (with dev-env.packages.${system}; [
+                  zigPackages
+                  goPackages
+                  commonPackages
+                ])
+                ++ (with pkgs; [
+                  # Core development tools
+                  file
+                  pkg-config
+                  openssl
+                  zlib
+                  libuv
+                  
+                  # Debugging and analysis
+                  gdb
+                  valgrind
+                  strace
+                  
+                  # Network tools
+                  tcpdump
+                  wireshark-cli
+                  netcat-gnu
+                  
+                  # Container and orchestration
+                  docker
+                  docker-compose
+                  
+                  # Monitoring and observability
+                  prometheus
+                  grafana
+                  
+                  # Documentation and development
+                  mdbook
+                  plantuml
+                  
+                  # Testing tools
+                  fuzz
+                  
+                  # Platform specific
+                  (if pkgs.stdenv.isLinux then glibc else null)
+                  (if system == "x86_64-linux" then wine else null)
+                ])
+              );
+            };
+
+            # Minimal shell for CI/automation
+            ci = pkgs.mkShell {
+              name = "geode-ci";
+              packages = [
+                zigPkg
+                pkgs.git
+                pkgs.openssl
+                pkgs.pkg-config
+              ];
+            };
+
+            # Production deployment shell
+            deploy = pkgs.mkShell {
+              name = "geode-deploy";
+              packages = [
+                geodePackage
+                pkgs.systemd
+                pkgs.openssl
+                pkgs.docker
+                pkgs.kubectl
+                pkgs.terraform
+              ];
+            };
+          };
+
+          # Apps for easy running
+          apps = {
+            geode = {
+              type = "app";
+              program = "${geodePackage}/bin/geode";
+            };
+            
+            geode-debug = {
+              type = "app";
+              program = "${geodeDebugPackage}/bin/geode";
+            };
+            
+            default = {
+              type = "app";
+              program = "${geodePackage}/bin/geode";
+            };
+          };
+
+          # NixOS module
+          nixosModules.geode = import ./nix/modules/geode-daemon.nix;
+
+          # Formatter
+          formatter = pkgs.nixpkgs-fmt;
+
+          # Checks for CI
+          checks = {
+            # Package builds
+            geode-package = geodePackage;
+            geode-debug-package = geodeDebugPackage;
+            
+            # Module evaluation test
+            nixos-module-test = pkgs.nixos {
+              imports = [ self.nixosModules.geode ];
+              services.geode.enable = true;
+            };
+            
+            # Static analysis
+            nix-lint = pkgs.runCommand "nix-lint" { } ''
+              ${pkgs.statix}/bin/statix check ${./.}
+              touch $out
+            '';
           };
         };
+
+      # System-independent outputs
+      systemAgnosticOutputs = {
+        # Overlay for adding Geode to nixpkgs
+        overlays.default = final: prev: {
+          geode = final.callPackage ./nix/packages/geode.nix {
+            zig = final.zig;
+          };
+        };
+
+        # NixOS modules
+        nixosModules = {
+          geode = import ./nix/modules/geode-daemon.nix;
+          default = import ./nix/modules/geode-daemon.nix;
+        };
+
+        # Templates for new projects
+        templates = {
+          geode-service = {
+            path = ./nix/templates/geode-service;
+            description = "NixOS configuration template for Geode service";
+          };
+          
+          geode-dev = {
+            path = ./nix/templates/geode-dev;
+            description = "Development environment template for Geode";
+          };
+        };
+
+        # Hydra jobsets
+        hydraJobs = nixpkgs.lib.mapAttrs (system: packages: packages) self.packages;
+      };
+
     in
-    flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
+    flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system)
+    // systemAgnosticOutputs;
 
   nixConfig = {
     extra-substituters = [ "https://spyder.cachix.org" ];
