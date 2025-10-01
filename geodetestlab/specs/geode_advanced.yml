@@ -1,0 +1,266 @@
+version: "1.0"
+name: "Geode Advanced Features Tests"
+description: "Advanced Geode functionality including complex queries, authentication, and performance testing"
+
+cli:
+  binary: "geode"
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 90000
+    cleanup: true
+    args: ["--log-level", "debug"]
+  client:
+    timeout_ms: 60000
+    format: "json"
+
+secrets:
+  admin_token:
+    source: "env"
+    key: "GEODE_ADMIN_TOKEN"
+    required: false
+  user_password:
+    source: "env"
+    key: "GEODE_USER_PASSWORD"
+    required: false
+
+fuzz:
+  enabled: true
+  provider: "mock"
+  max_cases: 10
+  seed: 123
+  geode_specific: true
+  include_gql: true
+  include_auth: true
+  prompt_template: |
+    Generate sophisticated test cases for Geode graph database.
+    Focus on complex GQL queries, schema operations, and edge cases.
+    Include both valid and invalid scenarios for comprehensive testing.
+
+tests:
+  - name: "complex-graph-creation"
+    description: "Create a complex graph structure"
+    args: ["query", |
+      CREATE 
+        (alice:Person {name: 'Alice', age: 30, city: 'New York'}),
+        (bob:Person {name: 'Bob', age: 25, city: 'San Francisco'}),
+        (carol:Person {name: 'Carol', age: 35, city: 'London'}),
+        (company:Company {name: 'TechCorp', founded: 2010}),
+        (product:Product {name: 'Database', version: '1.0'}),
+        (alice)-[:WORKS_FOR {since: 2020}]->(company),
+        (bob)-[:WORKS_FOR {since: 2021}]->(company),
+        (carol)-[:MANAGES]->(alice),
+        (alice)-[:DEVELOPED]->(product),
+        (company)-[:OWNS]->(product)
+      RETURN alice, bob, carol, company, product
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        contains_node:
+          name: "Alice"
+        contains_edge:
+          since: 2020
+    tags: ["complex", "graph", "create"]
+
+  - name: "path-traversal-query"
+    description: "Complex path traversal and analysis"
+    args: ["query", |
+      MATCH path = (person:Person)-[:WORKS_FOR*1..2]->(org)-[:OWNS]->(product:Product)
+      WHERE person.age > 25
+      RETURN 
+        person.name AS employee,
+        length(path) AS path_length,
+        product.name AS product_name,
+        path
+      ORDER BY person.age DESC
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 0
+        columns: ["employee", "path_length", "product_name", "path"]
+    tags: ["complex", "query", "path"]
+
+  - name: "aggregation-analysis"
+    description: "Advanced aggregation and analytics"
+    args: ["query", |
+      MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
+      WITH c.name AS company, 
+           count(p) AS employee_count,
+           avg(p.age) AS avg_age,
+           collect(p.name) AS employees
+      WHERE employee_count > 0
+      RETURN company, employee_count, avg_age, employees
+      ORDER BY employee_count DESC
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 0
+        max_rows: 10
+    tags: ["complex", "aggregation", "analytics"]
+
+  - name: "temporal-query"
+    description: "Time-based query with temporal functions"
+    args: ["query", |
+      MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
+      WHERE r.since <= 2021
+      WITH p, r, c, (2024 - r.since) AS years_employed
+      RETURN 
+        p.name AS employee,
+        c.name AS company,
+        r.since AS start_year,
+        years_employed
+      ORDER BY years_employed DESC
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 0
+    tags: ["temporal", "query", "analytics"]
+
+  - name: "subquery-with-union"
+    description: "Complex subquery with UNION operations"
+    args: ["query", |
+      CALL {
+        MATCH (p:Person) RETURN p.name AS name, 'Person' AS type
+        UNION
+        MATCH (c:Company) RETURN c.name AS name, 'Company' AS type
+        UNION  
+        MATCH (pr:Product) RETURN pr.name AS name, 'Product' AS type
+      }
+      WITH name, type, count(*) AS entity_count
+      RETURN type, collect(name) AS entities, sum(entity_count) AS total
+      ORDER BY total DESC
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 1
+        max_rows: 3
+        columns: ["type", "entities", "total"]
+    tags: ["complex", "subquery", "union"]
+
+  - name: "schema-introspection"
+    description: "Explore database schema and structure"
+    args: ["query", |
+      CALL {
+        MATCH (n) 
+        UNWIND labels(n) AS label
+        RETURN DISTINCT label
+      }
+      WITH collect(label) AS node_labels
+      CALL {
+        MATCH ()-[r]->()
+        RETURN DISTINCT type(r) AS rel_type
+      }
+      WITH node_labels, collect(rel_type) AS relationship_types
+      RETURN 
+        node_labels,
+        relationship_types,
+        size(node_labels) AS label_count,
+        size(relationship_types) AS rel_type_count
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["node_labels", "relationship_types", "label_count", "rel_type_count"]
+    tags: ["schema", "introspection", "metadata"]
+
+  - name: "performance-bulk-create"
+    description: "Performance test with bulk data creation"
+    timeout_ms: 120000
+    args: ["query", |
+      WITH range(1, 100) AS numbers
+      UNWIND numbers AS i
+      CREATE (n:TestNode {
+        id: i,
+        name: 'node_' + toString(i),
+        category: CASE 
+          WHEN i % 3 = 0 THEN 'A'
+          WHEN i % 3 = 1 THEN 'B' 
+          ELSE 'C'
+        END,
+        created_at: timestamp(),
+        random_value: toInteger(rand() * 1000)
+      })
+      RETURN count(n) AS nodes_created
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["nodes_created"]
+      stdout_json_assert:
+        - expression: "results[0].nodes_created"
+          equals: 100
+    tags: ["performance", "bulk", "create"]
+
+  - name: "performance-complex-matching"
+    description: "Performance test with complex pattern matching"
+    timeout_ms: 60000
+    args: ["query", |
+      MATCH (n:TestNode)
+      WHERE n.category IN ['A', 'B']
+      WITH n.category AS cat, count(n) AS node_count, avg(n.random_value) AS avg_value
+      ORDER BY node_count DESC
+      RETURN cat, node_count, avg_value
+    ]
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 0
+        max_rows: 2
+        execution_time_ms: 30000
+    tags: ["performance", "matching", "analytics"]
+
+  - name: "transaction-rollback-test"
+    description: "Test transaction handling and rollback"
+    args: ["query", "--begin", |
+      CREATE (temp:TempNode {test: true})
+      RETURN temp
+    ]
+    expect:
+      exit_code: 0
+    cleanup: 
+      - "query --rollback"
+    tags: ["transaction", "rollback"]
+
+  - name: "index-performance"
+    description: "Test index usage and performance"
+    setup:
+      - "query \"CREATE INDEX FOR (p:Person) ON (p.name)\""
+    args: ["query", |
+      EXPLAIN MATCH (p:Person) 
+      WHERE p.name = 'Alice' 
+      RETURN p
+    ]
+    expect:
+      exit_code: 0
+      stdout_contains: ["index", "scan"]
+    cleanup:
+      - "query \"DROP INDEX FOR (p:Person) ON (p.name)\""
+    tags: ["index", "performance", "explain"]
+
+  - name: "error-handling-division-by-zero"
+    description: "Test error handling in mathematical operations"
+    args: ["query", "RETURN 10 / 0 AS result"]
+    expect:
+      exit_code: 1
+      stderr_contains: ["division", "zero", "error"]
+    tags: ["error", "math"]
+
+  - name: "memory-cleanup-test"
+    description: "Test memory cleanup with large result sets"
+    args: ["query", "MATCH (n:TestNode) RETURN n LIMIT 1000"]
+    expect:
+      exit_code: 0
+      geode_query:
+        max_rows: 1000
+    tags: ["memory", "performance", "cleanup"]
+
+tags: ["advanced", "performance", "complex"]

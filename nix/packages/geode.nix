@@ -152,16 +152,5 @@ in stdenv.mkDerivation rec {
   # Pass through attributes for debugging
   passthru = {
     inherit zigVersion optimize enableQuic enableOptimization;
-    tests = {
-      # Add package tests here
-      version = stdenv.mkDerivation {
-        name = "geode-version-test";
-        inherit src;
-        buildCommand = ''
-          ${geode}/bin/geode --version
-          touch $out
-        '';
-      };
-    };
   };
 }

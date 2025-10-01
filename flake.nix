@@ -87,6 +87,59 @@
             '';
           };
 
+          # Python environment for geodetestlab
+          pythonWithPackages = pkgs.python3.withPackages (ps: with ps; [
+            typer
+            pydantic
+            rich
+            jmespath
+            psutil
+            keyring
+            pyyaml
+            pytest
+            mypy
+            black
+            isort
+            flake8
+          ]);
+
+          # Geodetestlab package
+          geodetestlab = pkgs.python3Packages.buildPythonApplication {
+            pname = "geodetestlab";
+            version = "0.1.0";
+            src = ./geodetestlab;
+            
+            pyproject = true;
+            build-system = [ pkgs.python3Packages.setuptools ];
+            
+            dependencies = with pkgs.python3Packages; [
+              typer
+              pydantic
+              rich
+              jmespath
+              psutil
+              keyring
+              pyyaml
+            ];
+            
+            nativeCheckInputs = with pkgs.python3Packages; [
+              pytest
+              mypy
+              black
+              isort
+              flake8
+            ];
+            
+            checkPhase = ''
+              python -m pytest tests/ -v
+            '';
+            
+            meta = {
+              description = "CLI testing framework for Geode graph database";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
         in
         {
           packages = {
@@ -101,6 +154,10 @@
             
             # Documentation
             docs = docs;
+            
+            # Python packages
+            python-with-packages = pythonWithPackages;
+            geodetestlab = geodetestlab;
             
             # Default package
             default = geodePackage;
@@ -164,8 +221,8 @@
                   mdbook
                   plantuml
                   
-                  # Testing tools
-                  fuzz
+                  # Python environment for geodetestlab
+                  pythonWithPackages
                   
                   # Platform specific
                   (if pkgs.stdenv.isLinux then glibc else null)
@@ -182,7 +239,26 @@
                 pkgs.git
                 pkgs.openssl
                 pkgs.pkg-config
+                pythonWithPackages
               ];
+            };
+            
+            # Python development shell for geodetestlab
+            python = pkgs.mkShell {
+              name = "geodetestlab-dev";
+              packages = [
+                pythonWithPackages
+                geodePackage
+              ];
+              shellHook = ''
+                echo "🐍 Geodetestlab Development Environment"
+                echo "Python version: $(python --version)"
+                echo "Available commands:"
+                echo "  geodetestlab --help     - Show geodetestlab help"
+                echo "  pytest                  - Run tests"
+                echo "  python -m geodetestlab.cli - Run CLI directly"
+                echo ""
+              '';
             };
 
             # Production deployment shell
@@ -211,6 +287,11 @@
               program = "${geodeDebugPackage}/bin/geode";
             };
             
+            geodetestlab = {
+              type = "app";
+              program = "${geodetestlab}/bin/geodetestlab";
+            };
+            
             default = {
               type = "app";
               program = "${geodePackage}/bin/geode";
@@ -228,6 +309,7 @@
             # Package builds
             geode-package = geodePackage;
             geode-debug-package = geodeDebugPackage;
+            geodetestlab-package = geodetestlab;
             
             # Module evaluation test
             nixos-module-test = pkgs.nixos {
