@@ -1267,7 +1267,6 @@ fn validatePasswordAgainstPolicy(password: []const u8) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
     const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
     defer if (min_length_env) |env| allocator.free(env);
     const min_length = if (min_length_env) |len_str| blk: {
@@ -1317,7 +1316,6 @@ fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8,
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
     const admin_username_env = getEnvVar(allocator, "GEODE_ADMIN_USERNAME");
     defer if (admin_username_env) |env| allocator.free(env);
     const admin_username = admin_username_env orelse "geode";
@@ -1396,7 +1394,6 @@ fn isPassphrase(password: []const u8) bool {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
     // Use configurable minimum words for passphrase validation
     const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
     defer if (min_words_env) |env| allocator.free(env);
@@ -1624,7 +1621,6 @@ fn validateNewPassword(password: []const u8) bool {
                 var gpa2 = std.heap.GeneralPurposeAllocator(.{}){};
                 defer _ = gpa2.deinit();
                 const allocator2 = gpa2.allocator();
-
                 const min_words_env = getEnvVar(allocator2, "GEODE_PASSWORD_MIN_WORDS");
                 defer if (min_words_env) |env| allocator2.free(env);
                 const min_words = if (min_words_env) |words_str| blk: {
