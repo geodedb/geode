@@ -250,7 +250,7 @@ echo "PASS"
 ### CANARY System Integration
 Tests linked to requirements use CANARY markers:
 ```zig
-// CANARY: REQ=REQ-GQL-001; FEATURE="BasicQuery"; STATUS=TESTED; TEST=TestBasicQuery
+// CANARY: REQ=REQ-GQL-001; FEATURE="BasicQuery"; ASPECT=Testing; STATUS=TESTED; TEST=TestBasicQuery; OWNER=test; UPDATED=2025-10-02
 test "TestCANARY_REQ_GQL_001_BasicQuery" {
     // Test implementation
 }

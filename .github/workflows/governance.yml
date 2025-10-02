@@ -38,10 +38,25 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.1
+      - name: Free up disk space
+        run: |
+          # Remove unnecessary software to free up disk space
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+      - name: Clean Go module cache
+        run: |
+          # Clean Go module cache to free up space
+          go clean -modcache || true
+          # Ensure the module is available locally
+          cd tools/canaryscan && go mod download && cd ../..
       - name: Build canary scanner
         run: cd tools/canaryscan && go build -o ../../bin/canaryscan .
       - name: Strict verify GAP_ANALYSIS vs evidence
