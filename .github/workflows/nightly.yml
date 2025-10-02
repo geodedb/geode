@@ -55,7 +55,7 @@ jobs:
         make governance-aggregate
     
     - name: Upload governance artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: governance-report-${{ github.run_id }}
         path: |
@@ -87,7 +87,7 @@ jobs:
         tar czf geode-$VERSION.tar.gz zig-out/
     
     - name: Upload nightly artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nightly-build-${{ github.run_id }}
         path: geode-nightly-*.tar.gz
