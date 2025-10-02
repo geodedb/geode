@@ -1,0 +1,22 @@
+name: Format
+
+on:
+  pull_request:
+    branches: ['**']
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Setup Zig 0.15.1
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Check formatting
+        run: zig fmt --check .
