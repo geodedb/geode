@@ -29,7 +29,7 @@ jobs:
         exit-code: '1'
     
     - name: SBOM generation
-      uses: anchore/syft-action@v0.14.0
+      uses: anchore/syft@v1
       with:
         artifact-name: sbom-${{ github.run_id }}
 
