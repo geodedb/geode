@@ -696,8 +696,8 @@ fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: dia
 fn collectTextDiagnostics(text: []const u8, parse_err_msg: ?[]const u8, out_codes: *[4]diagnostics.Code) usize {
     var tmp: [4]diagnostics.Code = undefined;
     var n: usize = 0;
-    const has_limit = std.mem.indexOf(u8, text, "LIMIT") != null;
-    const has_offset = std.mem.indexOf(u8, text, "OFFSET") != null;
+    // LIMIT alone is allowed without ORDER BY (has_limit removed since not used)
+    const has_offset = std.mem.indexOf(u8, text, "OFFSET") != null or std.mem.indexOf(u8, text, "SKIP") != null;
     const has_order_kw = std.mem.indexOf(u8, text, "ORDER BY") != null;
     var parsed_illegal = false;
     if (parse_err_msg) |msg| {
@@ -705,7 +705,9 @@ fn collectTextDiagnostics(text: []const u8, parse_err_msg: ?[]const u8, out_code
             parsed_illegal = true;
         }
     }
-    if ((has_limit or has_offset) and (!has_order_kw or parsed_illegal)) {
+    // US001: LIMIT with SKIP/OFFSET requires ORDER BY for deterministic pagination
+    // LIMIT alone is allowed without ORDER BY
+    if (has_offset and (!has_order_kw or parsed_illegal)) {
         tmp[n] = .US001;
         n += 1;
     }
@@ -3487,8 +3489,9 @@ pub fn main() !void {
                                     } else |_| {}
                                     continue;
                                 };
-                                if (!profile_mode and (q.limit != null or q.offset != null) and q.order_by == null) {
-                                    // US001 enforcement applies only outside EXPLAIN/PROFILE
+                                // US001: Only enforce for OFFSET/SKIP without ORDER BY (LIMIT alone is allowed)
+                                if (!profile_mode and q.offset != null and q.order_by == null) {
+                                    // US001 enforcement applies only for OFFSET without ORDER BY
                                     writeErrorWithFlags(gpa, stdout_file, diagnostics.Code.US001, diagnostics.defaultMessage(.US001), diagnostics.anchorFor(.US001), &.{}, true);
                                     continue;
                                 }

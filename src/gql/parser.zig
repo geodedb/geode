@@ -548,15 +548,24 @@ pub const Parser = struct {
             }
         }
 
+        // Parse LIMIT and OFFSET in any order
+        // First check for LIMIT
         if (self.cur.kind == .LIMIT) {
             self.advance();
             const n = try self.expect(.integer_lit);
             limit = try std.fmt.parseInt(usize, n.lexeme, 10);
         }
+        // Check for OFFSET/SKIP
         if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
             self.advance();
             const n = try self.expect(.integer_lit);
             offset = try std.fmt.parseInt(usize, n.lexeme, 10);
+        }
+        // Check for LIMIT again (in case it comes after OFFSET)
+        if (limit == null and self.cur.kind == .LIMIT) {
+            self.advance();
+            const n = try self.expect(.integer_lit);
+            limit = try std.fmt.parseInt(usize, n.lexeme, 10);
         }
 
         return .{

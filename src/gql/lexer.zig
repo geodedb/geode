@@ -13,9 +13,13 @@ pub const Lexer = struct {
         self.skipSeparators();
         if (self.idx >= self.src.len) return self.mkTok(.eof, 0);
 
-        if (self.matchMulti()) |tokv| return tokn(tokv);
-
         const c = self.peek();
+        
+        // Handle quotes first before other matching to avoid issues
+        if (c == '\'') return self.scanStringAny(c);
+        if (c == '"') return self.scanDoubleQuoted();
+
+        if (self.matchMulti()) |tokv| return tokn(tokv);
 
         // Check for Unicode identifier start (or ASCII)
         if (c < 128) {
@@ -33,9 +37,6 @@ pub const Lexer = struct {
                 }
             }
         }
-
-        if (c == '"') return self.scanQuotedIdentifier();
-        if (c == '\'') return self.scanStringAny(c);
 
         if (self.matchSingle()) |tokv| return tokn(tokv);
 
@@ -333,31 +334,119 @@ pub const Lexer = struct {
         return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }
 
-    fn scanStringAny(self: *Lexer, quote: u8) t.Token {
+    fn scanDoubleQuoted(self: *Lexer) t.Token {
+        // For now, just use the same logic as single quotes
+        return self.scanStringAny('"');
+    }
+    
+    fn scanDoubleQuoted_OLD(self: *Lexer) t.Token {
+        // Handle double quotes - in GQL context, treat as string literal
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const start = self.idx;
-        self.idx += 1;
+        
+        // Ensure we have an opening quote
+        if (self.idx >= self.src.len or self.src[self.idx] != '"') {
+            return .{ .kind = .invalid, .lexeme = "", .loc = loc };
+        }
+        
+        self.idx += 1;  // Skip opening quote
         self.col += 1;
-        while (self.idx < self.src.len) : (self.idx += 1) {
+        
+        const content_start = self.idx;
+        
+        while (self.idx < self.src.len) {
             const c = self.src[self.idx];
-            if (c == quote) {
+            
+            if (c == '"') {
+                // Check if it's an escaped quote
+                if (self.idx > content_start and self.src[self.idx - 1] == '\\') {
+                    // It's escaped, continue
+                    self.idx += 1;
+                    self.col += 1;
+                    continue;
+                }
+                // Found closing quote
+                const content = self.src[content_start..self.idx];
+                self.idx += 1;  // Skip closing quote
                 self.col += 1;
-                self.idx += 1;
-                break;
+                return .{ .kind = .string_lit, .lexeme = content, .loc = loc };
             }
-            if (c == '\\' and self.idx + 1 < self.src.len) {
-                self.idx += 1;
-                self.col += 2;
-                continue;
-            }
+            
             if (c == '\n') {
                 self.line += 1;
                 self.col = 1;
             } else {
                 self.col += 1;
             }
+            self.idx += 1;
         }
-        return .{ .kind = .string_lit, .lexeme = self.src[start + 1 .. self.idx - 1], .loc = loc };
+        
+        // Unterminated string
+        return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
+    }
+
+    fn scanStringAny(self: *Lexer, quote: u8) t.Token {
+        const loc: t.Location = .{ .line = self.line, .column = self.col };
+        const start = self.idx;
+        self.idx += 1;  // Skip opening quote
+        self.col += 1;
+        
+        const content_start = self.idx;
+        var escaped = false;
+        
+        // Debug: check if we have enough input
+        if (self.idx >= self.src.len) {
+            return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
+        }
+        
+        while (self.idx < self.src.len) {
+            const c = self.src[self.idx];
+            
+            if (escaped) {
+                // We're processing an escaped character
+                escaped = false;
+                if (c == '\n') {
+                    self.line += 1;
+                    self.col = 1;
+                } else {
+                    self.col += 1;
+                }
+                self.idx += 1;
+                continue;
+            }
+            
+            if (c == '\\') {
+                // Start escape sequence
+                escaped = true;
+                self.col += 1;
+                self.idx += 1;
+                continue;
+            }
+            
+            if (c == quote) {
+                // Found closing quote
+                const content = self.src[content_start..self.idx];
+                self.idx += 1;  // Skip closing quote
+                self.col += 1;
+                // Return appropriate token type based on quote character
+                // In GQL, double quotes are typically used for quoted identifiers
+                // while single quotes are for string literals
+                const token_kind = if (quote == '"') t.TokenKind.quoted_identifier else t.TokenKind.string_lit;
+                return .{ .kind = token_kind, .lexeme = content, .loc = loc };
+            }
+            
+            // Regular character
+            if (c == '\n') {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+            self.idx += 1;
+        }
+        
+        // Unterminated string
+        return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }
 
     pub fn nextAfterKeyword(self: *Lexer, kind: t.TokenKind) t.Token {

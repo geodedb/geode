@@ -494,3 +494,22 @@ services.geode = {
 - remember when adding new tests, if there is a failure in something that should work, fix geode don't change the test to make the test work
 - remember to always add regression tests when fixing bugs
 - when issues are found that are complex FIX THEM, don't just document them
+
+## Recent Major Fixes Applied (for reference)
+
+### Fixed Issues:
+1. **Property-based ordering** (`ORDER BY n.property`) - Fixed by enabling `g_order_keys_expr` flag in src/server/main.zig:108
+2. **Count aggregation** - Fixed by adding aggregation detection in src/server/graph/exec.zig
+3. **LIMIT without ORDER BY** - Fixed by modifying US001 enforcement to only apply to OFFSET/SKIP
+4. **Parser OFFSET/LIMIT order** - Fixed parser to accept LIMIT and OFFSET in any order in src/gql/parser.zig:551-569
+5. **Node ID collisions** - Fixed by implementing getNextNodeId() that finds max ID + 1
+
+### Test Infrastructure:
+- `tests/comprehensive_regression_test.sh` - Master regression test suite (34 scenarios)
+- `tests/limit_skip_regression_test.sh` - Pagination behavior tests (23 scenarios)
+- `tests/property_ordering_regression_test.sh` - Property ordering tests (10 scenarios)  
+- `tests/count_aggregation_regression_test.sh` - Aggregation tests (8 scenarios)
+
+### Known Remaining Issues:
+- Double quote string literals cause server hang (workaround: use single quotes)
+- QUIC TLS handshake inconsistency with --insecure flag
