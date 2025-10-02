@@ -14,10 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - uses: spyderorg/workflows/.github/actions/nix-setup@main
       with:
-        submodules: recursive
+        git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+        gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+        cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
     
     - name: Check for known vulnerabilities
       uses: aquasecurity/trivy-action@master
@@ -37,8 +38,11 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - uses: spyderorg/workflows/.github/actions/nix-setup@main
+      with:
+        git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+        gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+        cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
     
     - name: Setup Zig
       uses: goto-bus-stop/setup-zig@v2
@@ -61,8 +65,11 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - uses: spyderorg/workflows/.github/actions/nix-setup@main
+      with:
+        git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+        gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+        cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
     
     - name: License scan
       uses: fossas/fossa-action@main
@@ -76,8 +83,11 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - uses: spyderorg/workflows/.github/actions/nix-setup@main
+      with:
+        git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+        gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+        cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
     
     - name: TruffleHog scan
       uses: trufflesecurity/trufflehog@main
