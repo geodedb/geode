@@ -34,7 +34,7 @@ fi
 
 # Test 3: CREATE with properties
 echo "3. Testing CREATE with properties..."
-timeout 3 ./zig-out/bin/geodec 'CREATE (p {name: "Alice", age: 30})' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec "CREATE (p {name: 'Alice', age: 30})" --no-quic > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with properties successful"
 else
@@ -44,7 +44,7 @@ fi
 
 # Test 4: CREATE with labels and properties
 echo "4. Testing CREATE with labels and properties..."
-timeout 3 ./zig-out/bin/geodec 'CREATE (p:Person {name: "Bob", age: 25})' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec "CREATE (p:Person {name: 'Bob', age: 25})" --no-quic > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with labels and properties successful"
 else

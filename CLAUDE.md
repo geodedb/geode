@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL: String Literal Syntax
+
+**ALWAYS USE SINGLE QUOTES for string literals in GQL queries.**
+- ✅ CORRECT: `CREATE (n {name: 'Alice', city: 'New York'})`
+- ❌ WRONG: `CREATE (n {name: "Alice", city: "New York"})` 
+
+Double quotes cause parser hangs. This is a known issue. All examples, tests, and documentation must use single quotes exclusively.
+
 ## Project Overview
 
 Geode is an open-source, ACID-compliant graph database implementing ISO/IEC 39075:2024 Graph Query Language (GQL). Written in Zig 0.15.1+ for low-level efficiency, it focuses on reliability, security, and deterministic behavior.

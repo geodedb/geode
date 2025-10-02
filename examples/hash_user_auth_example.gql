@@ -21,10 +21,10 @@ CREATE (user:User {
     failed_attempts: 0,
     locked_until: NULL,
     -- Additional security
-    backup_email_hash: HashData("BLAKE2b-256", lower($backup_email)),
-    account_recovery_key: Blake2bKdf(32, "recovery:" + $username, $master_recovery_key)
+    backup_email_hash: HashData('BLAKE2b-256', lower($backup_email)),
+    account_recovery_key: Blake2bKdf(32, 'recovery:' + $username, $master_recovery_key)
 })
-RETURN user.id, user.username, "User created successfully" AS message
+RETURN user.id, user.username, 'User created successfully' AS message
 
 -- ============================================================================
 -- 2. USER LOGIN
@@ -47,14 +47,14 @@ user.last_login = CASE
     ELSE user.last_login 
 END,
 user.locked_until = CASE
-    WHEN user.failed_attempts >= 5 THEN DateTime() + Duration("PT30M")
+    WHEN user.failed_attempts >= 5 THEN DateTime() + Duration('PT30M')
     ELSE NULL
 END
 RETURN 
     CASE WHEN password_valid THEN user.id ELSE NULL END AS user_id,
-    CASE WHEN password_valid THEN "Login successful" 
-         WHEN user.failed_attempts >= 5 THEN "Account locked for 30 minutes"
-         ELSE "Invalid credentials" 
+    CASE WHEN password_valid THEN 'Login successful' 
+         WHEN user.failed_attempts >= 5 THEN 'Account locked for 30 minutes'
+         ELSE 'Invalid credentials' 
     END AS message,
     password_valid AS authenticated
 
@@ -67,8 +67,8 @@ MATCH (user:User {email: $email})
 CREATE (token:PasswordResetToken {
     id: UUID(),
     user_id: user.id,
-    token_hash: Blake2bKdf(32, "reset-token:" + user.id, $server_secret + ":" + DateTime()),
-    expires_at: DateTime() + Duration("PT1H"),
+    token_hash: Blake2bKdf(32, 'reset-token:' + user.id, $server_secret + ':' + DateTime()),
+    expires_at: DateTime() + Duration('PT1H'),
     used: false
 })
 RETURN token.id AS reset_token_id
@@ -79,14 +79,14 @@ WHERE token.expires_at > DateTime() AND token.used = false
 MATCH (user:User {id: token.user_id})
 WHERE hash_equals(
     token.token_hash,
-    Blake2bKdf(32, "reset-token:" + user.id, $provided_secret)
+    Blake2bKdf(32, 'reset-token:' + user.id, $provided_secret)
 )
 SET user.salt = $new_salt,
     user.password_hash = Argon2idHash($new_password, $new_salt, 4, 65536, 1),
     user.password_changed_at = DateTime(),
     token.used = true,
     token.used_at = DateTime()
-RETURN user.username, "Password reset successful" AS message
+RETURN user.username, 'Password reset successful' AS message
 
 -- ============================================================================
 -- 4. PASSWORD UPGRADE
@@ -117,12 +117,12 @@ CREATE (session:Session {
     id: UUID(),
     user_id: $user_id,
     -- Derive session keys from master session secret
-    session_token: Blake2bKdf(32, "session:" + $session_id, $session_master_key),
-    csrf_token: Blake2sKdf(16, "csrf:" + $session_id, $session_master_key),
+    session_token: Blake2bKdf(32, 'session:' + $session_id, $session_master_key),
+    csrf_token: Blake2sKdf(16, 'csrf:' + $session_id, $session_master_key),
     created_at: DateTime(),
-    expires_at: DateTime() + Duration("PT24H"),
+    expires_at: DateTime() + Duration('PT24H'),
     ip_address: $client_ip,
-    user_agent_hash: HashData("BLAKE2s-256", $user_agent)
+    user_agent_hash: HashData('BLAKE2s-256', $user_agent)
 })
 RETURN session.id, session.csrf_token
 
@@ -131,11 +131,11 @@ MATCH (session:Session {id: $session_id})
 WHERE session.expires_at > DateTime()
   AND hash_equals(
       session.session_token,
-      Blake2bKdf(32, "session:" + $session_id, $provided_token)
+      Blake2bKdf(32, 'session:' + $session_id, $provided_token)
   )
   AND hash_equals(
       session.user_agent_hash,
-      HashData("BLAKE2s-256", $current_user_agent)
+      HashData('BLAKE2s-256', $current_user_agent)
   )
 RETURN session.user_id, true AS valid
 
@@ -148,14 +148,14 @@ CREATE (apikey:ApiKey {
     id: UUID(),
     name: $key_name,
     -- Use different KDF contexts for different key types
-    key_hash: HashData("BLAKE2b-512", $generated_api_key),
+    key_hash: HashData('BLAKE2b-512', $generated_api_key),
     permissions: $permissions_array,
     rate_limit: $rate_limit,
     created_at: DateTime(),
-    expires_at: DateTime() + Duration("P365D"),
+    expires_at: DateTime() + Duration('P365D'),
     last_used: NULL,
     -- Derive signing key for request signatures
-    signing_key: Blake2bKdf(32, "api-signing:" + $key_id, $generated_api_key)
+    signing_key: Blake2bKdf(32, 'api-signing:' + $key_id, $generated_api_key)
 })
 RETURN apikey.id, $generated_api_key AS api_key -- Only return once!
 
@@ -163,7 +163,7 @@ RETURN apikey.id, $generated_api_key AS api_key -- Only return once!
 MATCH (apikey:ApiKey)
 WHERE hash_equals(
     apikey.key_hash,
-    HashData("BLAKE2b-512", $provided_api_key)
+    HashData('BLAKE2b-512', $provided_api_key)
 )
 AND apikey.expires_at > DateTime()
 SET apikey.last_used = DateTime(),
@@ -178,13 +178,13 @@ RETURN apikey.id, apikey.permissions, apikey.rate_limit
 MATCH (user:User {id: $user_id})
 CREATE (twofa:TwoFactorAuth {
     user_id: user.id,
-    secret: Blake2bKdf(20, "totp:" + user.id, $totp_master_secret),
+    secret: Blake2bKdf(20, 'totp:' + user.id, $totp_master_secret),
     backup_codes: [
-        HashData("BLAKE2s-256", $backup_code_1),
-        HashData("BLAKE2s-256", $backup_code_2),
-        HashData("BLAKE2s-256", $backup_code_3),
-        HashData("BLAKE2s-256", $backup_code_4),
-        HashData("BLAKE2s-256", $backup_code_5)
+        HashData('BLAKE2s-256', $backup_code_1),
+        HashData('BLAKE2s-256', $backup_code_2),
+        HashData('BLAKE2s-256', $backup_code_3),
+        HashData('BLAKE2s-256', $backup_code_4),
+        HashData('BLAKE2s-256', $backup_code_5)
     ],
     enabled: false,
     created_at: DateTime()
@@ -196,7 +196,7 @@ MATCH (user:User {id: $user_id})
 MATCH (twofa:TwoFactorAuth {user_id: user.id, enabled: true})
 WITH user, twofa,
      -- Check if it's a backup code
-     [code IN twofa.backup_codes WHERE hash_equals(code, HashData("BLAKE2s-256", $provided_code))] AS matching_backup
+     [code IN twofa.backup_codes WHERE hash_equals(code, HashData('BLAKE2s-256', $provided_code))] AS matching_backup
 WHERE 
     -- Either TOTP matches (would need proper TOTP implementation)
     $totp_valid = true
@@ -205,7 +205,7 @@ WHERE
 // Remove used backup code
 SET twofa.backup_codes = CASE
     WHEN size(matching_backup) > 0 
-    THEN [code IN twofa.backup_codes WHERE NOT hash_equals(code, HashData("BLAKE2s-256", $provided_code))]
+    THEN [code IN twofa.backup_codes WHERE NOT hash_equals(code, HashData('BLAKE2s-256', $provided_code))]
     ELSE twofa.backup_codes
 END
 RETURN true AS authenticated
@@ -229,13 +229,13 @@ CREATE (audit:AuditLog {
     -- Create hash chain
     previous_hash: CASE 
         WHEN prev IS NOT NULL THEN prev.entry_hash 
-        ELSE Hash("BLAKE2b-512", "0000000000000000000000000000000000000000000000000000000000000000")
+        ELSE Hash('BLAKE2b-512', '0000000000000000000000000000000000000000000000000000000000000000')
     END,
-    entry_hash: HashData("BLAKE2b-512", 
-        coalesce(prev.entry_hash, "genesis") + ":" + 
-        DateTime() + ":" + 
-        $user_id + ":" + 
-        $action + ":" + 
+    entry_hash: HashData('BLAKE2b-512', 
+        coalesce(prev.entry_hash, 'genesis') + ':' + 
+        DateTime() + ':' + 
+        $user_id + ':' + 
+        $action + ':' + 
         $details
     )
 })
@@ -243,7 +243,7 @@ CREATE (prev)-[:NEXT]->(audit)
 RETURN audit.id
 
 -- Verify audit log integrity
-MATCH path = (:AuditLog {previous_hash: Hash("BLAKE2b-512", "0000000000000000000000000000000000000000000000000000000000000000")})-[:NEXT*]->()
+MATCH path = (:AuditLog {previous_hash: Hash('BLAKE2b-512', '0000000000000000000000000000000000000000000000000000000000000000')})-[:NEXT*]->()
 WITH nodes(path) AS entries
 UNWIND range(1, length(entries)-1) AS i
 WITH entries[i-1] AS prev, entries[i] AS curr
@@ -258,17 +258,17 @@ LIMIT 1
 -- Anonymize user data for analytics
 MATCH (user:User)
 CREATE (anon:AnonymizedUser {
-    id: HashData("BLAKE2b-256", "user:" + user.id + ":" + $anonymization_salt),
+    id: HashData('BLAKE2b-256', 'user:' + user.id + ':' + $anonymization_salt),
     age_group: 
         CASE 
-            WHEN user.age < 25 THEN "18-24"
-            WHEN user.age < 35 THEN "25-34"
-            WHEN user.age < 45 THEN "35-44"
-            WHEN user.age < 55 THEN "45-54"
-            WHEN user.age < 65 THEN "55-64"
-            ELSE "65+"
+            WHEN user.age < 25 THEN '18-24'
+            WHEN user.age < 35 THEN '25-34'
+            WHEN user.age < 45 THEN '35-44'
+            WHEN user.age < 55 THEN '45-54'
+            WHEN user.age < 65 THEN '55-64'
+            ELSE '65+'
         END,
-    region_hash: HashData("BLAKE2s-256", substring(user.postal_code, 0, 3) + ":" + $region_salt),
+    region_hash: HashData('BLAKE2s-256', substring(user.postal_code, 0, 3) + ':' + $region_salt),
     created_at: DateTime()
 })
 RETURN count(*) AS anonymized_users
@@ -279,7 +279,7 @@ RETURN count(*) AS anonymized_users
 
 -- Detect potential password spraying attacks
 MATCH (attempt:LoginAttempt)
-WHERE attempt.timestamp > DateTime() - Duration("PT10M")
+WHERE attempt.timestamp > DateTime() - Duration('PT10M')
   AND attempt.success = false
 WITH attempt.ip_address AS ip, 
      collect(DISTINCT attempt.username) AS targeted_users,
@@ -287,14 +287,14 @@ WITH attempt.ip_address AS ip,
 WHERE attempt_count > 10 OR size(targeted_users) > 5
 CREATE (alert:SecurityAlert {
     id: UUID(),
-    type: "POSSIBLE_PASSWORD_SPRAY",
+    type: 'POSSIBLE_PASSWORD_SPRAY',
     ip_address: ip,
-    ip_hash: HashData("BLAKE2b-256", ip + ":" + Date()),
+    ip_hash: HashData('BLAKE2b-256', ip + ':' + Date()),
     targeted_users: targeted_users,
     attempt_count: attempt_count,
     detected_at: DateTime(),
-    signature: HashData("BLAKE2b-512", 
-        "SPRAY:" + ip + ":" + toString(targeted_users) + ":" + DateTime()
+    signature: HashData('BLAKE2b-512', 
+        'SPRAY:' + ip + ':' + toString(targeted_users) + ':' + DateTime()
     )
 })
 RETURN alert.id, alert.ip_address, alert.attempt_count

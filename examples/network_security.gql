@@ -3,100 +3,100 @@
 
 // Create network infrastructure
 CREATE (fw:Firewall {
-    name: "fw-01-dmz",
-    public_ip: IpAddr("203.0.113.10"),
-    internal_ip: IpAddr("10.0.1.1"),
+    name: 'fw-01-dmz',
+    public_ip: IpAddr('203.0.113.10'),
+    internal_ip: IpAddr('10.0.1.1'),
     protected_subnets: [
-        Subnet("10.0.0.0/8"),
-        Subnet("172.16.0.0/12"),
-        Subnet("192.168.0.0/16")
+        Subnet('10.0.0.0/8'),
+        Subnet('172.16.0.0/12'),
+        Subnet('192.168.0.0/16')
     ]
 });
 
 CREATE (dmz:NetworkZone {
-    name: "DMZ",
-    subnet: Subnet("10.0.1.0/24"),
+    name: 'DMZ',
+    subnet: Subnet('10.0.1.0/24'),
     vlan_id: 100
 });
 
 CREATE (internal:NetworkZone {
-    name: "Internal",
-    subnet: Subnet("10.0.10.0/24"),
+    name: 'Internal',
+    subnet: Subnet('10.0.10.0/24'),
     vlan_id: 200
 });
 
 // Create servers with network configurations
 CREATE (web:Server {
-    hostname: "web-01",
-    ip_address: IpAddr("10.0.1.10"),
-    mac_address: Mac("00:50:56:A1:2B:3C"),
-    zone: "DMZ",
+    hostname: 'web-01',
+    ip_address: IpAddr('10.0.1.10'),
+    mac_address: Mac('00:50:56:A1:2B:3C'),
+    zone: 'DMZ',
     ports: [80, 443]
 });
 
 CREATE (app:Server {
-    hostname: "app-01",
-    ip_address: IpAddr("10.0.10.20"),
-    mac_address: Mac("00:50:56:A2:3B:4C"),
-    zone: "Internal",
+    hostname: 'app-01',
+    ip_address: IpAddr('10.0.10.20'),
+    mac_address: Mac('00:50:56:A2:3B:4C'),
+    zone: 'Internal',
     ports: [8080, 8443]
 });
 
 CREATE (db:Server {
-    hostname: "db-01",
-    ip_address: IpAddr("10.0.10.30"),
-    mac_address: Mac("00:50:56:A3:4B:5C"),
-    zone: "Internal",
+    hostname: 'db-01',
+    ip_address: IpAddr('10.0.10.30'),
+    mac_address: Mac('00:50:56:A3:4B:5C'),
+    zone: 'Internal',
     ports: [5432]
 });
 
 // Create network connections with security rules
-MATCH (fw:Firewall), (web:Server {hostname: "web-01"})
+MATCH (fw:Firewall), (web:Server {hostname: 'web-01'})
 CREATE (fw)-[:ALLOWS {
-    protocol: "TCP",
+    protocol: 'TCP',
     port: 443,
-    source_subnet: Subnet("0.0.0.0/0"),
-    action: "ACCEPT"
+    source_subnet: Subnet('0.0.0.0/0'),
+    action: 'ACCEPT'
 }]->(web);
 
-MATCH (web:Server {hostname: "web-01"}), (app:Server {hostname: "app-01"})
+MATCH (web:Server {hostname: 'web-01'}), (app:Server {hostname: 'app-01'})
 CREATE (web)-[:CONNECTS_TO {
-    protocol: "HTTP",
+    protocol: 'HTTP',
     port: 8080,
     encrypted: false
 }]->(app);
 
-MATCH (app:Server {hostname: "app-01"}), (db:Server {hostname: "db-01"})
+MATCH (app:Server {hostname: 'app-01'}), (db:Server {hostname: 'db-01'})
 CREATE (app)-[:CONNECTS_TO {
-    protocol: "PostgreSQL",
+    protocol: 'PostgreSQL',
     port: 5432,
     encrypted: true,
-    cert_hash: Hash("SHA3-256", "a1b2c3d4e5f6...")
+    cert_hash: Hash('SHA3-256', 'a1b2c3d4e5f6...')
 }]->(db);
 
 // Query 1: Find all servers in a specific subnet
 MATCH (s:Server)
-WHERE ip_contains(Subnet("10.0.1.0/24"), s.ip_address)
+WHERE ip_contains(Subnet('10.0.1.0/24'), s.ip_address)
 RETURN s.hostname, s.ip_address, s.zone;
 
 // Query 2: Detect potential security issues - servers in DMZ connecting to internal
-MATCH (dmz_server:Server {zone: "DMZ"})-[c:CONNECTS_TO]->(internal_server:Server {zone: "Internal"})
+MATCH (dmz_server:Server {zone: 'DMZ'})-[c:CONNECTS_TO]->(internal_server:Server {zone: 'Internal'})
 WHERE NOT c.encrypted
 RETURN dmz_server.hostname AS source,
        internal_server.hostname AS target,
        c.protocol AS protocol,
        c.port AS port,
-       "UNENCRYPTED CONNECTION" AS security_issue;
+       'UNENCRYPTED CONNECTION' AS security_issue;
 
 // Query 3: Find all private IP addresses
 MATCH (s:Server)
 WHERE ip_is_private(s.ip_address)
 RETURN s.hostname, s.ip_address, 
        CASE 
-           WHEN ip_contains(Subnet("10.0.0.0/8"), s.ip_address) THEN "Class A Private"
-           WHEN ip_contains(Subnet("172.16.0.0/12"), s.ip_address) THEN "Class B Private"
-           WHEN ip_contains(Subnet("192.168.0.0/16"), s.ip_address) THEN "Class C Private"
-           ELSE "Other Private"
+           WHEN ip_contains(Subnet('10.0.0.0/8'), s.ip_address) THEN 'Class A Private'
+           WHEN ip_contains(Subnet('172.16.0.0/12'), s.ip_address) THEN 'Class B Private'
+           WHEN ip_contains(Subnet('192.168.0.0/16'), s.ip_address) THEN 'Class C Private'
+           ELSE 'Other Private'
        END AS ip_class;
 
 // Query 4: Validate MAC addresses and detect multicast
@@ -108,7 +108,7 @@ RETURN s.hostname,
 
 // Query 5: Network path analysis with security validation
 MATCH path = (client:Server)-[:CONNECTS_TO*1..3]->(target:Server)
-WHERE client.hostname = "web-01" AND target.hostname = "db-01"
+WHERE client.hostname = 'web-01' AND target.hostname = 'db-01'
 WITH path, [r IN relationships(path) | r.encrypted] AS encryption_status
 RETURN path,
        ALL(enc IN encryption_status WHERE enc = true) AS fully_encrypted,
@@ -123,20 +123,20 @@ RETURN z1.name AS zone1,
        z2.name AS zone2,
        z1.subnet AS subnet1,
        z2.subnet AS subnet2,
-       "OVERLAPPING SUBNETS" AS issue;
+       'OVERLAPPING SUBNETS' AS issue;
 
 // Query 7: Find exposed services
 MATCH (fw:Firewall)-[r:ALLOWS]->(s:Server)
-WHERE r.source_subnet = Subnet("0.0.0.0/0")
+WHERE r.source_subnet = Subnet('0.0.0.0/0')
 RETURN s.hostname,
        s.ip_address,
        r.port AS exposed_port,
        r.protocol AS protocol,
        s.zone AS zone,
        CASE
-           WHEN s.zone = "Internal" THEN "CRITICAL - Internal server exposed"
-           WHEN s.zone = "DMZ" THEN "Normal - DMZ exposure"
-           ELSE "Review needed"
+           WHEN s.zone = 'Internal' THEN 'CRITICAL - Internal server exposed'
+           WHEN s.zone = 'DMZ' THEN 'Normal - DMZ exposure'
+           ELSE 'Review needed'
        END AS risk_level;
 
 // Query 8: Certificate validation using hashes

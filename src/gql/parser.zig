@@ -302,9 +302,6 @@ pub const Parser = struct {
                             if (self.cur.kind == .identifier) {
                                 value = self.cur.lexeme;
                                 self.advance();
-                            } else if (self.cur.kind == .quoted_identifier) {
-                                value = self.cur.lexeme;
-                                self.advance();
                             } else if (self.cur.kind == .string_lit) {
                                 value = self.cur.lexeme;
                                 self.advance();
@@ -378,7 +375,34 @@ pub const Parser = struct {
             // For the top-level MATCH pattern, collect aliases freshly.
             self.collect_chain_aliases = true;
             self.path_aliases.clearRetainingCapacity();
-            const gp = try self.parseGraphPattern();
+            
+            // Parse first MATCH pattern
+            var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            const first_gp = try self.parseGraphPattern();
+            for (first_gp.chains) |chain| {
+                try all_chains.append(self.arena.allocator(), chain);
+            }
+            
+            // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
+            while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
+                // Handle OPTIONAL MATCH
+                if (self.cur.kind == .OPTIONAL) {
+                    self.advance();
+                    if (self.cur.kind != .MATCH) {
+                        return error.UnexpectedToken;
+                    }
+                    // Mark that we have an optional match (this affects the overall query)
+                    optional_match = true;
+                }
+                self.advance(); // consume MATCH
+                const additional_gp = try self.parseGraphPattern();
+                for (additional_gp.chains) |chain| {
+                    try all_chains.append(self.arena.allocator(), chain);
+                }
+            }
+            
+            const combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
+            
             // Keep aliases for ORDER BY checks that follow.
             self.collect_chain_aliases = false;
             // optional WHERE predicate
@@ -421,7 +445,7 @@ pub const Parser = struct {
                     having_expr = try self.parseOrExpr();
                 }
             }
-            break :blk_pat gp;
+            break :blk_pat combined_gp;
         } else blk_empty: {
             // No MATCH: use empty pattern, and ensure no stale aliases
             self.path_aliases.clearRetainingCapacity();
@@ -755,7 +779,14 @@ pub const Parser = struct {
         var list = std.ArrayList(ast.Property).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         if (self.cur.kind != .r_brace) {
             while (true) {
-                const key = try self.expect(.identifier);
+                // Accept both identifier and string_lit for property keys
+                // This allows both {name: 'value'} and {'name': 'value'} syntax
+                const key = if (self.cur.kind == .identifier) 
+                    try self.expect(.identifier)
+                else if (self.cur.kind == .string_lit)
+                    try self.expect(.string_lit)
+                else 
+                    return self.unexpected("property key");
                 _ = try self.expect(.colon);
                 const expr = try self.parseOrExpr();
                 const a = self.arena.allocator();
@@ -1111,12 +1142,6 @@ pub const Parser = struct {
                 const unicode = @import("../unicode/unicode_tables.zig");
                 const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
                 break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
-            },
-            .quoted_identifier => blk: {
-                // Treat quoted identifiers as string literals in expression contexts
-                const tkn = self.cur;
-                self.advance();
-                break :blk .{ .String = tkn.lexeme };
             },
             .string_lit => blk: {
                 const tkn = self.cur;

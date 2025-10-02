@@ -335,8 +335,9 @@ pub const Lexer = struct {
     }
 
     fn scanDoubleQuoted(self: *Lexer) t.Token {
-        // For now, just use the same logic as single quotes
-        return self.scanStringAny('"');
+        // Use the OLD version that was working for double quotes
+        // The scanStringAny might have issues with double quotes
+        return self.scanDoubleQuoted_OLD();
     }
     
     fn scanDoubleQuoted_OLD(self: *Lexer) t.Token {
@@ -353,19 +354,34 @@ pub const Lexer = struct {
         self.col += 1;
         
         const content_start = self.idx;
+        var escaped = false;
         
         while (self.idx < self.src.len) {
             const c = self.src[self.idx];
             
-            if (c == '"') {
-                // Check if it's an escaped quote
-                if (self.idx > content_start and self.src[self.idx - 1] == '\\') {
-                    // It's escaped, continue
-                    self.idx += 1;
+            if (escaped) {
+                // We're in an escape sequence, skip this character
+                escaped = false;
+                if (c == '\n') {
+                    self.line += 1;
+                    self.col = 1;
+                } else {
                     self.col += 1;
-                    continue;
                 }
-                // Found closing quote
+                self.idx += 1;
+                continue;
+            }
+            
+            if (c == '\\') {
+                // Start of escape sequence
+                escaped = true;
+                self.col += 1;
+                self.idx += 1;
+                continue;
+            }
+            
+            if (c == '"') {
+                // Found closing quote (not escaped)
                 const content = self.src[content_start..self.idx];
                 self.idx += 1;  // Skip closing quote
                 self.col += 1;
@@ -429,9 +445,10 @@ pub const Lexer = struct {
                 self.idx += 1;  // Skip closing quote
                 self.col += 1;
                 // Return appropriate token type based on quote character
-                // In GQL, double quotes are typically used for quoted identifiers
-                // while single quotes are for string literals
-                const token_kind = if (quote == '"') t.TokenKind.quoted_identifier else t.TokenKind.string_lit;
+                // In GQL, both single and double quotes can be used for string literals
+                // Double quotes can also be used for quoted identifiers in certain contexts
+                // For now, treat both as string literals to avoid parser hangs
+                const token_kind = t.TokenKind.string_lit;
                 return .{ .kind = token_kind, .lexeme = content, .loc = loc };
             }
             

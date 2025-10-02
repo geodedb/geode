@@ -510,6 +510,8 @@ pub const QuicClient = struct {
     pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
         const server_addr_str = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
         defer self.allocator.free(server_addr_str);
+        
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connectInsecure called\",\"address\":\"{s}\",\"port\":{},\"allow_insecure\":{}}}\n", .{ address, port, allow_insecure });
 
         const cfg = try self.allocator.create(quic_lib.QuicConfig);
         cfg.* = .{
@@ -533,7 +535,7 @@ pub const QuicClient = struct {
             .allow_insecure = allow_insecure,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .real_tls = true, // Always use TLS, but allow insecure certificates
+            .real_tls = true, // Always use TLS protocol, but allow self-signed certs when insecure
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
@@ -545,7 +547,7 @@ pub const QuicClient = struct {
 
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":{},\"allow_insecure\":{}}}\n", .{ cfg.real_tls, cfg.allow_insecure });
 
-        // Connect to server
+        // Connect to server  
         const sni = address; // Use server address as SNI
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initiating connection\",\"server_addr\":\"{s}\",\"sni\":\"{s}\"}}\n", .{ server_addr_str, sni });
         self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
@@ -611,8 +613,8 @@ pub const QuicClient = struct {
         }
 
         // Wait for handshake to complete with timeout
-        const total_timeout_ms = 30000; // 30 second total timeout
-        const poll_timeout_ms = 200; // 200ms per poll
+        const total_timeout_ms = 5000; // 5 second total timeout (reduced from 30s)
+        const poll_timeout_ms = 50; // 50ms per poll (reduced from 200ms)
         const start_time = std.time.milliTimestamp();
         
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"waitForHandshake: starting handshake wait\",\"timeout_ms\":{}}}\n", .{total_timeout_ms});
@@ -622,7 +624,10 @@ pub const QuicClient = struct {
             poll_count += 1;
             
             // Poll endpoint to process network events and advance handshake
-            try quic_lib.poll(self.endpoint.?, poll_timeout_ms);
+            quic_lib.poll(self.endpoint.?, poll_timeout_ms) catch |err| {
+                // Continue polling even if individual poll fails
+                std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"poll error\",\"error\":\"{}\"}}\n", .{err});
+            };
             
             // Check if handshake is complete
             if (quic_lib.handshakeComplete(self.quic_connection.?)) {
@@ -632,14 +637,14 @@ pub const QuicClient = struct {
             }
             
             // Log periodic progress
-            if (poll_count % 25 == 0) { // Every ~5 seconds
+            if (poll_count % 20 == 0) { // Every ~1 second
                 const elapsed_ms = std.time.milliTimestamp() - start_time;
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake in progress\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
             }
         }
         
         const elapsed_ms = std.time.milliTimestamp() - start_time;
-        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake timeout\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
+        std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_client\",\"msg\":\"handshake timeout\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
         return QuicError.HandshakeFailed;
     }
 

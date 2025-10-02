@@ -61,15 +61,15 @@ run_test "Create vertex with label" \
     "status_class.*00000"
 
 run_test "Create vertex with properties" \
-    "./zig-out/bin/geodec 'CREATE (p:Person {name: \"Alice\", age: 30})' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE (p:Person {name: \"Alice\', age: 30})' --no-quic' \
     "status_class.*00000"
 
 run_test "Create vertex with multiple labels" \
-    "./zig-out/bin/geodec 'CREATE (p:Person:Employee {name: \"Bob\", age: 25, department: \"Engineering\"})' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE (p:Person:Employee {name: \"Bob\", age: 25, department: \"Engineering\'})' --no-quic' \
     "status_class.*00000"
 
 run_test "Create vertex with complex properties" \
-    "./zig-out/bin/geodec 'CREATE (c:Company {name: \"TechCorp\", founded: 2010, employees: 500, active: true})' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE (c:Company {name: \"TechCorp\', founded: 2010, employees: 500, active: true})' --no-quic' \
     "status_class.*00000"
 
 echo
@@ -138,10 +138,10 @@ echo -e "${BLUE}=== Graph Traversal Tests ===${NC}"
 
 # Add more data for traversal
 echo "Setting up additional test data..."
-./zig-out/bin/geodec 'CREATE (charlie:Person {name: "Charlie", age: 35})' --no-quic > /dev/null 2>&1
-./zig-out/bin/geodec 'CREATE (diana:Person {name: "Diana", age: 28})' --no-quic > /dev/null 2>&1
-./zig-out/bin/geodec 'MATCH (b:Person {name: "Bob"}), (c:Person {name: "Charlie"}) CREATE (b)-[:KNOWS]->(c)' --no-quic > /dev/null 2>&1
-./zig-out/bin/geodec 'MATCH (c:Person {name: "Charlie"}), (d:Person {name: "Diana"}) CREATE (c)-[:KNOWS]->(d)' --no-quic > /dev/null 2>&1
+./zig-out/bin/geodec 'CREATE (charlie:Person {name: 'Charlie', age: 35})' --no-quic > /dev/null 2>&1
+./zig-out/bin/geodec 'CREATE (diana:Person {name: 'Diana', age: 28})' --no-quic > /dev/null 2>&1
+./zig-out/bin/geodec 'MATCH (b:Person {'name': 'Bob'}), (c:Person {'name': 'Charlie'}) CREATE (b)-[:KNOWS]->(c)' --no-quic > /dev/null 2>&1
+./zig-out/bin/geodec 'MATCH (c:Person {'name': 'Charlie'}), (d:Person {'name': 'Diana'}) CREATE (c)-[:KNOWS]->(d)' --no-quic > /dev/null 2>&1
 
 run_test "Simple path traversal" \
     "./zig-out/bin/geodec 'MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name AS from_person, b.name AS to_person' --no-quic" \

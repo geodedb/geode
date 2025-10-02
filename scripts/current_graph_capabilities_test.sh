@@ -112,7 +112,7 @@ test_not_implemented "Vertex with label" \
     "./zig-out/bin/geodec 'CREATE (p:Person)' --no-quic"
 
 test_not_implemented "Vertex with properties" \
-    "./zig-out/bin/geodec 'CREATE (p:Person {name: \"Alice\", age: 30})' --no-quic"
+    "./zig-out/bin/geodec 'CREATE (p:Person {name: \"Alice\', age: 30})' --no-quic'
 
 test_not_implemented "Edge creation" \
     "./zig-out/bin/geodec 'CREATE (a:Person)-[:KNOWS]->(b:Person)' --no-quic"

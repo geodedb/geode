@@ -2,6 +2,11 @@
 
 Geode is an open-source, ACID-compliant graph database implementing the ISO/IEC 39075:2024 Graph Query Language (GQL). Written in Zig for low-level efficiency, Geode focuses on reliability, security, and deterministic behavior.
 
+> **⚠️ IMPORTANT: String Literal Syntax**  
+> Currently, **only single quotes** are supported for string literals in GQL queries.  
+> Double quotes cause the parser to hang. Always use single quotes: `'string'` not `"string"`  
+> Example: `CREATE (n {name: 'Alice'})` ✓ | `CREATE (n {name: "Alice"})` ✗
+
 Highlights (v0.18.0):
 - QUIC+TLS transport only; optional Transparent Data Encryption (TDE)
 - MVCC with snapshot isolation; WAL/ARIES crash recovery

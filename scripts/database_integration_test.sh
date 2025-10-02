@@ -110,13 +110,13 @@ run_test "Create single node" \
     "./zig-out/bin/geodec 'CREATE (n:Person {age: 30})' --no-quic"
 
 run_test "Create multiple nodes" \
-    "./zig-out/bin/geodec 'CREATE (n:Person {name: \"Bob\", age: 25}), (m:Person {name: \"Charlie\", age: 35})' --no-quic"
+    "./zig-out/bin/geodec 'CREATE (n:Person {name: \"Bob\', age: 25}), (m:Person {name: \'Charlie\", age: 35})' --no-quic"
 
 run_test "Create relationship" \
     "./zig-out/bin/geodec 'MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) CREATE (a)-[:KNOWS {since: 2020}]->(b)' --no-quic"
 
 run_test "Create complex graph" \
-    "./zig-out/bin/geodec 'CREATE (a:Person {name: \"David\"})-[:WORKS_AT {role: \"Engineer\"}]->(c:Company {name: \"TechCorp\"})' --no-quic"
+    "./zig-out/bin/geodec 'CREATE (a:Person {name: \"David\'})-[:WORKS_AT {role: \'Engineer\"}]->(c:Company {name: \"TechCorp\"})' --no-quic"
 
 echo
 

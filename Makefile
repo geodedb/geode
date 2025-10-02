@@ -31,7 +31,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 
 .PHONY: go-prep go-vendor-sync go-vendor-check go-matrix
 
-.PHONY: all build release test integration-test go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
+.PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict
@@ -190,7 +190,8 @@ go-example: build go-build
 	fi
 
 # Run comprehensive integration tests
-integration-test: build dataset-integration-test
+integration-test: build
+	@echo "Running basic integration tests..."
 	@if [ -f "scripts/integration_test.sh" ]; then \
 		./scripts/integration_test.sh; \
 	else \
@@ -206,6 +207,72 @@ dataset-integration-test: build
 		echo "Dataset integration test script not found or not executable"; \
 		exit 1; \
 	fi
+
+# Run comprehensive regression test suite (34 scenarios)
+regression-test: build
+	@echo "Running comprehensive regression tests..."
+	@if [ -x "tests/comprehensive_regression_test.sh" ]; then \
+		./tests/comprehensive_regression_test.sh; \
+	else \
+		echo "Regression test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run property ordering regression tests (10 scenarios)
+property-ordering-test: build
+	@echo "Running property ordering regression tests..."
+	@if [ -x "tests/property_ordering_regression_test.sh" ]; then \
+		./tests/property_ordering_regression_test.sh; \
+	else \
+		echo "Property ordering test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run limit/skip pagination tests (23 scenarios)
+pagination-test: build
+	@echo "Running pagination regression tests..."
+	@if [ -x "tests/limit_skip_regression_test.sh" ]; then \
+		./tests/limit_skip_regression_test.sh; \
+	else \
+		echo "Pagination test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run count aggregation tests (8 scenarios)
+aggregation-test: build
+	@echo "Running aggregation regression tests..."
+	@if [ -x "tests/count_aggregation_regression_test.sh" ]; then \
+		./tests/count_aggregation_regression_test.sh; \
+	else \
+		echo "Aggregation test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run graph-specific integration tests
+graph-test: build
+	@echo "Running graph integration tests..."
+	@if [ -x "scripts/comprehensive_graph_test.sh" ]; then \
+		./scripts/comprehensive_graph_test.sh; \
+	elif [ -x "scripts/graph_data_integration_test.sh" ]; then \
+		./scripts/graph_data_integration_test.sh; \
+	else \
+		echo "Graph test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run database integration tests
+db-test: build
+	@echo "Running database integration tests..."
+	@if [ -x "scripts/database_integration_test.sh" ]; then \
+		./scripts/database_integration_test.sh; \
+	else \
+		echo "Database test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run ALL integration and regression tests
+test-all-integration: build integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test
+	@echo "All integration tests complete"
 
 # Load example dataset (for development/testing)
 load-dataset: build

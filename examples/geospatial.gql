@@ -3,36 +3,36 @@
 
 // Create cities with coordinates
 CREATE (sf:City {
-    name: "San Francisco",
+    name: 'San Francisco',
     location: LatLon(37.7749, -122.4194),
     population: 873965,
     area_sqkm: 121.4,
-    timezone: "America/Los_Angeles"
+    timezone: 'America/Los_Angeles'
 });
 
 CREATE (oak:City {
-    name: "Oakland",
+    name: 'Oakland',
     location: LatLon(37.8044, -122.2712),
     population: 433031,
     area_sqkm: 202.4
 });
 
 CREATE (sj:City {
-    name: "San Jose",
+    name: 'San Jose',
     location: LatLon(37.3382, -121.8863),
     population: 1030119,
     area_sqkm: 461.5
 });
 
 CREATE (la:City {
-    name: "Los Angeles",
+    name: 'Los Angeles',
     location: LatLon(34.0522, -118.2437),
     population: 3898747,
     area_sqkm: 1302.0
 });
 
 CREATE (sd:City {
-    name: "San Diego",
+    name: 'San Diego',
     location: LatLon(32.7157, -117.1611),
     population: 1386932,
     area_sqkm: 964.5
@@ -40,52 +40,52 @@ CREATE (sd:City {
 
 // Create points of interest
 CREATE (ggb:Landmark {
-    name: "Golden Gate Bridge",
+    name: 'Golden Gate Bridge',
     location: LatLon(37.8199, -122.4783),
-    type: "Bridge",
+    type: 'Bridge',
     year_built: 1937
 });
 
 CREATE (alc:Landmark {
-    name: "Alcatraz Island",
+    name: 'Alcatraz Island',
     location: LatLon(37.8267, -122.4230),
-    type: "Historic Site"
+    type: 'Historic Site'
 });
 
 CREATE (yos:Park {
-    name: "Yosemite National Park",
+    name: 'Yosemite National Park',
     entrance: LatLon(37.8651, -119.5383),
     area_sqkm: 3028.8,
     elevation_m: 1200
 });
 
 // Create transportation routes
-MATCH (sf:City {name: "San Francisco"}), (oak:City {name: "Oakland"})
+MATCH (sf:City {name: 'San Francisco'}), (oak:City {name: 'Oakland'})
 CREATE (sf)-[:ROUTE {
-    type: "Highway",
-    name: "I-80",
+    type: 'Highway',
+    name: 'I-80',
     distance_km: distance_haversine(sf.location, oak.location) / 1000.0,
     travel_time_min: 20
 }]->(oak);
 
-MATCH (sf:City {name: "San Francisco"}), (sj:City {name: "San Jose"})
+MATCH (sf:City {name: 'San Francisco'}), (sj:City {name: 'San Jose'})
 CREATE (sf)-[:ROUTE {
-    type: "Highway",
-    name: "US-101",
+    type: 'Highway',
+    name: 'US-101',
     distance_km: distance_haversine(sf.location, sj.location) / 1000.0,
     travel_time_min: 60
 }]->(sj);
 
-MATCH (sf:City {name: "San Francisco"}), (la:City {name: "Los Angeles"})
+MATCH (sf:City {name: 'San Francisco'}), (la:City {name: 'Los Angeles'})
 CREATE (sf)-[:FLIGHT {
-    airline: "United",
-    flight_number: "UA507",
+    airline: 'United',
+    flight_number: 'UA507',
     distance_km: distance_haversine(sf.location, la.location) / 1000.0,
     duration_min: 90
 }]->(la);
 
 // Query 1: Find cities within a certain distance
-MATCH (origin:City {name: "San Francisco"}), (dest:City)
+MATCH (origin:City {name: 'San Francisco'}), (dest:City)
 WHERE origin <> dest
   AND distance_haversine(origin.location, dest.location) < 100000  // 100km in meters
 RETURN dest.name,
@@ -93,22 +93,22 @@ RETURN dest.name,
 ORDER BY distance_km;
 
 // Query 2: Calculate bearings between cities
-MATCH (sf:City {name: "San Francisco"}), (c:City)
+MATCH (sf:City {name: 'San Francisco'}), (c:City)
 WHERE sf <> c
 RETURN c.name,
        distance_haversine(sf.location, c.location) / 1000.0 AS distance_km,
        geo_bearing(sf.location, c.location) AS bearing_degrees,
        CASE
-           WHEN geo_bearing(sf.location, c.location) < 45 THEN "North"
-           WHEN geo_bearing(sf.location, c.location) < 135 THEN "East"
-           WHEN geo_bearing(sf.location, c.location) < 225 THEN "South"
-           WHEN geo_bearing(sf.location, c.location) < 315 THEN "West"
-           ELSE "North"
+           WHEN geo_bearing(sf.location, c.location) < 45 THEN 'North'
+           WHEN geo_bearing(sf.location, c.location) < 135 THEN 'East'
+           WHEN geo_bearing(sf.location, c.location) < 225 THEN 'South'
+           WHEN geo_bearing(sf.location, c.location) < 315 THEN 'West'
+           ELSE 'North'
        END AS general_direction
 ORDER BY distance_km;
 
 // Query 3: Find nearest landmarks to a city
-MATCH (c:City {name: "San Francisco"}), (l:Landmark)
+MATCH (c:City {name: 'San Francisco'}), (l:Landmark)
 WITH c, l, distance_haversine(c.location, l.location) AS distance_m
 RETURN l.name,
        l.type,
@@ -127,7 +127,7 @@ RETURN poi.name,
        geo_lon(poi.location) AS longitude;
 
 // Query 5: Calculate total route distance
-MATCH path = (sf:City {name: "San Francisco"})-[:ROUTE*1..3]->(dest:City)
+MATCH path = (sf:City {name: 'San Francisco'})-[:ROUTE*1..3]->(dest:City)
 WITH path, dest,
      [r IN relationships(path) | r.distance_km] AS distances,
      [n IN nodes(path) | n.name] AS cities
@@ -155,9 +155,9 @@ CREATE (c1)-[:NEARBY {
 }]->(c2);
 
 // Query 8: Route optimization with waypoints
-MATCH (start:City {name: "San Francisco"}),
-      (waypoint:City {name: "San Jose"}),
-      (end:City {name: "Los Angeles"})
+MATCH (start:City {name: 'San Francisco'}),
+      (waypoint:City {name: 'San Jose'}),
+      (end:City {name: 'Los Angeles'})
 WITH start, waypoint, end,
      distance_haversine(start.location, waypoint.location) / 1000.0 AS leg1_km,
      distance_haversine(waypoint.location, end.location) / 1000.0 AS leg2_km,
@@ -172,9 +172,9 @@ RETURN start.name AS start,
 // Query 9: Geographic clustering by region
 MATCH (c:City)
 RETURN CASE
-           WHEN geo_lat(c.location) > 37.0 THEN "Northern California"
-           WHEN geo_lat(c.location) > 34.0 THEN "Central California"
-           ELSE "Southern California"
+           WHEN geo_lat(c.location) > 37.0 THEN 'Northern California'
+           WHEN geo_lat(c.location) > 34.0 THEN 'Central California'
+           ELSE 'Southern California'
        END AS region,
        collect(c.name) AS cities,
        count(c) AS city_count,
@@ -183,7 +183,7 @@ RETURN CASE
 ORDER BY total_population DESC;
 
 // Query 10: Calculate midpoint between cities
-MATCH (sf:City {name: "San Francisco"}), (la:City {name: "Los Angeles"})
+MATCH (sf:City {name: 'San Francisco'}), (la:City {name: 'Los Angeles'})
 WITH sf, la,
      (geo_lat(sf.location) + geo_lat(la.location)) / 2.0 AS mid_lat,
      (geo_lon(sf.location) + geo_lon(la.location)) / 2.0 AS mid_lon

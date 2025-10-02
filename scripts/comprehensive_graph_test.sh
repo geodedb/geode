@@ -96,12 +96,12 @@ test_feature "NODE_CREATION" "Boolean properties" \
     "status_class.*00000"
 
 test_feature "NODE_CREATION" "String properties" \
-    "./zig-out/bin/geodec 'CREATE (p {name: \"Alice\"})' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE (p {name: \"Alice\'})' --no-quic' \
     "ParseError\\|timeout\\|hang" \
     true
 
 test_feature "NODE_CREATION" "Mixed properties" \
-    "./zig-out/bin/geodec 'CREATE (p:Person {name: \"Alice\", age: 30, active: true})' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE (p:Person {name: \"Alice\', age: 30, active: true})' --no-quic' \
     "ParseError\\|timeout\\|hang" \
     true
 
@@ -258,7 +258,7 @@ test_feature "DATA_TYPES" "Decimal numbers" \
     "status_class.*00000"
 
 test_feature "DATA_TYPES" "Arrays" \
-    "./zig-out/bin/geodec 'CREATE (p {tags: [\"tag1\", \"tag2\", \"tag3\"]})' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE (p {tags: [\"tag1\", \"tag2\", \"tag3\']})' --no-quic' \
     "status_class.*00000\\|ParseError\\|NotImplemented" \
     true
 
