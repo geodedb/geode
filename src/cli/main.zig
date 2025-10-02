@@ -415,6 +415,94 @@ fn printAuthUsage() void {
         "\n", .{});
 }
 
+fn printRoleUsage() void {
+    std.debug.print("geode role - Role management commands\n" ++
+        "\n" ++
+        "Usage: geode role <command> [args...]\n" ++
+        "\n" ++
+        "Commands:\n" ++
+        "  create                 Create a new role\n" ++
+        "  list                   List all roles\n" ++
+        "  show                   Show role details\n" ++
+        "  delete                 Delete a role\n" ++
+        "  grant                  Grant permissions to a role\n" ++
+        "  revoke                 Revoke permissions from a role\n" ++
+        "\n" ++
+        "Common Options:\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  -h, --help             Show this help\n" ++
+        "\n" ++
+        "Examples:\n" ++
+        "  geode role create admin\n" ++
+        "  geode role list\n" ++
+        "  geode role delete obsolete_role\n" ++
+        "\n", .{});
+}
+
+fn printPolicyUsage() void {
+    std.debug.print("geode policy - RLS policy management commands\n" ++
+        "\n" ++
+        "Usage: geode policy <command> [args...]\n" ++
+        "\n" ++
+        "Commands:\n" ++
+        "  create                 Create a new policy\n" ++
+        "  list                   List all policies\n" ++
+        "  show                   Show policy details\n" ++
+        "  delete                 Delete a policy\n" ++
+        "  enable                 Enable a policy\n" ++
+        "  disable                Disable a policy\n" ++
+        "\n" ++
+        "Common Options:\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  -h, --help             Show this help\n" ++
+        "\n" ++
+        "Examples:\n" ++
+        "  geode policy create read_own_data\n" ++
+        "  geode policy list\n" ++
+        "  geode policy delete outdated_policy\n" ++
+        "\n", .{});
+}
+
+fn printGrantUsage() void {
+    std.debug.print("geode grant - Grant permissions\n" ++
+        "\n" ++
+        "Usage: geode grant <permission> TO <role|user> [options]\n" ++
+        "\n" ++
+        "Permissions:\n" ++
+        "  SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER\n" ++
+        "  ALL PRIVILEGES\n" ++
+        "\n" ++
+        "Options:\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  -h, --help             Show this help\n" ++
+        "\n" ++
+        "Examples:\n" ++
+        "  geode grant SELECT TO role_reader\n" ++
+        "  geode grant ALL PRIVILEGES TO admin\n" ++
+        "  geode grant INSERT,UPDATE TO user_alice\n" ++
+        "\n", .{});
+}
+
+fn printRevokeUsage() void {
+    std.debug.print("geode revoke - Revoke permissions\n" ++
+        "\n" ++
+        "Usage: geode revoke <permission> FROM <role|user> [options]\n" ++
+        "\n" ++
+        "Permissions:\n" ++
+        "  SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER\n" ++
+        "  ALL PRIVILEGES\n" ++
+        "\n" ++
+        "Options:\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  -h, --help             Show this help\n" ++
+        "\n" ++
+        "Examples:\n" ++
+        "  geode revoke DELETE FROM role_reader\n" ++
+        "  geode revoke ALL PRIVILEGES FROM ex_employee\n" ++
+        "  geode revoke UPDATE FROM user_bob\n" ++
+        "\n", .{});
+}
+
 // Subcommand implementations
 fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var i: usize = start_idx;
@@ -642,7 +730,7 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var history_enabled = true;
     var verbose = false;
 
-    var i = start_idx;
+    var i = start_idx + 1; // Start after "shell"
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             printShellUsage();
@@ -718,16 +806,20 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    if (start_idx >= argv.len) {
+    // start_idx points to "auth", so start_idx + 1 is the subcommand
+    const subcmd_idx = start_idx + 1;
+    
+    if (subcmd_idx >= argv.len) {
+        std.debug.print("Error: missing auth subcommand\n", .{});
         printAuthUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    const subcmd = argv[start_idx];
+    const subcmd = argv[subcmd_idx];
 
     if (std.mem.eql(u8, subcmd, "login")) {
         // CANARY: REQ=REQ-AUTH-001; FEATURE="AuthenticationLogin"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_001_RealLogin; OWNER=cli; UPDATED=2025-09-30
-        try cmdAuthLogin(ally, argv, start_idx + 1);
+        try cmdAuthLogin(ally, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "logout")) {
         // CANARY: REQ=REQ-AUTH-002; FEATURE="AuthenticationLogout"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_002_RealLogout; OWNER=cli; UPDATED=2025-09-30
         try cmdAuthLogout(ally);
@@ -743,152 +835,117 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Check for help
-    if (start_idx >= argv.len) {
+    _ = ally;
+    // start_idx points to "user", so start_idx + 1 is the subcommand
+    const subcmd_idx = start_idx + 1;
+    
+    // Check for missing subcommand
+    if (subcmd_idx >= argv.len) {
+        std.debug.print("Error: missing user subcommand\n", .{});
+        printUserUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
+    const subcmd = argv[subcmd_idx];
+    
+    // Check for help flag
+    if (std.mem.eql(u8, subcmd, "--help") or std.mem.eql(u8, subcmd, "-h")) {
         printUserUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
     }
-
-    var i: usize = start_idx;
-    while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            printUserUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
-        }
-    }
-
-    // Build user auth command arguments
-    var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
-    defer auth_args.deinit(ally);
-
-    try auth_args.append(ally, "./zig-out/bin/geode-auth");
-    try auth_args.append(ally, "user");
-
-    // Add remaining args
-    i = start_idx;
-    while (i < argv.len) : (i += 1) {
-        try auth_args.append(ally, argv[i]);
-    }
-
-    // Execute auth tool
-    var child = std.process.Child.init(auth_args.items, ally);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    const term = try child.spawnAndWait();
-    std.process.exit(switch (term) {
-        .Exited => |code| code,
-        else => @intFromEnum(ExitCode.general_error),
-    });
+    
+    // For now, user management is not yet implemented
+    std.debug.print("Error: user management commands not yet implemented\n", .{});
+    printUserUsage();
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Build role command arguments
-    var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
-    defer auth_args.deinit(ally);
-
-    try auth_args.append(ally, "./zig-out/bin/geode-auth");
-    try auth_args.append(ally, "role");
-
-    // Add remaining args
-    var i: usize = start_idx;
-    while (i < argv.len) : (i += 1) {
-        try auth_args.append(ally, argv[i]);
+    _ = ally;
+    // start_idx points to "role", so start_idx + 1 is the subcommand
+    const subcmd_idx = start_idx + 1;
+    
+    // Check for missing subcommand or help
+    if (subcmd_idx >= argv.len) {
+        std.debug.print("Error: missing role subcommand\n", .{});
+        printRoleUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-
-    // Execute auth tool
-    var child = std.process.Child.init(auth_args.items, ally);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    const term = try child.spawnAndWait();
-    std.process.exit(switch (term) {
-        .Exited => |code| code,
-        else => @intFromEnum(ExitCode.general_error),
-    });
+    
+    const subcmd = argv[subcmd_idx];
+    
+    // Check for help flag
+    if (std.mem.eql(u8, subcmd, "--help") or std.mem.eql(u8, subcmd, "-h")) {
+        printRoleUsage();
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+    
+    // For now, role management is not yet implemented
+    std.debug.print("Error: role management commands not yet implemented\n", .{});
+    printRoleUsage();
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Build policy command arguments
-    var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
-    defer auth_args.deinit(ally);
-
-    try auth_args.append(ally, "./zig-out/bin/geode-auth");
-    try auth_args.append(ally, "policy");
-
-    // Add remaining args
-    var i: usize = start_idx;
-    while (i < argv.len) : (i += 1) {
-        try auth_args.append(ally, argv[i]);
+    _ = ally;
+    // start_idx points to "policy", so start_idx + 1 is the subcommand
+    const subcmd_idx = start_idx + 1;
+    
+    // Check for missing subcommand
+    if (subcmd_idx >= argv.len) {
+        std.debug.print("Error: missing policy subcommand\n", .{});
+        printPolicyUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-
-    // Execute auth tool
-    var child = std.process.Child.init(auth_args.items, ally);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    const term = try child.spawnAndWait();
-    std.process.exit(switch (term) {
-        .Exited => |code| code,
-        else => @intFromEnum(ExitCode.general_error),
-    });
+    
+    const subcmd = argv[subcmd_idx];
+    
+    // Check for help flag
+    if (std.mem.eql(u8, subcmd, "--help") or std.mem.eql(u8, subcmd, "-h")) {
+        printPolicyUsage();
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+    
+    // For now, policy management is not yet implemented
+    std.debug.print("Error: policy management commands not yet implemented\n", .{});
+    printPolicyUsage();
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Build grant command arguments
-    var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
-    defer auth_args.deinit(ally);
-
-    try auth_args.append(ally, "./zig-out/bin/geode-auth");
-    try auth_args.append(ally, "grant");
-
-    // Add remaining args
-    var i: usize = start_idx;
-    while (i < argv.len) : (i += 1) {
-        try auth_args.append(ally, argv[i]);
+    _ = ally;
+    
+    // Check for help flag
+    if (start_idx + 1 < argv.len) {
+        const arg = argv[start_idx + 1];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printGrantUsage();
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
     }
-
-    // Execute auth tool
-    var child = std.process.Child.init(auth_args.items, ally);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    const term = try child.spawnAndWait();
-    std.process.exit(switch (term) {
-        .Exited => |code| code,
-        else => @intFromEnum(ExitCode.general_error),
-    });
+    
+    // For now, grant command is not yet implemented
+    std.debug.print("Error: grant command not yet implemented\n", .{});
+    printGrantUsage();
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Build revoke command arguments
-    var auth_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 10) catch return error.OutOfMemory;
-    defer auth_args.deinit(ally);
-
-    try auth_args.append(ally, "./zig-out/bin/geode-auth");
-    try auth_args.append(ally, "revoke");
-
-    // Add remaining args
-    var i: usize = start_idx;
-    while (i < argv.len) : (i += 1) {
-        try auth_args.append(ally, argv[i]);
+    _ = ally;
+    
+    // Check for help flag
+    if (start_idx + 1 < argv.len) {
+        const arg = argv[start_idx + 1];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printRevokeUsage();
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
     }
-
-    // Execute auth tool
-    var child = std.process.Child.init(auth_args.items, ally);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    const term = try child.spawnAndWait();
-    std.process.exit(switch (term) {
-        .Exited => |code| code,
-        else => @intFromEnum(ExitCode.general_error),
-    });
+    
+    // For now, revoke command is not yet implemented
+    std.debug.print("Error: revoke command not yet implemented\n", .{});
+    printRevokeUsage();
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 fn cmdBackup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

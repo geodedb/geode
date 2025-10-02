@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.spec import load_spec, SpecValidationError
 from core.utils import resolve_secrets, SecretResolutionError
 from core.runner import run_tests, RunnerError
-from server.manager import ServerManager
+from server.simple_manager import ServerManager
 
 app = typer.Typer(
     name="geodetestlab", 

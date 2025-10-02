@@ -1,4 +1,4 @@
-# Geode Database Fixes and Improvements Summary
+# Geode Database Fixes and Improvements Summary - Session 2
 
 ## Overview
 This document summarizes all major fixes and improvements made to the Geode graph database, including implementation details, test results, and remaining issues.

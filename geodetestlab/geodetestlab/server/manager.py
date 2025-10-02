@@ -23,10 +23,11 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.utils import find_geode_binary, get_free_port
 
 
-class ServerManager:
+class ServerManagerDisabled:
     """Manages a Geode server instance for testing."""
 
     @staticmethod
