@@ -18,10 +18,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .core.spec import load_spec, SpecValidationError
-from .core.utils import resolve_secrets, SecretResolutionError
-from .core.runner import run_tests, RunnerError
-from .server.manager import ServerManager
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from core.spec import load_spec, SpecValidationError
+from core.utils import resolve_secrets, SecretResolutionError
+from core.runner import run_tests, RunnerError
+from server.manager import ServerManager
 
 app = typer.Typer(
     name="geodetestlab", 
@@ -124,7 +128,7 @@ def run(
     try:
         secrets, env_vars = resolve_secrets(spec_obj)
     except SecretResolutionError as exc:
-        console.print(str(exc), style="red", file=sys.stderr)
+        console_err.print(str(exc), style="red")
         raise typer.Exit(code=4)
 
     try:
@@ -148,7 +152,7 @@ def run(
         )
     except RunnerError as exc:
         # Runtime/setup error – typically binary not found or other unexpected issues
-        console.print(str(exc), style="red", file=sys.stderr)
+        console_err.print(str(exc), style="red")
         raise typer.Exit(code=3)
     
     # Print final single‑line JSON summary
@@ -180,7 +184,7 @@ def secrets_check(*, spec: Path = typer.Option(..., exists=True, readable=True, 
     try:
         resolve_secrets(spec_obj)
     except SecretResolutionError as exc:
-        console.print(str(exc), style="red", file=sys.stderr)
+        console_err.print(str(exc), style="red")
         raise typer.Exit(code=4)
     # No missing secrets
     console.print("[green]All required secrets are resolvable[/green]")
@@ -207,7 +211,7 @@ def secrets_list(
     try:
         secrets, _ = resolve_secrets(spec_obj)
     except SecretResolutionError as exc:
-        console.print(str(exc), style="red", file=sys.stderr)
+        console_err.print(str(exc), style="red")
         raise typer.Exit(code=4)
     if not spec_obj.secrets:
         console.print("[yellow]No secrets defined in spec[/yellow]")
@@ -278,7 +282,7 @@ def server_start(
                 console.print("[green]Server stopped[/green]")
                 
     except Exception as exc:
-        console.print(f"[red]Failed to start server: {exc}[/red]", file=sys.stderr)
+        console_err.print(f"[red]Failed to start server: {exc}[/red]")
         raise typer.Exit(code=3)
 
 
@@ -296,7 +300,7 @@ def server_stop(
             console.print(f"[yellow]No server found on port {port}[/yellow]")
             raise typer.Exit(code=1)
     except Exception as exc:
-        console.print(f"[red]Failed to stop server: {exc}[/red]", file=sys.stderr)
+        console_err.print(f"[red]Failed to stop server: {exc}[/red]")
         raise typer.Exit(code=3)
 
 

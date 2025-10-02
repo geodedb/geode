@@ -19,11 +19,92 @@ from typing import Optional, Dict, List, Any
 
 import psutil
 
-from ..core.utils import find_geode_binary, get_free_port
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.utils import find_geode_binary, get_free_port
 
 
 class ServerManager:
     """Manages a Geode server instance for testing."""
+
+    @staticmethod
+    def generate_test_certificates(cert_dir: Path) -> tuple[Path, Path, Path]:
+        """Generate test certificates for TLS.
+        
+        Returns
+        -------
+        tuple[Path, Path, Path]
+            CA certificate, server certificate, and server key paths.
+        """
+        cert_dir = Path(cert_dir)
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        
+        ca_key = cert_dir / "ca-key.pem"
+        ca_cert = cert_dir / "ca-cert.pem"
+        server_key = cert_dir / "server-key.pem"
+        server_cert = cert_dir / "server-cert.pem"
+        server_csr = cert_dir / "server.csr"
+        server_conf = cert_dir / "server.conf"
+        
+        # Generate CA private key
+        subprocess.run([
+            "openssl", "genrsa", "-out", str(ca_key), "2048"
+        ], check=True, capture_output=True)
+        
+        # Generate CA certificate
+        subprocess.run([
+            "openssl", "req", "-new", "-x509", "-days", "365",
+            "-key", str(ca_key), "-out", str(ca_cert),
+            "-subj", "/C=US/ST=Test/L=Test/O=Geode Test/CN=Geode Test CA"
+        ], check=True, capture_output=True)
+        
+        # Generate server private key
+        subprocess.run([
+            "openssl", "genrsa", "-out", str(server_key), "2048"
+        ], check=True, capture_output=True)
+        
+        # Create server config file
+        server_conf.write_text("""[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = Test
+L = Test
+O = Geode Test
+CN = 127.0.0.1
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+""")
+        
+        # Generate server certificate signing request
+        subprocess.run([
+            "openssl", "req", "-new", "-key", str(server_key),
+            "-out", str(server_csr),
+            "-subj", "/C=US/ST=Test/L=Test/O=Geode Test/CN=127.0.0.1"
+        ], check=True, capture_output=True)
+        
+        # Generate server certificate signed by CA
+        subprocess.run([
+            "openssl", "x509", "-req", "-in", str(server_csr),
+            "-CA", str(ca_cert), "-CAkey", str(ca_key),
+            "-CAcreateserial", "-out", str(server_cert),
+            "-days", "365", "-extensions", "v3_req",
+            "-extfile", str(server_conf)
+        ], check=True, capture_output=True)
+        
+        return ca_cert, server_cert, server_key
 
     def __init__(
         self,
@@ -70,6 +151,11 @@ class ServerManager:
             self.data_dir = Path(data_dir)
             self.data_dir.mkdir(parents=True, exist_ok=True)
         
+        # Generate test certificates
+        self.ca_cert, self.server_cert, self.server_key = self.generate_test_certificates(
+            self.data_dir / "certs"
+        )
+        
         # Process management
         self.process: Optional[subprocess.Popen] = None
         self._ready = False
@@ -91,6 +177,8 @@ class ServerManager:
             "serve",
             "--data-dir", str(self.data_dir),
             "--listen", f"127.0.0.1:{self.port}",
+            "--cert", str(self.server_cert),
+            "--key", str(self.server_key),
             "--log-level", "info",
         ]
         
@@ -114,6 +202,7 @@ class ServerManager:
                 stderr=subprocess.PIPE if not self.verbose else None,
                 text=True,
             )
+            self._start_time = time.time()
         except Exception as exc:
             raise RuntimeError(f"Failed to start server process: {exc}")
         
@@ -216,13 +305,26 @@ class ServerManager:
         raise RuntimeError(f"Server failed to become ready within {timeout_seconds} seconds")
 
     def _check_port_ready(self) -> bool:
-        """Check if the server port is accepting connections."""
+        """Check if the server is ready by checking process stability and port binding."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.1)
-                result = sock.connect_ex(('127.0.0.1', self.port))
-                return result == 0
+            # Check if process has been running for a reasonable time and port is bound
+            if hasattr(self, '_start_time') and time.time() - self._start_time > 2.0:
+                # Check if UDP port is bound (QUIC uses UDP)
+                result = subprocess.run(
+                    ["netstat", "-uln"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.0
+                )
+                if result.returncode == 0:
+                    port_bound = f":{self.port}" in result.stdout
+                    if port_bound and self.is_running():
+                        return True
+            return False
         except Exception:
+            # Final fallback: just check if process is running for enough time
+            if hasattr(self, '_start_time'):
+                return time.time() - self._start_time > 4.0 and self.is_running()
             return False
 
     @staticmethod

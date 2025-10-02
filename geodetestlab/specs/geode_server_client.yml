@@ -1,0 +1,174 @@
+version: "1.0"
+name: "Geode Server/Client Integration Tests"
+description: "Comprehensive testing of Geode server startup, client connections, and basic operations"
+
+cli:
+  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  server:
+    enabled: true
+    port: null  # Auto-allocate port
+    data_dir: null  # Use temporary directory
+    startup_timeout_ms: 30000
+    cleanup: true
+    args: ["--log-level", "info"]
+    env:
+      GEODE_LOG_JSON: "true"
+  client:
+    timeout_ms: 10000
+    tls_verify: false
+    format: "json"
+
+secrets:
+  admin_password:
+    source: "env"
+    key: "GEODE_ADMIN_PASSWORD"
+    required: false
+  test_token:
+    source: "env"
+    key: "GEODE_TEST_TOKEN"
+    required: false
+
+tests:
+  # Server startup and basic connectivity
+  - name: "server-status-check"
+    description: "Verify server is running and responsive"
+    args: ["query", "--server", "${server_address}", "RETURN 1 AS test"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["test"]
+    tags: ["server", "connectivity"]
+
+  # Basic GQL queries
+  - name: "simple-return"
+    description: "Execute simple RETURN statement"
+    args: ["query", "--server", "${server_address}", "RETURN 42 AS answer, 'hello' AS greeting"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["answer", "greeting"]
+    tags: ["gql", "basic"]
+
+  - name: "simple-match"
+    description: "Execute simple MATCH with no data"
+    args: ["query", "--server", "${server_address}", "MATCH (n) RETURN count(n) AS node_count"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["node_count"]
+    tags: ["gql", "match"]
+
+  # Data manipulation
+  - name: "create-node"
+    description: "Create a simple node"
+    args: ["query", "--server", "${server_address}", "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        contains_node:
+          name: "Alice"
+          age: 30
+    tags: ["gql", "create", "node"]
+
+  - name: "create-relationship"
+    description: "Create nodes with relationship"
+    args: ["query", "--server", "${server_address}", "CREATE (a:Person {name: 'Bob'})-[r:KNOWS]->(b:Person {name: 'Carol'}) RETURN a, r, b"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        contains_edge:
+          type: "KNOWS"
+    tags: ["gql", "create", "relationship"]
+
+  - name: "query-created-data"
+    description: "Query previously created data"
+    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name"]
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 1
+        columns: ["name"]
+    tags: ["gql", "query", "data"]
+
+  # Transaction testing
+  - name: "transaction-begin"
+    description: "Begin a transaction"
+    args: ["query", "--server", "${server_address}", "--begin", "CREATE (n:TxTest {id: 1}) RETURN n"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+    tags: ["transaction", "begin"]
+
+  - name: "transaction-commit"
+    description: "Commit a transaction"
+    args: ["query", "--server", "${server_address}", "--commit", "MATCH (n:TxTest) RETURN count(n) AS count"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+    tags: ["transaction", "commit"]
+
+  # Output format testing
+  - name: "json-format"
+    description: "Test JSON output format"
+    args: ["query", "--server", "${server_address}", "--format", "json", "RETURN 1 AS value"]
+    expect:
+      exit_code: 0
+      stdout_json_assert:
+        - expression: "results[0].value"
+          equals: 1
+    tags: ["format", "json"]
+
+  - name: "table-format"
+    description: "Test table output format"
+    args: ["query", "--server", "${server_address}", "--format", "table", "RETURN 1 AS value"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["value", "1"]
+    tags: ["format", "table"]
+
+  # Error handling
+  - name: "syntax-error"
+    description: "Test handling of syntax errors"
+    args: ["query", "--server", "${server_address}", "INVALID GQL SYNTAX"]
+    expect:
+      exit_code: 1
+    tags: ["error", "syntax"]
+
+  - name: "semantic-error"
+    description: "Test handling of semantic errors"
+    args: ["query", "--server", "${server_address}", "MATCH (n:NonExistentLabel) WHERE n.nonexistent_property = 'value' RETURN n"]
+    expect:
+      exit_code: 0  # May return 0 with empty results
+      geode_query:
+        row_count: 0
+    tags: ["error", "semantic"]
+
+  # Performance and limits
+  - name: "large-result-set"
+    description: "Test handling of larger result sets"
+    args: ["query", "--server", "${server_address}", "UNWIND range(1, 100) AS i CREATE (n:TestNode {id: i}) RETURN count(n) AS created"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["created"]
+    tags: ["performance", "bulk"]
+
+  - name: "cleanup-test-data"
+    description: "Clean up test data"
+    args: ["query", "--server", "${server_address}", "MATCH (n) WHERE n:Person OR n:TxTest OR n:TestNode DELETE n"]
+    expect:
+      exit_code: 0
+    tags: ["cleanup"]
+
+invariants:
+  - type: "server_running"
+
+tags: ["integration", "server", "client", "comprehensive"]
