@@ -46,6 +46,37 @@ zig build -Doptimize=ReleaseSafe
 
 # Start server
 ./zig-out/bin/geoded --listen-quic 0.0.0.0:8443
+
+# Run CLI with embedded server (no external server needed)
+./zig-out/bin/geode query "RETURN 1 AS x"
+
+# Interactive shell
+./zig-out/bin/geode shell
+```
+
+### CLI Commands
+The unified CLI (`geode`) provides comprehensive database management:
+
+```bash
+# Query execution (auto-starts embedded server if needed)
+geode query "MATCH (n) RETURN n LIMIT 10"
+
+# User management
+geode user create alice alice@example.com
+geode user list
+geode user assign-role alice admin
+
+# Authentication
+geode auth login --user admin
+geode auth validate --token <token>
+
+# Role and policy management
+geode role create analyst "Data analyst role"
+geode policy create user_access "User data access policy"
+
+# Permissions
+geode grant read database analyst
+geode revoke write graph limited_role
 ```
 
 ## Testing

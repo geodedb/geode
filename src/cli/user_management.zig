@@ -32,18 +32,18 @@ pub const UserStore = struct {
         };
 
         const file_path = try std.fs.path.join(allocator, &.{ geode_dir, "users.json" });
-        
+
         const users = std.ArrayList(User).initCapacity(allocator, 0) catch return error.OutOfMemory;
-        
+
         var store = UserStore{
             .users = users,
             .allocator = allocator,
             .file_path = file_path,
         };
-        
+
         // Load existing users
         try store.load();
-        
+
         // If no users exist, create default admin user
         if (store.users.items.len == 0) {
             const admin = User{
@@ -57,7 +57,7 @@ pub const UserStore = struct {
             try store.users.append(store.allocator, admin);
             try store.save();
         }
-        
+
         return store;
     }
 
@@ -95,14 +95,14 @@ pub const UserStore = struct {
         defer parsed.deinit();
 
         if (parsed.value != .array) return;
-        
+
         for (parsed.value.array.items) |item| {
             if (item != .object) continue;
-            
+
             const obj = item.object;
             const username = obj.get("username") orelse continue;
             if (username != .string) continue;
-            
+
             const user = User{
                 .username = try self.allocator.dupe(u8, username.string),
                 .email = if (obj.get("email")) |e| if (e == .string) try self.allocator.dupe(u8, e.string) else null else null,
@@ -126,7 +126,7 @@ pub const UserStore = struct {
                 .created_at = if (obj.get("created_at")) |c| if (c == .integer) c.integer else std.time.timestamp() else std.time.timestamp(),
                 .updated_at = if (obj.get("updated_at")) |u| if (u == .integer) u.integer else std.time.timestamp() else std.time.timestamp(),
             };
-            
+
             try self.users.append(self.allocator, user);
         }
     }
@@ -136,7 +136,7 @@ pub const UserStore = struct {
         defer file.close();
 
         const writer = file.writer();
-        
+
         try writer.writeByte('[');
         for (self.users.items, 0..) |user, i| {
             if (i > 0) {
@@ -144,23 +144,23 @@ pub const UserStore = struct {
             } else {
                 try writer.writeAll("\n  ");
             }
-            
+
             try writer.writeAll("{");
             try writer.print("\"username\":\"{s}\"", .{user.username});
-            
+
             if (user.email) |email| {
                 try writer.print(",\"email\":\"{s}\"", .{email});
             }
-            
+
             try writer.print(",\"status\":\"{s}\"", .{user.status});
-            
+
             try writer.writeAll(",\"roles\":[");
             for (user.roles, 0..) |role, j| {
                 if (j > 0) try writer.writeByte(',');
                 try writer.print("\"{s}\"", .{role});
             }
             try writer.writeAll("]");
-            
+
             try writer.print(",\"created_at\":{}", .{user.created_at});
             try writer.print(",\"updated_at\":{}", .{user.updated_at});
             try writer.writeByte('}');
@@ -176,7 +176,7 @@ pub const UserStore = struct {
                 return error.UserAlreadyExists;
             }
         }
-        
+
         const user = User{
             .username = try self.allocator.dupe(u8, username),
             .email = if (email) |e| try self.allocator.dupe(u8, e) else null,
@@ -185,7 +185,7 @@ pub const UserStore = struct {
             .created_at = std.time.timestamp(),
             .updated_at = std.time.timestamp(),
         };
-        
+
         try self.users.append(self.allocator, user);
         try self.save();
     }
@@ -198,7 +198,7 @@ pub const UserStore = struct {
                 break;
             }
         }
-        
+
         if (found_index) |index| {
             const user = self.users.orderedRemove(index);
             self.allocator.free(user.username);
