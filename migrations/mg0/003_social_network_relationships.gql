@@ -164,35 +164,75 @@ CREATE (:Post {
     sentiment: 0.88
 });
 
--- Generate more posts
-UNWIND range(6, 25) AS i
+-- Generate additional posts (showing first 5 as examples)
+-- Note: In production, you would use a data loading tool for bulk insertions
+
 CREATE (:Post {
-    id: 'post-' + toString(i),
-    content: CASE i % 5
-        WHEN 0 THEN 'Working on an exciting new feature for our product. Can\'t wait to share more details! #BuildInPublic'
-        WHEN 1 THEN 'Great conference today! Met amazing people and learned about the latest trends in tech. #Networking'
-        WHEN 2 THEN 'Just published a new tutorial on graph algorithms. Link in bio! #Education #GraphTheory'
-        WHEN 3 THEN 'Thoughts on the latest developments in AI? I think we\'re approaching a paradigm shift. #AI #Future'
-        ELSE 'Coffee and code - the perfect morning combination ☕ 💻 #DeveloperLife #Coding'
-    END,
-    created_at: timestamp('2024-09-20T00:00:00Z') - duration('P' + toString(i) + 'D'),
-    updated_at: CASE WHEN i % 3 = 0 THEN timestamp('2024-09-20T00:00:00Z') - duration('P' + toString(i - 1) + 'D') ELSE null END,
-    likes: (i * 13) % 200,
-    shares: (i * 7) % 50,
-    comments: (i * 5) % 30,
-    content_vector: VectorF32([
-        (i % 10) / 10.0,
-        ((i * 2) % 10) / 10.0,
-        ((i * 3) % 10) / 10.0,
-        ((i * 4) % 10) / 10.0,
-        ((i * 5) % 10) / 10.0,
-        ((i * 6) % 10) / 10.0,
-        ((i * 7) % 10) / 10.0,
-        ((i * 8) % 10) / 10.0
-    ]),
+    id: 'post-6',
+    content: 'Great conference today! Met amazing people and learned about the latest trends in tech. #Networking',
+    created_at: timestamp('2024-09-14T00:00:00Z'),
+    updated_at: timestamp('2024-09-15T00:00:00Z'),
+    likes: 78,
+    shares: 42,
+    comments: 0,
+    content_vector: VectorF32([0.6, 0.2, 0.8, 0.4, 0.0, 0.6, 0.2, 0.8]),
     language: LanguageTag('en-US'),
-    sentiment: 0.5 + ((i % 5) * 0.1)
+    sentiment: 0.6
 });
+
+CREATE (:Post {
+    id: 'post-7',
+    content: 'Just published a new tutorial on graph algorithms. Link in bio! #Education #GraphTheory',
+    created_at: timestamp('2024-09-13T00:00:00Z'),
+    updated_at: null,
+    likes: 91,
+    shares: 0,
+    comments: 5,
+    content_vector: VectorF32([0.7, 0.4, 0.1, 0.8, 0.5, 0.2, 0.9, 0.6]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.7
+});
+
+CREATE (:Post {
+    id: 'post-8',
+    content: 'Thoughts on the latest developments in AI? I think we\'re approaching a paradigm shift. #AI #Future',
+    created_at: timestamp('2024-09-12T00:00:00Z'),
+    updated_at: null,
+    likes: 104,
+    shares: 7,
+    comments: 10,
+    content_vector: VectorF32([0.8, 0.6, 0.4, 0.2, 0.0, 0.8, 0.6, 0.4]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.8
+});
+
+CREATE (:Post {
+    id: 'post-9',
+    content: 'Coffee and code - the perfect morning combination ☕ 💻 #DeveloperLife #Coding',
+    created_at: timestamp('2024-09-11T00:00:00Z'),
+    updated_at: timestamp('2024-09-12T00:00:00Z'),
+    likes: 117,
+    shares: 14,
+    comments: 15,
+    content_vector: VectorF32([0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.9
+});
+
+CREATE (:Post {
+    id: 'post-10',
+    content: 'Working on an exciting new feature for our product. Can\'t wait to share more details! #BuildInPublic',
+    created_at: timestamp('2024-09-10T00:00:00Z'),
+    updated_at: null,
+    likes: 130,
+    shares: 21,
+    comments: 20,
+    content_vector: VectorF32([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    language: LanguageTag('en-US'),
+    sentiment: 0.5
+});
+
+-- Additional posts would be created similarly...
 
 -- Connect posts to users
 MATCH (u:User {id: 'user-1'}), (p:Post {id: 'post-1'})

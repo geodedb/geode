@@ -35,6 +35,25 @@ pub const Parser = struct {
         self.cur = self.lx.next();
     }
 
+    fn isKeyword(self: *Parser, kind: tok.TokenKind) bool {
+        _ = self;
+        // Check if the token kind is a keyword (not a delimiter, literal, or identifier)
+        return switch (kind) {
+            .MATCH, .OPTIONAL, .WHERE, .RETURN, .WITH, .CASE, .WHEN, .THEN, .ELSE, .END,
+            .AND, .OR, .NOT, .IN, .IS, .STARTS, .ENDS, .CONTAINS, .CALL, .YIELD,
+            .TRUE, .FALSE, .NULL, .AS, .DISTINCT, .UNION, .INTERSECT, .EXCEPT, .ALL,
+            .SESSION, .SET, .RESET, .CLOSE, .INSERT, .VALUE, .VALUES, .SCAN, .START,
+            .TRANSACTION, .COMMIT, .ROLLBACK, .CREATE, .DELETE, .MERGE, .GRAPH,
+            .PROPERTY, .DROP, .ORDER, .BY, .GROUP, .ASC, .DESC, .LIMIT, .OFFSET,
+            .SKIP, .HAVING, .NULLS, .FIRST, .LAST, .ON, .UNKNOWN, .FILTER, .LET,
+            .SELECT, .FROM, .EXISTS, .DETACH, .REMOVE, .FOR, .FOREACH, .UNWIND,
+            .USE, .USING, .INDEX, .JOIN, .IF, .TO, .KEY, .KEYS, .LABELS, .LOAD,
+            .CSV, .PERIODIC, .PROPERTIES, .RELATIONSHIPS, .START_NODE, .END_NODE,
+            .TYPE, .TYPES => true,
+            else => false,
+        };
+    }
+
     fn peekKind(self: *Parser) tok.TokenKind {
         var tmp = self.lx.*;
         const tkn = tmp.next();
@@ -181,49 +200,94 @@ pub const Parser = struct {
                 };
                 break :blk_select .{ .Query = query };
             },
-            .MATCH, .OPTIONAL => blk_query: {
-                const first = try self.parseQuery();
-                if (self.cur.kind == .UNION) {
-                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    while (self.cur.kind == .UNION) {
-                        self.advance();
-                        var all = false;
-                        var distinct = false;
-                        if (self.cur.kind == .ALL) {
-                            all = true;
-                            self.advance();
-                        } else if (self.cur.kind == .DISTINCT) {
-                            distinct = true;
-                            self.advance();
-                        }
-                        // Disallow both modifiers at once
-                        if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-                        const q = try self.parseQuery();
-                        try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q });
-                    }
-                    break :blk_query .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
-                }
-                if (self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
-                    const kind = self.cur.kind;
+            .MATCH => blk_match: {
+                // Check if this is a MATCH...DELETE pattern
+                // We need to look ahead after parsing the MATCH pattern
+                const saved_pos = self.lx.*;
+                const saved_cur = self.cur;
+                
+                // Try to detect MATCH...DELETE pattern
+                self.advance(); // Skip MATCH
+                _ = self.parseGraphPattern() catch {
+                    // If pattern parsing fails, restore and parse as query
+                    self.lx.* = saved_pos;
+                    self.cur = saved_cur;
+                    const first = try self.parseQuery();
+                    break :blk_match self.handleQueryResult(first);
+                };
+                
+                // Check for optional WHERE
+                if (self.cur.kind == .WHERE) {
                     self.advance();
-                    var all = false;
-                    var distinct = false;
-                    if (self.cur.kind == .ALL) {
-                        all = true;
-                        self.advance();
-                    } else if (self.cur.kind == .DISTINCT) {
-                        distinct = true;
-                        self.advance();
-                    }
-                    if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-                    const rhs = try self.parseQuery();
-                    if (kind == .INTERSECT) {
-                        break :blk_query .{ .Intersect = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
-                    } else {
-                        break :blk_query .{ .Except = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
-                    }
+                    _ = self.parseOrExpr() catch {};
                 }
-                break :blk_query .{ .Query = first };
+                
+                // Check if DELETE follows
+                const is_delete = self.cur.kind == .DELETE;
+                
+                // Restore position
+                self.lx.* = saved_pos;
+                self.cur = saved_cur;
+                
+                if (is_delete) {
+                    // Parse as MATCH...DELETE statement
+                    self.advance(); // Skip MATCH
+                    const match_pattern = try self.parseGraphPattern();
+                    
+                    var where_clause: ?ast.Expr = null;
+                    if (self.cur.kind == .WHERE) {
+                        self.advance();
+                        where_clause = try self.parseOrExpr();
+                    }
+                    
+                    _ = try self.expect(.DELETE);
+                    
+                    // Parse items to delete
+                    var delete_items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
+                    
+                    // Parse first item
+                    const first_item = try self.parseDeleteItem();
+                    try delete_items.append(self.arena.allocator(), first_item);
+                    
+                    // Parse additional items
+                    while (self.cur.kind == .comma) {
+                        self.advance();
+                        const item = try self.parseDeleteItem();
+                        try delete_items.append(self.arena.allocator(), item);
+                    }
+                    
+                    // Optional RETURN clause
+                    var return_clause: ?ast.ReturnClause = null;
+                    if (self.cur.kind == .RETURN) {
+                        self.advance();
+                        const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                            self.advance();
+                            break :blk true;
+                        } else false;
+                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        try self.parseProjectionItems(&return_items);
+                        return_clause = .{
+                            .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                            .distinct = distinct,
+                        };
+                    }
+                    
+                    break :blk_match .{ .Delete = .{
+                        .match_clause = match_pattern,
+                        .where_clause = where_clause,
+                        .detach = false,
+                        .items = try delete_items.toOwnedSlice(self.arena.allocator()),
+                        .return_clause = return_clause,
+                    }};
+                }
+                
+                // Otherwise, parse as regular query
+                const first = try self.parseQuery();
+                break :blk_match self.handleQueryResult(first);
+            },
+            .OPTIONAL => blk_query: {
+                const first = try self.parseQuery();
+                break :blk_query self.handleQueryResult(first);
             },
             .RETURN => blk_r: {
                 // Parenthesized set expression grouping: (RETURN ... UNION ...)
@@ -359,8 +423,88 @@ pub const Parser = struct {
                 self.advance();
                 return .Rollback;
             },
+            .CALL => blk_call: {
+                self.advance();
+                // Parse procedure call expression (e.g., db.labels())
+                const procedure = try self.parseOrExpr();
+                
+                // Optional YIELD clause
+                var yield_items: ?[]ast.ReturnItem = null;
+                if (self.cur.kind == .YIELD) {
+                    self.advance();
+                    var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    try self.parseProjectionItems(&items);
+                    yield_items = try items.toOwnedSlice(self.arena.allocator());
+                }
+                
+                // Optional RETURN clause
+                var return_clause: ?ast.ReturnClause = null;
+                if (self.cur.kind == .RETURN) {
+                    self.advance();
+                    const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                        self.advance();
+                        break :blk true;
+                    } else false;
+                    var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    try self.parseProjectionItems(&return_items);
+                    return_clause = .{
+                        .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                        .distinct = distinct,
+                    };
+                }
+                
+                break :blk_call .{ .Call = .{
+                    .procedure = procedure,
+                    .yield_items = yield_items,
+                    .return_clause = return_clause,
+                }};
+            },
             else => return error.UnexpectedToken,
         };
+    }
+
+    fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
+        if (self.cur.kind == .UNION) {
+            var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            while (self.cur.kind == .UNION) {
+                self.advance();
+                var all = false;
+                var distinct = false;
+                if (self.cur.kind == .ALL) {
+                    all = true;
+                    self.advance();
+                } else if (self.cur.kind == .DISTINCT) {
+                    distinct = true;
+                    self.advance();
+                }
+                // Disallow both modifiers at once
+                if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+                const q = try self.parseQuery();
+                try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q });
+            }
+            return .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
+        }
+        if (self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+            const kind = self.cur.kind;
+            self.advance();
+            var all = false;
+            var distinct = false;
+            if (self.cur.kind == .ALL) {
+                all = true;
+                self.advance();
+            } else if (self.cur.kind == .DISTINCT) {
+                distinct = true;
+                self.advance();
+            }
+            if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+            const rhs = try self.parseQuery();
+            if (kind == .INTERSECT) {
+                return .{ .Intersect = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
+            } else {
+                return .{ .Except = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
+            }
+        }
+        return .{ .Query = first };
     }
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
@@ -461,6 +605,20 @@ pub const Parser = struct {
             self.path_aliases.clearRetainingCapacity();
             break :blk_empty .{ .chains = &.{} };
         };
+
+        // Parse SET clauses if present
+        var set_clauses: []ast.SetClause = &.{};
+        if (self.cur.kind == .SET) {
+            self.advance();
+            set_clauses = try self.parseSetClauses();
+        }
+
+        // Parse REMOVE clauses if present
+        var remove_clauses: []ast.RemoveClause = &.{};
+        if (self.cur.kind == .REMOVE) {
+            self.advance();
+            remove_clauses = try self.parseRemoveClauses();
+        }
 
         // RETURN item (, item)*
         _ = try self.expect(.RETURN);
@@ -607,6 +765,8 @@ pub const Parser = struct {
             .match = pat,
             .where_clause = where_expr,
             .with_clause = with_clause,
+            .set_clauses = set_clauses,
+            .remove_clauses = remove_clauses,
             .group_by = group_by,
             .having = having_expr,
             .ret = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct },
@@ -789,12 +949,17 @@ pub const Parser = struct {
         var list = std.ArrayList(ast.Property).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         if (self.cur.kind != .r_brace) {
             while (true) {
-                // Accept both identifier and string_lit for property keys
-                // This allows both {name: 'value'} and {'name': 'value'} syntax
-                const key = if (self.cur.kind == .identifier)
-                    try self.expect(.identifier)
-                else if (self.cur.kind == .string_lit)
+                // Accept identifier, string_lit, or any keyword as property keys
+                // This allows {name: 'value'}, {'name': 'value'}, and {value: 1} syntax
+                // Keywords like VALUE, RETURN, etc. are valid property names
+                const key = if (self.cur.kind == .string_lit)
                     try self.expect(.string_lit)
+                else if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind))
+                    blk: {
+                        const token = self.cur;
+                        self.advance();
+                        break :blk token;
+                    }
                 else
                     return self.unexpected("property key");
                 _ = try self.expect(.colon);
@@ -1022,7 +1187,14 @@ pub const Parser = struct {
         while (true) {
             if (self.cur.kind == .dot) {
                 self.advance();
-                const field = try self.expect(.identifier);
+                const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind))
+                    blk: {
+                        const token = self.cur;
+                        self.advance();
+                        break :blk token;
+                    }
+                else
+                    try self.expect(.identifier);
                 const a = self.arena.allocator();
                 const bp = try a.create(ast.Expr);
                 bp.* = base;
@@ -1040,13 +1212,25 @@ pub const Parser = struct {
                         saw_distinct = true;
                         self.advance();
                     }
-                    while (true) {
-                        const arg = try self.parseOrExpr();
-                        const ap = try self.arena.allocator().create(ast.Expr);
-                        ap.* = arg;
-                        try args.append(self.arena.allocator(), ap);
-                        if (self.cur.kind != .comma) break;
+                    // Special handling: COUNT(*)
+                    if (base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count") and self.cur.kind == .star) {
+                        // Create a special identifier node for "*"
+                        const star_token = self.cur;
                         self.advance();
+                        const ap = try self.arena.allocator().create(ast.Expr);
+                        const unicode = @import("../unicode/unicode_tables.zig");
+                        const cnf = unicode.caseFoldToUpper(self.arena.allocator(), star_token.lexeme) catch star_token.lexeme;
+                        ap.* = .{ .Ident = .{ .orig = star_token.lexeme, .cnf = cnf } };
+                        try args.append(self.arena.allocator(), ap);
+                    } else {
+                        while (true) {
+                            const arg = try self.parseOrExpr();
+                            const ap = try self.arena.allocator().create(ast.Expr);
+                            ap.* = arg;
+                            try args.append(self.arena.allocator(), ap);
+                            if (self.cur.kind != .comma) break;
+                            self.advance();
+                        }
                     }
                 }
                 _ = try self.expect(.r_paren);
@@ -1213,7 +1397,32 @@ pub const Parser = struct {
                 if (self.cur.kind == .l_paren or self.cur.kind == .arrow_l or self.cur.kind == .minus or (self.cur.kind == .identifier and self.peekKind() == .eq)) {
                     starts_pattern = true;
                 }
-                if (!starts_pattern) return error.UnexpectedToken;
+                if (!starts_pattern) {
+                    // Try to parse as array literal: [expr, expr, ...]
+                    var elements = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    
+                    // Handle empty array
+                    if (self.cur.kind == .r_bracket) {
+                        self.advance();
+                        const elements_slice = try elements.toOwnedSlice(self.arena.allocator());
+                        break :blk_pc .{ .ArrayLit = elements_slice };
+                    }
+                    
+                    // Parse comma-separated expressions
+                    while (true) {
+                        const elem = try self.parseOrExpr();
+                        const ep = try self.arena.allocator().create(ast.Expr);
+                        ep.* = elem;
+                        try elements.append(self.arena.allocator(), ep);
+                        
+                        if (self.cur.kind != .comma) break;
+                        self.advance();
+                    }
+                    
+                    _ = try self.expect(.r_bracket);
+                    const elements_slice = try elements.toOwnedSlice(self.arena.allocator());
+                    break :blk_pc .{ .ArrayLit = elements_slice };
+                }
                 const pat_val = try self.parseGraphPattern();
                 var where_expr: ?*ast.Expr = null;
                 if (self.cur.kind == .WHERE) {
@@ -1621,6 +1830,40 @@ pub const Parser = struct {
         return .{
             .target = .{ .object = object, .property = property },
             .value = value,
+        };
+    }
+
+    fn parseRemoveClauses(self: *Parser) ParserError![]ast.RemoveClause {
+        var clauses = std.ArrayList(ast.RemoveClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+
+        // Parse first clause
+        const first = try self.parseRemoveClause();
+        try clauses.append(self.arena.allocator(), first);
+
+        // Parse additional clauses
+        while (self.cur.kind == .comma) {
+            self.advance();
+            const clause = try self.parseRemoveClause();
+            try clauses.append(self.arena.allocator(), clause);
+        }
+
+        return clauses.toOwnedSlice(self.arena.allocator());
+    }
+
+    fn parseRemoveClause(self: *Parser) ParserError!ast.RemoveClause {
+        // Parse property access (e.g., n.name)
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const object = self.cur.lexeme;
+        self.advance();
+
+        _ = try self.expect(.dot);
+
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const property = self.cur.lexeme;
+        self.advance();
+
+        return .{
+            .target = .{ .object = object, .property = property },
         };
     }
 

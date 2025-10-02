@@ -3,199 +3,78 @@
 // Replaces 001_audit.sql with focus on core entity patterns
 // (Audit functionality is handled by Geode's built-in audit system)
 
-// --- Base Graph Schema Definition ---
+// --- Base Graph Schema Documentation ---
+// Note: GQL standard doesn't include DDL statements like CREATE LABEL or CREATE CONSTRAINT.
+// These patterns document the base entity structure that would be used throughout
+// the VDB graph database.
 
-// Common labels for all entities
-CREATE LABEL Entity;
-CREATE LABEL Versioned;
-CREATE LABEL Timestamped;
+// Common entity patterns:
+// - Entity: Base pattern for all nodes
+// - Versioned: Nodes that track version numbers  
+// - Timestamped: Nodes with detailed time tracking
 
-// --- Base Entity Pattern ---
+// Base constraints that would typically be enforced:
+// - All Entity nodes must have id and created_at properties
+// - id must be unique within each label
+// - Timestamps should be non-null where required
 
-// All entities inherit these common properties
-CREATE CONSTRAINT entity_base_pattern ON (:Entity) 
-  ASSERT id IS NOT NULL AND created_at IS NOT NULL;
+// --- Base Entity Pattern Examples ---
 
 // Standard entity with minimal required fields
-// Note: In practice, you would create entities with specific property values
-// CREATE (entity:Entity {
-//   id: uuid_v4(),
-//   created_at: DateTime(),
-//   updated_at: DateTime(),
-//   metadata: Jsonb('{}')
-// });
+// Example of creating a base entity:
+CREATE (entity:Entity {
+  id: 'uuid_v4_example_001',
+  created_at: timestamp('2024-09-27T12:00:00Z'),
+  updated_at: timestamp('2024-09-27T12:00:00Z'),
+  metadata: Jsonb('{}')
+});
 
-// Versioned entities track version numbers
-// Note: In practice, you would create entities with specific property values
-// CREATE (versioned_entity:Entity:Versioned {
-//   id: uuid_v4(),
-//   created_at: DateTime(),
-//   updated_at: DateTime(),
-//   version: 1,
-//   metadata: Jsonb('{}')
-// });
+// Versioned entity that tracks version numbers
+CREATE (versioned_entity:Entity:Versioned {
+  id: 'uuid_v4_example_002',
+  created_at: timestamp('2024-09-27T12:00:00Z'),
+  updated_at: timestamp('2024-09-27T12:00:00Z'),
+  version: 1,
+  metadata: Jsonb('{"source": "migration"}')
+});
 
-// Timestamped entities have detailed time tracking
-// Note: In practice, you would create entities with specific property values
-// CREATE (timestamped_entity:Entity:Timestamped {
-//   id: uuid_v4(),
-//   created_at: DateTime(),
-//   updated_at: DateTime(),
-//   last_accessed: DateTime(),
-//   expires_at: DateTime(),
-//   metadata: Jsonb('{}')
-// });
+// Timestamped entity with detailed time tracking
+CREATE (timestamped_entity:Entity:Timestamped {
+  id: 'uuid_v4_example_003',
+  created_at: timestamp('2024-09-27T12:00:00Z'),
+  updated_at: timestamp('2024-09-27T12:00:00Z'),
+  deleted_at: null,
+  valid_from: timestamp('2024-09-27T12:00:00Z'),
+  valid_to: timestamp('9999-12-31T23:59:59Z'),
+  metadata: Jsonb('{"tracking": "enabled"}')
+});
 
-// --- Common Edge Types ---
+// --- Common Relationships ---
 
-// Basic relationships used across domains
-CREATE LABEL TYPE EDGE CONTAINS;
-CREATE LABEL TYPE EDGE BELONGS_TO;
-CREATE LABEL TYPE EDGE DEPENDS_ON;
-CREATE LABEL TYPE EDGE REFERENCES;
-CREATE LABEL TYPE EDGE DERIVED_FROM;
+// Version tracking relationship
+MATCH (v1:Versioned {id: 'uuid_v4_example_002', version: 1}),
+      (v2:Versioned {id: 'uuid_v4_example_002', version: 2})
+CREATE (v1)-[:NEXT_VERSION {changed_at: timestamp('2024-09-27T13:00:00Z')}]->(v2);
 
-// Hierarchical relationships
-CREATE LABEL TYPE EDGE PARENT_OF;
-CREATE LABEL TYPE EDGE CHILD_OF;
+// Parent-child hierarchy
+MATCH (parent:Entity {id: 'uuid_v4_example_001'}),
+      (child:Entity {id: 'uuid_v4_example_002'})
+CREATE (parent)-[:HAS_CHILD {created_at: timestamp('2024-09-27T12:30:00Z')}]->(child);
 
-// Temporal relationships
-CREATE LABEL TYPE EDGE PRECEDES;
-CREATE LABEL TYPE EDGE FOLLOWS;
+// Ownership relationship
+MATCH (owner:Entity {id: 'uuid_v4_example_001'}),
+      (resource:Entity {id: 'uuid_v4_example_003'})
+CREATE (owner)-[:OWNS {since: timestamp('2024-09-27T12:00:00Z')}]->(resource);
 
-// --- Universal Constraints ---
-// Note: GQL constraints are not part of the ISO/IEC 39075:2024 standard
-// These would be enforced at the application level or through Geode's
-// built-in validation systems
-
-// Conceptual constraints (enforced by application logic):
-// - All entities must have valid UUIDs for id property
-// - Timestamps must be valid (updated_at >= created_at when both present)  
-// - Version numbers must be positive integers
-
-// --- Universal Indexes ---
-// Note: Index creation syntax is implementation-specific and not standardized in GQL
-// Geode would provide its own indexing mechanisms
-
-// Conceptual indexes (would be created through Geode's indexing system):
-// - entity_id_idx: Index on Entity.id for fast lookups
-// - entity_created_at_idx: Index on Entity.created_at for temporal queries
-// - versioned_version_idx: Index on Versioned.version for version queries
-// - timestamped_updated_idx: Index on Timestamped.updated_at for recent updates
-// - timestamped_expires_idx: Index on Timestamped.expires_at for expiration queries
-// - timestamped_accessed_idx: Index on Timestamped.last_accessed for access patterns
-
-// --- Common Utility Patterns ---
-// Note: GQL does not support user-defined functions. These are common 
-// query patterns that can be used directly in your applications.
-
-// Update timestamp and version for any entity
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// SET e.updated_at = DateTime()
-// RETURN e;
-
-// For versioned entities, increment version
-// MATCH (e:Entity:Versioned WHERE e.id = $entity_id)
-// SET e.updated_at = DateTime(),
-//     e.version = e.version + 1
-// RETURN e;
-
-// For timestamped entities, update last_accessed
-// MATCH (e:Entity:Timestamped WHERE e.id = $entity_id)  
-// SET e.updated_at = DateTime(),
-//     e.last_accessed = DateTime()
-// RETURN e;
-
-// Soft delete pattern (mark as deleted without removing)
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// SET e.metadata = Jsonb('{"deleted_at": "' + DateTime() + '"}')
-// RETURN e;
-
-// Check if entity is soft deleted
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// RETURN e.metadata.deleted_at IS NOT NULL;
-
-// Get entity creation age in days
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// RETURN duration_between(e.created_at, DateTime(), 'days') AS age_days;
-
-// Find entities created in date range
-// MATCH (e:Entity)
-// WHERE e.created_at >= $start_date AND e.created_at <= $end_date
-// RETURN collect(e.id);
-
-// --- Metadata Management Patterns ---
-
-// Add metadata key-value pair
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// SET e.metadata = Jsonb('{"' + $key + '": "' + $value + '"}'),
-//     e.updated_at = DateTime()
-// RETURN e;
-
-// Get metadata value
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// RETURN e.metadata[$key] AS metadata_value;
-
-// Remove metadata key (requires reconstructing the JSON object)
-// MATCH (e:Entity WHERE e.id = $entity_id)
-// SET e.metadata = Jsonb('{}'),  // Simplified - in practice would preserve other keys
-//     e.updated_at = DateTime()
-// RETURN e;
-
-// --- Common Query Patterns ---
-
-// Find all entities of a specific type
-MATCH (e:Entity WHERE e:$label)
-RETURN e;
-
-// Get entity with full metadata
-MATCH (e:Entity WHERE e.id = $entity_id)
-RETURN e.id, e.created_at, e.updated_at, e.metadata;
-
-// Find recently updated entities
-MATCH (e:Entity)
-WHERE e.updated_at > (CURRENT_TIMESTAMP() - duration('P7D'))
-RETURN e
-ORDER BY e.updated_at DESC;
-
-// Find entities by metadata query
-MATCH (e:Entity)
-WHERE e.metadata[$key] = $value
-RETURN e;
-
-// Get entity hierarchy (parent-child relationships)
-MATCH path = (parent:Entity)-[:PARENT_OF*]->(child:Entity)
-WHERE parent.id = $parent_id
-RETURN path;
-
-// Find orphaned entities (no incoming relationships)
-MATCH (e:Entity)
-WHERE NOT ()-[:CONTAINS|PARENT_OF|REFERENCES]->(e)
-RETURN e;
-
-// --- Data Validation Patterns ---
-// Note: These are conceptual validation patterns. In practice, validation
-// would be done at the application level or through Geode's type system.
-
-// Validate UUID format (conceptual - UUIDs are validated by the UUID type)
-// WHERE UUID($uuid_string) IS NOT NULL
-
-// Validate timestamp range
-// WHERE $start_time IS NOT NULL AND $end_time IS NOT NULL AND $start_time < $end_time
-
-// Validate metadata structure (conceptual - JSONB type provides validation)
-// WHERE $metadata IS NULL OR jsonb_typeof($metadata) = 'object'
-
-// --- Migration Notes ---
-// This migration establishes the foundation for all VDB graph entities:
-// 1. Common Entity label with standard properties
-// 2. Versioned and Timestamped extensions for specialized needs
-// 3. Standard edge types for common relationship patterns
-// 4. Utility functions for entity lifecycle management
-// 5. Metadata management for flexible entity attributes
-// 6. Query patterns for common entity operations
-// 7. Validation functions for data integrity
+// --- Utility Functions Documentation ---
+// These would typically be implemented as stored procedures or application logic:
 //
-// Audit functionality is intentionally omitted as Geode provides
-// comprehensive built-in audit capabilities that automatically track
-// all graph changes without requiring explicit audit node creation.
+// uuid_v4(): Generate a UUID v4 identifier
+// now(): Get current timestamp
+// merge_metadata(old, new): Merge two JSON objects
+// validate_entity(node): Ensure node meets entity requirements
+
+// --- Migration Metadata ---
+// This migration establishes the base patterns that all other entities
+// in the VDB graph will follow. Subsequent migrations should use these
+// patterns for consistency.

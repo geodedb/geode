@@ -1,0 +1,219 @@
+name: geode-migrations
+description: "Comprehensive migration test suite for schema evolution and data transformations"
+
+tests:
+  # Basic Schema Creation Tests
+  - name: create-node-labels
+    args: ["query", "CREATE (:Person {name: 'Alice', age: 30})", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: create-edge-types
+    args: ["query", "CREATE (:Person {name: 'Bob'})-[:KNOWS {since: 2020}]->(:Person {name: 'Charlie'})", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Property Management Tests
+  - name: add-node-property
+    args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.email = 'alice@example.com' RETURN p", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["alice@example.com"]
+
+  - name: modify-property-type
+    args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.age = toString(p.age) RETURN p.age", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["30"]
+
+  - name: remove-property
+    args: ["query", "MATCH (p:Person {name: 'Alice'}) REMOVE p.email RETURN p", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Index Management Tests
+  - name: create-btree-index
+    args: ["query", "CREATE INDEX person_name_idx ON :Person(name) USING BTREE", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: create-hash-index
+    args: ["query", "CREATE INDEX person_email_idx ON :Person(email) USING HASH", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: create-composite-index
+    args: ["query", "CREATE INDEX person_composite_idx ON :Person(name, age)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: drop-index
+    args: ["query", "DROP INDEX person_email_idx", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Constraint Management Tests
+  - name: create-unique-constraint
+    args: ["query", "CREATE CONSTRAINT person_unique_email ON :Person ASSERT email IS UNIQUE", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: create-node-key-constraint
+    args: ["query", "CREATE CONSTRAINT person_key ON :Person ASSERT (id) IS NODE KEY", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: create-property-existence-constraint
+    args: ["query", "CREATE CONSTRAINT person_must_have_name ON :Person ASSERT EXISTS (name)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: drop-constraint
+    args: ["query", "DROP CONSTRAINT person_unique_email", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Label Migration Tests
+  - name: add-label-to-nodes
+    args: ["query", "MATCH (p:Person) SET p:Human RETURN labels(p)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["Person", "Human"]
+
+  - name: remove-label-from-nodes
+    args: ["query", "MATCH (p:Human) REMOVE p:Human RETURN labels(p)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["Person"]
+
+  - name: rename-label-migration
+    args: ["query", "MATCH (p:Person) SET p:User REMOVE p:Person RETURN labels(p)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["User"]
+
+  # Relationship Type Migration Tests
+  - name: create-new-relationship-type
+    args: ["query", "MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) CREATE (a)-[:FOLLOWS {since: date()}]->(b) RETURN type(r)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["FOLLOWS"]
+
+  - name: migrate-relationship-properties
+    args: ["query", "MATCH ()-[r:KNOWS]->() SET r.strength = 'strong' RETURN r.strength", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["strong"]
+
+  - name: change-relationship-direction
+    args: ["query", "MATCH (a)-[r:FOLLOWS]->(b) DELETE r CREATE (b)-[:FOLLOWED_BY]->(a) RETURN type(r)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["FOLLOWED_BY"]
+
+  # Batch Data Migration Tests
+  - name: batch-update-properties
+    args: ["query", "MATCH (u:User) WHERE u.age IS NULL SET u.age = 0 RETURN count(u)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: batch-create-relationships
+    args: ["query", "MATCH (u1:User), (u2:User) WHERE u1.name < u2.name CREATE (u1)-[:POTENTIAL_FRIEND]->(u2) RETURN count(*)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: batch-delete-orphaned-nodes
+    args: ["query", "MATCH (n) WHERE NOT (n)--() DELETE n RETURN count(n)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  # Complex Migration Scenarios
+  - name: merge-duplicate-nodes
+    args: ["query", "MATCH (u1:User), (u2:User) WHERE u1.email = u2.email AND id(u1) < id(u2) CALL apoc.refactor.mergeNodes([u1, u2]) YIELD node RETURN count(node)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: split-node-into-multiple
+    args: ["query", "MATCH (p:Person) WHERE p.type = 'employee' CREATE (e:Employee {name: p.name}), (d:Department {name: p.department}) CREATE (e)-[:WORKS_IN]->(d) DELETE p RETURN count(e)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: normalize-denormalized-data
+    args: ["query", "MATCH (o:Order) CREATE (c:Customer {id: o.customerId, name: o.customerName}) CREATE (o)-[:PLACED_BY]->(c) REMOVE o.customerId, o.customerName RETURN count(c)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  # Transaction and Rollback Tests
+  - name: migration-with-transaction
+    args: ["query", "BEGIN TRANSACTION; MATCH (n:User) SET n.migrated = true; COMMIT; RETURN count(n)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: rollback-failed-migration
+    args: ["query", "BEGIN TRANSACTION; MATCH (n:User) SET n.invalid = 1/0; ROLLBACK; RETURN 'rolled back'", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["rolled back"]
+
+  # Performance Migration Tests
+  - name: create-large-dataset
+    args: ["query", "CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3}) RETURN 3 AS created", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["3"]
+
+  - name: bulk-update-with-index
+    args: ["query", "CREATE INDEX test_id_idx ON :TestNode(id); MATCH (n:TestNode) WHERE n.id % 2 = 0 SET n.even = true RETURN count(n)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["500"]
+
+  - name: parallel-migration-simulation
+    args: ["query", "CALL apoc.periodic.iterate('MATCH (n:TestNode) RETURN n', 'SET n.processed = true', {batchSize: 100, parallel: true}) YIELD batches RETURN batches", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["batches"]
+
+  # Schema Validation Tests
+  - name: validate-schema-after-migration
+    args: ["query", "CALL db.schema() YIELD nodes, relationships RETURN size(nodes) AS nodeTypes, size(relationships) AS relTypes", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["nodeTypes", "relTypes"]
+
+  - name: check-index-usage
+    args: ["query", "EXPLAIN MATCH (n:TestNode {id: 500}) RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["IndexSeek"]
+
+  # Cleanup Tests
+  - name: drop-test-data
+    args: ["query", "MATCH (n:TestNode) DELETE n RETURN count(n)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["0"]
+
+  - name: drop-all-indexes
+    args: ["query", "CALL db.indexes() YIELD name CALL db.index.drop(name) YIELD name AS dropped RETURN count(dropped)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]

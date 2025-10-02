@@ -1,0 +1,173 @@
+name: geode-current-capabilities
+description: "Test suite focused on currently working features and critical issues"
+
+tests:
+  # Working Features
+  - name: create-simple-node
+    args: ["query", "CREATE (n:Person {name: 'Test'})", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: create-with-return
+    args: ["query", "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n.name, n.age", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "30"]
+
+  - name: match-all-nodes
+    args: ["query", "MATCH (n) RETURN count(n)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: match-with-filter
+    args: ["query", "MATCH (n:Person) WHERE n.age > 25 RETURN n.name", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["name"]
+
+  - name: create-relationship
+    args: ["query", "CREATE (a:Person {name: 'A'})-[:KNOWS]->(b:Person {name: 'B'})", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: match-path-pattern
+    args: ["query", "MATCH (a)-[r]->(b) RETURN count(r)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["count"]
+
+  - name: delete-nodes
+    args: ["query", "MATCH (n:Test) DELETE n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Critical Missing Features - These should be implemented
+  - name: set-node-property
+    args: ["query", "CREATE (n:Test {value: 1}) WITH n SET n.updated = true RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["updated", "true"]
+
+  - name: remove-property
+    args: ["query", "CREATE (n:Test {a: 1, b: 2}) WITH n REMOVE n.b RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["a"]
+
+  - name: update-multiple-properties
+    args: ["query", "CREATE (n:Test {x: 1}) WITH n SET n.x = 2, n.y = 3 RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["x", "2", "y", "3"]
+
+  # Other Important Features
+  - name: merge-pattern
+    args: ["query", "MERGE (n:Person {name: 'Unique'}) RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["Unique"]
+
+  - name: merge-with-on-create
+    args: ["query", "MERGE (n:Person {name: 'Test'}) ON CREATE SET n.created = true RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["created"]
+
+  - name: merge-with-on-match
+    args: ["query", "MERGE (n:Person {name: 'Test'}) ON MATCH SET n.updated = true RETURN n", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["updated"]
+
+  - name: multiple-creates
+    args: ["query", "CREATE (n1:Number {value: 1}), (n2:Number {value: 2}), (n3:Number {value: 3}) RETURN 3 AS created", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["3"]
+
+  - name: call-procedure
+    args: ["query", "CALL db.labels() YIELD label RETURN label", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["label"]
+
+  # Transaction Support
+  - name: begin-transaction
+    args: ["query", "BEGIN", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: commit-transaction
+    args: ["query", "COMMIT", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: rollback-transaction
+    args: ["query", "ROLLBACK", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Index Operations  
+  - name: create-simple-index
+    args: ["query", "CREATE INDEX idx_person_name ON :Person(name)", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  - name: drop-index
+    args: ["query", "DROP INDEX idx_person_name", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["status_class\":\"00000"]
+
+  # Working Aggregations
+  - name: count-nodes
+    args: ["query", "MATCH (n) RETURN count(n) AS total", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["total"]
+
+  - name: sum-values
+    args: ["query", "MATCH (n:Number) RETURN sum(n.value) AS total", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["total"]
+
+  - name: avg-values
+    args: ["query", "MATCH (n:Number) RETURN avg(n.value) AS average", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["average"]
+
+  # List and Map Support
+  - name: return-list
+    args: ["query", "RETURN [1, 2, 3, 4, 5] AS numbers", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["numbers", "[1, 2, 3, 4, 5]"]
+
+  - name: return-map
+    args: ["query", "RETURN {name: 'test', value: 42} AS data", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["name", "test", "value", "42"]
+
+  # UNION/INTERSECT/EXCEPT
+  - name: union-queries
+    args: ["query", "MATCH (a:Person) RETURN a.name AS name UNION MATCH (b:User) RETURN b.name AS name", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["name"]
+
+  - name: union-all-queries
+    args: ["query", "MATCH (a:Person) RETURN a.name AS name UNION ALL MATCH (b:Person) RETURN b.name AS name", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["name"]

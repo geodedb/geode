@@ -23,6 +23,8 @@ pub const Statement = union(enum) {
     Create: CreateStatement,
     Delete: DeleteStatement,
     Merge: MergeStatement,
+    // Procedure calls
+    Call: CallStatement,
     // Index operations
     CreateIndex: CreateIndexStatement,
     DropIndex: DropIndexStatement,
@@ -36,6 +38,8 @@ pub const Query = struct {
     match: GraphPattern,
     where_clause: ?Expr,
     with_clause: ?WithClause,
+    set_clauses: []SetClause = &.{},
+    remove_clauses: []RemoveClause = &.{},
     group_by: ?GroupBy = null,
     having: ?Expr = null,
     ret: ReturnClause,
@@ -199,9 +203,19 @@ pub const MergeStatement = struct {
     return_clause: ?ReturnClause = null,
 };
 
+pub const CallStatement = struct {
+    procedure: Expr, // Function call expression: db.labels()
+    yield_items: ?[]ReturnItem = null, // YIELD clause items
+    return_clause: ?ReturnClause = null, // Optional RETURN clause
+};
+
 pub const SetClause = struct {
     target: PropertyAccess,
     value: Expr,
+};
+
+pub const RemoveClause = struct {
+    target: PropertyAccess,
 };
 
 pub const PropertyAccess = struct {

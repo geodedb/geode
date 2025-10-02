@@ -1,0 +1,215 @@
+[
+  {
+    "suite": "geode-current-capabilities",
+    "passed": 10,
+    "failed": 17,
+    "skipped": 0,
+    "total": 27,
+    "failures": [
+      {
+        "test": "create-with-return",
+        "args": [
+          "query",
+          "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n.name, n.age",
+          "--format",
+          "json"
+        ],
+        "reason": "Pattern not found: 'Alice'",
+        "stdout": "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"created\",\"type\":\"INT\"}]}}\n{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"rows\":[{\"created\":1}]}}\n",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
+      },
+      {
+        "test": "delete-nodes",
+        "args": [
+          "query",
+          "MATCH (n:Test) DELETE n",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"RETURN\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "set-node-property",
+        "args": [
+          "query",
+          "CREATE (n:Test {value: 1}) WITH n SET n.updated = true RETURN n",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"property key\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "remove-property",
+        "args": [
+          "query",
+          "CREATE (n:Test {a: 1, b: 2}) WITH n REMOVE n.b RETURN n",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "update-multiple-properties",
+        "args": [
+          "query",
+          "CREATE (n:Test {x: 1}) WITH n SET n.x = 2, n.y = 3 RETURN n",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "merge-pattern",
+        "args": [
+          "query",
+          "MERGE (n:Person {name: 'Unique'}) RETURN n",
+          "--format",
+          "json"
+        ],
+        "reason": "Pattern not found: 'Unique'",
+        "stdout": "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"created\",\"type\":\"BOOL\"},{\"name\":\"matched\",\"type\":\"BOOL\"}]}}\n{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"rows\":[{\"created\":true,\"matched\":false}]}}\n",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
+      },
+      {
+        "test": "merge-with-on-match",
+        "args": [
+          "query",
+          "MERGE (n:Person {name: 'Test'}) ON MATCH SET n.updated = true RETURN n",
+          "--format",
+          "json"
+        ],
+        "reason": "Pattern not found: 'updated'",
+        "stdout": "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"created\",\"type\":\"BOOL\"},{\"name\":\"matched\",\"type\":\"BOOL\"}]}}\n{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"rows\":[{\"created\":true,\"matched\":false}]}}\n",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
+      },
+      {
+        "test": "multiple-creates",
+        "args": [
+          "query",
+          "CREATE (n1:Number {value: 1}), (n2:Number {value: 2}), (n3:Number {value: 3}) RETURN 3 AS created",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"property key\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "call-procedure",
+        "args": [
+          "query",
+          "CALL db.labels() YIELD label RETURN label",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "begin-transaction",
+        "args": [
+          "query",
+          "BEGIN",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "commit-transaction",
+        "args": [
+          "query",
+          "COMMIT",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"Unsupported\",\"result\":{\"type\":\"ERROR\",\"code\":\"Unsupported\",\"message\":\"statement type\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "rollback-transaction",
+        "args": [
+          "query",
+          "ROLLBACK",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"Unsupported\",\"result\":{\"type\":\"ERROR\",\"code\":\"Unsupported\",\"message\":\"statement type\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "drop-index",
+        "args": [
+          "query",
+          "DROP INDEX idx_person_name",
+          "--format",
+          "json"
+        ],
+        "reason": "Pattern not found: 'status_class\":\"00000'",
+        "stdout": "{\"status_class\":\"42704\",\"message\":\"Index idx_person_name does not exist\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"NoResult\",\"result\":{\"type\":\"ERROR\",\"code\":\"NoResult\",\"message\":\"no active result set\",\"anchor\":\"\"}}\n",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
+      },
+      {
+        "test": "sum-values",
+        "args": [
+          "query",
+          "MATCH (n:Number) RETURN sum(n.value) AS total",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"identifier\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "avg-values",
+        "args": [
+          "query",
+          "MATCH (n:Number) RETURN avg(n.value) AS average",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"identifier\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "return-list",
+        "args": [
+          "query",
+          "RETURN [1, 2, 3, 4, 5] AS numbers",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+      },
+      {
+        "test": "return-map",
+        "args": [
+          "query",
+          "RETURN {name: 'test', value: 42} AS data",
+          "--format",
+          "json"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 2",
+        "stdout": "",
+        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"property key\",\"anchor\":\"\"}}\n"
+      }
+    ]
+  }
+]

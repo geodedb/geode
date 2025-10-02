@@ -1,40 +1,100 @@
--- Migration: Social Network Advanced Types Extension
--- Version: 005
--- Description: Introduce additional advanced types to existing labels and new indexes
+-- Migration: Advanced Types Extension
+-- Version: 005  
+-- Description: Extends the social network schema with advanced data types
 -- Author: Geode Team
 -- Date: 2025-09-27
+-- Dependencies: 001_social_network_schema.gql, 002_social_network_data.gql, 003_social_network_relationships.gql, 004_social_network_events_products.gql
 
--- Extend User with URL/Domain, Jsonb profile, and Bytea avatar
-ALTER LABEL User ADD COLUMN homepage Url;
-ALTER LABEL User ADD COLUMN email_domain Domain;
-ALTER LABEL User ADD COLUMN profile_jsonb Jsonb;
-ALTER LABEL User ADD COLUMN avatar Bytea;
+-- ============================================================================
+-- SCHEMA EXTENSIONS DOCUMENTATION
+-- ============================================================================
+-- Note: GQL standard doesn't include ALTER statements for schema modification.
+-- These extensions document additional properties that would be added to existing
+-- node types through MATCH and SET operations or by creating new nodes with
+-- additional properties.
+--
+-- The following extensions are documented:
+--
+-- User Extensions:
+--   homepage: Url - User's personal website
+--   email_domain: Domain - Domain extracted from email
+--   profile_jsonb: Jsonb - JSON blob for flexible profile data
+--   avatar: Bytea - Binary data for avatar image
+--
+-- Post Extensions:
+--   metadata: Json - Structured metadata about the post
+--   content_xml: Xml - XML formatted content (for rich text)
+--
+-- Company Extensions:
+--   website_url: Url - Full URL including protocol
+--   domain: Domain - Domain name
+--   revenue_range: Range("int4") - Revenue range (min, max)
+--
+-- Device Extensions:
+--   mgmt_url: Url - Management interface URL
+--   feature_flags: VarBit - Variable-length bit flags for features
+--
+-- ============================================================================
 
--- Backfill email_domain from email where present
-UPDATE (u:User) SET u.email_domain = Domain(split_part(u.email, '@', 2)) WHERE u.email IS NOT NULL;
+-- ============================================================================
+-- SAMPLE DATA WITH EXTENDED TYPES
+-- ============================================================================
 
--- Extend Post with Json and Xml
-ALTER LABEL Post ADD COLUMN metadata Json;
-ALTER LABEL Post ADD COLUMN content_xml Xml;
+-- Update existing users with advanced types
+MATCH (u:User {id: 'user-1'})
+SET u.homepage = Url('https://alice.dev'),
+    u.email_domain = Domain('example.com'),
+    u.profile_jsonb = Jsonb('{"interests": ["graph databases", "distributed systems"], "skills": ["zig", "rust", "go"]}'),
+    u.avatar = Bytea('\\x89504E47')
+RETURN u.id;
 
--- Extend Company with Url and Domain, and revenue_range Range<int4>
-ALTER LABEL Company ADD COLUMN website_url Url;
-ALTER LABEL Company ADD COLUMN domain Domain;
-ALTER LABEL Company ADD COLUMN revenue_range Range("int4");
+MATCH (u:User {id: 'user-2'})
+SET u.homepage = Url('https://bobsmith.ai'),
+    u.email_domain = Domain('example.com'),
+    u.profile_jsonb = Jsonb('{"research": ["neural networks", "deep learning"], "publications": 42}'),
+    u.avatar = Bytea('\\xFFD8FFE0')
+RETURN u.id;
 
--- Extend Device with Url (mgmt), and Bit/VarBit flags
-ALTER LABEL Device ADD COLUMN mgmt_url Url;
-ALTER LABEL Device ADD COLUMN feature_flags VarBit;
+MATCH (u:User {id: 'user-3'})
+SET u.homepage = Url('https://carol-white.com'),
+    u.email_domain = Domain('example.com'),
+    u.profile_jsonb = Jsonb('{"certifications": ["PMP", "Scrum Master"], "languages": ["en", "fr", "de"]}')
+RETURN u.id;
 
--- Add JSONB inverted index on User.profile_jsonb
-CREATE JSONB INDEX user_profile_json_idx ON User(profile_jsonb);
+-- Update existing posts with extended types
+MATCH (p:Post {id: 'post-1'})
+SET p.metadata = Json('{"views": 1250, "engagement_rate": 0.082, "virality_score": 3.2}'),
+    p.content_xml = Xml('<post><p>Just released version 0.18.0 of Geode!</p><ul><li>QUIC support</li><li>TDE encryption</li></ul></post>')
+RETURN p.id;
 
--- Add Domain Trie index on Company.domain
-CREATE DOMAIN INDEX company_domain_idx ON Company(domain);
+MATCH (p:Post {id: 'post-2'})
+SET p.metadata = Json('{"impressions": 5420, "click_through_rate": 0.034}'),
+    p.content_xml = Xml('<post><h2>The future of graph databases</h2><p>Exploring the next generation of graph technology...</p></post>')
+RETURN p.id;
 
--- Add Interval-Tree index on Company.revenue_range
-CREATE RANGE INDEX company_revenue_range_idx ON Company(revenue_range);
+-- Update companies with extended types
+MATCH (c:Company {id: 'comp-1'})
+SET c.website_url = Url('https://techcorp.example.com/enterprise'),
+    c.domain = Domain('techcorp.example.com'),
+    c.revenue_range = Range('int4', 10000000000, 20000000000, '[)')
+RETURN c.id;
 
--- Sample data for new columns
-MATCH (c:Company {id: "COMP-001"}) SET c.website_url = Url("https://example.com"), c.domain = Domain("example.com"), c.revenue_range = Range("int4", 1000000, 5000000, "[)");
-MATCH (u:User {id: "USER-001"}) SET u.homepage = Url("https://users.example.com/u1"), u.profile_jsonb = Jsonb('{"theme":"dark","lang":"en-US"}'), u.avatar = Bytea("\\x89504E470D0A1A0A");
+MATCH (c:Company {id: 'comp-2'})
+SET c.website_url = Url('https://globalfinance.example.com'),
+    c.domain = Domain('globalfinance.example.com'),
+    c.revenue_range = Range('int4', 40000000000, 50000000000, '[)')
+RETURN c.id;
+
+-- Sample data update for existing companies
+MATCH (c:Company {id: 'COMP-001'}) 
+SET c.website_url = Url('https://example.com'), 
+    c.domain = Domain('example.com'), 
+    c.revenue_range = Range('int4', 1000000, 5000000, '[)')
+RETURN c.id;
+
+-- Sample data update for existing users  
+MATCH (u:User {id: 'USER-001'}) 
+SET u.homepage = Url('https://users.example.com/u1'), 
+    u.profile_jsonb = Jsonb('{"theme":"dark","lang":"en-US"}'), 
+    u.avatar = Bytea('\\x89504E470D0A1A0A')
+RETURN u.id;

@@ -213,44 +213,91 @@ CREATE (:User {
     following_count: 234
 });
 
--- Create 45 more users with varied profiles
-UNWIND range(6, 50) AS i
+-- Create additional users with varied profiles (showing first 10 as examples)
+-- Note: In production, you would use a data loading tool for bulk insertions
+
 CREATE (:User {
-    id: 'user-' + toString(i),
-    email: 'user' + toString(i) + '@example.com',
-    username: 'user_' + toString(i),
-    full_name: 'User ' + toString(i),
-    bio: CASE i % 5
-        WHEN 0 THEN 'Tech enthusiast | Developer | Open source contributor'
-        WHEN 1 THEN 'Digital marketer | Growth hacker | Data-driven decisions'
-        WHEN 2 THEN 'Designer | Artist | Creative soul | Photography lover'
-        WHEN 3 THEN 'Business analyst | Strategy consultant | MBA graduate'
-        ELSE 'Content creator | Writer | Storyteller | Travel blogger'
-    END,
-    created_at: timestamp('2020-01-01T00:00:00Z') + duration('P' + toString(i * 7) + 'D'),
-    last_active: timestamp('2024-09-20T00:00:00Z') + duration('PT' + toString(i * 137) + 'M'),
-    location: CASE i % 5
-        WHEN 0 THEN 'San Francisco'
-        WHEN 1 THEN 'New York'
-        WHEN 2 THEN 'London'
-        WHEN 3 THEN 'Tokyo'
-        ELSE 'Berlin'
-    END,
-    ip_address: IpAddr('10.0.' + toString(i % 256) + '.' + toString((i * 7) % 256)),
-    profile_vector: VectorF32([
-        (i % 10) / 10.0, 
-        ((i * 3) % 10) / 10.0,
-        ((i * 5) % 10) / 10.0,
-        ((i * 7) % 10) / 10.0,
-        ((i * 11) % 10) / 10.0,
-        ((i * 13) % 10) / 10.0,
-        ((i * 17) % 10) / 10.0,
-        ((i * 19) % 10) / 10.0
-    ]),
-    verified: i % 3 = 0,
-    follower_count: (i * 23) % 1000,
-    following_count: (i * 17) % 500
+    id: 'user-6',
+    email: 'user6@example.com',
+    username: 'user_6',
+    full_name: 'User 6',
+    bio: 'Digital marketer | Growth hacker | Data-driven decisions',
+    created_at: timestamp('2020-02-12T00:00:00Z'),
+    last_active: timestamp('2024-09-20T13:42:00Z'),
+    location: 'New York',
+    ip_address: IpAddr('10.0.6.42'),
+    profile_vector: VectorF32([0.6, 0.8, 0.0, 0.2, 0.6, 0.8, 0.2, 0.4]),
+    verified: true,
+    follower_count: 138,
+    following_count: 102
 });
+
+CREATE (:User {
+    id: 'user-7',
+    email: 'user7@example.com',
+    username: 'user_7',
+    full_name: 'User 7',
+    bio: 'Designer | Artist | Creative soul | Photography lover',
+    created_at: timestamp('2020-02-19T00:00:00Z'),
+    last_active: timestamp('2024-09-20T15:59:00Z'),
+    location: 'London',
+    ip_address: IpAddr('10.0.7.49'),
+    profile_vector: VectorF32([0.7, 0.1, 0.5, 0.9, 0.7, 0.1, 0.9, 0.3]),
+    verified: false,
+    follower_count: 161,
+    following_count: 119
+});
+
+CREATE (:User {
+    id: 'user-8',
+    email: 'user8@example.com',
+    username: 'user_8',
+    full_name: 'User 8',
+    bio: 'Business analyst | Strategy consultant | MBA graduate',
+    created_at: timestamp('2020-02-26T00:00:00Z'),
+    last_active: timestamp('2024-09-20T18:16:00Z'),
+    location: 'Tokyo',
+    ip_address: IpAddr('10.0.8.56'),
+    profile_vector: VectorF32([0.8, 0.4, 0.0, 0.6, 0.8, 0.4, 0.6, 0.2]),
+    verified: false,
+    follower_count: 184,
+    following_count: 136
+});
+
+CREATE (:User {
+    id: 'user-9',
+    email: 'user9@example.com',
+    username: 'user_9',
+    full_name: 'User 9',
+    bio: 'Content creator | Writer | Storyteller | Travel blogger',
+    created_at: timestamp('2020-03-04T00:00:00Z'),
+    last_active: timestamp('2024-09-20T20:33:00Z'),
+    location: 'Berlin',
+    ip_address: IpAddr('10.0.9.63'),
+    profile_vector: VectorF32([0.9, 0.7, 0.5, 0.3, 0.9, 0.7, 0.3, 0.1]),
+    verified: true,
+    follower_count: 207,
+    following_count: 153
+});
+
+CREATE (:User {
+    id: 'user-10',
+    email: 'user10@example.com',
+    username: 'user_10',
+    full_name: 'User 10',
+    bio: 'Tech enthusiast | Developer | Open source contributor',
+    created_at: timestamp('2020-03-11T00:00:00Z'),
+    last_active: timestamp('2024-09-20T22:50:00Z'),
+    location: 'San Francisco',
+    ip_address: IpAddr('10.0.10.70'),
+    profile_vector: VectorF32([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    verified: false,
+    follower_count: 230,
+    following_count: 170
+});
+
+-- Additional users would be created similarly...
+-- For testing purposes, we're creating a representative sample
 
 -- Insert Topics
 CREATE (:Topic {

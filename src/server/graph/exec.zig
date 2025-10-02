@@ -128,6 +128,20 @@ pub const GraphStorage = struct {
             try self.edges.items[@intCast(edge_id)].properties.put(key, value);
         }
     }
+
+    // Remove a property from a node
+    pub fn removeNodeProperty(self: *GraphStorage, node_id: NodeId, key: []const u8) !void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            _ = node.properties.remove(key);
+        }
+    }
+
+    // Remove a property from an edge
+    pub fn removeEdgeProperty(self: *GraphStorage, edge_id: EdgeId, key: []const u8) !void {
+        if (edge_id < self.edges.items.len) {
+            _ = self.edges.items[@intCast(edge_id)].properties.remove(key);
+        }
+    }
 };
 
 // Binding table entry for graph pattern matching

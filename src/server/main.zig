@@ -1246,6 +1246,50 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             bindings = try graph_exec.executeWith(ally, bindings, with, q.where_clause, graph);
         }
 
+        // Apply SET clauses if present
+        if (q.set_clauses.len > 0) {
+            for (q.set_clauses) |set_clause| {
+                // For each binding, find the object and set its property
+                for (bindings) |*binding| {
+                    if (binding.vars.get(set_clause.target.object)) |obj| {
+                        // Evaluate the expression as a simple value for now
+                        // In the future, this should evaluate in the context of the binding
+                        const prop_val = evalExprToPropertyValue(ally, set_clause.value);
+                        
+                        switch (obj) {
+                            .Node => |node_id| {
+                                try graph.setNodeProperty(node_id, set_clause.target.property, prop_val);
+                            },
+                            .Edge => |edge_id| {
+                                try graph.setEdgeProperty(edge_id, set_clause.target.property, prop_val);
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply REMOVE clauses if present
+        if (q.remove_clauses.len > 0) {
+            for (q.remove_clauses) |remove_clause| {
+                // For each binding, find the object and remove its property
+                for (bindings) |*binding| {
+                    if (binding.vars.get(remove_clause.target.object)) |obj| {
+                        switch (obj) {
+                            .Node => |node_id| {
+                                try graph.removeNodeProperty(node_id, remove_clause.target.property);
+                            },
+                            .Edge => |edge_id| {
+                                try graph.removeEdgeProperty(edge_id, remove_clause.target.property);
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
+        }
+
         // Build column metadata (names inferred from RETURN items; types set to MIXED placeholder)
         var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
         for (q.ret.items, 0..) |item, i| {

@@ -156,6 +156,7 @@ fn tagName(st: ast.Statement) []const u8 {
         .Create => "Create",
         .Delete => "Delete",
         .Merge => "Merge",
+        .Call => "Call",
         .CreateIndex => "CreateIndex",
         .DropIndex => "DropIndex",
         .Backup => "Backup",
