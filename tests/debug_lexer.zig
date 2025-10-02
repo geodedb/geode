@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn main() !void {
     _ = std.heap.page_allocator; // Might use later
-    
+
     // Test inputs
     const tests = [_][]const u8{
         "RETURN 'test'",
@@ -10,10 +10,10 @@ pub fn main() !void {
         "CREATE (n {name: 'alice'})",
         "CREATE (n {name: \"alice\"})",
     };
-    
+
     for (tests) |input| {
         std.debug.print("\nTesting: {s}\n", .{input});
-        
+
         // We'll need to manually trace through what the lexer is doing
         var idx: usize = 0;
         while (idx < input.len) : (idx += 1) {

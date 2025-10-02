@@ -379,7 +379,7 @@ pub fn executeWith(
                 .Ident => |id| id.orig,
                 else => "col",
             };
-            
+
             switch (item.expr) {
                 .Call => |call| {
                     if (call.callee.* == .Ident) {
@@ -399,12 +399,12 @@ pub fn executeWith(
                 },
             }
         }
-        
+
         var results = try allocator.alloc(Binding, 1);
         results[0] = aggregated_binding;
         return results;
     }
-    
+
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
 
     for (bindings) |binding| {
@@ -521,10 +521,10 @@ fn isAggregationExpression(expr: ast.Expr) bool {
             if (call.callee.* == .Ident) {
                 const func_name = call.callee.*.Ident.orig;
                 return std.ascii.eqlIgnoreCase(func_name, "count") or
-                       std.ascii.eqlIgnoreCase(func_name, "sum") or
-                       std.ascii.eqlIgnoreCase(func_name, "avg") or
-                       std.ascii.eqlIgnoreCase(func_name, "min") or
-                       std.ascii.eqlIgnoreCase(func_name, "max");
+                    std.ascii.eqlIgnoreCase(func_name, "sum") or
+                    std.ascii.eqlIgnoreCase(func_name, "avg") or
+                    std.ascii.eqlIgnoreCase(func_name, "min") or
+                    std.ascii.eqlIgnoreCase(func_name, "max");
             }
             return false;
         },
@@ -953,18 +953,18 @@ pub fn bindingsToJson(
             break;
         }
     }
-    
+
     // If aggregation is detected, return a single aggregated row
     if (has_aggregation) {
         var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
         const writer = buf.writer(allocator);
         try writer.writeAll("{");
-        
+
         for (return_items, 0..) |item, i| {
             if (i > 0) try writer.writeAll(",");
             const alias = item.alias orelse "col";
             try writer.print("\"{s}\":", .{alias});
-            
+
             switch (item.expr) {
                 .Call => |call| {
                     if (call.callee.* == .Ident) {
@@ -986,13 +986,13 @@ pub fn bindingsToJson(
                 },
             }
         }
-        
+
         try writer.writeAll("}");
         var rows = try allocator.alloc([]const u8, 1);
         rows[0] = buf.items;
         return rows;
     }
-    
+
     // Normal processing for non-aggregation queries
     var rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
 

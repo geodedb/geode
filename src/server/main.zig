@@ -77,13 +77,13 @@ const ServerState = struct {
     // Optional CDC engine pointer for diagnostics protocol frame
     // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
     cdc_engine: ?*@import("cdc_enhanced").CDCEngine = null,
-    
+
     // Index manager for managing database indexes
     index_manager_ptr: ?*anyopaque = null,
-    
+
     // Backup manager for backup/restore operations
     backup_manager: ?*anyopaque = null,
-    
+
     // Graph state for tracking nodes and edges
     graph_state: ?*struct {
         node_count: u64,
@@ -4699,7 +4699,7 @@ pub fn main() !void {
 
 // Execute CREATE statement
 fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateStatement) ![]const u8 {
-    
+
     // Get or create graph storage
     const graph = getOrCreateGraphStorage(allocator);
 
@@ -4727,7 +4727,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 const node_id = getNextNodeId(graph);
                 try graph.addNode(allocator, node_id, head_node.labels);
                 try created_nodes.append(allocator, node_id);
-                
+
                 // Set properties if any
                 if (head_node.props) |props| {
                     for (props) |prop| {
@@ -5009,7 +5009,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         state.index_manager_ptr = idx_mgr;
     }
     const index_manager: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
-    
+
     // Check if index already exists
     if (index_manager.property_indexes.contains(stmt.name)) {
         if (stmt.if_not_exists) {
@@ -5017,42 +5017,31 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         }
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P07\",\"message\":\"Index {s} already exists\"}}\n", .{stmt.name});
     }
-    
+
     // Map AST index type to IndexManager type
     const index_type = switch (stmt.index_type) {
         .btree => geode.index.IndexManager.IndexType.btree,
         .hash => geode.index.IndexManager.IndexType.hash,
         .fulltext => geode.index.IndexManager.IndexType.fulltext,
         .spatial => geode.index.IndexManager.IndexType.spatial,
-        .vector => return std.fmt.allocPrint(allocator, "{{\"status_class\":\"0A000\",\"message\":\"Vector indexes not yet implemented\"}}\n", .{}),
+        .vector => geode.index.IndexManager.IndexType.vector,
     };
-    
+
     // Create the index based on number of properties
     if (stmt.properties.len == 1) {
         // Single property index
-        try index_manager.createPropertyIndex(
-            stmt.name,
-            stmt.label,
-            stmt.properties[0],
-            index_type,
-            stmt.unique
-        );
+        try index_manager.createPropertyIndex(stmt.name, stmt.label, stmt.properties[0], index_type, stmt.unique);
     } else if (stmt.properties.len > 1) {
         // Composite index
-        try index_manager.createCompositeIndex(
-            stmt.name,
-            stmt.label,
-            stmt.properties,
-            stmt.unique
-        );
+        try index_manager.createCompositeIndex(stmt.name, stmt.label, stmt.properties, stmt.unique);
     } else {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Index must have at least one property\"}}\n", .{});
     }
-    
+
     // TODO: Populate index with existing data
     // This would involve scanning all nodes with the given label
     // and adding their property values to the index
-    
+
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} created successfully\"}}\n", .{stmt.name});
 }
 
@@ -5064,16 +5053,16 @@ fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, 
         }
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Index {s} does not exist\"}}\n", .{stmt.name});
     }
-    
+
     const index_manager: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
-    
+
     // Check if index exists
     var found = false;
     if (index_manager.property_indexes.contains(stmt.name)) {
         _ = index_manager.property_indexes.remove(stmt.name);
         found = true;
     }
-    
+
     // Check composite indexes
     if (!found) {
         var i: usize = 0;
@@ -5085,22 +5074,22 @@ fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, 
             }
         }
     }
-    
+
     // Check fulltext indexes
     if (!found and index_manager.fulltext_indexes.contains(stmt.name)) {
         _ = index_manager.fulltext_indexes.remove(stmt.name);
         found = true;
     }
-    
+
     if (!found) {
         if (stmt.if_exists) {
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} does not exist, skipping\"}}\n", .{stmt.name});
         }
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Index {s} does not exist\"}}\n", .{stmt.name});
     }
-    
+
     index_manager.statistics.total_indexes -= 1;
-    
+
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} dropped successfully\"}}\n", .{stmt.name});
 }
 
@@ -5110,61 +5099,61 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
         // For now, return not implemented since we need WAL and PageManager references
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"0A000\",\"message\":\"Backup system not initialized\"}}\n", .{});
     }
-    
+
     // Validate backup path
     const backup_path = stmt.path;
     if (backup_path.len == 0) {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup path\"}}\n", .{});
     }
-    
+
     // Check if path is accessible
     const dir = std.fs.path.dirname(backup_path) orelse ".";
     std.fs.cwd().access(dir, .{}) catch {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Backup directory not accessible: {s}\"}}\n", .{dir});
     };
-    
+
     // Create backup file
     const file = std.fs.cwd().createFile(backup_path, .{}) catch |err| {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Cannot create backup file: {s}\"}}\n", .{@errorName(err)});
     };
     defer file.close();
-    
+
     // Write backup header
     _ = try file.writeAll("GEODE_BACKUP_V1\n");
-    
+
     // Write timestamp
     const timestamp = std.time.milliTimestamp();
     const timestamp_str = try std.fmt.allocPrint(allocator, "TIMESTAMP: {}\n", .{timestamp});
     defer allocator.free(timestamp_str);
     _ = try file.writeAll(timestamp_str);
-    
+
     // Backup graph data (simplified version)
     // In a real implementation, this would use the BackupManager
     var node_count: u64 = 0;
     var edge_count: u64 = 0;
-    
+
     // Count nodes and edges
     if (state.graph_state != null) {
         const graph = state.graph_state.?;
         node_count = graph.node_count;
         edge_count = graph.edge_count;
     }
-    
+
     const nodes_str = try std.fmt.allocPrint(allocator, "NODES: {}\n", .{node_count});
     defer allocator.free(nodes_str);
     _ = try file.writeAll(nodes_str);
-    
+
     const edges_str = try std.fmt.allocPrint(allocator, "EDGES: {}\n", .{edge_count});
     defer allocator.free(edges_str);
     _ = try file.writeAll(edges_str);
-    
+
     // Write index metadata if available
     if (state.index_manager_ptr != null) {
         const index_manager: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
         const indexes_str = try std.fmt.allocPrint(allocator, "INDEXES: {}\n", .{index_manager.statistics.total_indexes});
         defer allocator.free(indexes_str);
         _ = try file.writeAll(indexes_str);
-        
+
         // Write property index names
         var prop_it = index_manager.property_indexes.iterator();
         while (prop_it.next()) |entry| {
@@ -5173,21 +5162,21 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
             _ = try file.writeAll(index_str);
         }
     }
-    
+
     // Write data section marker
     _ = try file.writeAll("\nDATA_SECTION\n");
-    
+
     // TODO: Write actual graph data here
     // This would include nodes, edges, properties, etc.
-    
+
     // Write end marker
     _ = try file.writeAll("\nEND_BACKUP\n");
-    
+
     // Get file size
     const stat = try file.stat();
     const size_mb = @as(f64, @floatFromInt(stat.size)) / (1024.0 * 1024.0);
-    
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup created successfully at {s} ({d:.2} MB)\"}}\n", .{backup_path, size_mb});
+
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup created successfully at {s} ({d:.2} MB)\"}}\n", .{ backup_path, size_mb });
 }
 
 fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.RestoreStatement) ![]const u8 {
@@ -5196,30 +5185,30 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
     if (restore_path.len == 0) {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid restore path\"}}\n", .{});
     }
-    
+
     // Check if backup file exists
     const file = std.fs.cwd().openFile(restore_path, .{}) catch |err| {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Cannot open backup file: {s}\"}}\n", .{@errorName(err)});
     };
     defer file.close();
-    
+
     // Read and verify backup header
     var header_buf: [16]u8 = undefined;
     _ = try file.read(&header_buf);
-    
+
     if (!std.mem.eql(u8, header_buf[0..15], "GEODE_BACKUP_V1")) {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22003\",\"message\":\"Invalid backup file format\"}}\n", .{});
     }
-    
+
     // Read backup metadata
     const file_content = try file.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
     defer allocator.free(file_content);
-    
+
     var timestamp: i64 = 0;
     var node_count: u64 = 0;
     var edge_count: u64 = 0;
     var index_count: u64 = 0;
-    
+
     // Parse metadata lines
     var lines = std.mem.tokenizeScalar(u8, file_content, '\n');
     while (lines.next()) |line| {
@@ -5235,17 +5224,17 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
             break;
         }
     }
-    
+
     // Check if we have timestamp filter
     if (stmt.timestamp) |target_timestamp_str| {
         const target_timestamp = std.fmt.parseInt(i64, target_timestamp_str, 10) catch {
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22008\",\"message\":\"Invalid timestamp format: {s}\"}}\n", .{target_timestamp_str});
         };
         if (timestamp > target_timestamp) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22008\",\"message\":\"Backup timestamp {} is after requested timestamp {}\"}}\n", .{timestamp, target_timestamp});
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22008\",\"message\":\"Backup timestamp {} is after requested timestamp {}\"}}\n", .{ timestamp, target_timestamp });
         }
     }
-    
+
     // Clear existing data if needed (unless verify_only)
     if (!stmt.verify_only) {
         // Clear current graph state
@@ -5253,7 +5242,7 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
             state.graph_state.?.node_count = 0;
             state.graph_state.?.edge_count = 0;
         }
-        
+
         // Clear indexes
         if (state.index_manager_ptr != null) {
             const index_manager: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
@@ -5264,12 +5253,11 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
             index_manager.statistics.total_indexes = 0;
         }
     }
-    
+
     // TODO: Actually restore the data from the backup file
     // This would involve parsing the DATA_SECTION and recreating
     // nodes, edges, properties, and indexes
-    
+
     // For now, just report success with metadata
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Restore completed: {} nodes, {} edges, {} indexes from backup at timestamp {}\"}}\n", 
-        .{node_count, edge_count, index_count, timestamp});
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Restore completed: {} nodes, {} edges, {} indexes from backup at timestamp {}\"}}\n", .{ node_count, edge_count, index_count, timestamp });
 }

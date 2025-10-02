@@ -57,7 +57,7 @@ pub const PathExpand = struct {
     };
 
     const QueueItem = struct { node_id: u64, path: []const u64 };
-    
+
     pub const BFSState = struct {
         current_level: u32 = 0,
         visited: std.AutoHashMap(u64, void),

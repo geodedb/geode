@@ -385,14 +385,14 @@ pub const Parser = struct {
             // For the top-level MATCH pattern, collect aliases freshly.
             self.collect_chain_aliases = true;
             self.path_aliases.clearRetainingCapacity();
-            
+
             // Parse first MATCH pattern
             var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             const first_gp = try self.parseGraphPattern();
             for (first_gp.chains) |chain| {
                 try all_chains.append(self.arena.allocator(), chain);
             }
-            
+
             // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
             while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
                 // Handle OPTIONAL MATCH
@@ -410,9 +410,9 @@ pub const Parser = struct {
                     try all_chains.append(self.arena.allocator(), chain);
                 }
             }
-            
+
             const combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
-            
+
             // Keep aliases for ORDER BY checks that follow.
             self.collect_chain_aliases = false;
             // optional WHERE predicate
@@ -791,11 +791,11 @@ pub const Parser = struct {
             while (true) {
                 // Accept both identifier and string_lit for property keys
                 // This allows both {name: 'value'} and {'name': 'value'} syntax
-                const key = if (self.cur.kind == .identifier) 
+                const key = if (self.cur.kind == .identifier)
                     try self.expect(.identifier)
                 else if (self.cur.kind == .string_lit)
                     try self.expect(.string_lit)
-                else 
+                else
                     return self.unexpected("property key");
                 _ = try self.expect(.colon);
                 const expr = try self.parseOrExpr();
@@ -1431,9 +1431,10 @@ pub const Parser = struct {
         _ = try self.expect(.CREATE);
 
         // Check if this is CREATE INDEX
-        if (self.cur.kind == .INDEX or 
+        if (self.cur.kind == .INDEX or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")) or
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "UNIQUE"))) {
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "UNIQUE")))
+        {
             return self.parseCreateIndex();
         }
 
@@ -1626,13 +1627,13 @@ pub const Parser = struct {
     // Parse CREATE INDEX statement
     fn parseCreateIndex(self: *Parser) ParserError!ast.Statement {
         var unique = false;
-        
+
         // Check for UNIQUE keyword
         if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "UNIQUE")) {
             unique = true;
             self.advance();
         }
-        
+
         // Expect INDEX keyword
         if (self.cur.kind == .INDEX) {
             self.advance();
@@ -1641,7 +1642,7 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         }
-        
+
         // Optional IF NOT EXISTS
         var if_not_exists = false;
         if (self.cur.kind == .IF) {
@@ -1658,16 +1659,16 @@ pub const Parser = struct {
                 return error.UnexpectedToken;
             }
         }
-        
+
         // Index name
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         const name = self.cur.lexeme;
         self.advance();
-        
+
         // ON keyword
         if (self.cur.kind != .ON) return error.UnexpectedToken;
         self.advance();
-        
+
         // Label (e.g., :Person or Person)
         var label: []const u8 = undefined;
         if (self.cur.kind == .colon) {
@@ -1681,18 +1682,18 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         }
-        
+
         // Properties in parentheses
         if (self.cur.kind != .l_paren) return error.UnexpectedToken;
         self.advance();
-        
+
         var properties = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1) catch unreachable;
-        
+
         // First property
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         try properties.append(self.arena.allocator(), self.cur.lexeme);
         self.advance();
-        
+
         // Additional properties
         while (self.cur.kind == .comma) {
             self.advance();
@@ -1700,10 +1701,10 @@ pub const Parser = struct {
             try properties.append(self.arena.allocator(), self.cur.lexeme);
             self.advance();
         }
-        
+
         if (self.cur.kind != .r_paren) return error.UnexpectedToken;
         self.advance();
-        
+
         // Optional USING index_type
         var index_type = ast.IndexType.btree;
         if (self.cur.kind == .USING) {
@@ -1724,7 +1725,7 @@ pub const Parser = struct {
                 self.advance();
             }
         }
-        
+
         return .{ .CreateIndex = .{
             .name = name,
             .unique = unique,
@@ -1738,13 +1739,14 @@ pub const Parser = struct {
     // Parse DROP statement (DROP INDEX or future DROP types)
     fn parseDropStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.DROP);
-        
+
         // Check if this is DROP INDEX
-        if (self.cur.kind == .INDEX or 
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX"))) {
+        if (self.cur.kind == .INDEX or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")))
+        {
             return self.parseDropIndex();
         }
-        
+
         // Future: handle DROP CONSTRAINT, DROP DATABASE, etc.
         return error.UnexpectedToken;
     }
@@ -1759,7 +1761,7 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         }
-        
+
         // Optional IF EXISTS
         var if_exists = false;
         if (self.cur.kind == .IF) {
@@ -1771,12 +1773,12 @@ pub const Parser = struct {
                 return error.UnexpectedToken;
             }
         }
-        
+
         // Index name
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         const name = self.cur.lexeme;
         self.advance();
-        
+
         return .{ .DropIndex = .{
             .name = name,
             .if_exists = if_exists,
@@ -1786,28 +1788,28 @@ pub const Parser = struct {
     // Parse BACKUP statement
     fn parseBackupStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.identifier); // Expect BACKUP
-        
+
         // TO keyword or path
         if (self.cur.kind == .TO) {
             self.advance();
         }
-        
+
         // Parse path as string literal
         if (self.cur.kind != .string_lit) return error.UnexpectedToken;
         const path = self.cur.lexeme;
         self.advance();
-        
+
         var incremental = false;
         var compressed = false;
         var encrypted = false;
         var encryption_key: ?[]const u8 = null;
-        
+
         // Parse options
         while (self.cur.kind == .WITH or self.cur.kind == .identifier) {
             if (self.cur.kind == .WITH) {
                 self.advance();
             }
-            
+
             if (self.cur.kind == .identifier) {
                 const option = self.cur.lexeme;
                 if (std.ascii.eqlIgnoreCase(option, "INCREMENTAL")) {
@@ -1827,7 +1829,7 @@ pub const Parser = struct {
                 self.advance();
             }
         }
-        
+
         return .{ .Backup = .{
             .path = path,
             .incremental = incremental,
@@ -1840,20 +1842,20 @@ pub const Parser = struct {
     // Parse RESTORE statement
     fn parseRestoreStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.identifier); // Expect RESTORE
-        
+
         // FROM keyword or path
         if (self.cur.kind == .FROM) {
             self.advance();
         }
-        
+
         // Parse path as string literal
         if (self.cur.kind != .string_lit) return error.UnexpectedToken;
         const path = self.cur.lexeme;
         self.advance();
-        
+
         var timestamp: ?[]const u8 = null;
         var verify_only = false;
-        
+
         // Parse options
         while (self.cur.kind == .TO or self.cur.kind == .identifier) {
             if (self.cur.kind == .TO) {
@@ -1874,7 +1876,7 @@ pub const Parser = struct {
                 }
             }
         }
-        
+
         return .{ .Restore = .{
             .path = path,
             .timestamp = timestamp,

@@ -379,7 +379,7 @@ canary-verify: canary
 .PHONY: verify-all verify-fast ci-verify
 
 # Full, strict E2E verification. Fails on vendoring issues immediately.
-verify-all: clean sub quic-init fmt go-prep build test cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+verify-all: clean sub quic-init fmt go-prep build test integration-test dataset-integration-test cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
 	@echo "==> E2E verification: PASSED"
 
 # Faster dev loop (no fuzz/bench/docker/governance)

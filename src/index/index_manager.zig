@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const btree = @import("btree.zig");
 const fulltext = @import("fulltext.zig");
+const hnsw = @import("hnsw.zig");
+const rtree = @import("rtree.zig");
 
 // Comprehensive index management for graph database
 pub const IndexManager = struct {
@@ -10,6 +12,8 @@ pub const IndexManager = struct {
     label_indexes: std.StringHashMap(LabelIndex),
     composite_indexes: std.ArrayList(CompositeIndex),
     fulltext_indexes: std.StringHashMap(fulltext.FullTextIndex),
+    spatial_indexes: std.StringHashMap(*rtree.RTree),
+    vector_indexes: std.StringHashMap(*anyopaque), // hnsw.Hnsw instances
     statistics: IndexStatistics,
 
     pub const IndexType = enum {
@@ -18,6 +22,7 @@ pub const IndexManager = struct {
         fulltext,
         spatial,
         bitmap,
+        vector,
     };
 
     pub const PropertyIndex = struct {
@@ -26,8 +31,11 @@ pub const IndexManager = struct {
         property: []const u8,
         type: IndexType,
         unique: bool,
-        btree_index: ?*anyopaque,  // Actually btree.BTree([]const u8, u64, order)
+        btree_index: ?*anyopaque, // Actually btree.BTree([]const u8, u64, order)
         hash_index: ?HashIndex,
+        spatial_index: ?*rtree.RTree,
+        vector_index: ?*anyopaque, // Actually hnsw.Hnsw
+        fulltext_index: ?*fulltext.FullTextIndex,
         statistics: IndexStats,
     };
 
@@ -46,7 +54,7 @@ pub const IndexManager = struct {
         properties: [][]const u8,
         type: IndexType,
         unique: bool,
-        btree_index: ?*anyopaque,  // Actually btree.BTree([]const u8, u64, order)
+        btree_index: ?*anyopaque, // Actually btree.BTree([]const u8, u64, order)
         statistics: IndexStats,
     };
 
@@ -115,8 +123,10 @@ pub const IndexManager = struct {
             .allocator = allocator,
             .property_indexes = std.StringHashMap(PropertyIndex).init(allocator),
             .label_indexes = std.StringHashMap(LabelIndex).init(allocator),
-            .composite_indexes = .{},
+            .composite_indexes = std.ArrayList(CompositeIndex).initCapacity(allocator, 0) catch unreachable,
             .fulltext_indexes = std.StringHashMap(fulltext.FullTextIndex).init(allocator),
+            .spatial_indexes = std.StringHashMap(*rtree.RTree).init(allocator),
+            .vector_indexes = std.StringHashMap(*anyopaque).init(allocator),
             .statistics = .{
                 .total_indexes = 0,
                 .total_entries = 0,
@@ -171,6 +181,22 @@ pub const IndexManager = struct {
             entry.value_ptr.deinit();
         }
         self.fulltext_indexes.deinit();
+
+        var spatial_it = self.spatial_indexes.iterator();
+        while (spatial_it.next()) |entry| {
+            entry.value_ptr.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.spatial_indexes.deinit();
+
+        var vector_it = self.vector_indexes.iterator();
+        while (vector_it.next()) |entry| {
+            // Cast to Hnsw and deinit
+            var hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(entry.value_ptr.*));
+            hnsw_index.deinit();
+            self.allocator.destroy(hnsw_index);
+        }
+        self.vector_indexes.deinit();
     }
 
     // Create a property index
@@ -198,6 +224,20 @@ pub const IndexManager = struct {
                 try self.createHashIndex(1024)
             else
                 null,
+            .spatial_index = if (index_type == .spatial) blk: {
+                const spatial = try self.allocator.create(rtree.RTree);
+                spatial.* = rtree.RTree.init(self.allocator, 16);
+                try self.spatial_indexes.put(name, spatial);
+                break :blk spatial;
+            } else null,
+            .vector_index = if (index_type == .vector) blk: {
+                // Default to 128-dimensional vectors with M=16, ef_construction=200
+                const vector = try self.allocator.create(hnsw.Hnsw);
+                vector.* = hnsw.Hnsw.init(self.allocator, 128, 16, 200);
+                try self.vector_indexes.put(name, vector);
+                break :blk @as(?*anyopaque, vector);
+            } else null,
+            .fulltext_index = null,
             .statistics = .{
                 .entries = 0,
                 .size_bytes = 0,
@@ -226,7 +266,7 @@ pub const IndexManager = struct {
             .name = try self.allocator.dupe(u8, name),
             .label = try self.allocator.dupe(u8, label),
             .type = if (use_bitmap) .bitmap else .hash,
-            .node_ids = .{},
+            .node_ids = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable,
             .bitmap = if (use_bitmap) blk: {
                 const bm = BitMap{
                     .bits = try self.allocator.alloc(u64, 1024),
@@ -492,7 +532,7 @@ pub const IndexManager = struct {
         const buckets = try self.allocator.alloc(HashIndex.Bucket, bucket_count);
         for (buckets) |*bucket| {
             bucket.* = HashIndex.Bucket{
-                .entries = .{},
+                .entries = std.ArrayList(HashIndex.Entry).initCapacity(self.allocator, 0) catch unreachable,
             };
         }
 
@@ -528,5 +568,134 @@ pub const IndexManager = struct {
         }
 
         return null;
+    }
+
+    // Spatial index operations
+    pub fn createSpatialIndex(
+        self: *IndexManager,
+        name: []const u8,
+        label: []const u8,
+        property: []const u8,
+    ) !void {
+        try self.createPropertyIndex(name, label, property, .spatial, false);
+    }
+
+    pub fn insertIntoSpatialIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        mbr: rtree.MBR,
+        node_id: u64,
+    ) !void {
+        if (self.spatial_indexes.get(index_name)) |spatial| {
+            try spatial.insert(mbr, node_id);
+        } else if (self.property_indexes.getPtr(index_name)) |index| {
+            if (index.spatial_index) |spatial| {
+                try spatial.insert(mbr, node_id);
+                index.statistics.entries += 1;
+                self.statistics.total_entries += 1;
+            }
+        }
+    }
+
+    pub fn searchSpatialIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        query_mbr: rtree.MBR,
+    ) ![]u64 {
+        var results = std.ArrayList(u64).init(self.allocator);
+        defer results.deinit();
+
+        if (self.spatial_indexes.get(index_name)) |spatial| {
+            try spatial.search(query_mbr, &results);
+        } else if (self.property_indexes.getPtr(index_name)) |index| {
+            if (index.spatial_index) |spatial| {
+                try spatial.search(query_mbr, &results);
+                index.statistics.read_count += 1;
+            }
+        }
+
+        return results.toOwnedSlice();
+    }
+
+    // Vector index operations
+    pub fn createVectorIndex(
+        self: *IndexManager,
+        name: []const u8,
+        label: []const u8,
+        property: []const u8,
+        dimensions: u16,
+    ) !void {
+        const index_name = try self.allocator.dupe(u8, name);
+        const index = PropertyIndex{
+            .name = index_name,
+            .label = try self.allocator.dupe(u8, label),
+            .property = try self.allocator.dupe(u8, property),
+            .type = .vector,
+            .unique = false,
+            .btree_index = null,
+            .hash_index = null,
+            .spatial_index = null,
+            .vector_index = blk: {
+                const vector = try self.allocator.create(hnsw.Hnsw);
+                vector.* = hnsw.Hnsw.init(self.allocator, dimensions, 16, 200);
+                try self.vector_indexes.put(index_name, vector);
+                break :blk @as(?*anyopaque, vector);
+            },
+            .fulltext_index = null,
+            .statistics = .{
+                .entries = 0,
+                .size_bytes = 0,
+                .height = 0,
+                .fill_factor = 0,
+                .last_updated = std.time.timestamp(),
+                .read_count = 0,
+                .write_count = 0,
+                .cache_hits = 0,
+                .cache_misses = 0,
+            },
+        };
+
+        try self.property_indexes.put(index_name, index);
+        self.statistics.total_indexes += 1;
+    }
+
+    pub fn insertIntoVectorIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        vector: []const f32,
+        node_id: u64,
+    ) !void {
+        if (self.vector_indexes.get(index_name)) |vector_index| {
+            const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+            try hnsw_index.insert(node_id, vector);
+        } else if (self.property_indexes.getPtr(index_name)) |index| {
+            if (index.vector_index) |vector_index| {
+                const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+                try hnsw_index.insert(node_id, vector);
+                index.statistics.entries += 1;
+                index.statistics.write_count += 1;
+                self.statistics.total_entries += 1;
+            }
+        }
+    }
+
+    pub fn knnSearchVectorIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        query_vector: []const f32,
+        k: usize,
+    ) ![]struct { id: u64, score: f64 } {
+        if (self.vector_indexes.get(index_name)) |vector_index| {
+            const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+            return try hnsw_index.knnSearch(query_vector, k, .l2);
+        } else if (self.property_indexes.getPtr(index_name)) |index| {
+            if (index.vector_index) |vector_index| {
+                const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+                index.statistics.read_count += 1;
+                return try hnsw_index.knnSearch(query_vector, k, .l2);
+            }
+        }
+
+        return try self.allocator.alloc(struct { id: u64, score: f64 }, 0);
     }
 };

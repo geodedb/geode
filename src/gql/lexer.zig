@@ -14,7 +14,7 @@ pub const Lexer = struct {
         if (self.idx >= self.src.len) return self.mkTok(.eof, 0);
 
         const c = self.peek();
-        
+
         // Handle quotes first before other matching to avoid issues
         if (c == '\'') return self.scanStringAny(c);
         if (c == '"') {
@@ -342,21 +342,21 @@ pub const Lexer = struct {
         // Unified string literal scanner for both single and double quotes
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const start = self.idx;
-        
+
         // Ensure we're at a quote character
         if (self.idx >= self.src.len or self.src[self.idx] != quote) {
             return .{ .kind = .invalid, .lexeme = "", .loc = loc };
         }
-        
-        self.idx += 1;  // Skip opening quote
+
+        self.idx += 1; // Skip opening quote
         self.col += 1;
-        
+
         const content_start = self.idx;
         var escaped = false;
-        
+
         while (self.idx < self.src.len) {
             const c = self.src[self.idx];
-            
+
             if (escaped) {
                 // We're processing an escaped character
                 escaped = false;
@@ -369,7 +369,7 @@ pub const Lexer = struct {
                 self.idx += 1;
                 continue;
             }
-            
+
             if (c == '\\') {
                 // Start of escape sequence
                 escaped = true;
@@ -377,15 +377,15 @@ pub const Lexer = struct {
                 self.idx += 1;
                 continue;
             }
-            
+
             if (c == quote) {
                 // Found closing quote (not escaped)
                 const content = self.src[content_start..self.idx];
-                self.idx += 1;  // Skip closing quote
+                self.idx += 1; // Skip closing quote
                 self.col += 1;
                 return .{ .kind = .string_lit, .lexeme = content, .loc = loc };
             }
-            
+
             if (c == '\n') {
                 self.line += 1;
                 self.col = 1;
@@ -394,35 +394,35 @@ pub const Lexer = struct {
             }
             self.idx += 1;
         }
-        
+
         // Unterminated string
         return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }
-    
+
     fn scanDoubleQuoted(self: *Lexer) t.Token {
         // Legacy function - now just calls scanStringLiteral
         return self.scanStringLiteral('"');
     }
-    
+
     fn scanDoubleQuoted_OLD(self: *Lexer) t.Token {
         // Handle double quotes - in GQL context, treat as string literal
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const start = self.idx;
-        
+
         // Ensure we have an opening quote
         if (self.idx >= self.src.len or self.src[self.idx] != '"') {
             return .{ .kind = .invalid, .lexeme = "", .loc = loc };
         }
-        
-        self.idx += 1;  // Skip opening quote
+
+        self.idx += 1; // Skip opening quote
         self.col += 1;
-        
+
         const content_start = self.idx;
         var escaped = false;
-        
+
         while (self.idx < self.src.len) {
             const c = self.src[self.idx];
-            
+
             if (escaped) {
                 // We're in an escape sequence, skip this character
                 escaped = false;
@@ -435,7 +435,7 @@ pub const Lexer = struct {
                 self.idx += 1;
                 continue;
             }
-            
+
             if (c == '\\') {
                 // Start of escape sequence
                 escaped = true;
@@ -443,15 +443,15 @@ pub const Lexer = struct {
                 self.idx += 1;
                 continue;
             }
-            
+
             if (c == '"') {
                 // Found closing quote (not escaped)
                 const content = self.src[content_start..self.idx];
-                self.idx += 1;  // Skip closing quote
+                self.idx += 1; // Skip closing quote
                 self.col += 1;
                 return .{ .kind = .string_lit, .lexeme = content, .loc = loc };
             }
-            
+
             if (c == '\n') {
                 self.line += 1;
                 self.col = 1;
@@ -460,7 +460,7 @@ pub const Lexer = struct {
             }
             self.idx += 1;
         }
-        
+
         // Unterminated string
         return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }
@@ -468,21 +468,21 @@ pub const Lexer = struct {
     fn scanStringAny(self: *Lexer, quote: u8) t.Token {
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const start = self.idx;
-        
+
         // Ensure we're at a quote character
         if (self.idx >= self.src.len or self.src[self.idx] != quote) {
             return .{ .kind = .invalid, .lexeme = "", .loc = loc };
         }
-        
-        self.idx += 1;  // Skip opening quote
+
+        self.idx += 1; // Skip opening quote
         self.col += 1;
-        
+
         const content_start = self.idx;
         var escaped = false;
-        
+
         while (self.idx < self.src.len) {
             const c = self.src[self.idx];
-            
+
             if (escaped) {
                 // We're processing an escaped character
                 escaped = false;
@@ -495,7 +495,7 @@ pub const Lexer = struct {
                 self.idx += 1;
                 continue;
             }
-            
+
             if (c == '\\') {
                 // Start escape sequence
                 escaped = true;
@@ -503,11 +503,11 @@ pub const Lexer = struct {
                 self.idx += 1;
                 continue;
             }
-            
+
             if (c == quote) {
                 // Found closing quote
                 const content = self.src[content_start..self.idx];
-                self.idx += 1;  // Skip closing quote
+                self.idx += 1; // Skip closing quote
                 self.col += 1;
                 // Return appropriate token type based on quote character
                 // In GQL, both single and double quotes can be used for string literals
@@ -516,7 +516,7 @@ pub const Lexer = struct {
                 const token_kind = t.TokenKind.string_lit;
                 return .{ .kind = token_kind, .lexeme = content, .loc = loc };
             }
-            
+
             // Regular character
             if (c == '\n') {
                 self.line += 1;
@@ -526,7 +526,7 @@ pub const Lexer = struct {
             }
             self.idx += 1;
         }
-        
+
         // Unterminated string
         return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }

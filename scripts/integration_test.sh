@@ -4,6 +4,11 @@
 
 set -e
 
+# Get the script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+cd "$PROJECT_ROOT"
+
 echo "=== Geode Integration Tests ==="
 echo
 
@@ -23,7 +28,7 @@ run_test() {
     local cmd="$2"
     
     echo -n "Testing $name... "
-    if eval "$cmd" > /dev/null 2>&1; then
+    if bash -c "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
@@ -54,9 +59,9 @@ echo
 if [ -d "clients/go/gql" ]; then
     echo "=== Go Client Tests ==="
     run_test "Go library build" "cd clients/go/gql && go build ./..."
-    run_test "Go process mode" "cd clients/go/gql && go test -run TestGQL_OrderLimit -timeout 10s 2>&1 | grep -q PASS"
-    run_test "Go error handling" "cd clients/go/gql && go test -run TestGQL_UnorderedPaginationError -timeout 10s 2>&1 | grep -q PASS"
-    run_test "Go set operations" "cd clients/go/gql && go test -run TestGQL_SetDistinct -timeout 10s 2>&1 | grep -q PASS"
+    run_test "Go process mode" "cd clients/go/gql && go test -run TestGQL_OrderLimit -timeout 10s"
+    run_test "Go error handling" "cd clients/go/gql && go test -run TestGQL_UnorderedPaginationError -timeout 10s"
+    run_test "Go set operations" "cd clients/go/gql && go test -run TestGQL_SetDistinct -timeout 10s"
     echo
 
     # Test 5: Example program

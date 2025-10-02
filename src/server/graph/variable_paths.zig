@@ -100,7 +100,7 @@ pub fn expandVariablePaths(
             if (edge_list) |edges| {
                 for (edges.items) |edge_id| {
                     const edge = graph.edges.items[edge_id];
-                    
+
                     // Check if edge type matches pattern
                     if (pattern.types.len > 0) {
                         var type_matches = false;
@@ -133,10 +133,10 @@ pub fn expandVariablePaths(
                     // Create new path state
                     var new_nodes = try allocator.alloc(exec.NodeId, state.path_nodes.len + 1);
                     var new_edges = try allocator.alloc(exec.EdgeId, state.path_edges.len + 1);
-                    
+
                     @memcpy(new_nodes[0..state.path_nodes.len], state.path_nodes);
                     new_nodes[state.path_nodes.len] = next_node;
-                    
+
                     @memcpy(new_edges[0..state.path_edges.len], state.path_edges);
                     new_edges[state.path_edges.len] = edge_id;
 
@@ -156,7 +156,7 @@ pub fn expandVariablePaths(
                     for (in_edges.items) |edge_id| {
                         const edge = graph.edges.items[edge_id];
                         const next_node = edge.source;
-                        
+
                         // Similar logic as above for incoming edges
                         // (omitted for brevity, but would follow same pattern)
                     }

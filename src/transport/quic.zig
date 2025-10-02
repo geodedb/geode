@@ -113,7 +113,7 @@ pub const QuicTransport = struct {
         const port: u16 = 8443;
         const tls_str = if (use_tls) "true" else "false";
         std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"{s}\",\"port\":{}}}\n", .{ tls_str, port });
-        
+
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"server startup\",\"use_tls\":{},\"cert_exists\":{},\"key_exists\":{}}}\n", .{ use_tls, cert_exists, key_exists });
 
         // Load certificate files if using TLS
@@ -121,19 +121,19 @@ pub const QuicTransport = struct {
         var inline_priv_key: ?[]u8 = null;
         if (use_tls) {
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loading certificate files\",\"cert_path\":\"{s}\",\"key_path\":\"{s}\"}}\n", .{ self.cert_path, self.key_path });
-            
+
             // Load certificate file
             const cert_file = std.fs.cwd().openFile(self.cert_path, .{}) catch |err| {
                 std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"failed to open certificate file\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.cert_path, err });
                 return err;
             };
             defer cert_file.close();
-            
+
             const cert_size = try cert_file.getEndPos();
             inline_cert_der = try self.allocator.alloc(u8, cert_size);
             _ = try cert_file.readAll(inline_cert_der.?);
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded certificate\",\"size\":{}}}\n", .{cert_size});
-            
+
             // Load private key file
             const key_file = std.fs.cwd().openFile(self.key_path, .{}) catch |err| {
                 std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"failed to open private key file\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.key_path, err });
@@ -141,7 +141,7 @@ pub const QuicTransport = struct {
                 return err;
             };
             defer key_file.close();
-            
+
             const key_size = try key_file.getEndPos();
             inline_priv_key = try self.allocator.alloc(u8, key_size);
             _ = try key_file.readAll(inline_priv_key.?);
@@ -487,9 +487,9 @@ pub const QuicClient = struct {
             .inline_server_priv_p256 = null,
         };
         self.quic_config = cfg;
-        
+
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":{},\"allow_insecure\":{}}}\n", .{ cfg.real_tls, cfg.allow_insecure });
-        
+
         // Create client endpoint
         const bind_addr = "0.0.0.0:0"; // Bind to any available port
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"{s}\"}}\n", .{bind_addr});
@@ -503,14 +503,14 @@ pub const QuicClient = struct {
         self.is_quic = true;
         self.server_addr = address;
         self.server_port = port;
-        
+
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connection initiated successfully\"}}\n", .{});
     }
 
     pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
         const server_addr_str = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
         defer self.allocator.free(server_addr_str);
-        
+
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connectInsecure called\",\"address\":\"{s}\",\"port\":{},\"allow_insecure\":{}}}\n", .{ address, port, allow_insecure });
 
         const cfg = try self.allocator.create(quic_lib.QuicConfig);
@@ -547,7 +547,7 @@ pub const QuicClient = struct {
 
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":{},\"allow_insecure\":{}}}\n", .{ cfg.real_tls, cfg.allow_insecure });
 
-        // Connect to server  
+        // Connect to server
         const sni = address; // Use server address as SNI
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initiating connection\",\"server_addr\":\"{s}\",\"sni\":\"{s}\"}}\n", .{ server_addr_str, sni });
         self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
@@ -616,33 +616,33 @@ pub const QuicClient = struct {
         const total_timeout_ms = 5000; // 5 second total timeout (reduced from 30s)
         const poll_timeout_ms = 50; // 50ms per poll (reduced from 200ms)
         const start_time = std.time.milliTimestamp();
-        
+
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"waitForHandshake: starting handshake wait\",\"timeout_ms\":{}}}\n", .{total_timeout_ms});
-        
+
         var poll_count: u32 = 0;
         while (std.time.milliTimestamp() - start_time < total_timeout_ms) {
             poll_count += 1;
-            
+
             // Poll endpoint to process network events and advance handshake
             quic_lib.poll(self.endpoint.?, poll_timeout_ms) catch |err| {
                 // Continue polling even if individual poll fails
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"poll error\",\"error\":\"{}\"}}\n", .{err});
             };
-            
+
             // Check if handshake is complete
             if (quic_lib.handshakeComplete(self.quic_connection.?)) {
                 const elapsed_ms = std.time.milliTimestamp() - start_time;
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake completed\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
                 return;
             }
-            
+
             // Log periodic progress
             if (poll_count % 20 == 0) { // Every ~1 second
                 const elapsed_ms = std.time.milliTimestamp() - start_time;
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake in progress\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
             }
         }
-        
+
         const elapsed_ms = std.time.milliTimestamp() - start_time;
         std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_client\",\"msg\":\"handshake timeout\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
         return QuicError.HandshakeFailed;
@@ -650,7 +650,7 @@ pub const QuicClient = struct {
 
     pub fn getStream(self: *QuicClient) !*QuicClientStream {
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: starting\"}}\n", .{});
-        
+
         const stream = try self.allocator.create(QuicClientStream);
         errdefer self.allocator.destroy(stream);
 
@@ -658,11 +658,11 @@ pub const QuicClient = struct {
             // Wait for handshake to complete before opening stream
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: waiting for handshake\"}}\n", .{});
             try self.waitForHandshake();
-            
+
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: opening stream\"}}\n", .{});
             const stream_id = try quic_lib.openStream(self.quic_connection.?, true);
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: stream opened\",\"stream_id\":{}}}\n", .{stream_id});
-            
+
             stream.* = QuicClientStream{
                 .allocator = self.allocator,
                 .quic_stream_id = stream_id,
