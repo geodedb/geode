@@ -193,6 +193,7 @@
                 ])
                 ++ (with pkgs; [
                   # Core development tools
+                  strace
                   file
                   pkg-config
                   openssl

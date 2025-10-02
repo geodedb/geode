@@ -1095,13 +1095,19 @@ pub const Parser = struct {
                 const wh_slice = try whens.toOwnedSlice(self.arena.allocator());
                 break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
             },
-            .identifier, .quoted_identifier, .EXISTS => blk: {
+            .identifier, .EXISTS => blk: {
                 const tkn = self.cur;
                 self.advance();
                 // Create CNF representation for identifiers
                 const unicode = @import("../unicode/unicode_tables.zig");
                 const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
                 break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
+            },
+            .quoted_identifier => blk: {
+                // Treat quoted identifiers as string literals in expression contexts
+                const tkn = self.cur;
+                self.advance();
+                break :blk .{ .String = tkn.lexeme };
             },
             .string_lit => blk: {
                 const tkn = self.cur;

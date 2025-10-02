@@ -105,11 +105,12 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Dynamic flag construction originally used stack slices causing dangling references.
 // Replace with static precomputed combinations (NULLs policy toggled at runtime where needed).
 var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
-var g_order_keys_expr: bool = false; // default identifiers-only; toggled via --order-keys expr
+var g_order_keys_expr: bool = true; // enable property-based ordering by default
 // CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=IllegalOrderKeyPolicy; STATUS=TESTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
 
 // Base flag strings (shared)
 const F_ILLEGAL = "I:IllegalOrderKeyPolicy=ident-only";
+const F_PROPERTY_ORDER = "I:PropertyOrderingEnabled";
 const F_NULLS_FIRST = "U:NullsFirstPolicy";
 const F_NULLS_LAST = "U:NullsLastPolicy";
 const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
@@ -286,6 +287,17 @@ fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
     initializeSampleGraph(ally, graph) catch {};
     g_graph_storage = graph;
     return graph;
+}
+
+fn getNextNodeId(graph: *graph_exec.GraphStorage) graph_exec.NodeId {
+    var max_id: graph_exec.NodeId = 0;
+    var iterator = graph.nodes.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.key_ptr.* > max_id) {
+            max_id = entry.key_ptr.*;
+        }
+    }
+    return max_id + 1;
 }
 
 fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
@@ -471,8 +483,8 @@ fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorag
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
     _ = ordered;
     _ = distinct;
-    // Tests expect only IllegalOrderKeyPolicy in flagger_findings for determinism
-    flags_buf_base[0] = F_ILLEGAL;
+    // Use appropriate flag based on property ordering setting
+    flags_buf_base[0] = if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL;
     return flags_buf_base[0..1];
 }
 
@@ -666,7 +678,7 @@ fn bindingValueRowToJson(ally: std.mem.Allocator, cols: []const protocol.SchemaC
 }
 
 fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
-    var flags_buf: [3][]const u8 = .{ "I:IllegalOrderKeyPolicy=ident-only", "U:OrderTiebreak=LexJSON", "U:US001/enforced" };
+    var flags_buf: [3][]const u8 = .{ if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL, "U:OrderTiebreak=LexJSON", "U:US001/enforced" };
     const flag_slice = if (has_us001_any) flags_buf[0..3] else flags_buf[0..2];
     // Storage corruption treated as class 58000 (data exception) instead of generic 02000.
     const status_override: ?[]const u8 = if (code == .StoragePageChecksum) "58000" else null;
@@ -2233,7 +2245,7 @@ fn processMessage(
                     const add_slice = buildAdditionalStatusesAlloc(gpa, codes_buf[0..n], primary);
                     const primary_msg = if (primary == .IllegalOrderKey) er.msg else diagnostics.defaultMessage(primary);
                     const has_us001 = primary == .US001;
-                    var flags_buf_local: [3][]const u8 = .{ F_ILLEGAL, F_TIEBREAK, "U:US001/enforced" };
+                    var flags_buf_local: [3][]const u8 = .{ if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL, F_TIEBREAK, "U:US001/enforced" };
                     const base_flags = if (has_us001) flags_buf_local[0..3] else flags_buf_local[0..2];
                     // Build error line with flags
                     const err_line = protocol.buildErrorLineWithFlagsCustomStatus(gpa, diagnostics.codeName(primary), primary_msg, diagnostics.anchorFor(primary), add_slice, base_flags, null) catch try gpa.dupe(u8, "");
@@ -2523,9 +2535,10 @@ pub fn main() !void {
     var listen_quic: ?[]const u8 = null;
     var cert_path: ?[]const u8 = null;
     var key_path: ?[]const u8 = null;
-    var order_keys_mode_expr = false;
+    var order_keys_mode_expr = true; // enable property-based ordering by default
     var data_dir: ?[]const u8 = null;
     var test_exit_after_first: bool = false;
+    var force_no_tls: bool = false;
     var catalog_create_name: ?[]const u8 = null;
     var match_max_results_override: ?usize = null; // test deterministic guard trigger
 
@@ -2583,10 +2596,16 @@ pub fn main() !void {
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--order-keys") and ai + 1 < args.len) {
             const mode = args[ai + 1];
-            if (std.mem.eql(u8, mode, "expr")) order_keys_mode_expr = true;
+            if (std.mem.eql(u8, mode, "expr")) {
+                order_keys_mode_expr = true;
+            } else if (std.mem.eql(u8, mode, "ident-only")) {
+                order_keys_mode_expr = false;
+            }
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--test-exit-after-first-request")) {
             test_exit_after_first = true;
+        } else if (std.mem.eql(u8, args[ai], "--no-tls")) {
+            force_no_tls = true;
         } else if (std.mem.eql(u8, args[ai], "--log-level") and ai + 1 < args.len) {
             log_level_arg = args[ai + 1];
             ai += 1;
@@ -4637,6 +4656,7 @@ pub fn main() !void {
 
 // Execute CREATE statement
 fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateStatement) ![]const u8 {
+    
     // Get or create graph storage
     const graph = getOrCreateGraphStorage(allocator);
 
@@ -4657,50 +4677,65 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
 
     // Create nodes from the pattern
     for (stmt.pattern.chains) |chain| {
-        for (chain.hops) |hop| {
-            // Create left node if it has a name
-            if (hop.left.name) |_| {
-                const node_id = graph.nodes.count();
-                try graph.addNode(allocator, node_id, hop.left.labels);
+        if (chain.hops.len == 0) {
+            // Handle single node pattern: CREATE (n), CREATE (p:Person), etc.
+            // Single node information is stored in chain.head
+            if (chain.head) |head_node| {
+                const node_id = getNextNodeId(graph);
+                try graph.addNode(allocator, node_id, head_node.labels);
                 try created_nodes.append(allocator, node_id);
+                
+                // Set properties if any
+                if (head_node.props) |props| {
+                    for (props) |prop| {
+                        const val = evalExprToPropertyValue(allocator, prop.value.*);
+                        try graph.setNodeProperty(node_id, prop.key, val);
+                    }
+                }
+            }
+        } else {
+            // Handle relationship patterns: CREATE (a)-[r]->(b)
+            for (chain.hops) |hop| {
+                // Always create left node (CREATE statements should create all nodes in pattern)
+                const left_node_id = getNextNodeId(graph);
+                try graph.addNode(allocator, left_node_id, hop.left.labels);
+                try created_nodes.append(allocator, left_node_id);
 
                 // Set properties if any
                 if (hop.left.props) |props| {
                     for (props) |prop| {
                         const val = evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(node_id, prop.key, val);
+                        try graph.setNodeProperty(left_node_id, prop.key, val);
                     }
                 }
-            }
 
-            // Create right node if it has a name
-            if (hop.right.name) |_| {
-                const node_id = graph.nodes.count();
-                try graph.addNode(allocator, node_id, hop.right.labels);
-                try created_nodes.append(allocator, node_id);
+                // Always create right node (for relationship patterns)
+                const right_node_id = getNextNodeId(graph);
+                try graph.addNode(allocator, right_node_id, hop.right.labels);
+                try created_nodes.append(allocator, right_node_id);
 
                 // Set properties if any
                 if (hop.right.props) |props| {
                     for (props) |prop| {
                         const val = evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(node_id, prop.key, val);
+                        try graph.setNodeProperty(right_node_id, prop.key, val);
                     }
                 }
-            }
 
-            // Create relationship if specified
-            if (hop.rel.types.len > 0 and created_nodes.items.len >= 2) {
-                const source = created_nodes.items[created_nodes.items.len - 2];
-                const target = created_nodes.items[created_nodes.items.len - 1];
-                const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-                const edge_id = try graph.addEdge(allocator, source, target, edge_type);
-                try created_edges.append(allocator, edge_id);
+                // Create relationship if specified
+                if (hop.rel.types.len > 0 and created_nodes.items.len >= 2) {
+                    const source = created_nodes.items[created_nodes.items.len - 2];
+                    const target = created_nodes.items[created_nodes.items.len - 1];
+                    const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
+                    const edge_id = try graph.addEdge(allocator, source, target, edge_type);
+                    try created_edges.append(allocator, edge_id);
 
-                // Set edge properties if any
-                if (hop.rel.props) |props| {
-                    for (props) |prop| {
-                        const val = evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setEdgeProperty(edge_id, prop.key, val);
+                    // Set edge properties if any
+                    if (hop.rel.props) |props| {
+                        for (props) |prop| {
+                            const val = evalExprToPropertyValue(allocator, prop.value.*);
+                            try graph.setEdgeProperty(edge_id, prop.key, val);
+                        }
                     }
                 }
             }

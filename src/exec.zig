@@ -1523,13 +1523,31 @@ pub const HashAggregator = struct {
         self.spill_segments.clearRetainingCapacity();
     }
 
-    pub fn getResults(self: *HashAggregator) ![]const []const BindingValue {
+    pub fn getResults(self: *HashAggregator, agg_specs: []const Agg) ![]const []const BindingValue {
         // If spilled segments exist, load & merge them prior to producing results
         if (self.spilled and self.spill_segments.items.len > 0) {
             try self.loadSegments();
         }
         var results = std.ArrayList([]const BindingValue){};
         defer results.deinit();
+
+        // Handle case where no groups exist but we have aggregates (non-GROUP BY query with no matching rows)
+        if (self.groups.count() == 0 and agg_specs.len > 0) {
+            // Create a single row with default aggregate values (e.g., COUNT=0)
+            var row = try self.allocator.alloc(BindingValue, agg_specs.len);
+            for (agg_specs, 0..) |agg_spec, i| {
+                row[i] = switch (agg_spec) {
+                    .CountStar, .Count => BindingValue{ .Int = 0 },
+                    .Sum => BindingValue{ .Null = {} },
+                    .Min => BindingValue{ .Null = {} },
+                    .Max => BindingValue{ .Null = {} },
+                    .Avg => BindingValue{ .Null = {} },
+                    .CountDistinct => BindingValue{ .Int = 0 },
+                };
+            }
+            try results.append(row);
+            return results.toOwnedSlice();
+        }
 
         var iter = self.groups.iterator();
         while (iter.next()) |entry| {

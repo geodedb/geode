@@ -491,3 +491,6 @@ services.geode = {
 - Always ensure canaries are added for new additions, or when changes are made so that the canary scan tool tracks them. And run the canary scan regularly to keep the status.csv and status.json files up to date.
 - remember to run `make verify-fast` to ensure builds work after changes and for large changes to run `make verify-all` and correct issues iteratively until all issues are resolved
 - remember to use std.os.getenv instead of std.posix.getenv because it's compatible accross OSes
+- remember when adding new tests, if there is a failure in something that should work, fix geode don't change the test to make the test work
+- remember to always add regression tests when fixing bugs
+- when issues are found that are complex FIX THEM, don't just document them

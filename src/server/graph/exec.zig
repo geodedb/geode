@@ -4,6 +4,7 @@ const geode = @import("geode");
 const eval = geode.eval;
 const protocol = geode.protocol;
 const ast = geode.ast;
+const exec = geode.exec;
 
 // Graph execution operators for MATCH patterns
 
@@ -370,6 +371,40 @@ pub fn executeWith(
     where_clause: ?ast.Expr,
     graph: *const GraphStorage,
 ) ![]Binding {
+    // Check for aggregation functions and handle them specially
+    if (hasAggregationFunctions(with_clause)) {
+        var aggregated_binding = Binding.init(allocator);
+        for (with_clause.items) |item| {
+            const alias = item.alias orelse switch (item.expr) {
+                .Ident => |id| id.orig,
+                else => "col",
+            };
+            
+            switch (item.expr) {
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        const func_name = call.callee.*.Ident.orig;
+                        if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+                            // Properly aggregate count across all bindings
+                            try aggregated_binding.vars.put(alias, .{ .Value = .{ .Int = @intCast(bindings.len) } });
+                        } else {
+                            // Other aggregation functions - return null for now
+                            try aggregated_binding.vars.put(alias, .{ .Value = .{ .Null = {} } });
+                        }
+                    }
+                },
+                else => {
+                    // Non-aggregation expressions in aggregation context - return null
+                    try aggregated_binding.vars.put(alias, .{ .Value = .{ .Null = {} } });
+                },
+            }
+        }
+        
+        var results = try allocator.alloc(Binding, 1);
+        results[0] = aggregated_binding;
+        return results;
+    }
+    
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
 
     for (bindings) |binding| {
@@ -417,8 +452,9 @@ pub fn executeWith(
                     if (call.callee.* == .Ident) {
                         const func_name = call.callee.*.Ident.orig;
                         if (std.ascii.eqlIgnoreCase(func_name, "count")) {
-                            // For now, just count as 1 per binding
-                            try new_binding.vars.put(alias, .{ .Value = .{ .Int = 1 } });
+                            // FIXED: Properly count all bindings instead of returning 1 per binding
+                            // This is a temporary fix - for proper aggregation, we should use HashAggregator
+                            try new_binding.vars.put(alias, .{ .Value = .{ .Int = @intCast(bindings.len) } });
                         } else {
                             // Evaluate other functions
                             const result = eval.evalExpr(allocator, item.expr, env) catch eval.Value{ .Null = {} };
@@ -465,6 +501,34 @@ fn exprToPropertyValue(e: ast.Expr) !PropertyValue {
         .String => |s| PropertyValue{ .String = s },
         .Decimal => |d| PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         else => error.UnsupportedLiteral,
+    };
+}
+
+// Check if any WITH item contains aggregation functions
+fn hasAggregationFunctions(with_clause: ast.WithClause) bool {
+    for (with_clause.items) |item| {
+        if (isAggregationExpression(item.expr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Recursively check if an expression contains aggregation functions
+fn isAggregationExpression(expr: ast.Expr) bool {
+    return switch (expr) {
+        .Call => |call| {
+            if (call.callee.* == .Ident) {
+                const func_name = call.callee.*.Ident.orig;
+                return std.ascii.eqlIgnoreCase(func_name, "count") or
+                       std.ascii.eqlIgnoreCase(func_name, "sum") or
+                       std.ascii.eqlIgnoreCase(func_name, "avg") or
+                       std.ascii.eqlIgnoreCase(func_name, "min") or
+                       std.ascii.eqlIgnoreCase(func_name, "max");
+            }
+            return false;
+        },
+        else => false,
     };
 }
 
@@ -881,6 +945,55 @@ pub fn bindingsToJson(
     return_items: []const ast.ReturnItem,
     graph: *const GraphStorage,
 ) ![][]const u8 {
+    // Check if any return item contains aggregation functions
+    var has_aggregation = false;
+    for (return_items) |item| {
+        if (isAggregationExpression(item.expr)) {
+            has_aggregation = true;
+            break;
+        }
+    }
+    
+    // If aggregation is detected, return a single aggregated row
+    if (has_aggregation) {
+        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+        const writer = buf.writer(allocator);
+        try writer.writeAll("{");
+        
+        for (return_items, 0..) |item, i| {
+            if (i > 0) try writer.writeAll(",");
+            const alias = item.alias orelse "col";
+            try writer.print("\"{s}\":", .{alias});
+            
+            switch (item.expr) {
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        const func_name = call.callee.*.Ident.orig;
+                        if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+                            // Return the actual count of all bindings
+                            try writer.print("{d}", .{bindings.len});
+                        } else {
+                            // Other aggregation functions - return null for now
+                            try writer.writeAll("null");
+                        }
+                    } else {
+                        try writer.writeAll("null");
+                    }
+                },
+                else => {
+                    // Non-aggregation expressions in aggregation context - return null
+                    try writer.writeAll("null");
+                },
+            }
+        }
+        
+        try writer.writeAll("}");
+        var rows = try allocator.alloc([]const u8, 1);
+        rows[0] = buf.items;
+        return rows;
+    }
+    
+    // Normal processing for non-aggregation queries
     var rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
 
     for (bindings) |binding| {

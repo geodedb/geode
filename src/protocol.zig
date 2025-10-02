@@ -151,36 +151,36 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
 /// Returned slice lifetime: caller owned (single allocation of joined strings).
 pub fn collectImplementationFlags(ally: std.mem.Allocator, lexer_state: ?*const GqlLexer.Lexer, parser_state: ?*const GqlParser.Parser, session_ctx: ?*const SessionContext) ![][]const u8 {
     // Build dynamic list based on runtime state
-    var flags = std.ArrayList([]const u8).init(ally);
+    var flags = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
 
     // Check if expressions are allowed in ORDER BY (now they are)
-    try flags.append("I:IllegalOrderKeyPolicy=expr");
+    try flags.append(ally, "I:IllegalOrderKeyPolicy=expr");
 
     // Check for ORDER tie-break when no explicit ORDER BY
     if (session_ctx != null and session_ctx.?.implicit_order_applied) {
-        try flags.append("U:OrderTiebreak=LexJSON");
+        try flags.append(ally, "U:OrderTiebreak=LexJSON");
     }
 
     // Check for double-solidus comment usage
     if (lexer_state != null and lexer_state.?.has_double_solidus_comment) {
-        try flags.append("GB03:DoubleSolidusComment");
+        try flags.append(ally, "GB03:DoubleSolidusComment");
     }
 
     // Check for ordinal sort keys
     if (parser_state != null and parser_state.?.has_ordinal_sort_key) {
-        try flags.append("E:OrdinalSortKey");
+        try flags.append(ally, "E:OrdinalSortKey");
     }
 
     // Check for multi-graph catalog
     if (session_ctx != null and session_ctx.?.graph_catalog != null) {
-        try flags.append("I:GraphCatalog=memory");
+        try flags.append(ally, "I:GraphCatalog=memory");
     }
 
     // Static flags
-    try flags.append("I:PathTieBreak=LengthId");
-    try flags.append("I:Collation=binary");
+    try flags.append(ally, "I:PathTieBreak=LengthId");
+    try flags.append(ally, "I:Collation=binary");
 
-    return flags.toOwnedSlice();
+    return flags.toOwnedSlice(ally);
 }
 
 pub const SessionContext = struct {

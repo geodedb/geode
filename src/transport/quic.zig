@@ -507,6 +507,56 @@ pub const QuicClient = struct {
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connection initiated successfully\"}}\n", .{});
     }
 
+    pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
+        const server_addr_str = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
+        defer self.allocator.free(server_addr_str);
+
+        const cfg = try self.allocator.create(quic_lib.QuicConfig);
+        cfg.* = .{
+            .version = .v1,
+            .alpn = &[_][]const u8{ "h3", "http/3" },
+            .cc = .newreno,
+            .enable_datagram = false,
+            .enable_spin_bit = false,
+            .grease = true,
+            .compatible_vn = false,
+            .enable_retry = false,
+            .token_secret = null,
+            .token_expiry_ms = 60000,
+            .enable_pacing = false,
+            .max_datagram_size = 1200,
+            .max_idle_timeout_ms = 30000,
+            .max_udp_payload = 1350,
+            .cert_path = null,
+            .key_path = null,
+            .ca_path = null,
+            .allow_insecure = allow_insecure,
+            .aead_confidentiality_limit_override = null,
+            .aead_integrity_limit_override = null,
+            .real_tls = true, // Always use TLS, but allow insecure certificates
+            .inline_server_cert_der = null,
+            .inline_server_priv_p256 = null,
+        };
+        self.quic_config = cfg;
+
+        // Create client endpoint
+        const bind_addr = "0.0.0.0:0";
+        self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
+
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":{},\"allow_insecure\":{}}}\n", .{ cfg.real_tls, cfg.allow_insecure });
+
+        // Connect to server
+        const sni = address; // Use server address as SNI
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initiating connection\",\"server_addr\":\"{s}\",\"sni\":\"{s}\"}}\n", .{ server_addr_str, sni });
+        self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
+
+        self.is_quic = true;
+        self.server_addr = address;
+        self.server_port = port;
+
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connection initiated successfully\"}}\n", .{});
+    }
+
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca: ?[]const u8, cert: ?[]const u8, key: ?[]const u8) !void {
         const server_addr_str = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
         defer self.allocator.free(server_addr_str);

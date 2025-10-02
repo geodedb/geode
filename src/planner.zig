@@ -56,18 +56,20 @@ pub const PathExpand = struct {
         }
     };
 
+    const QueueItem = struct { node_id: u64, path: []const u64 };
+    
     pub const BFSState = struct {
         current_level: u32 = 0,
         visited: std.AutoHashMap(u64, void),
-        queue: std.ArrayList(struct { node_id: u64, path: []const u64 }),
+        queue: std.ArrayList(QueueItem),
         results: std.ArrayList(PathResult),
         allocator: std.mem.Allocator,
 
         pub fn init(allocator: std.mem.Allocator) BFSState {
             return .{
                 .visited = std.AutoHashMap(u64, void).init(allocator),
-                .queue = std.ArrayList(struct { node_id: u64, path: []const u64 }){},
-                .results = std.ArrayList(PathResult){},
+                .queue = std.ArrayList(QueueItem).initCapacity(allocator, 0) catch @panic("OOM"),
+                .results = std.ArrayList(PathResult).initCapacity(allocator, 0) catch @panic("OOM"),
                 .allocator = allocator,
             };
         }
@@ -79,12 +81,12 @@ pub const PathExpand = struct {
             for (self.queue.items) |item| {
                 self.allocator.free(item.path);
             }
-            self.queue.deinit();
+            self.queue.deinit(self.allocator);
 
             for (self.results.items) |result| {
                 self.allocator.free(result.edge_ids);
             }
-            self.results.deinit();
+            self.results.deinit(self.allocator);
         }
     };
 
@@ -95,7 +97,7 @@ pub const PathExpand = struct {
         // Initialize queue with start nodes
         for (start_nodes) |start_id| {
             const initial_path = try allocator.alloc(u64, 0);
-            try state.queue.append(.{ .node_id = start_id, .path = initial_path });
+            try state.queue.append(allocator, .{ .node_id = start_id, .path = initial_path });
         }
 
         while (state.queue.items.len > 0 and state.current_level < self.max_hops) {
@@ -133,12 +135,12 @@ pub const PathExpand = struct {
                                     .path_length = state.current_level,
                                     .edge_ids = try allocator.dupe(u64, new_path),
                                 };
-                                try state.results.append(result);
+                                try state.results.append(allocator, result);
                             }
 
                             // Continue BFS if not at max hops
                             if (state.current_level < self.max_hops) {
-                                try state.queue.append(.{ .node_id = neighbor.node_id, .path = new_path });
+                                try state.queue.append(allocator, .{ .node_id = neighbor.node_id, .path = new_path });
                             } else {
                                 allocator.free(new_path);
                             }
