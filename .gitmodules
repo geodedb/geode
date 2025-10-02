@@ -1,3 +1,6 @@
+[submodule "vendor/quic"]
+	path = vendor/quic
+	url = https://github.com/spyderorg/quic.git
 [submodule "specs/raft/zaft"]
 	path = specs/raft/zaft
 	url = git@github.com:LVala/zaft.git
