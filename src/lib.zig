@@ -126,6 +126,7 @@ pub const index = struct {
     pub const domain_trie = @import("index/domain_trie.zig");
     pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
     pub const fulltext = @import("index/fulltext.zig");
+    pub const IndexManager = @import("index/index_manager.zig").IndexManager;
 };
 
 // Re-export wire protocol definitions for tests/benchmarks needing Value / frame types

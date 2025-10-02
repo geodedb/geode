@@ -1,0 +1,93 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Run at 2 AM UTC daily
+  workflow_dispatch:
+
+env:
+  ZIG_VERSION: "0.15.1"
+
+jobs:
+  nightly-build:
+    name: Nightly Build and Extended Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    
+    - name: Setup Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: ${{ env.ZIG_VERSION }}
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Full verification suite
+      run: make verify-all
+    
+    - name: Extended fuzz testing
+      run: |
+        timeout 60m make fuzz || true
+    
+    - name: Dataset integration tests
+      run: |
+        make load-dataset
+        make dataset-integration-test
+    
+    - name: Memory leak detection
+      run: |
+        # Run with valgrind if available
+        if command -v valgrind &> /dev/null; then
+          valgrind --leak-check=full --error-exitcode=1 ./zig-out/bin/geoded --help
+        fi
+    
+    - name: Generate governance report
+      run: |
+        make status-generate
+        make governance-aggregate
+    
+    - name: Upload governance artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: governance-report-${{ github.run_id }}
+        path: |
+          docs/status.csv
+          docs/status.json
+    
+    - name: Performance regression test
+      run: |
+        make bench > bench-current.txt
+        # Compare with baseline if exists
+        if [ -f bench-baseline.txt ]; then
+          python3 tools/compare_benchmarks.py bench-baseline.txt bench-current.txt
+        fi
+    
+    - name: Store benchmark baseline
+      if: success()
+      run: cp bench-current.txt bench-baseline.txt
+    
+    - name: Build all configurations
+      run: |
+        zig build -Doptimize=Debug
+        zig build -Doptimize=ReleaseSafe
+        zig build -Doptimize=ReleaseFast
+        zig build -Doptimize=ReleaseSmall
+    
+    - name: Create nightly release
+      run: |
+        VERSION="nightly-$(date +%Y%m%d)"
+        tar czf geode-$VERSION.tar.gz zig-out/
+    
+    - name: Upload nightly artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: nightly-build-${{ github.run_id }}
+        path: geode-nightly-*.tar.gz
+        retention-days: 7

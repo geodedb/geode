@@ -23,6 +23,12 @@ pub const Statement = union(enum) {
     Create: CreateStatement,
     Delete: DeleteStatement,
     Merge: MergeStatement,
+    // Index operations
+    CreateIndex: CreateIndexStatement,
+    DropIndex: DropIndexStatement,
+    // Backup operations
+    Backup: BackupStatement,
+    Restore: RestoreStatement,
 };
 
 pub const Query = struct {
@@ -206,4 +212,42 @@ pub const PropertyAccess = struct {
 pub const SessionSetStatement = struct {
     property: []const u8, // e.g., "GRAPH"
     value: []const u8, // e.g., "G1"
+};
+
+// Index operation statements
+pub const CreateIndexStatement = struct {
+    name: []const u8,
+    unique: bool = false,
+    index_type: IndexType = .btree,
+    label: []const u8,
+    properties: [][]const u8,
+    if_not_exists: bool = false,
+};
+
+pub const DropIndexStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+};
+
+pub const IndexType = enum {
+    btree,
+    hash,
+    fulltext,
+    spatial,
+    vector,
+};
+
+// Backup and restore statements
+pub const BackupStatement = struct {
+    path: []const u8,
+    incremental: bool = false,
+    compressed: bool = false,
+    encrypted: bool = false,
+    encryption_key: ?[]const u8 = null,
+};
+
+pub const RestoreStatement = struct {
+    path: []const u8,
+    timestamp: ?[]const u8 = null,
+    verify_only: bool = false,
 };

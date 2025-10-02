@@ -115,6 +115,16 @@ pub const Parser = struct {
             .CREATE => self.parseCreateStatement(),
             .DELETE => self.parseDeleteStatement(),
             .MERGE => self.parseMergeStatement(),
+            .DROP => self.parseDropStatement(),
+            .identifier => blk_ident: {
+                // Check for BACKUP and RESTORE keywords
+                if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "BACKUP")) {
+                    break :blk_ident self.parseBackupStatement();
+                } else if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "RESTORE")) {
+                    break :blk_ident self.parseRestoreStatement();
+                }
+                return error.UnexpectedToken;
+            },
             .INSERT => blk_ins: {
                 self.advance();
                 // Syntax: INSERT VALUE <expr>
@@ -1416,11 +1426,18 @@ pub const Parser = struct {
         return true;
     }
 
-    // Parse CREATE statement
+    // Parse CREATE statement (CREATE pattern or CREATE INDEX)
     fn parseCreateStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.CREATE);
 
-        // Parse the pattern to create
+        // Check if this is CREATE INDEX
+        if (self.cur.kind == .INDEX or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")) or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "UNIQUE"))) {
+            return self.parseCreateIndex();
+        }
+
+        // Otherwise, parse the pattern to create
         const pattern = try self.parseGraphPattern();
 
         // Optional RETURN clause
@@ -1604,5 +1621,264 @@ pub const Parser = struct {
             .target = .{ .object = object, .property = property },
             .value = value,
         };
+    }
+
+    // Parse CREATE INDEX statement
+    fn parseCreateIndex(self: *Parser) ParserError!ast.Statement {
+        var unique = false;
+        
+        // Check for UNIQUE keyword
+        if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "UNIQUE")) {
+            unique = true;
+            self.advance();
+        }
+        
+        // Expect INDEX keyword
+        if (self.cur.kind == .INDEX) {
+            self.advance();
+        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")) {
+            self.advance();
+        } else {
+            return error.UnexpectedToken;
+        }
+        
+        // Optional IF NOT EXISTS
+        var if_not_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .NOT) {
+                self.advance();
+                if (self.cur.kind == .EXISTS) {
+                    self.advance();
+                    if_not_exists = true;
+                } else {
+                    return error.UnexpectedToken;
+                }
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+        
+        // Index name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+        
+        // ON keyword
+        if (self.cur.kind != .ON) return error.UnexpectedToken;
+        self.advance();
+        
+        // Label (e.g., :Person or Person)
+        var label: []const u8 = undefined;
+        if (self.cur.kind == .colon) {
+            self.advance();
+            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            label = self.cur.lexeme;
+            self.advance();
+        } else if (self.cur.kind == .identifier) {
+            label = self.cur.lexeme;
+            self.advance();
+        } else {
+            return error.UnexpectedToken;
+        }
+        
+        // Properties in parentheses
+        if (self.cur.kind != .l_paren) return error.UnexpectedToken;
+        self.advance();
+        
+        var properties = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1) catch unreachable;
+        
+        // First property
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        try properties.append(self.arena.allocator(), self.cur.lexeme);
+        self.advance();
+        
+        // Additional properties
+        while (self.cur.kind == .comma) {
+            self.advance();
+            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            try properties.append(self.arena.allocator(), self.cur.lexeme);
+            self.advance();
+        }
+        
+        if (self.cur.kind != .r_paren) return error.UnexpectedToken;
+        self.advance();
+        
+        // Optional USING index_type
+        var index_type = ast.IndexType.btree;
+        if (self.cur.kind == .USING) {
+            self.advance();
+            if (self.cur.kind == .identifier) {
+                const type_str = self.cur.lexeme;
+                if (std.ascii.eqlIgnoreCase(type_str, "btree")) {
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "hash")) {
+                    index_type = .hash;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "fulltext")) {
+                    index_type = .fulltext;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial")) {
+                    index_type = .spatial;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "vector")) {
+                    index_type = .vector;
+                }
+                self.advance();
+            }
+        }
+        
+        return .{ .CreateIndex = .{
+            .name = name,
+            .unique = unique,
+            .index_type = index_type,
+            .label = label,
+            .properties = try properties.toOwnedSlice(self.arena.allocator()),
+            .if_not_exists = if_not_exists,
+        } };
+    }
+
+    // Parse DROP statement (DROP INDEX or future DROP types)
+    fn parseDropStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.DROP);
+        
+        // Check if this is DROP INDEX
+        if (self.cur.kind == .INDEX or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX"))) {
+            return self.parseDropIndex();
+        }
+        
+        // Future: handle DROP CONSTRAINT, DROP DATABASE, etc.
+        return error.UnexpectedToken;
+    }
+
+    // Parse DROP INDEX statement
+    fn parseDropIndex(self: *Parser) ParserError!ast.Statement {
+        // Expect INDEX keyword
+        if (self.cur.kind == .INDEX) {
+            self.advance();
+        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")) {
+            self.advance();
+        } else {
+            return error.UnexpectedToken;
+        }
+        
+        // Optional IF EXISTS
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .EXISTS) {
+                self.advance();
+                if_exists = true;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+        
+        // Index name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+        
+        return .{ .DropIndex = .{
+            .name = name,
+            .if_exists = if_exists,
+        } };
+    }
+
+    // Parse BACKUP statement
+    fn parseBackupStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.identifier); // Expect BACKUP
+        
+        // TO keyword or path
+        if (self.cur.kind == .TO) {
+            self.advance();
+        }
+        
+        // Parse path as string literal
+        if (self.cur.kind != .string_lit) return error.UnexpectedToken;
+        const path = self.cur.lexeme;
+        self.advance();
+        
+        var incremental = false;
+        var compressed = false;
+        var encrypted = false;
+        var encryption_key: ?[]const u8 = null;
+        
+        // Parse options
+        while (self.cur.kind == .WITH or self.cur.kind == .identifier) {
+            if (self.cur.kind == .WITH) {
+                self.advance();
+            }
+            
+            if (self.cur.kind == .identifier) {
+                const option = self.cur.lexeme;
+                if (std.ascii.eqlIgnoreCase(option, "INCREMENTAL")) {
+                    incremental = true;
+                } else if (std.ascii.eqlIgnoreCase(option, "COMPRESSED")) {
+                    compressed = true;
+                } else if (std.ascii.eqlIgnoreCase(option, "ENCRYPTED")) {
+                    encrypted = true;
+                    self.advance();
+                    // Optional encryption key
+                    if (self.cur.kind == .string_lit) {
+                        encryption_key = self.cur.lexeme;
+                        self.advance();
+                    }
+                    continue;
+                }
+                self.advance();
+            }
+        }
+        
+        return .{ .Backup = .{
+            .path = path,
+            .incremental = incremental,
+            .compressed = compressed,
+            .encrypted = encrypted,
+            .encryption_key = encryption_key,
+        } };
+    }
+
+    // Parse RESTORE statement
+    fn parseRestoreStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.identifier); // Expect RESTORE
+        
+        // FROM keyword or path
+        if (self.cur.kind == .FROM) {
+            self.advance();
+        }
+        
+        // Parse path as string literal
+        if (self.cur.kind != .string_lit) return error.UnexpectedToken;
+        const path = self.cur.lexeme;
+        self.advance();
+        
+        var timestamp: ?[]const u8 = null;
+        var verify_only = false;
+        
+        // Parse options
+        while (self.cur.kind == .TO or self.cur.kind == .identifier) {
+            if (self.cur.kind == .TO) {
+                self.advance();
+                // Expect timestamp
+                if (self.cur.kind == .string_lit) {
+                    timestamp = self.cur.lexeme;
+                    self.advance();
+                }
+            } else if (self.cur.kind == .identifier) {
+                const option = self.cur.lexeme;
+                if (std.ascii.eqlIgnoreCase(option, "VERIFY")) {
+                    verify_only = true;
+                    self.advance();
+                    if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "ONLY")) {
+                        self.advance();
+                    }
+                }
+            }
+        }
+        
+        return .{ .Restore = .{
+            .path = path,
+            .timestamp = timestamp,
+            .verify_only = verify_only,
+        } };
     }
 };

@@ -382,12 +382,14 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
         allocator: Allocator,
         root: ?*Node,
         size: usize,
+        height: u32,
 
         pub fn init(allocator: Allocator) Self {
             return .{
                 .allocator = allocator,
                 .root = null,
                 .size = 0,
+                .height = 0,
             };
         }
 
@@ -404,6 +406,7 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
                 self.root.?.keys[0] = key;
                 self.root.?.values[0] = value;
                 self.root.?.num_keys = 1;
+                self.height = 1;
             } else {
                 const root = self.root.?;
 
@@ -421,6 +424,7 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
 
                     try new_root.children[i].?.insertNonFull(key, value);
                     self.root = new_root;
+                    self.height += 1;
                 } else {
                     try root.insertNonFull(key, value);
                 }
@@ -463,7 +467,7 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
         }
 
         pub fn range(self: *Self, min_key: Key, max_key: Key) ![]struct { key: Key, value: Value } {
-            var results = std.ArrayList(struct { key: Key, value: Value }){};
+            var results = std.ArrayList(struct { key: Key, value: Value }).init(self.allocator);
             if (self.root) |root| {
                 try self.rangeHelper(root, min_key, max_key, &results);
             }
@@ -477,7 +481,6 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
             max_key: Key,
             results: *std.ArrayList(struct { key: Key, value: Value }),
         ) !void {
-            _ = self;
             var i: usize = 0;
 
             // Find first key >= min_key
@@ -513,6 +516,34 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
             if (!node.is_leaf and i < max_children and node.children[i] != null) {
                 try self.rangeHelper(node.children[i].?, min_key, max_key, results);
             }
+        }
+
+        pub fn getHeight(self: *Self) u32 {
+            return self.height;
+        }
+
+        pub fn getCapacity(self: *Self) usize {
+            // Calculate capacity based on tree height and order
+            if (self.height == 0) return 0;
+            var capacity: usize = 0;
+            var level_nodes: usize = 1;
+            var h: u32 = 0;
+            while (h < self.height) : (h += 1) {
+                capacity += level_nodes * max_keys;
+                level_nodes *= max_children;
+            }
+            return capacity;
+        }
+
+        pub fn getSizeBytes(self: *Self) usize {
+            // Estimate size based on node count and size
+            const node_size = @sizeOf(Node);
+            const estimated_nodes = self.size / (order / 2) + 1; // Rough estimate
+            return estimated_nodes * node_size;
+        }
+
+        pub fn getSize(self: *Self) usize {
+            return self.size;
         }
 
         fn compareKeys(a: Key, b: Key) i8 {

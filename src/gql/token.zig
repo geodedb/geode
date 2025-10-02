@@ -119,6 +119,8 @@ pub const TokenKind = enum {
     USING,
     INDEX,
     JOIN,
+    IF,
+    TO,
     KEY,
     KEYS,
     LABELS,
@@ -252,6 +254,8 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "USING")) return .USING;
     if (std.ascii.eqlIgnoreCase(word, "INDEX")) return .INDEX;
     if (std.ascii.eqlIgnoreCase(word, "JOIN")) return .JOIN;
+    if (std.ascii.eqlIgnoreCase(word, "IF")) return .IF;
+    if (std.ascii.eqlIgnoreCase(word, "TO")) return .TO;
     if (std.ascii.eqlIgnoreCase(word, "KEY")) return .KEY;
     if (std.ascii.eqlIgnoreCase(word, "KEYS")) return .KEYS;
     if (std.ascii.eqlIgnoreCase(word, "LABELS")) return .LABELS;

@@ -50,6 +50,8 @@ zig build -Doptimize=ReleaseSafe
 - [docs/README.md](docs/README.md) - Full documentation set (v0.18.0)
 - [nix/README.md](nix/README.md) - Nix packaging and deployment guide
 - [docs/NIX_DEPLOYMENT.md](docs/NIX_DEPLOYMENT.md) - Complete Nix deployment documentation
+- [docs/FIXES_SUMMARY.md](docs/FIXES_SUMMARY.md) - Recent fixes and improvements
+- [docs/TEST_COVERAGE.md](docs/TEST_COVERAGE.md) - Comprehensive test suite documentation
 
 For CANARY governance and evidence tracking, see `tools/canaryscan/` and run:
 ```bash
