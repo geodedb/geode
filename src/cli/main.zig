@@ -1067,11 +1067,22 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
 
     // If running in test mode (non-interactive), just succeed
-    const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    if (!stdin.isTty()) {
-        std.debug.print("geode> exit\n", .{});
-        std.debug.print("Goodbye!\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.success));
+    // Check for CI environment variable to detect non-interactive mode
+    if (std.process.getEnvVarOwned(ally, "CI")) |ci_val| {
+        defer ally.free(ci_val);
+        if (std.mem.eql(u8, ci_val, "true") or std.mem.eql(u8, ci_val, "1")) {
+            std.debug.print("geode> exit\n", .{});
+            std.debug.print("Goodbye!\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
+    } else |_| {
+        // Also check if NON_INTERACTIVE is set
+        if (std.process.getEnvVarOwned(ally, "NON_INTERACTIVE")) |val| {
+            defer ally.free(val);
+            std.debug.print("geode> exit\n", .{});
+            std.debug.print("Goodbye!\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        } else |_| {}
     }
 
     // Otherwise try to run the real REPL

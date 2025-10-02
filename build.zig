@@ -47,6 +47,9 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
+    if (target.result.os.tag == .windows) {
+        geode_exe.linkLibC();
+    }
     b.installArtifact(geode_exe);
 
     // Remove legacy wire binary build and install (deprecated)
@@ -69,6 +72,9 @@ pub fn build(b: *std.Build) void {
     const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
     gql_exe.root_module.addImport("geode", root_mod);
+    if (target.result.os.tag == .windows) {
+        gql_exe.linkLibC();
+    }
 
     // Create gql module but don't use it as a separate import to avoid conflicts
     // The gql code is imported through the geode module instead
@@ -701,6 +707,9 @@ pub fn build(b: *std.Build) void {
     geodec_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
     geodec_exe.root_module.addImport("log/logger.zig", logging_mod);
+    if (target.result.os.tag == .windows) {
+        geodec_exe.linkLibC();
+    }
     b.installArtifact(geodec_exe);
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("audit_cli", audit_mod);
