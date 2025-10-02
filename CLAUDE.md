@@ -594,3 +594,8 @@ python3 geodetestlab/runner.py --config geodetestlab/config.yml --verbose
 - Aggregations: <20ms for 1000 nodes ✅
 - Transaction support: Working (BEGIN/COMMIT/ROLLBACK) ✅
 - SET/DELETE operations: Functional ✅
+- remember to always use the following in place of the checkout action:       - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
