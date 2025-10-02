@@ -392,6 +392,51 @@ fn printUserUsage() void {
         "\n", .{});
 }
 
+fn printUserSubcommandUsage(subcmd: []const u8) void {
+    if (std.mem.eql(u8, subcmd, "create")) {
+        std.debug.print("geode user create - Create a new user\n" ++
+            "\n" ++
+            "Usage: geode user create <username> [email] [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --password <password>  Set initial password\n" ++
+            "  --role <role>          Assign role to user\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "list")) {
+        std.debug.print("geode user list - List all users\n" ++
+            "\n" ++
+            "Usage: geode user list [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --format <fmt>         Output format (json|table|csv)\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "show")) {
+        std.debug.print("geode user show - Show user details\n" ++
+            "\n" ++
+            "Usage: geode user show <username> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --format <fmt>         Output format (json|table)\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "delete")) {
+        std.debug.print("geode user delete - Delete a user\n" ++
+            "\n" ++
+            "Usage: geode user delete <username> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --force                Skip confirmation\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    }
+}
+
 fn printAuthUsage() void {
     std.debug.print("geode auth - Authentication commands\n" ++
         "\n" ++
@@ -439,6 +484,50 @@ fn printRoleUsage() void {
         "\n", .{});
 }
 
+fn printRoleSubcommandUsage(subcmd: []const u8) void {
+    if (std.mem.eql(u8, subcmd, "create")) {
+        std.debug.print("geode role create - Create a new role\n" ++
+            "\n" ++
+            "Usage: geode role create <rolename> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --description <desc>   Role description\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "list")) {
+        std.debug.print("geode role list - List all roles\n" ++
+            "\n" ++
+            "Usage: geode role list [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --format <fmt>         Output format (json|table|csv)\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "show")) {
+        std.debug.print("geode role show - Show role details\n" ++
+            "\n" ++
+            "Usage: geode role show <rolename> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --format <fmt>         Output format (json|table)\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "delete")) {
+        std.debug.print("geode role delete - Delete a role\n" ++
+            "\n" ++
+            "Usage: geode role delete <rolename> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --force                Skip confirmation\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    }
+}
+
 fn printPolicyUsage() void {
     std.debug.print("geode policy - RLS policy management commands\n" ++
         "\n" ++
@@ -461,6 +550,52 @@ fn printPolicyUsage() void {
         "  geode policy list\n" ++
         "  geode policy delete outdated_policy\n" ++
         "\n", .{});
+}
+
+fn printPolicySubcommandUsage(subcmd: []const u8) void {
+    if (std.mem.eql(u8, subcmd, "create")) {
+        std.debug.print("geode policy create - Create a new policy\n" ++
+            "\n" ++
+            "Usage: geode policy create <policyname> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --table <table>        Target table for policy\n" ++
+            "  --using <expr>         USING expression for policy\n" ++
+            "  --check <expr>         CHECK expression for policy\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "list")) {
+        std.debug.print("geode policy list - List all policies\n" ++
+            "\n" ++
+            "Usage: geode policy list [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --format <fmt>         Output format (json|table|csv)\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "show")) {
+        std.debug.print("geode policy show - Show policy details\n" ++
+            "\n" ++
+            "Usage: geode policy show <policyname> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --format <fmt>         Output format (json|table)\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    } else if (std.mem.eql(u8, subcmd, "delete")) {
+        std.debug.print("geode policy delete - Delete a policy\n" ++
+            "\n" ++
+            "Usage: geode policy delete <policyname> [options]\n" ++
+            "\n" ++
+            "Options:\n" ++
+            "  --force                Skip confirmation\n" ++
+            "  --server <addr:port>   Server address\n" ++
+            "  -h, --help             Show this help\n" ++
+            "\n", .{});
+    }
 }
 
 fn printGrantUsage() void {
@@ -822,7 +957,7 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         try cmdAuthLogin(ally, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "logout")) {
         // CANARY: REQ=REQ-AUTH-002; FEATURE="AuthenticationLogout"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_002_RealLogout; OWNER=cli; UPDATED=2025-09-30
-        try cmdAuthLogout(ally);
+        try cmdAuthLogout(ally, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -854,10 +989,29 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         std.process.exit(@intFromEnum(ExitCode.success));
     }
     
-    // For now, user management is not yet implemented
-    std.debug.print("Error: user management commands not yet implemented\n", .{});
-    printUserUsage();
-    std.process.exit(@intFromEnum(ExitCode.general_error));
+    // Handle user subcommands
+    if (std.mem.eql(u8, subcmd, "create") or
+        std.mem.eql(u8, subcmd, "list") or
+        std.mem.eql(u8, subcmd, "show") or
+        std.mem.eql(u8, subcmd, "delete")) {
+        
+        // Check for help flag after subcommand
+        if (subcmd_idx + 1 < argv.len) {
+            const arg = argv[subcmd_idx + 1];
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                printUserSubcommandUsage(subcmd);
+                std.process.exit(@intFromEnum(ExitCode.success));
+            }
+        }
+        
+        // For now, show not implemented message
+        std.debug.print("User command '{s}' is not yet implemented\n", .{subcmd});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    } else {
+        std.debug.print("Error: unknown user subcommand '{s}'\n", .{subcmd});
+        printUserUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
 }
 
 fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -865,7 +1019,7 @@ fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // start_idx points to "role", so start_idx + 1 is the subcommand
     const subcmd_idx = start_idx + 1;
     
-    // Check for missing subcommand or help
+    // Check for missing subcommand
     if (subcmd_idx >= argv.len) {
         std.debug.print("Error: missing role subcommand\n", .{});
         printRoleUsage();
@@ -880,10 +1034,29 @@ fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         std.process.exit(@intFromEnum(ExitCode.success));
     }
     
-    // For now, role management is not yet implemented
-    std.debug.print("Error: role management commands not yet implemented\n", .{});
-    printRoleUsage();
-    std.process.exit(@intFromEnum(ExitCode.general_error));
+    // Handle role subcommands
+    if (std.mem.eql(u8, subcmd, "create") or
+        std.mem.eql(u8, subcmd, "list") or
+        std.mem.eql(u8, subcmd, "show") or
+        std.mem.eql(u8, subcmd, "delete")) {
+        
+        // Check for help flag after subcommand
+        if (subcmd_idx + 1 < argv.len) {
+            const arg = argv[subcmd_idx + 1];
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                printRoleSubcommandUsage(subcmd);
+                std.process.exit(@intFromEnum(ExitCode.success));
+            }
+        }
+        
+        // For now, show not implemented message
+        std.debug.print("Role command '{s}' is not yet implemented\n", .{subcmd});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    } else {
+        std.debug.print("Error: unknown role subcommand '{s}'\n", .{subcmd});
+        printRoleUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
 }
 
 fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -906,10 +1079,29 @@ fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         std.process.exit(@intFromEnum(ExitCode.success));
     }
     
-    // For now, policy management is not yet implemented
-    std.debug.print("Error: policy management commands not yet implemented\n", .{});
-    printPolicyUsage();
-    std.process.exit(@intFromEnum(ExitCode.general_error));
+    // Handle policy subcommands
+    if (std.mem.eql(u8, subcmd, "create") or
+        std.mem.eql(u8, subcmd, "list") or
+        std.mem.eql(u8, subcmd, "show") or
+        std.mem.eql(u8, subcmd, "delete")) {
+        
+        // Check for help flag after subcommand
+        if (subcmd_idx + 1 < argv.len) {
+            const arg = argv[subcmd_idx + 1];
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                printPolicySubcommandUsage(subcmd);
+                std.process.exit(@intFromEnum(ExitCode.success));
+            }
+        }
+        
+        // For now, show not implemented message
+        std.debug.print("Policy command '{s}' is not yet implemented\n", .{subcmd});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    } else {
+        std.debug.print("Error: unknown policy subcommand '{s}'\n", .{subcmd});
+        printPolicyUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
 }
 
 fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -1102,12 +1294,31 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             printMainUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
+        } else if (std.mem.eql(u8, argv[i], "--verbose") or std.mem.eql(u8, argv[i], "-v")) {
+            // Set global verbose flag (would be used throughout the application)
+            // For now, just accept the flag
+            subcommand_start = i + 1;
+        } else if (std.mem.eql(u8, argv[i], "--json")) {
+            // Set global JSON output flag (would be used throughout the application)
+            // For now, just accept the flag
+            subcommand_start = i + 1;
+        } else if (std.mem.eql(u8, argv[i], "--config")) {
+            if (i + 1 < argv.len) {
+                // Would load configuration file
+                // For now, just accept the flag
+                i += 1;
+                subcommand_start = i + 1;
+            } else {
+                std.debug.print("Error: --config requires a path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
         } else {
             break;
         }
     }
 
     if (subcommand_start >= argv.len) {
+        std.debug.print("Error: missing subcommand\n", .{});
         printMainUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
@@ -1157,6 +1368,9 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, subcommand, "grant")) {
         logAuditEvent("command", "grant", "started");
         try cmdGrant(ally, argv, subcommand_start);
+    } else if (std.mem.eql(u8, subcommand, "revoke")) {
+        logAuditEvent("command", "revoke", "started");
+        try cmdRevoke(ally, argv, subcommand_start);
     } else if (std.mem.eql(u8, subcommand, "audit")) {
         // geode audit verify --file <path> ...
         var algo: audit_cli.HashAlgo = .sha256;
@@ -1694,7 +1908,21 @@ fn validateNewPassword(password: []const u8) bool {
 
 // Removed - replaced by countWords function above
 
-fn cmdAuthLogout(ally: std.mem.Allocator) !void {
+fn cmdAuthLogout(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Check for help flag
+    if (start_idx < argv.len) {
+        const arg = argv[start_idx];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print("geode auth logout - Clear saved credentials\n" ++
+                "\n" ++
+                "Usage: geode auth logout\n" ++
+                "\n" ++
+                "This command clears saved authentication credentials from ~/.geode/credentials.json\n" ++
+                "\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
+    }
+    
     // Clear saved credentials
     clearCredentials(ally) catch |err| {
         std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
