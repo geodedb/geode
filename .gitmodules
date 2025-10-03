@@ -4,3 +4,9 @@
 [submodule "specs/raft/zaft"]
 	path = specs/raft/zaft
 	url = git@github.com:LVala/zaft.git
+[submodule "grammar/ebnfparser"]
+	path = grammar/ebnfparser
+	url = git@github.com:zmajeed/ebnfparser.git
+[submodule "grammar/gql-grammar"]
+	path = grammar/gql-grammar
+	url = git@github.com:TuGraph-family/gql-grammar.git

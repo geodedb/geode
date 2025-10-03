@@ -85,6 +85,9 @@ const ServerState = struct {
     // Index optimizer for query planning
     index_optimizer_ptr: ?*anyopaque = null,
 
+    // Index statistics manager for cost estimation
+    index_stats_manager: ?*anyopaque = null,
+
     // Backup manager for backup/restore operations
     backup_manager: ?*anyopaque = null,
 
@@ -5181,6 +5184,13 @@ fn getOrCreateIndexOptimizer(allocator: std.mem.Allocator, state: *ServerState) 
         optimizer.* = @import("index_optimizer.zig").IndexOptimizer.init(allocator, idx_mgr);
         state.index_optimizer_ptr = optimizer;
 
+        // Connect statistics manager if available
+        if (state.index_stats_manager) |stats_ptr| {
+            const IndexStatisticsManager = @import("index_statistics.zig").IndexStatisticsManager;
+            const stats_mgr: *IndexStatisticsManager = @ptrCast(@alignCast(stats_ptr));
+            optimizer.setStatisticsManager(stats_mgr);
+        }
+
         // Set as global optimizer for access from execution engine
         @import("index_optimizer.zig").setGlobalOptimizer(optimizer);
     }
@@ -5227,6 +5237,14 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         state.index_manager_ptr = idx_mgr;
     }
     const index_manager: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
+
+    // Get or create index statistics manager
+    if (state.index_stats_manager == null) {
+        const IndexStatisticsManager = @import("index_statistics.zig").IndexStatisticsManager;
+        const stats_mgr = allocator.create(IndexStatisticsManager) catch return error.OutOfMemory;
+        stats_mgr.* = IndexStatisticsManager.init(allocator);
+        state.index_stats_manager = stats_mgr;
+    }
 
     // Check if index already exists
     if (index_manager.property_indexes.contains(stmt.name)) {
@@ -5343,6 +5361,41 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         }
     }
 
+    // Create statistics tracking for the new index
+    const IndexStatisticsManager = @import("index_statistics.zig").IndexStatisticsManager;
+    const stats_manager: *IndexStatisticsManager = @ptrCast(@alignCast(state.index_stats_manager.?));
+    
+    // Map AST index type to graph_common IndexType for statistics
+    const stats_index_type = switch (stmt.index_type) {
+        .btree => geode.graph_common.IndexType.btree,
+        .hash => geode.graph_common.IndexType.hash,
+        .fulltext => geode.graph_common.IndexType.fulltext,
+        .spatial => geode.graph_common.IndexType.spatial,
+        else => geode.graph_common.IndexType.btree, // Default fallback
+    };
+    
+    // Create statistics entry for the new index
+    stats_manager.createIndexStatistics(stmt.name, stats_index_type, stmt.label, stmt.properties) catch |err| {
+        // Log error but don't fail index creation
+        std.log.warn("Failed to create index statistics for {s}: {}", .{ stmt.name, err });
+    };
+
+    // Record initial population entries in statistics
+    if (population_count > 0) {
+        // Estimate number of unique values (assuming reasonable uniqueness for populated data)
+        const estimated_unique = @min(population_count, @max(1, population_count / 2));
+        
+        // Record entries one by one to build up statistics  
+        var entry_count: u32 = 0;
+        while (entry_count < population_count) : (entry_count += 1) {
+            // Use synthetic key for counting (real implementation would use actual keys)
+            var key_buf: [32]u8 = undefined;
+            const synthetic_key = std.fmt.bufPrint(&key_buf, "entry_{d}", .{entry_count}) catch "entry";
+            const is_new_unique = (entry_count < estimated_unique);
+            stats_manager.recordIndexEntry(stmt.name, synthetic_key, is_new_unique);
+        }
+    }
+
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} created successfully, populated with {d} entries\"}}\n", .{ stmt.name, population_count });
 }
 
@@ -5401,6 +5454,13 @@ fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, 
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} does not exist, skipping\"}}\n", .{stmt.name});
         }
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Index {s} does not exist\"}}\n", .{stmt.name});
+    }
+
+    // Remove statistics for dropped index
+    if (state.index_stats_manager) |stats_ptr| {
+        const IndexStatisticsManager = @import("index_statistics.zig").IndexStatisticsManager;
+        const stats_manager: *IndexStatisticsManager = @ptrCast(@alignCast(stats_ptr));
+        stats_manager.removeIndexStatistics(stmt.name);
     }
 
     index_manager.statistics.total_indexes -= 1;

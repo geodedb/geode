@@ -31,12 +31,18 @@ pub fn getGlobalOptimizer() ?*IndexOptimizer {
 pub const IndexOptimizer = struct {
     allocator: Allocator,
     index_manager: *index_manager,
+    stats_manager: ?*@import("index_statistics.zig").IndexStatisticsManager = null,
 
     pub fn init(allocator: Allocator, idx_mgr: *index_manager) IndexOptimizer {
         return IndexOptimizer{
             .allocator = allocator,
             .index_manager = idx_mgr,
         };
+    }
+
+    // Set the statistics manager for enhanced cost estimation
+    pub fn setStatisticsManager(self: *IndexOptimizer, stats_mgr: *@import("index_statistics.zig").IndexStatisticsManager) void {
+        self.stats_manager = stats_mgr;
     }
 
     // Optimize a node scan by choosing between sequential scan and index scan
@@ -437,8 +443,19 @@ pub const IndexOptimizer = struct {
 
     // Estimate selectivity based on index type and property characteristics
     fn estimateIndexSelectivity(self: *IndexOptimizer, index_type: IndexType, property: []const u8) f64 {
-        _ = self;
+        // First try to get actual statistics if available
+        if (self.stats_manager) |stats_mgr| {
+            // Try to find index statistics for this property
+            var index_name_buf: [256]u8 = undefined;
+            const index_name = std.fmt.bufPrint(&index_name_buf, "_{s}_{s}_idx", .{ property, @tagName(index_type) }) catch property;
+            
+            if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                // Use actual selectivity from collected statistics
+                return stats.getEstimatedSelectivity();
+            }
+        }
         
+        // Fallback to heuristic-based estimates if no statistics available
         return switch (index_type) {
             .btree => blk: {
                 // B-tree good for range queries and exact matches
@@ -476,8 +493,6 @@ pub const IndexOptimizer = struct {
 
     // Estimate cost based on index type characteristics
     fn estimateIndexTypeCost(self: *IndexOptimizer, index_type: IndexType, selectivity: f64) f64 {
-        _ = self;
-        
         const base_cost = switch (index_type) {
             .btree => 10.0,     // Balanced tree traversal cost
             .hash => 5.0,       // O(1) hash lookup cost
@@ -485,8 +500,24 @@ pub const IndexOptimizer = struct {
             .fulltext => 20.0,  // Text processing and matching cost
         };
         
+        // Apply statistics-based cost factors if available
+        var cost_factor: f64 = 1.0;
+        if (self.stats_manager) |stats_mgr| {
+            // Check if we have statistics for any index of this type
+            const all_stats = stats_mgr.getAllStatistics();
+            defer self.allocator.free(all_stats);
+            
+            for (all_stats) |stats| {
+                if (stats.index_type == index_type) {
+                    // Use the cost factor from statistics
+                    cost_factor = stats.getEstimatedCostFactor();
+                    break;
+                }
+            }
+        }
+        
         // Cost scales with selectivity - more selective indexes are cheaper to process results
-        return base_cost * selectivity;
+        return base_cost * selectivity * cost_factor;
     }
 
     // Determine if an index type is suitable for a given query pattern
