@@ -5,6 +5,7 @@ const twophase = @import("twophase.zig");
 const sharding = @import("sharding.zig");
 const federation = @import("federation.zig");
 const query_coordinator = @import("query_coordinator.zig");
+const query_planner = @import("query_planner.zig");
 
 pub const DistributedConfig = struct {
     node_id: []const u8,

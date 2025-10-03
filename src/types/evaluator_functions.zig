@@ -44,19 +44,19 @@ pub const EvaluatorError = error{
 // First-class type constructors
 pub fn IpAddr(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
     _ = allocator;
-    const ip = network.IpAddr.parse(text) catch return EvaluatorError.InvalidFormat;
+    const ip = network.IpAddr.fromString(text) catch return EvaluatorError.InvalidFormat;
     return Value{ .IpAddr = ip };
 }
 
 pub fn Subnet(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
     _ = allocator;
-    const subnet = network.Subnet.parse(text) catch return EvaluatorError.InvalidFormat;
+    const subnet = network.Subnet.fromString(text) catch return EvaluatorError.InvalidFormat;
     return Value{ .Subnet = subnet };
 }
 
 pub fn Mac(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
     _ = allocator;
-    const mac = network.Mac.parse(text) catch return EvaluatorError.InvalidFormat;
+    const mac = network.Mac.fromString(text) catch return EvaluatorError.InvalidFormat;
     return Value{ .Mac = mac };
 }
 

@@ -247,7 +247,7 @@ test "MAC address encoding/decoding" {
 test "MAC address random generation" {
     const testing = std.testing;
 
-    var prng = std.rand.DefaultPrng.init(42);
+    var prng = std.Random.DefaultPrng.init(42);
     const rng = prng.random();
 
     const oui = [3]u8{ 0x00, 0x50, 0x56 }; // VMware OUI

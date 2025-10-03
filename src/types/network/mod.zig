@@ -26,17 +26,15 @@ pub fn parseMac(mac_str: []const u8) !Mac {
 
 // Network type detection utilities
 pub fn isValidIpAddr(addr_str: []const u8) bool {
-    return parseIpAddr(addr_str) != error.InvalidIPv4Format and 
-           parseIpAddr(addr_str) != error.InvalidIPv6Format;
+    return if (parseIpAddr(addr_str)) |_| true else |_| false;
 }
 
 pub fn isValidSubnet(cidr_str: []const u8) bool {
-    return parseSubnet(cidr_str) != error.InvalidCIDRFormat and
-           parseSubnet(cidr_str) != error.InvalidPrefixLength;
+    return if (parseSubnet(cidr_str)) |_| true else |_| false;
 }
 
 pub fn isValidMac(mac_str: []const u8) bool {
-    return parseMac(mac_str) != error.InvalidMacFormat;
+    return if (parseMac(mac_str)) |_| true else |_| false;
 }
 
 test "network types module integration" {

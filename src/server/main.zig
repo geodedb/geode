@@ -16,6 +16,7 @@ const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("tools/cert_gen.zig");
 const mvcc = @import("server/txn/mvcc.zig");
 const logger = @import("log/logger.zig");
+const query_plan_cache = @import("query_plan_cache.zig");
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
 
@@ -92,6 +93,13 @@ const ServerState = struct {
         node_count: u64,
         edge_count: u64,
     } = null,
+
+    // Query plan cache and optimizer for performance optimization
+    query_optimizer: ?*query_plan_cache.QueryOptimizer = null,
+
+    // Distributed query planner for federation-aware optimization
+    distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,
+    federation_manager: ?*geode.distributed.query_planner.FederationManager = null,
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -1970,15 +1978,17 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
 }
 
 fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: [][]const u8, param_matrix: [][]const eval.Value, union_mode_out: *[]const u8, metrics: *UnionMetrics) ![][]const u8 {
-    // Evaluate each component as simple query without ORDER/LIMIT (applied externally if needed)
+    // Evaluate first component as simple query without ORDER/LIMIT (applied externally if needed)
     var dummy_cols: []const protocol.SchemaCol = &.{};
     var ordered: bool = false;
     var order_keys: [][]const u8 = &.{};
-    const left_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null, null);
-    metrics.left_in = left_rows.len;
-    var all_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer all_rows.deinit(ally);
-    for (left_rows) |r| all_rows.append(ally, r) catch {};
+    var result_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null, null);
+    metrics.left_in = result_rows.len;
+    
+    // Import advanced set operations
+    const union_advanced = @import("union_advanced.zig");
+    var set_ops = union_advanced.SetOperations.init(ally);
+    
     var any_all = false;
     var total_tail: usize = 0;
     var ti: usize = 0;
@@ -1988,31 +1998,59 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         var oc: []const protocol.SchemaCol = &.{};
         ordered = false;
         order_keys = &.{};
-        const rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null, null);
-        total_tail += rows.len;
-        for (rows) |rr| all_rows.append(ally, rr) catch {};
+        const right_rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null, null);
+        total_tail += right_rows.len;
+        
+        // Apply the appropriate set operation
+        const new_result = switch (part.operation) {
+            .union_op => blk: {
+                // Traditional UNION logic
+                var all_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+                defer all_rows.deinit(ally);
+                
+                for (result_rows) |r| all_rows.append(ally, r) catch {};
+                for (right_rows) |r| all_rows.append(ally, r) catch {};
+                
+                if (part.all) {
+                    break :blk try all_rows.toOwnedSlice(ally);
+                } else {
+                    // Apply DISTINCT
+                    var hash_size: usize = 0;
+                    var dummy_vals = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
+                    defer dummy_vals.deinit(ally);
+                    distinctDedup(ally, false, 0, &all_rows, &dummy_vals, &hash_size);
+                    metrics.hash_size = hash_size;
+                    break :blk try all_rows.toOwnedSlice(ally);
+                }
+            },
+            .intersect => try set_ops.intersect(result_rows, right_rows, part.all),
+            .except => try set_ops.except(result_rows, right_rows, part.all),
+        };
+        
+        // Free previous result and update with new result
+        ally.free(result_rows);
+        result_rows = new_result;
     }
+    
     metrics.right_in = total_tail;
-    if (any_all) {
-        union_mode_out.* = "ALL";
-        metrics.out = all_rows.items.len;
-        metrics.hash_size = null;
-        return all_rows.toOwnedSlice(ally) catch &.{};
+    metrics.out = result_rows.len;
+    
+    // Set operation mode for metrics
+    if (u.tails.len > 0) {
+        union_mode_out.* = switch (u.tails[0].operation) {
+            .union_op => if (any_all) "UNION ALL" else "UNION DISTINCT",
+            .intersect => if (any_all) "INTERSECT ALL" else "INTERSECT DISTINCT", 
+            .except => if (any_all) "EXCEPT ALL" else "EXCEPT DISTINCT",
+        };
+    } else {
+        union_mode_out.* = "SINGLE";
     }
-    union_mode_out.* = "DISTINCT";
-    if (all_rows.items.len <= 1) {
-        metrics.out = all_rows.items.len;
-        metrics.hash_size = all_rows.items.len;
-        return all_rows.toOwnedSlice(ally) catch &.{};
+    
+    if (metrics.hash_size == null) {
+        metrics.hash_size = if (any_all) null else result_rows.len;
     }
-    // Reuse shared helper directly on all_rows (in-place). We pass a dummy values list.
-    var dummy_vals = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer dummy_vals.deinit(ally);
-    var hash_size: usize = 0;
-    distinctDedup(ally, false, 0, &all_rows, &dummy_vals, &hash_size);
-    metrics.out = all_rows.items.len;
-    metrics.hash_size = hash_size;
-    return all_rows.toOwnedSlice(ally) catch &.{};
+    
+    return result_rows;
 }
 
 fn evaluateBinarySet(
@@ -2194,6 +2232,19 @@ fn handleQuicConnection(
     state.spill_union = env_spill_union;
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
+
+    // Initialize query plan cache and optimizer for performance optimization
+    var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans
+    defer query_optimizer.deinit();
+    state.query_optimizer = &query_optimizer;
+
+    // Initialize distributed query planner for federation-aware optimization
+    var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
+    defer federation_manager.deinit();
+    var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
+    defer dist_planner.deinit();
+    state.federation_manager = &federation_manager;
+    state.distributed_planner = &dist_planner;
 
     // Process messages
     while (true) {
@@ -2382,6 +2433,33 @@ fn processMessage(
                             var run_code: diagnostics.Code = .IllegalOrderKey;
                             var timings: StageTimings = .{};
                             const need_timings = profile_mode or explain_calibrated;
+                            
+                            // Query plan optimization with caching
+                            if (state.query_optimizer) |optimizer| {
+                                const plan = optimizer.optimizeQuery(text, &q) catch null;
+                                if (plan) |p| {
+                                    // Log optimization metrics for PROFILE mode
+                                    if (profile_mode and DEBUG_PROFILE) {
+                                        std.log.info("Query plan optimized: cost={d:.2}, memory={d}, parallelism={d}", .{ p.estimated_cost, p.memory_requirement, p.parallelism_level });
+                                    }
+                                    // Future: Use optimized plan for execution
+                                    // For now, the plan is cached for subsequent identical queries
+                                }
+                            }
+
+                            // Distributed query planning for federation queries
+                            if (state.distributed_planner) |dist_planner| {
+                                const distributed_plan = dist_planner.planDistributedQuery(&q) catch null;
+                                if (distributed_plan) |d_plan| {
+                                    // Log distributed optimization metrics for PROFILE mode
+                                    if (profile_mode and DEBUG_PROFILE) {
+                                        std.log.info("Distributed plan generated: cost={d:.2}, phases={d}, parallelism={d}", .{ d_plan.estimated_cost, d_plan.execution_phases.len, d_plan.parallelism_level });
+                                    }
+                                    // Future: Use distributed plan for federated execution
+                                    // For now, the plan provides optimization insights
+                                }
+                            }
+                            
                             const rows = evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, if (need_timings) &timings else null, &run_code, null) catch &.{};
                             state.last_columns = cols;
                             state.last_ordered = ord;
@@ -2898,6 +2976,19 @@ pub fn main() !void {
     state.spill_union = env_spill_union;
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
+
+    // Initialize query plan cache and optimizer for performance optimization
+    var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans
+    defer query_optimizer.deinit();
+    state.query_optimizer = &query_optimizer;
+
+    // Initialize distributed query planner for federation-aware optimization
+    var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
+    defer federation_manager.deinit();
+    var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
+    defer dist_planner.deinit();
+    state.federation_manager = &federation_manager;
+    state.distributed_planner = &dist_planner;
 
     const stdin_file = if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
@@ -4578,32 +4669,44 @@ pub fn main() !void {
                                     continue;
                                 }
                                 const rows = evaluateUnion(gpa, u_stmt, param_names, param_rows, &union_mode, &metrics) catch &.{};
-                                // Derive schema from first part return list
+                                // Derive schema from first part return list with advanced type inference
                                 var dummy_cols: []protocol.SchemaCol = &.{};
                                 // union schema inference does not depend on ordering for now
                                 const ord_keys: [][]const u8 = &.{}; // unused placeholder retained for consistency
                                 dummy_cols = gpa.alloc(protocol.SchemaCol, u_stmt.first.ret.items.len) catch &.{};
+                                
+                                // Use advanced UNION type inference
+                                const union_advanced = @import("union_advanced.zig");
+                                var type_inferrer = union_advanced.UnionTypeInference.init(gpa);
+                                
                                 var ci: usize = 0;
                                 while (ci < u_stmt.first.ret.items.len) : (ci += 1) {
                                     const it = u_stmt.first.ret.items[ci];
-                                    // Infer type from first query branch if we have data
+                                    // Enhanced type inference from multiple sources
                                     var col_type: []const u8 = "MIXED";
+                                    
                                     if (rows.len > 0) {
-                                        // Parse first row to get column type
-                                        if (std.json.parseFromSlice(std.json.Value, gpa, rows[0], .{})) |parsed| {
-                                            defer parsed.deinit();
-                                            const col_name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col";
-                                            if (parsed.value.object.get(col_name)) |first_val| {
-                                                col_type = switch (first_val) {
-                                                    .string => "STRING",
-                                                    .integer => "INT", 
-                                                    .float => "DECIMAL",
-                                                    .bool => "BOOL",
-                                                    .null => "NULL",
-                                                    else => "MIXED",
-                                                };
-                                            }
-                                        } else |_| {}
+                                        const col_name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col";
+                                        
+                                        // Use advanced type inference from sample data
+                                        if (type_inferrer.inferColumnType(col_name, rows)) |inferred_type| {
+                                            col_type = inferred_type;
+                                        } else |_| {
+                                            // Fallback to simple inference
+                                            if (std.json.parseFromSlice(std.json.Value, gpa, rows[0], .{})) |parsed| {
+                                                defer parsed.deinit();
+                                                if (parsed.value.object.get(col_name)) |first_val| {
+                                                    col_type = switch (first_val) {
+                                                        .string => "STRING",
+                                                        .integer => "INT", 
+                                                        .float => "DECIMAL",
+                                                        .bool => "BOOL",
+                                                        .null => "NULL",
+                                                        else => "MIXED",
+                                                    };
+                                                }
+                                            } else |_| {}
+                                        }
                                     }
                                     dummy_cols[ci] = .{ .name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col", .type = col_type };
                                 }

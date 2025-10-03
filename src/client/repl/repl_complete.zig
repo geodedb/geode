@@ -35,6 +35,8 @@ const gql_keywords = [_][]const u8{
     "SET",
     "REMOVE",
     "UNION",
+    "INTERSECT", 
+    "EXCEPT",
     "ALL",
     "AS",
     "DISTINCT",

@@ -256,7 +256,7 @@ pub const Subnet = union(enum) {
 // Test suite
 test "IPv4 subnet parsing and operations" {
     const testing = std.testing;
-    _ = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test subnet parsing
     const subnet = try Subnet.fromString("192.168.1.0/24");
@@ -281,7 +281,6 @@ test "IPv4 subnet parsing and operations" {
 
 test "IPv6 subnet parsing and operations" {
     const testing = std.testing;
-    _ = testing.allocator;
 
     // Test IPv6 subnet parsing
     const subnet = try Subnet.fromString("2001:db8::/32");

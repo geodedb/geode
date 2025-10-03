@@ -5,6 +5,7 @@ const patricia = @import("index/patricia.zig");
 const rtree = @import("index/rtree.zig");
 const hnsw = @import("index/hnsw.zig");
 const extf = @import("types/extended_functions.zig");
+const network = @import("types/network.zig");
 
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_CACHE; STATUS=IMPL; TEST=tests/canary_extended_builtins.zig; OWNER=engine; UPDATED=2025-09-26
 
@@ -165,111 +166,60 @@ fn constructIpAddr(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
-
-    const addr4_opt = std.net.Address.parseIp4(text, 0) catch null;
-    if (addr4_opt) |a4| {
-        const raw: u32 = a4.in.sa.addr;
-        const b0: u8 = @intCast((raw >> 24) & 0xFF);
-        const b1: u8 = @intCast((raw >> 16) & 0xFF);
-        const b2: u8 = @intCast((raw >> 8) & 0xFF);
-        const b3: u8 = @intCast(raw & 0xFF);
-        return .{ .IpAddr = .{ .v4 = .{ b0, b1, b2, b3 } } };
-    }
-
-    const addr6_opt = std.net.Address.parseIp6(text, 0) catch null;
-    if (addr6_opt) |a6| {
-        return .{ .IpAddr = .{ .v6 = a6.in6.sa.addr } };
-    }
-
-    return error.InvalidIpAddress;
+    const addr = network.IpAddr.fromString(text) catch return error.InvalidIpAddress;
+    
+    // Convert to heap.IpAddr format
+    const heap_addr = switch (addr) {
+        .v4 => |ipv4| heap.IpAddr{ .v4 = ipv4.octets },
+        .v6 => |ipv6| blk: {
+            var bytes: [16]u8 = undefined;
+            for (ipv6.segments, 0..) |segment, i| {
+                bytes[i * 2] = @intCast((segment >> 8) & 0xFF);
+                bytes[i * 2 + 1] = @intCast(segment & 0xFF);
+            }
+            break :blk heap.IpAddr{ .v6 = bytes };
+        },
+    };
+    
+    return .{ .IpAddr = heap_addr };
 }
 
 fn constructSubnet(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    // allocator currently unused
     if (args.len != 1) return error.InvalidArgs;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
-    const slash_idx = std.mem.indexOf(u8, text, "/") orelse return error.InvalidSubnet;
-
-    const ip_part = text[0..slash_idx];
-    const prefix_part = text[slash_idx + 1 ..];
-
-    const prefix_len = try std.fmt.parseInt(u8, prefix_part, 10);
-
-    // Parse IP part
-    var ip: heap.IpAddr = undefined;
-    if (std.net.Address.parseIp4(ip_part, 0) catch null) |addr| {
-        if (prefix_len > 32) return error.InvalidPrefix;
-        const raw: u32 = addr.in.sa.addr;
-        var bytes: [4]u8 = .{
-            @intCast((raw >> 24) & 0xFF),
-            @intCast((raw >> 16) & 0xFF),
-            @intCast((raw >> 8) & 0xFF),
-            @intCast(raw & 0xFF),
-        };
-
-        // Zero host bits
-        const host_bits = 32 - prefix_len;
-        if (host_bits > 0) {
-            const mask: u32 = ~(@as(u32, 0) >> @intCast(prefix_len));
-            const raw_net: u32 = ((@as(u32, bytes[0]) << 24) | (@as(u32, bytes[1]) << 16) | (@as(u32, bytes[2]) << 8) | @as(u32, bytes[3])) & mask;
-            bytes[0] = @intCast((raw_net >> 24) & 0xFF);
-            bytes[1] = @intCast((raw_net >> 16) & 0xFF);
-            bytes[2] = @intCast((raw_net >> 8) & 0xFF);
-            bytes[3] = @intCast(raw_net & 0xFF);
-        }
-
-        ip = .{ .v4 = bytes };
-    } else if (std.net.Address.parseIp6(ip_part, 0) catch null) |addr| {
-        if (prefix_len > 128) return error.InvalidPrefix;
-        var bytes = addr.in6.sa.addr;
-
-        // Zero host bits
-        const host_bits = 128 - prefix_len;
-        if (host_bits > 0) {
-            const byte_idx = prefix_len / 8;
-            const bit_idx: u8 = @intCast(prefix_len % 8);
-
-            if (bit_idx != 0) {
-                const shift: u3 = @intCast(8 - bit_idx); // bit_idx in 1..7 => shift 1..7
-                bytes[byte_idx] &= (@as(u8, 0xFF)) << shift;
+    const subnet = network.Subnet.fromString(text) catch return error.InvalidSubnet;
+    
+    // Convert to heap.Subnet format
+    const heap_addr = switch (subnet) {
+        .v4 => |ipv4_subnet| heap.IpAddr{ .v4 = ipv4_subnet.network },
+        .v6 => |ipv6_subnet| blk: {
+            var bytes: [16]u8 = undefined;
+            for (ipv6_subnet.network, 0..) |segment, i| {
+                bytes[i * 2] = @intCast((segment >> 8) & 0xFF);
+                bytes[i * 2 + 1] = @intCast(segment & 0xFF);
             }
-
-            var i = byte_idx + 1;
-            while (i < 16) : (i += 1) {
-                bytes[i] = 0;
-            }
-        }
-
-        ip = .{ .v6 = bytes };
-    } else {
-        return error.InvalidIpAddress;
-    }
-
-    return .{ .Subnet = .{ .addr = ip, .prefix_len = prefix_len } };
+            break :blk heap.IpAddr{ .v6 = bytes };
+        },
+    };
+    
+    const prefix_len = switch (subnet) {
+        .v4 => |ipv4_subnet| ipv4_subnet.prefix_len,
+        .v6 => |ipv6_subnet| ipv6_subnet.prefix_len,
+    };
+    
+    return .{ .Subnet = .{ .addr = heap_addr, .prefix_len = prefix_len } };
 }
 
 fn constructMac(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
     if (args[0] != .Str) return error.TypeMismatch;
+    
     const text = args[0].Str;
-    var clean: [12]u8 = undefined;
-    var clean_len: usize = 0;
-    for (text) |c| {
-        if (c != ':' and c != '-') {
-            if (clean_len >= 12) return error.InvalidMac;
-            clean[clean_len] = c;
-            clean_len += 1;
-        }
-    }
-    if (clean_len != 12) return error.InvalidMac;
-    var bytes: [6]u8 = undefined;
-    var i: usize = 0;
-    while (i < 6) : (i += 1) {
-        bytes[i] = try std.fmt.parseInt(u8, clean[i * 2 .. (i + 1) * 2], 16);
-    }
-    return .{ .Mac = .{ .bytes = bytes } };
+    const mac = network.Mac.fromString(text) catch return error.InvalidMac;
+    
+    return .{ .Mac = .{ .bytes = mac.octets } };
 }
 
 fn constructHash(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {

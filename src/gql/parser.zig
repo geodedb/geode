@@ -607,9 +607,15 @@ pub const Parser = struct {
     }
 
     fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
-        if (self.cur.kind == .UNION) {
+        if (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
             var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-            while (self.cur.kind == .UNION) {
+            while (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+                const operation = switch (self.cur.kind) {
+                    .UNION => ast.SetOperation.union_op,
+                    .INTERSECT => ast.SetOperation.intersect,
+                    .EXCEPT => ast.SetOperation.except,
+                    else => unreachable,
+                };
                 self.advance();
                 var all = false;
                 var distinct = false;
@@ -623,29 +629,9 @@ pub const Parser = struct {
                 // Disallow both modifiers at once
                 if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
                 const q = try self.parseQuery();
-                try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q });
+                try parts.append(self.arena.allocator(), .{ .operation = operation, .all = all, .distinct = distinct, .query = q });
             }
             return .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
-        }
-        if (self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
-            const kind = self.cur.kind;
-            self.advance();
-            var all = false;
-            var distinct = false;
-            if (self.cur.kind == .ALL) {
-                all = true;
-                self.advance();
-            } else if (self.cur.kind == .DISTINCT) {
-                distinct = true;
-                self.advance();
-            }
-            if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-            const rhs = try self.parseQuery();
-            if (kind == .INTERSECT) {
-                return .{ .Intersect = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
-            } else {
-                return .{ .Except = .{ .left = first, .right = rhs, .all = all, .distinct = distinct } };
-            }
         }
         return .{ .Query = first };
     }

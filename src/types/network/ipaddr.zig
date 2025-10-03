@@ -65,8 +65,8 @@ pub const IpAddr = union(enum) {
             
             if (double_colon_pos) |pos| {
                 // Handle zero compression
-                var before_parts = std.mem.splitSequence(u8, addr_str[0..pos], ":");
-                var after_parts = if (pos + 2 < addr_str.len) 
+                const before_parts = std.mem.splitSequence(u8, addr_str[0..pos], ":");
+                const after_parts = if (pos + 2 < addr_str.len) 
                     std.mem.splitSequence(u8, addr_str[pos + 2..], ":") 
                 else 
                     std.mem.splitSequence(u8, "", ":");
@@ -140,24 +140,24 @@ pub const IpAddr = union(enum) {
                 best_len = current_len;
             }
 
-            var result = std.ArrayList(u8).init(allocator);
-            defer result.deinit();
+            var result = std.ArrayList(u8).initCapacity(allocator, 39) catch unreachable; // IPv6 max length
+            defer result.deinit(allocator);
 
             var i: usize = 0;
             while (i < 8) {
                 if (best_start != null and i == best_start.? and best_len > 1) {
-                    try result.appendSlice("::");
+                    try result.appendSlice(allocator, "::");
                     i += best_len;
                 } else {
                     if (i > 0 and !(best_start != null and i == best_start.? + best_len)) {
-                        try result.append(':');
+                        try result.append(allocator, ':');
                     }
-                    try result.writer().print("{x}", .{self.segments[i]});
+                    try result.writer(allocator).print("{x}", .{self.segments[i]});
                     i += 1;
                 }
             }
 
-            return result.toOwnedSlice();
+            return result.toOwnedSlice(allocator);
         }
 
         pub fn isLoopback(self: IPv6Addr) bool {
@@ -259,7 +259,7 @@ pub const IpAddr = union(enum) {
 // Test suite
 test "IPv4 address parsing and formatting" {
     const testing = std.testing;
-    _ = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test valid IPv4 addresses
     const addr1 = try IpAddr.fromString("192.168.1.1");
@@ -283,7 +283,6 @@ test "IPv4 address parsing and formatting" {
 
 test "IPv6 address parsing and formatting" {
     const testing = std.testing;
-    _ = testing.allocator;
 
     // Test full IPv6 address
     const addr1 = try IpAddr.fromString("2001:db8:85a3:8d3:1319:8a2e:370:7344");
