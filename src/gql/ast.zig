@@ -12,6 +12,7 @@ pub const Statement = union(enum) {
     SessionSet: SessionSetStatement,
     SessionReset,
     SessionClose,
+    UseGraph: UseGraphStatement,
     StartTransaction,
     Commit,
     Rollback,
@@ -46,6 +47,8 @@ pub const Query = struct {
     order_by: ?OrderBy,
     limit: ?usize,
     offset: ?usize,
+    // Path variable assignment: MATCH path_var = pattern
+    path_variable: ?[]const u8 = null,
     // Indicates this query is part of a WITH RECURSIVE CTE block (parser recognition only for now)
     // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle|TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-26
     has_recursive_cte: bool = false,
@@ -171,7 +174,7 @@ pub const Expr = union(enum) {
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
 };
 
-pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div };
+pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Concat };
 pub const UnaryOp = enum { Not, Neg };
 
 pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };
@@ -226,6 +229,10 @@ pub const PropertyAccess = struct {
 pub const SessionSetStatement = struct {
     property: []const u8, // e.g., "GRAPH"
     value: []const u8, // e.g., "G1"
+};
+
+pub const UseGraphStatement = struct {
+    graph_name: []const u8, // e.g., "my_graph"
 };
 
 // Index operation statements

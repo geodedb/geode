@@ -49,7 +49,13 @@ pub const Parser = struct {
             .SELECT, .FROM, .EXISTS, .DETACH, .REMOVE, .FOR, .FOREACH, .UNWIND,
             .USE, .USING, .INDEX, .JOIN, .IF, .TO, .KEY, .KEYS, .LABELS, .LOAD,
             .CSV, .PERIODIC, .PROPERTIES, .RELATIONSHIPS, .START_NODE, .END_NODE,
-            .TYPE, .TYPES => true,
+            .TYPE, .TYPES,
+            // Critical missing ISO GQL keywords (avoiding duplicates)
+            .ACYCLIC, .AGGREGATE, .ANY, .AVG, .CATALOG, .CAST, .CONSTRAINT, .COUNT,
+            .CURRENT, .DIFFERENT, .DURATION, .EDGES, .ELEMENT, .FINISH, .HOME,
+            .LABELED, .LIKE, .LIST, .MAX, .MIN, .NEXT, .NODE, .OF, .OTHERWISE,
+            .PATH, .PATHS, .RECORD, .REPEATABLE, .REPLACE, .SCHEMA, .SHORTEST,
+            .SIMPLE, .SUM, .TABLE, .TRAIL, .WALK, .XOR, .ZONED => true,
             else => false,
         };
     }
@@ -133,8 +139,11 @@ pub const Parser = struct {
         return switch (self.cur.kind) {
             .CREATE => self.parseCreateStatement(),
             .DELETE => self.parseDeleteStatement(),
+            .DETACH => self.parseDeleteStatement(),
             .MERGE => self.parseMergeStatement(),
             .DROP => self.parseDropStatement(),
+            .SET => self.parseSetSessionStatement(),
+            .USE => self.parseUseStatement(),
             .identifier => blk_ident: {
                 // Check for BACKUP and RESTORE keywords
                 if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "BACKUP")) {
@@ -222,8 +231,8 @@ pub const Parser = struct {
                     _ = self.parseOrExpr() catch {};
                 }
                 
-                // Check if DELETE follows
-                const is_delete = self.cur.kind == .DELETE;
+                // Check if DELETE or DETACH DELETE follows
+                const is_delete = self.cur.kind == .DELETE or self.cur.kind == .DETACH;
                 
                 // Restore position
                 self.lx.* = saved_pos;
@@ -239,6 +248,12 @@ pub const Parser = struct {
                         self.advance();
                         where_clause = try self.parseOrExpr();
                     }
+                    
+                    // Handle optional DETACH
+                    const detach = if (self.cur.kind == .DETACH) blk: {
+                        self.advance();
+                        break :blk true;
+                    } else false;
                     
                     _ = try self.expect(.DELETE);
                     
@@ -275,7 +290,7 @@ pub const Parser = struct {
                     break :blk_match .{ .Delete = .{
                         .match_clause = match_pattern,
                         .where_clause = where_clause,
-                        .detach = false,
+                        .detach = detach,
                         .items = try delete_items.toOwnedSlice(self.arena.allocator()),
                         .return_clause = return_clause,
                     }};
@@ -524,11 +539,14 @@ pub const Parser = struct {
         var with_clause: ?ast.WithClause = null;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
+        const path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
             _ = try self.expect(.MATCH);
             // For the top-level MATCH pattern, collect aliases freshly.
             self.collect_chain_aliases = true;
             self.path_aliases.clearRetainingCapacity();
+
+            // Path variable assignment is handled inside parseGraphPattern
 
             // Parse first MATCH pattern
             var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
@@ -606,44 +624,55 @@ pub const Parser = struct {
             break :blk_empty .{ .chains = &.{} };
         };
 
-        // Parse SET clauses if present
+        // Parse SET clauses if present (before RETURN)
         var set_clauses: []ast.SetClause = &.{};
         if (self.cur.kind == .SET) {
             self.advance();
             set_clauses = try self.parseSetClauses();
         }
 
-        // Parse REMOVE clauses if present
+        // Parse REMOVE clauses if present (before RETURN)
         var remove_clauses: []ast.RemoveClause = &.{};
         if (self.cur.kind == .REMOVE) {
             self.advance();
             remove_clauses = try self.parseRemoveClauses();
         }
 
-        // RETURN item (, item)*
-        _ = try self.expect(.RETURN);
-        const distinct = if (self.cur.kind == .DISTINCT) blk: {
+        // RETURN item (, item)* (now after SET/REMOVE, optional if SET/REMOVE present)
+        var return_clause: ast.ReturnClause = undefined;
+        if (self.cur.kind == .RETURN) {
             self.advance();
-            break :blk true;
-        } else false;
-        var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-        try self.parseProjectionItems(&items);
-
-        // Allow GROUP BY (and optional HAVING) after RETURN as well
-        if (self.cur.kind == .GROUP) {
-            self.advance();
-            _ = try self.expect(.BY);
-            var keys_list2 = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-            while (true) {
-                try keys_list2.append(self.arena.allocator(), try self.parseOrExpr());
-                if (self.cur.kind != .comma) break;
+            const distinct = if (self.cur.kind == .DISTINCT) blk: {
                 self.advance();
-            }
-            group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
-            if (self.cur.kind == .HAVING) {
+                break :blk true;
+            } else false;
+            var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&items);
+            return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
+            
+            // Allow GROUP BY (and optional HAVING) after RETURN as well
+            if (self.cur.kind == .GROUP) {
                 self.advance();
-                having_expr = try self.parseOrExpr();
+                _ = try self.expect(.BY);
+                var keys_list2 = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                while (true) {
+                    try keys_list2.append(self.arena.allocator(), try self.parseOrExpr());
+                    if (self.cur.kind != .comma) break;
+                    self.advance();
+                }
+                group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
+                if (self.cur.kind == .HAVING) {
+                    self.advance();
+                    having_expr = try self.parseOrExpr();
+                }
             }
+        } else if (set_clauses.len > 0 or remove_clauses.len > 0) {
+            // SET/REMOVE without RETURN - create empty return clause
+            return_clause = .{ .items = &.{}, .distinct = false };
+        } else {
+            // No SET/REMOVE and no RETURN - error
+            _ = try self.expect(.RETURN);
+            unreachable;
         }
 
         var ord: ?ast.OrderBy = null;
@@ -661,7 +690,7 @@ pub const Parser = struct {
                 return error.UnexpectedToken;
             }
             // Check if it's an ordinal
-            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, items.items.len)) {
+            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_clause.items.len)) {
                 self.has_ordinal_sort_key = true;
             }
             var desc1 = false;
@@ -692,7 +721,7 @@ pub const Parser = struct {
                     return error.UnexpectedToken;
                 }
                 // Check if it's an ordinal
-                if (exprk == .Int and self.isValidOrdinal(exprk.Int, items.items.len)) {
+                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_clause.items.len)) {
                     self.has_ordinal_sort_key = true;
                 }
                 var d = false;
@@ -769,10 +798,11 @@ pub const Parser = struct {
             .remove_clauses = remove_clauses,
             .group_by = group_by,
             .having = having_expr,
-            .ret = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct },
+            .ret = return_clause,
             .order_by = ord,
             .limit = limit,
             .offset = offset,
+            .path_variable = path_variable,
         };
     }
     fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {
@@ -1142,8 +1172,13 @@ pub const Parser = struct {
 
     fn parseAddExpr(self: *Parser) ParserError!ast.Expr {
         var left = try self.parseMulExpr();
-        while (self.cur.kind == .plus or self.cur.kind == .minus) {
-            const op = if (self.cur.kind == .plus) ast.BinOp.Add else ast.BinOp.Sub;
+        while (self.cur.kind == .plus or self.cur.kind == .minus or self.cur.kind == .concat) {
+            const op = switch (self.cur.kind) {
+                .plus => ast.BinOp.Add,
+                .minus => ast.BinOp.Sub,
+                .concat => ast.BinOp.Concat,
+                else => unreachable,
+            };
             self.advance();
             const right = try self.parseMulExpr();
             left = try self.makeBinary(op, left, right);
@@ -1329,7 +1364,7 @@ pub const Parser = struct {
                 const wh_slice = try whens.toOwnedSlice(self.arena.allocator());
                 break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
             },
-            .identifier, .EXISTS => blk: {
+            .identifier, .EXISTS, .COUNT, .SUM, .AVG, .MIN, .MAX, .VALUE, .TYPE, .LAST, .REPLACE => blk: {
                 const tkn = self.cur;
                 self.advance();
                 // Create CNF representation for identifiers
@@ -1674,7 +1709,7 @@ pub const Parser = struct {
 
     // Parse DELETE statement
     fn parseDeleteStatement(self: *Parser) ParserError!ast.Statement {
-        const detach = if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "DETACH")) blk: {
+        const detach = if (self.cur.kind == .DETACH) blk: {
             self.advance();
             break :blk true;
         } else false;
@@ -2124,6 +2159,59 @@ pub const Parser = struct {
             .path = path,
             .timestamp = timestamp,
             .verify_only = verify_only,
+        } };
+    }
+
+    // Parse SET SESSION statement
+    fn parseSetSessionStatement(self: *Parser) ParserError!ast.Statement {
+        self.advance(); // consume SET
+        _ = try self.expect(.SESSION);
+        
+        // Expect property name (currently only GRAPH is supported)
+        const property = if (self.cur.kind == .GRAPH) blk: {
+            self.advance();
+            break :blk "GRAPH";
+        } else {
+            return error.UnexpectedToken;
+        };
+        
+        _ = try self.expect(.eq); // expect '='
+        
+        // Expect value (string literal or identifier)
+        const value = if (self.cur.kind == .string_lit or self.cur.kind == .identifier) blk: {
+            const val = self.cur.lexeme;
+            self.advance();
+            break :blk val;
+        } else {
+            return error.UnexpectedToken;
+        };
+        
+        return .{ .SessionSet = .{
+            .property = property,
+            .value = value,
+        } };
+    }
+
+    // Parse USE GRAPH statement
+    fn parseUseStatement(self: *Parser) ParserError!ast.Statement {
+        self.advance(); // consume USE
+        
+        // Optional GRAPH keyword
+        if (self.cur.kind == .GRAPH) {
+            self.advance();
+        }
+        
+        // Expect graph name (identifier or string literal)
+        const graph_name = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
+            const name = self.cur.lexeme;
+            self.advance();
+            break :blk name;
+        } else {
+            return error.UnexpectedToken;
+        };
+        
+        return .{ .UseGraph = .{
+            .graph_name = graph_name,
         } };
     }
 };

@@ -133,6 +133,47 @@ pub const TokenKind = enum {
     END_NODE,
     TYPE,
     TYPES,
+    
+    // Critical missing ISO GQL keywords (avoiding duplicates)
+    ACYCLIC,
+    AGGREGATE,
+    ANY,
+    AVG,
+    CATALOG,
+    CAST,
+    CONSTRAINT,
+    COUNT,
+    CURRENT,
+    DIFFERENT,
+    DURATION,
+    EDGES,
+    ELEMENT,
+    FINISH,
+    HOME,
+    LABELED,
+    LIKE,
+    LIST,
+    LOCAL,
+    MAX,
+    MIN,
+    NEXT,
+    NODE,
+    OF,
+    OTHERWISE,
+    PATH,
+    PATHS,
+    RECORD,
+    REPEATABLE,
+    REPLACE,
+    SCHEMA,
+    SHORTEST,
+    SIMPLE,
+    SUM,
+    TABLE,
+    TRAIL,
+    WALK,
+    XOR,
+    ZONED,
 
     // pattern and string operators (extras)
     regex_match, // =~
@@ -268,6 +309,47 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "END_NODE")) return .END_NODE;
     if (std.ascii.eqlIgnoreCase(word, "TYPE")) return .TYPE;
     if (std.ascii.eqlIgnoreCase(word, "TYPES")) return .TYPES;
+    
+    // Critical missing ISO GQL keywords (avoiding duplicates)
+    if (std.ascii.eqlIgnoreCase(word, "ACYCLIC")) return .ACYCLIC;
+    if (std.ascii.eqlIgnoreCase(word, "AGGREGATE")) return .AGGREGATE;
+    if (std.ascii.eqlIgnoreCase(word, "ANY")) return .ANY;
+    if (std.ascii.eqlIgnoreCase(word, "AVG")) return .AVG;
+    if (std.ascii.eqlIgnoreCase(word, "CATALOG")) return .CATALOG;
+    if (std.ascii.eqlIgnoreCase(word, "CAST")) return .CAST;
+    if (std.ascii.eqlIgnoreCase(word, "CONSTRAINT")) return .CONSTRAINT;
+    if (std.ascii.eqlIgnoreCase(word, "COUNT")) return .COUNT;
+    if (std.ascii.eqlIgnoreCase(word, "CURRENT")) return .CURRENT;
+    if (std.ascii.eqlIgnoreCase(word, "DIFFERENT")) return .DIFFERENT;
+    if (std.ascii.eqlIgnoreCase(word, "DURATION")) return .DURATION;
+    if (std.ascii.eqlIgnoreCase(word, "EDGES")) return .EDGES;
+    if (std.ascii.eqlIgnoreCase(word, "ELEMENT")) return .ELEMENT;
+    if (std.ascii.eqlIgnoreCase(word, "FINISH")) return .FINISH;
+    if (std.ascii.eqlIgnoreCase(word, "HOME")) return .HOME;
+    if (std.ascii.eqlIgnoreCase(word, "LABELED")) return .LABELED;
+    if (std.ascii.eqlIgnoreCase(word, "LIKE")) return .LIKE;
+    if (std.ascii.eqlIgnoreCase(word, "LIST")) return .LIST;
+    if (std.ascii.eqlIgnoreCase(word, "MAX")) return .MAX;
+    if (std.ascii.eqlIgnoreCase(word, "MIN")) return .MIN;
+    if (std.ascii.eqlIgnoreCase(word, "NEXT")) return .NEXT;
+    if (std.ascii.eqlIgnoreCase(word, "NODE")) return .NODE;
+    if (std.ascii.eqlIgnoreCase(word, "OF")) return .OF;
+    if (std.ascii.eqlIgnoreCase(word, "OTHERWISE")) return .OTHERWISE;
+    if (std.ascii.eqlIgnoreCase(word, "PATH")) return .PATH;
+    if (std.ascii.eqlIgnoreCase(word, "PATHS")) return .PATHS;
+    if (std.ascii.eqlIgnoreCase(word, "RECORD")) return .RECORD;
+    if (std.ascii.eqlIgnoreCase(word, "REPEATABLE")) return .REPEATABLE;
+    if (std.ascii.eqlIgnoreCase(word, "REPLACE")) return .REPLACE;
+    if (std.ascii.eqlIgnoreCase(word, "SCHEMA")) return .SCHEMA;
+    if (std.ascii.eqlIgnoreCase(word, "SHORTEST")) return .SHORTEST;
+    if (std.ascii.eqlIgnoreCase(word, "SIMPLE")) return .SIMPLE;
+    if (std.ascii.eqlIgnoreCase(word, "SUM")) return .SUM;
+    if (std.ascii.eqlIgnoreCase(word, "TABLE")) return .TABLE;
+    if (std.ascii.eqlIgnoreCase(word, "TRAIL")) return .TRAIL;
+    if (std.ascii.eqlIgnoreCase(word, "WALK")) return .WALK;
+    if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
+    if (std.ascii.eqlIgnoreCase(word, "ZONED")) return .ZONED;
+    
     // Temporal keywords
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
