@@ -101,6 +101,7 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("temperature", &constructTemperature);
     try registry.put("pressure", &constructPressure);
     try registry.put("vector", &constructVector);
+    try registry.put("vectorf32", &constructVectorF32);
 
     // IP/CIDR functions
     try registry.put("ip_contains", &ipContains);
@@ -548,6 +549,20 @@ fn constructVector(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
 
     return .{ .VectorF32 = .{ .dim = @intCast(list.len), .data = data } };
 }
+
+fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 1) return error.InvalidArgs;
+    if (args[0] != .Str) return error.TypeMismatch;
+
+    const text = args[0].Str;
+    
+    // Use the evaluator_functions implementation
+    const eval_funcs = @import("types/evaluator_functions.zig");
+    const result = eval_funcs.VectorF32(allocator, text) catch return error.InvalidFormat;
+    
+    return .{ .VectorF32 = result.VectorF32 };
+}
+
 
 // IP/CIDR functions
 fn ipContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {

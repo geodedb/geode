@@ -256,6 +256,11 @@ pub const IndexType = enum {
     fulltext,
     spatial,
     vector,
+    // Advanced type indexes
+    vector_f32,
+    spatial_geographic,
+    network_cidr,
+    signature_crypto,
 };
 
 // Backup and restore statements

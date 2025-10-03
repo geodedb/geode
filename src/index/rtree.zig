@@ -55,8 +55,8 @@ pub const RTreeNode = struct {
         };
     }
 
-    pub fn deinit(self: *RTreeNode) void {
-        self.entries.deinit();
+    pub fn deinit(self: *RTreeNode, allocator: std.mem.Allocator) void {
+        self.entries.deinit(allocator);
     }
 
     pub fn computeMBR(self: *const RTreeNode) ?MBR {
@@ -101,7 +101,7 @@ pub const RTree = struct {
                 }
             }
         }
-        node.deinit();
+        node.deinit(self.allocator);
         self.allocator.destroy(node);
     }
 

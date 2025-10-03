@@ -231,8 +231,25 @@ pub fn nodeScan(
     return results.toOwnedSlice(allocator);
 }
 
+// Index-aware node scan - uses index optimizer to choose between sequential and index scans
+pub fn indexAwareNodeScan(
+    _: std.mem.Allocator,
+    graph: *const GraphStorage,
+    index_optimizer: *@import("../index_optimizer.zig").IndexOptimizer,
+    labels: []const []const u8,
+    var_name: ?[]const u8,
+    prop_key: ?[]const u8,
+    prop_val: ?PropertyValue,
+) ![]Binding {
+    // Get optimized scan plan
+    const plan = index_optimizer.optimizeNodeScan(labels, var_name, prop_key, prop_val);
+    
+    // Execute the optimized plan
+    return index_optimizer.executeOptimizedScan(graph, plan, labels, var_name, prop_key, prop_val);
+}
+
 // Property equality helper (strict value + variant match)
-fn propertyEquals(a: PropertyValue, b: PropertyValue) bool {
+pub fn propertyEquals(a: PropertyValue, b: PropertyValue) bool {
     return switch (a) {
         .Null => b == .Null,
         .Bool => |av| b == .Bool and b.Bool == av,
@@ -391,6 +408,11 @@ pub fn executeWith(
         for (with_clause.items) |item| {
             const alias = item.alias orelse switch (item.expr) {
                 .Ident => |id| id.orig,
+                .PropertyAccess => |pa| blk: {
+                    // Create alias like "n.name" for property access
+                    const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{pa.object, pa.property}) catch "col";
+                    break :blk combined;
+                },
                 else => "col",
             };
 
@@ -428,6 +450,11 @@ pub fn executeWith(
         for (with_clause.items) |item| {
             const alias = item.alias orelse switch (item.expr) {
                 .Ident => |id| id.orig,
+                .PropertyAccess => |pa| blk: {
+                    // Create alias like "n.name" for property access
+                    const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{pa.object, pa.property}) catch "col";
+                    break :blk combined;
+                },
                 else => "col",
             };
 
@@ -555,6 +582,19 @@ pub fn executeMatch(
     opts_opt: ?MatchOptions,
     eval_diag: ?*geode.diagnostics.Code,
 ) ![]Binding {
+    return executeMatchWithOptimizer(allocator, graph, pattern, where_clause, opts_opt, eval_diag, null);
+}
+
+// Enhanced executeMatch with optional index optimizer
+pub fn executeMatchWithOptimizer(
+    allocator: std.mem.Allocator,
+    graph: *const GraphStorage,
+    pattern: ast.GraphPattern,
+    where_clause: ?ast.Expr,
+    opts_opt: ?MatchOptions,
+    eval_diag: ?*geode.diagnostics.Code,
+    index_optimizer: ?*@import("../index_optimizer.zig").IndexOptimizer,
+) ![]Binding {
     const opts: MatchOptions = opts_opt orelse .{};
     // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=EngineGuardInit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
     if (pattern.chains.len == 0) {
@@ -582,10 +622,22 @@ pub fn executeMatch(
                         prop_val = exprToPropertyValue(p.value.*) catch null;
                     }
                 }
-                chain_bindings = try nodeScan(allocator, graph, head_np.labels, head_np.name, prop_key, prop_val);
+                if (index_optimizer) |optimizer| {
+                    chain_bindings = try indexAwareNodeScan(allocator, graph, optimizer, head_np.labels, head_np.name, prop_key, prop_val);
+                } else if (@import("../index_optimizer.zig").getGlobalOptimizer()) |global_optimizer| {
+                    chain_bindings = try indexAwareNodeScan(allocator, graph, global_optimizer, head_np.labels, head_np.name, prop_key, prop_val);
+                } else {
+                    chain_bindings = try nodeScan(allocator, graph, head_np.labels, head_np.name, prop_key, prop_val);
+                }
             } else {
                 // No head info: scan all nodes without binding a name
-                chain_bindings = try nodeScan(allocator, graph, &.{}, null, null, null);
+                if (index_optimizer) |optimizer| {
+                    chain_bindings = try indexAwareNodeScan(allocator, graph, optimizer, &.{}, null, null, null);
+                } else if (@import("../index_optimizer.zig").getGlobalOptimizer()) |global_optimizer| {
+                    chain_bindings = try indexAwareNodeScan(allocator, graph, global_optimizer, &.{}, null, null, null);
+                } else {
+                    chain_bindings = try nodeScan(allocator, graph, &.{}, null, null, null);
+                }
             }
             // Attach chain result to current_bindings context
             if (chain_idx == 0) {
@@ -976,7 +1028,15 @@ pub fn bindingsToJson(
 
         for (return_items, 0..) |item, i| {
             if (i > 0) try writer.writeAll(",");
-            const alias = item.alias orelse "col";
+            const alias = item.alias orelse switch (item.expr) {
+                .Ident => |id| id.orig,
+                .PropertyAccess => |pa| blk: {
+                    // Create alias like "n.name" for property access
+                    const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{pa.object, pa.property}) catch "col";
+                    break :blk combined;
+                },
+                else => "col",
+            };
             try writer.print("\"{s}\":", .{alias});
 
             switch (item.expr) {
@@ -1018,7 +1078,15 @@ pub fn bindingsToJson(
         for (return_items, 0..) |item, i| {
             if (i > 0) try writer.writeAll(",");
 
-            const alias = item.alias orelse "col";
+            const alias = item.alias orelse switch (item.expr) {
+                .Ident => |id| id.orig,
+                .PropertyAccess => |pa| blk: {
+                    // Create alias like "n.name" for property access
+                    const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{pa.object, pa.property}) catch "col";
+                    break :blk combined;
+                },
+                else => "col",
+            };
             try writer.print("\"{s}\":", .{alias});
 
             // Evaluate return expression in binding context

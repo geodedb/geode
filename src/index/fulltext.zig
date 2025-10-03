@@ -151,10 +151,10 @@ pub const FullTextIndex = struct {
         }
 
         // Convert to results
-        var results = std.ArrayList(SearchResult){};
+        var results = std.ArrayList(SearchResult).init(self.allocator);
         var score_it = scores.iterator();
         while (score_it.next()) |entry| {
-            try results.append(.{
+            try results.append(self.allocator, .{
                 .doc_id = entry.key_ptr.*,
                 .score = entry.value_ptr.*,
                 .highlights = &[_]Highlight{},
@@ -189,7 +189,7 @@ pub const FullTextIndex = struct {
             while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
 
             if (i > start) {
-                try tokens.append(.{
+                try tokens.append(self.allocator, .{
                     .text = text[start..i],
                     .position = tokens.items.len,
                     .offset = start,
@@ -198,7 +198,7 @@ pub const FullTextIndex = struct {
             }
         }
 
-        return tokens.toOwnedSlice();
+        return tokens.toOwnedSlice(self.allocator);
     }
 
     fn normalize(self: *FullTextIndex, text: []const u8) ![]u8 {
@@ -259,7 +259,7 @@ pub const FullTextIndex = struct {
         defer {
             var it = term_positions.iterator();
             while (it.next()) |entry| {
-                entry.value_ptr.deinit();
+                entry.value_ptr.deinit(self.allocator);
             }
             term_positions.deinit();
         }
@@ -271,7 +271,7 @@ pub const FullTextIndex = struct {
             const normalized = try self.normalize(token.text);
 
             var positions = term_positions.get(normalized) orelse try std.ArrayList(usize).initCapacity(self.allocator, 0);
-            try positions.append(pos);
+            try positions.append(self.allocator, pos);
             try term_positions.put(normalized, positions);
         }
 
@@ -301,7 +301,7 @@ pub const FullTextIndex = struct {
 
             // Append to documents array
             var new_docs = try self.allocator.alloc(PostingEntry, posting_list.documents.len + 1);
-            std.mem.copy(PostingEntry, new_docs[0..posting_list.documents.len], posting_list.documents);
+            @memcpy(new_docs[0..posting_list.documents.len], posting_list.documents);
             new_docs[posting_list.documents.len] = posting;
 
             if (posting_list.documents.len > 0) {
@@ -336,7 +336,7 @@ pub const FullTextIndex = struct {
             var new_docs = try std.ArrayList(PostingEntry).initCapacity(self.allocator, 0);
             for (posting_list.documents) |posting| {
                 if (posting.doc_id != doc_id) {
-                    try new_docs.append(posting);
+                    try new_docs.append(self.allocator, posting);
                 } else {
                     self.allocator.free(posting.positions);
                 }
@@ -345,7 +345,7 @@ pub const FullTextIndex = struct {
             if (posting_list.documents.len > 0) {
                 self.allocator.free(posting_list.documents);
             }
-            posting_list.documents = new_docs.toOwnedSlice();
+            posting_list.documents = new_docs.toOwnedSlice(self.allocator);
         }
 
         // Update IDF scores

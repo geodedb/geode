@@ -93,6 +93,9 @@ pub const types = struct {
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
     pub const int256 = @import("types/i256.zig");
     pub const hash = @import("types/hash.zig");
+    pub const vector = @import("types/vector.zig");
+    pub const geographic = @import("types/geographic.zig");
+    pub const cryptographic = @import("types/cryptographic.zig");
 };
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
@@ -127,6 +130,9 @@ pub const index = struct {
     pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
     pub const fulltext = @import("index/fulltext.zig");
     pub const IndexManager = @import("index/index_manager.zig").IndexManager;
+    pub const vector_index = @import("index/vector_index.zig");
+    pub const spatial_index = @import("index/spatial_index.zig");
+    pub const advanced_types_index = @import("index/advanced_types_index.zig");
 };
 
 // Re-export wire protocol definitions for tests/benchmarks needing Value / frame types

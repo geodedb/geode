@@ -18,8 +18,8 @@ pub const PatriciaNode = struct {
         };
     }
 
-    pub fn deinit(self: *PatriciaNode) void {
-        self.payload.deinit();
+    pub fn deinit(self: *PatriciaNode, allocator: std.mem.Allocator) void {
+        self.payload.deinit(allocator);
     }
 };
 
@@ -55,7 +55,7 @@ pub const PatriciaTrie = struct {
     fn deinitNode(self: *PatriciaTrie, node: *PatriciaNode) void {
         if (node.child0) |child| self.deinitNode(child);
         if (node.child1) |child| self.deinitNode(child);
-        node.deinit();
+        node.deinit(self.allocator);
         self.allocator.destroy(node);
     }
 

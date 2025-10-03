@@ -48,6 +48,12 @@ const _canary_closeness = @import("canary_closeness.zig");
 const _benchmark_closeness = @import("benchmark_closeness.zig");
 const _benchmark_grey_cardinal = @import("benchmark_grey_cardinal.zig");
 const _benchmark_grey_cardinal_variance = @import("benchmark_grey_cardinal_variance.zig");
+
+// GQL Regression Tests
+const _gql_keyword_regression = @import("gql_keyword_regression_test.zig");
+const _gql_compliance_regression = @import("gql_compliance_regression_test.zig");
+const _network_types_regression = @import("network_types_regression_test.zig");
+const _advanced_types_regression = @import("advanced_types_regression_test.zig");
 const _canary_freshness_guard = @import("canary_freshness_guard.zig");
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");

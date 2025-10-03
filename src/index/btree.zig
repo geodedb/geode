@@ -556,7 +556,11 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
                 if (a > b) return 1;
                 return 0;
             } else if (@TypeOf(a) == []const u8) {
-                return @as(i8, @intCast(std.mem.order(u8, a, b).value()));
+                return switch (std.mem.order(u8, a, b)) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                };
             } else {
                 @compileError("Unsupported key type");
             }
@@ -588,15 +592,35 @@ pub fn BTree(comptime Key: type, comptime Value: type, comptime order: usize) ty
                     if (a_scaled.coeff > b_scaled.coeff) return 1;
                     return 0;
                 },
-                .Str => |av| @as(i8, @intCast(std.mem.order(u8, av, b.Str).value())),
-                .Text => |av| @as(i8, @intCast(std.mem.order(u8, av, b.Text).value())),
-                .Char => |av| @as(i8, @intCast(std.mem.order(u8, av.data, b.Char.data).value())),
-                .Varchar => |av| @as(i8, @intCast(std.mem.order(u8, av.data, b.Varchar.data).value())),
+                .Str => |av| switch (std.mem.order(u8, av, b.Str)) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                },
+                .Text => |av| switch (std.mem.order(u8, av, b.Text)) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                },
+                .Char => |av| switch (std.mem.order(u8, av.data, b.Char.data)) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                },
+                .Varchar => |av| switch (std.mem.order(u8, av.data, b.Varchar.data)) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                },
                 .Date => |av| if (av.days_since_epoch < b.Date.days_since_epoch) -1 else if (av.days_since_epoch > b.Date.days_since_epoch) 1 else 0,
                 .Time => |av| if (av.micros_since_midnight < b.Time.micros_since_midnight) -1 else if (av.micros_since_midnight > b.Time.micros_since_midnight) 1 else 0,
                 .Timestamp => |av| if (av.micros_since_epoch < b.Timestamp.micros_since_epoch) -1 else if (av.micros_since_epoch > b.Timestamp.micros_since_epoch) 1 else 0,
                 .TimestampTZ => |av| if (av.micros_since_epoch_utc < b.TimestampTZ.micros_since_epoch_utc) -1 else if (av.micros_since_epoch_utc > b.TimestampTZ.micros_since_epoch_utc) 1 else 0,
-                .UUID => |av| @as(i8, @intCast(std.mem.order(u8, &av.bytes, &b.UUID.bytes).value())),
+                .UUID => |av| switch (std.mem.order(u8, &av.bytes, &b.UUID.bytes)) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                },
                 .Enum => |av| if (av.value_ordinal < b.Enum.value_ordinal) -1 else if (av.value_ordinal > b.Enum.value_ordinal) 1 else 0,
                 .Url, .Domain, .Xml, .Json, .Jsonb, .Array, .BitString, .VarBit, .IntRange => 0, // Simplified for now
                 else => 0,

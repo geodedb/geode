@@ -80,6 +80,9 @@ const ServerState = struct {
 
     // Index manager for managing database indexes
     index_manager_ptr: ?*anyopaque = null,
+    
+    // Index optimizer for query planning
+    index_optimizer_ptr: ?*anyopaque = null,
 
     // Backup manager for backup/restore operations
     backup_manager: ?*anyopaque = null,
@@ -4583,7 +4586,26 @@ pub fn main() !void {
                                 var ci: usize = 0;
                                 while (ci < u_stmt.first.ret.items.len) : (ci += 1) {
                                     const it = u_stmt.first.ret.items[ci];
-                                    dummy_cols[ci] = .{ .name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col", .type = "INT" }; // heuristic
+                                    // Infer type from first query branch if we have data
+                                    var col_type: []const u8 = "MIXED";
+                                    if (rows.len > 0) {
+                                        // Parse first row to get column type
+                                        if (std.json.parseFromSlice(std.json.Value, gpa, rows[0], .{})) |parsed| {
+                                            defer parsed.deinit();
+                                            const col_name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col";
+                                            if (parsed.value.object.get(col_name)) |first_val| {
+                                                col_type = switch (first_val) {
+                                                    .string => "STRING",
+                                                    .integer => "INT", 
+                                                    .float => "DECIMAL",
+                                                    .bool => "BOOL",
+                                                    .null => "NULL",
+                                                    else => "MIXED",
+                                                };
+                                            }
+                                        } else |_| {}
+                                    }
+                                    dummy_cols[ci] = .{ .name = it.alias orelse geode.printer.stringifyExprAlloc(gpa, it.expr, .{}) catch "col", .type = col_type };
                                 }
                                 state.last_columns = dummy_cols;
                                 state.last_ordered = false;
@@ -5025,6 +5047,28 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
     return response.toOwnedSlice(allocator);
 }
 
+// Helper function to get or create index optimizer
+fn getOrCreateIndexOptimizer(allocator: std.mem.Allocator, state: *ServerState) !*@import("index_optimizer.zig").IndexOptimizer {
+    if (state.index_optimizer_ptr == null) {
+        // Ensure index manager exists first
+        if (state.index_manager_ptr == null) {
+            const idx_mgr = allocator.create(geode.index.IndexManager) catch return error.OutOfMemory;
+            idx_mgr.* = geode.index.IndexManager.init(allocator);
+            state.index_manager_ptr = idx_mgr;
+        }
+        
+        const idx_mgr: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
+        const optimizer = allocator.create(@import("index_optimizer.zig").IndexOptimizer) catch return error.OutOfMemory;
+        optimizer.* = @import("index_optimizer.zig").IndexOptimizer.init(allocator, idx_mgr);
+        state.index_optimizer_ptr = optimizer;
+        
+        // Set as global optimizer for access from execution engine
+        @import("index_optimizer.zig").setGlobalOptimizer(optimizer);
+    }
+    
+    return @ptrCast(@alignCast(state.index_optimizer_ptr.?));
+}
+
 // Helper function to convert AST expression to property value
 fn evalExprToPropertyValue(_: std.mem.Allocator, expr: geode.ast.Expr) graph_exec.PropertyValue {
     return switch (expr) {
@@ -5043,6 +5087,17 @@ test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
     try expect(!paginationStreamScaffold(10, 0));
     try expect(!paginationStreamScaffold(5, 10));
     try expect(paginationStreamScaffold(11, 10));
+}
+
+/// Convert a property value to a string key suitable for indexing
+fn propertyValueToIndexKey(allocator: std.mem.Allocator, value: graph_exec.PropertyValue) ![]u8 {
+    switch (value) {
+        .String => |s| return allocator.dupe(u8, s),
+        .Int => |i| return std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .Bool => |b| return allocator.dupe(u8, if (b) "true" else "false"),
+        .Null => return allocator.dupe(u8, "null"),
+        .Decimal => |d| return std.fmt.allocPrint(allocator, "{d}", .{d.coeff}),
+    }
 }
 
 fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateIndexStatement) ![]const u8 {
@@ -5069,24 +5124,107 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         .fulltext => geode.index.IndexManager.IndexType.fulltext,
         .spatial => geode.index.IndexManager.IndexType.spatial,
         .vector => geode.index.IndexManager.IndexType.vector,
+        // Advanced type indexes
+        .vector_f32 => geode.index.IndexManager.IndexType.vector_f32,
+        .spatial_geographic => geode.index.IndexManager.IndexType.spatial_geographic,
+        .network_cidr => geode.index.IndexManager.IndexType.network_cidr,
+        .signature_crypto => geode.index.IndexManager.IndexType.signature_crypto,
     };
 
-    // Create the index based on number of properties
-    if (stmt.properties.len == 1) {
-        // Single property index
-        try index_manager.createPropertyIndex(stmt.name, stmt.label, stmt.properties[0], index_type, stmt.unique);
-    } else if (stmt.properties.len > 1) {
-        // Composite index
-        try index_manager.createCompositeIndex(stmt.name, stmt.label, stmt.properties, stmt.unique);
-    } else {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Index must have at least one property\"}}\n", .{});
+    // Create the index based on type and number of properties
+    switch (index_type) {
+        .vector_f32 => {
+            // Vector indexes require dimension parameter (default 128 for now)
+            try index_manager.createAdvancedVectorIndex(stmt.name, 128, .l2);
+        },
+        .spatial_geographic => {
+            // Geographic spatial indexes
+            try index_manager.createAdvancedSpatialIndex(stmt.name);
+        },
+        .network_cidr => {
+            // Network/CIDR indexes
+            try index_manager.createAdvancedNetworkIndex(stmt.name);
+        },
+        .signature_crypto => {
+            // Cryptographic signature indexes
+            try index_manager.createAdvancedSignatureIndex(stmt.name);
+        },
+        else => {
+            // Traditional index types
+            if (stmt.properties.len == 1) {
+                // Single property index
+                try index_manager.createPropertyIndex(stmt.name, stmt.label, stmt.properties[0], index_type, stmt.unique);
+            } else if (stmt.properties.len > 1) {
+                // Composite index
+                try index_manager.createCompositeIndex(stmt.name, stmt.label, stmt.properties, stmt.unique);
+            } else {
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Index must have at least one property\"}}\n", .{});
+            }
+        },
     }
 
-    // TODO: Populate index with existing data
-    // This would involve scanning all nodes with the given label
-    // and adding their property values to the index
+    // Populate index with existing data
+    // Scan all nodes with the given label and add their property values to the index
+    const graph = getOrCreateGraphStorage(allocator);
+    
+    var population_count: u32 = 0;
+    
+    // Iterate through all nodes to find matching labels
+    var node_iterator = graph.nodes.iterator();
+    while (node_iterator.next()) |entry| {
+        const node_id = entry.key_ptr.*;
+        const node = entry.value_ptr;
+        
+        // Check if node has the required label
+        var has_label = false;
+        for (node.labels) |label| {
+            if (std.mem.eql(u8, label, stmt.label)) {
+                has_label = true;
+                break;
+            }
+        }
+        
+        if (has_label) {
+            // Extract property values for this node
+            for (stmt.properties) |prop_name| {
+                if (node.properties.get(prop_name)) |prop_value| {
+                    // Add to index based on type
+                    switch (index_type) {
+                        .btree, .hash => {
+                            // Add to property index
+                            const index_key = propertyValueToIndexKey(allocator, prop_value) catch continue;
+                            defer allocator.free(index_key);
+                            _ = index_manager.insertIntoPropertyIndex(stmt.name, index_key, node_id) catch {};
+                            population_count += 1;
+                        },
+                        .fulltext => {
+                            // Add to fulltext index if property is text
+                            if (prop_value == .String) {
+                                if (index_manager.fulltext_indexes.getPtr(stmt.name)) |ft_idx| {
+                                    _ = ft_idx.*.indexDocument(node_id, prop_value.String) catch {};
+                                    population_count += 1;
+                                }
+                            }
+                        },
+                        .spatial => {
+                            // Spatial indexes would need coordinate parsing
+                            // Skip for now as they require specific coordinate format
+                        },
+                        .vector, .vector_f32 => {
+                            // Vector indexes would need vector data parsing
+                            // Skip for now as they require specific vector format
+                        },
+                        else => {
+                            // Advanced indexes would need specialized population logic
+                            // Skip for now as they require type-specific handling
+                        },
+                    }
+                }
+            }
+        }
+    }
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} created successfully\"}}\n", .{stmt.name});
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} created successfully, populated with {d} entries\"}}\n", .{ stmt.name, population_count });
 }
 
 fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropIndexStatement) ![]const u8 {
@@ -5123,6 +5261,20 @@ fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, 
     if (!found and index_manager.fulltext_indexes.contains(stmt.name)) {
         _ = index_manager.fulltext_indexes.remove(stmt.name);
         found = true;
+    }
+    
+    // Check advanced type indexes
+    if (!found) {
+        // Try dropping each advanced index type
+        if (index_manager.dropAdvancedIndex(stmt.name, .vector_f32) catch false) {
+            found = true;
+        } else if (index_manager.dropAdvancedIndex(stmt.name, .spatial_geographic) catch false) {
+            found = true;
+        } else if (index_manager.dropAdvancedIndex(stmt.name, .network_cidr) catch false) {
+            found = true;
+        } else if (index_manager.dropAdvancedIndex(stmt.name, .signature_crypto) catch false) {
+            found = true;
+        }
     }
 
     if (!found) {

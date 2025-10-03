@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("gql/ast.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
+const heap = @import("storage/heap.zig");
 
 pub const EvalError = error{
     TypeMismatch,
@@ -550,7 +551,68 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             const p = try evalExpr(ally, rm.pattern.*, env);
             return try evalRegex(v, p, ally);
         },
-        .Call => |_| Value{ .Null = {} },
+        .Call => |call| blk_call: {
+            // Extract function name from callee (should be an Ident expression)
+            const function_name = switch (call.callee.*) {
+                .Ident => |ident| ident.orig,
+                else => break :blk_call .{ .Null = {} }, // Not a simple function call
+            };
+            
+            // Try to use the extended function registry for advanced type functions
+            const eval_ext = @import("eval_extended.zig");
+            
+            // Initialize registry
+            var registry = eval_ext.initFunctionRegistry(ally) catch {
+                break :blk_call .{ .Null = {} };
+            };
+            defer registry.deinit();
+            
+            // Convert function name to lowercase for lookup
+            var lowercase_name = ally.alloc(u8, function_name.len) catch {
+                break :blk_call .{ .Null = {} };
+            };
+            defer ally.free(lowercase_name);
+            
+            for (function_name, 0..) |c, i| {
+                lowercase_name[i] = std.ascii.toLower(c);
+            }
+            
+            // Look up function in extended registry
+            if (registry.get(lowercase_name)) |func| {
+                // Convert arguments from AST to ExtValue
+                var args = ally.alloc(eval_ext.ExtValue, call.args.len) catch {
+                    break :blk_call .{ .Null = {} };
+                };
+                defer ally.free(args);
+                
+                for (call.args, 0..) |arg, i| {
+                    const arg_value = evalExpr(ally, arg.*, env) catch {
+                        break :blk_call .{ .Null = {} };
+                    };
+                    args[i] = valueToExtValue(arg_value);
+                }
+                
+                // Call the extended function
+                const result = func(ally, args) catch {
+                    break :blk_call .{ .Null = {} };
+                };
+                
+                // Convert result back to eval.Value
+                break :blk_call extValueToValue(result);
+            }
+            
+            // Try basic built-in functions if not found in extended registry
+            const result = tryBasicFunction(ally, lowercase_name, call.args, env) catch {
+                break :blk_call .{ .Null = {} };
+            };
+            
+            if (result) |val| {
+                break :blk_call val;
+            }
+            
+            // Function not found, return null
+            break :blk_call .{ .Null = {} };
+        },
         .In => |iv| {
             const v = try evalExpr(ally, iv.value.*, env);
             return try inList(v, iv.set, ally, env);
@@ -567,6 +629,18 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             const v = try evalExpr(ally, nz.target.*, env);
             const is_null = isNull(v);
             break :blk_isnull .{ .Bool = if (nz.negated) !is_null else is_null };
+        },
+        .PropertyAccess => |pa| blk_property: {
+            // Property access like n.name
+            // First, get the object from the environment
+            const _object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
+            _ = _object; // Suppress unused variable warning
+            
+            // Try to extract the property value from the object
+            // For now, this is a simplified implementation
+            // In a full implementation, this would access the object's properties
+            // from the graph storage system
+            break :blk_property .{ .Null = {} }; // TODO: Implement actual property access
         },
         .Case => |c| {
             // ISO 3VL semantics
@@ -620,6 +694,124 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };
+}
+
+fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
+    return switch (value) {
+        .Null => .{ .Null = {} },
+        .Int => |i| .{ .Int = i },
+        .Bool => |b| .{ .Bool = b },
+        .Str => |s| .{ .Str = s },
+        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+    };
+}
+
+fn extValueToValue(ext_value: @import("eval_extended.zig").ExtValue) Value {
+    return switch (ext_value) {
+        .Null => .{ .Null = {} },
+        .Int => |i| .{ .Int = i },
+        .Bool => |b| .{ .Bool = b },
+        .Str => |s| .{ .Str = s },
+        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        // For now, convert advanced types to strings for display
+        .VectorF32 => |vec| blk: {
+            // Simple string representation for vectors
+            _ = vec;
+            break :blk .{ .Str = "[vector]" };
+        },
+        else => .{ .Str = "[advanced_type]" },
+    };
+}
+
+/// Convert eval.Value to heap.Value for function calls
+fn evalValueToHeapValue(value: Value) heap.Value {
+    return switch (value) {
+        .Null => .{ .Null = {} },
+        .Int => |i| .{ .Int = i },
+        .Bool => |b| .{ .Bool = b },
+        .Str => |s| .{ .Str = s },
+        .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = d.scale } },
+    };
+}
+
+/// Convert heap.Value to eval.Value for function results
+fn heapValueToEvalValue(value: heap.Value) Value {
+    return switch (value) {
+        .Null => .{ .Null = {} },
+        .Int => |i| .{ .Int = i },
+        .Bool => |b| .{ .Bool = b },
+        .Str => |s| .{ .Str = s },
+        .Text => |s| .{ .Str = s },
+        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
+        else => .{ .Null = {} }, // Convert unknown types to null
+    };
+}
+
+/// Try to execute basic built-in functions (length, upper, lower, etc.)
+fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
+    const evaluator_functions = @import("types/evaluator_functions.zig");
+    
+    // Evaluate arguments first
+    if (args.len == 0) return null;
+    
+    const first_arg = try evalExpr(ally, args[0].*, env);
+    const heap_first_arg = evalValueToHeapValue(first_arg);
+    
+    // Handle common string functions
+    if (std.mem.eql(u8, function_name, "length")) {
+        const result = evaluator_functions.length_chars(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "upper")) {
+        const result = evaluator_functions.upper(ally, heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "lower")) {
+        const result = evaluator_functions.lower(ally, heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "trim")) {
+        const result = evaluator_functions.trim(ally, heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "abs")) {
+        const result = evaluator_functions.abs_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "sqrt")) {
+        const result = evaluator_functions.sqrt_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "ceil")) {
+        const result = evaluator_functions.ceil_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "floor")) {
+        const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    }
+    
+    // Handle two-argument functions
+    if (args.len >= 2) {
+        const second_arg = try evalExpr(ally, args[1].*, env);
+        const heap_second_arg = evalValueToHeapValue(second_arg);
+        
+        if (std.mem.eql(u8, function_name, "substring")) {
+            if (args.len >= 3) {
+                const third_arg = try evalExpr(ally, args[2].*, env);
+                const heap_third_arg = evalValueToHeapValue(third_arg);
+                const result = evaluator_functions.substring(ally, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
+                return heapValueToEvalValue(result);
+            } else {
+                // Two-argument substring from start to end
+                const result = evaluator_functions.substring(ally, heap_first_arg, heap_second_arg, null) catch return null;
+                return heapValueToEvalValue(result);
+            }
+        } else if (std.mem.eql(u8, function_name, "replace")) {
+            if (args.len >= 3) {
+                const third_arg = try evalExpr(ally, args[2].*, env);
+                const heap_third_arg = evalValueToHeapValue(third_arg);
+                const result = evaluator_functions.replace(ally, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
+                return heapValueToEvalValue(result);
+            }
+        }
+    }
+    
+    // Function not recognized
+    return null;
 }
 
 fn inList(value: Value, set: []*ast.Expr, ally: std.mem.Allocator, env: Env) EvalError!Value {

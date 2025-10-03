@@ -1741,6 +1741,23 @@ pub const Parser = struct {
         if (std.ascii.eqlIgnoreCase(name, "abs")) {
             return n == 1 and argIsNumericLike(args[0]);
         }
+        // Vector types
+        if (std.ascii.eqlIgnoreCase(name, "VectorF32")) {
+            return n == 1 and argIsStringLike(args[0]);
+        }
+        if (std.ascii.eqlIgnoreCase(name, "VectorI32")) {
+            return n == 1 and argIsStringLike(args[0]);
+        }
+        // Geographic types
+        if (std.ascii.eqlIgnoreCase(name, "LatLon")) {
+            return n == 1 and argIsStringLike(args[0]);
+        }
+        if (std.ascii.eqlIgnoreCase(name, "LatLonAlt")) {
+            return n == 1 and argIsStringLike(args[0]);
+        }
+        if (std.ascii.eqlIgnoreCase(name, "GeoPoint")) {
+            return n == 1 and argIsStringLike(args[0]);
+        }
         if (ts_enabled) {
             // Core time-series functions
             if (std.ascii.eqlIgnoreCase(name, "last_value")) {
@@ -2127,6 +2144,14 @@ pub const Parser = struct {
                     index_type = .spatial;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "vector")) {
                     index_type = .vector;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "vector_f32")) {
+                    index_type = .vector_f32;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial_geographic")) {
+                    index_type = .spatial_geographic;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr")) {
+                    index_type = .network_cidr;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
+                    index_type = .signature_crypto;
                 }
                 self.advance();
             }

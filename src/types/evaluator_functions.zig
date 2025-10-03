@@ -11,12 +11,16 @@ const arrays = @import("arrays.zig");
 const bitstring = @import("bitstring.zig");
 const range = @import("range.zig");
 const network = @import("network.zig");
+const vector = @import("vector.zig");
+const geographic = @import("geographic.zig");
+const cryptographic = @import("cryptographic.zig");
 
 pub const EvaluatorError = error{
     TypeMismatch,
     DivisionByZero,
     Overflow,
     InvalidFormat,
+    InvalidInput,
     OutOfMemory,
     CharLengthExceeded,
     HexFormatError,
@@ -238,6 +242,40 @@ pub fn Vector(allocator: std.mem.Allocator, values: []const f32) EvaluatorError!
     }
     const data = try allocator.dupe(f32, values);
     return Value{ .VectorF32 = .{ .dim = @intCast(values.len), .data = data } };
+}
+
+// Advanced Type Constructors
+pub fn VectorF32(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    const vec = vector.VectorF32.fromString(text, allocator) catch return EvaluatorError.InvalidFormat;
+    return Value{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } };
+}
+
+pub fn VectorI32(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    const vec = vector.VectorI32.fromString(text, allocator) catch return EvaluatorError.InvalidFormat;
+    return Value{ .VectorI32 = .{ .dim = vec.dim, .data = vec.data } };
+}
+
+pub fn LatLonFromString(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    _ = allocator;
+    const coord = geographic.LatLon.fromString(text) catch return EvaluatorError.InvalidFormat;
+    return Value{ .LatLon = .{ .lat = coord.lat, .lon = coord.lon } };
+}
+
+pub fn LatLonAltFromString(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    _ = allocator;
+    const coord = geographic.LatLonAlt.fromString(text) catch return EvaluatorError.InvalidFormat;
+    return Value{ .LatLonAlt = .{ .lat = coord.lat, .lon = coord.lon, .alt = coord.alt } };
+}
+
+pub fn GeoPoint(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    _ = allocator;
+    const point = geographic.GeoPoint.fromString(text) catch return EvaluatorError.InvalidFormat;
+    return Value{ .GeoPoint = point };
+}
+
+pub fn Signature(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
+    const sig = cryptographic.Signature.fromString(text, allocator) catch return EvaluatorError.InvalidFormat;
+    return Value{ .Signature = sig };
 }
 
 // Additional data type constructors
@@ -773,4 +811,134 @@ pub fn range_overlaps(a: Value, b: Value) EvaluatorError!Value {
     };
 
     return Value{ .Bool = range_a.overlaps(range_b) };
+}
+
+// String functions
+pub fn substring(allocator: std.mem.Allocator, text: Value, start: Value, length: ?Value) EvaluatorError!Value {
+    const text_str = switch (text) {
+        .Str => |s| s,
+        .Text => |s| s,
+        .Char => |c| c.data,
+        .Varchar => |v| v.data,
+        else => return EvaluatorError.TypeMismatch,
+    };
+
+    const start_pos = switch (start) {
+        .Int => |i| if (i < 1) return EvaluatorError.IndexOutOfBounds else @as(usize, @intCast(i - 1)),
+        .SmallInt => |i| if (i < 1) return EvaluatorError.IndexOutOfBounds else @as(usize, @intCast(i - 1)),
+        else => return EvaluatorError.TypeMismatch,
+    };
+
+    if (start_pos >= text_str.len) {
+        const empty_result = try allocator.alloc(u8, 0);
+        return Value{ .Text = empty_result };
+    }
+
+    const end_pos = if (length) |len_val| blk: {
+        const len_int = switch (len_val) {
+            .Int => |i| if (i < 0) return EvaluatorError.IndexOutOfBounds else @as(usize, @intCast(i)),
+            .SmallInt => |i| if (i < 0) return EvaluatorError.IndexOutOfBounds else @as(usize, @intCast(i)),
+            else => return EvaluatorError.TypeMismatch,
+        };
+        break :blk @min(start_pos + len_int, text_str.len);
+    } else text_str.len;
+
+    const result_slice = text_str[start_pos..end_pos];
+    const result = try allocator.dupe(u8, result_slice);
+    return Value{ .Text = result };
+}
+
+pub fn replace(allocator: std.mem.Allocator, text: Value, search: Value, replacement: Value) EvaluatorError!Value {
+    const text_str = switch (text) {
+        .Str => |s| s,
+        .Text => |s| s,
+        .Char => |c| c.data,
+        .Varchar => |v| v.data,
+        else => return EvaluatorError.TypeMismatch,
+    };
+
+    const search_str = switch (search) {
+        .Str => |s| s,
+        .Text => |s| s,
+        .Char => |c| c.data,
+        .Varchar => |v| v.data,
+        else => return EvaluatorError.TypeMismatch,
+    };
+
+    const replacement_str = switch (replacement) {
+        .Str => |s| s,
+        .Text => |s| s,
+        .Char => |c| c.data,
+        .Varchar => |v| v.data,
+        else => return EvaluatorError.TypeMismatch,
+    };
+
+    if (search_str.len == 0) {
+        const result = try allocator.dupe(u8, text_str);
+        return Value{ .Text = result };
+    }
+
+    const result = try std.mem.replaceOwned(u8, allocator, text_str, search_str, replacement_str);
+    return Value{ .Text = result };
+}
+
+// Math functions
+pub fn abs_val(val: Value) EvaluatorError!Value {
+    return switch (val) {
+        .Int => |i| Value{ .Int = @intCast(@abs(i)) },
+        .SmallInt => |i| Value{ .SmallInt = @intCast(@abs(i)) },
+        .BigInt => |i| Value{ .BigInt = @intCast(@abs(i)) },
+        .Real => |f| Value{ .Real = @abs(f) },
+        .Double => |d| Value{ .Double = @abs(d) },
+        .Decimal128 => |d| Value{ .Decimal128 = .{ .coeff = @intCast(@abs(d.coeff)), .scale = d.scale } },
+        else => EvaluatorError.TypeMismatch,
+    };
+}
+
+pub fn sqrt_val(val: Value) EvaluatorError!Value {
+    return switch (val) {
+        .Int => |i| {
+            if (i < 0) return EvaluatorError.InvalidInput;
+            return Value{ .Double = @sqrt(@as(f64, @floatFromInt(i))) };
+        },
+        .SmallInt => |i| {
+            if (i < 0) return EvaluatorError.InvalidInput;
+            return Value{ .Double = @sqrt(@as(f64, @floatFromInt(i))) };
+        },
+        .BigInt => |i| {
+            if (i < 0) return EvaluatorError.InvalidInput;
+            return Value{ .Double = @sqrt(@as(f64, @floatFromInt(i))) };
+        },
+        .Real => |f| {
+            if (f < 0) return EvaluatorError.InvalidInput;
+            return Value{ .Real = @sqrt(f) };
+        },
+        .Double => |d| {
+            if (d < 0) return EvaluatorError.InvalidInput;
+            return Value{ .Double = @sqrt(d) };
+        },
+        else => EvaluatorError.TypeMismatch,
+    };
+}
+
+pub fn ceil_val(val: Value) EvaluatorError!Value {
+    return switch (val) {
+        .Int => val,
+        .SmallInt => val,
+        .BigInt => val,
+        .Real => |f| Value{ .Real = @ceil(f) },
+        .Double => |d| Value{ .Double = @ceil(d) },
+        else => EvaluatorError.TypeMismatch,
+    };
+}
+
+pub fn floor_val(val: Value) EvaluatorError!Value {
+    return switch (val) {
+        .Int => val,
+        .SmallInt => val,
+        .BigInt => val,
+        .Real => |f| Value{ .Real = @floor(f) },
+        .Double => |d| Value{ .Double = @floor(d) },
+        else => EvaluatorError.TypeMismatch,
+    };
 }

@@ -4,6 +4,9 @@ const btree = @import("btree.zig");
 const fulltext = @import("fulltext.zig");
 const hnsw = @import("hnsw.zig");
 const rtree = @import("rtree.zig");
+const advanced_types = @import("advanced_types_index.zig");
+const vector_index = @import("vector_index.zig");
+const spatial_index = @import("spatial_index.zig");
 
 // Comprehensive index management for graph database
 pub const IndexManager = struct {
@@ -14,6 +17,11 @@ pub const IndexManager = struct {
     fulltext_indexes: std.StringHashMap(fulltext.FullTextIndex),
     spatial_indexes: std.StringHashMap(*rtree.RTree),
     vector_indexes: std.StringHashMap(*anyopaque), // hnsw.Hnsw instances
+    // Advanced type indexes
+    advanced_vector_indexes: std.StringHashMap(*advanced_types.VectorIndexWrapper),
+    advanced_spatial_indexes: std.StringHashMap(*advanced_types.SpatialIndexWrapper),
+    advanced_network_indexes: std.StringHashMap(*advanced_types.NetworkIndexWrapper),
+    advanced_signature_indexes: std.StringHashMap(*advanced_types.SignatureIndexWrapper),
     statistics: IndexStatistics,
 
     pub const IndexType = enum {
@@ -23,6 +31,11 @@ pub const IndexManager = struct {
         spatial,
         bitmap,
         vector,
+        // Advanced type indexes
+        vector_f32,
+        spatial_geographic,
+        network_cidr,
+        signature_crypto,
     };
 
     pub const PropertyIndex = struct {
@@ -127,6 +140,11 @@ pub const IndexManager = struct {
             .fulltext_indexes = std.StringHashMap(fulltext.FullTextIndex).init(allocator),
             .spatial_indexes = std.StringHashMap(*rtree.RTree).init(allocator),
             .vector_indexes = std.StringHashMap(*anyopaque).init(allocator),
+            // Initialize advanced type indexes
+            .advanced_vector_indexes = std.StringHashMap(*advanced_types.VectorIndexWrapper).init(allocator),
+            .advanced_spatial_indexes = std.StringHashMap(*advanced_types.SpatialIndexWrapper).init(allocator),
+            .advanced_network_indexes = std.StringHashMap(*advanced_types.NetworkIndexWrapper).init(allocator),
+            .advanced_signature_indexes = std.StringHashMap(*advanced_types.SignatureIndexWrapper).init(allocator),
             .statistics = .{
                 .total_indexes = 0,
                 .total_entries = 0,
@@ -197,6 +215,35 @@ pub const IndexManager = struct {
             self.allocator.destroy(hnsw_index);
         }
         self.vector_indexes.deinit();
+        
+        // Cleanup advanced type indexes
+        var adv_vector_it = self.advanced_vector_indexes.iterator();
+        while (adv_vector_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.advanced_vector_indexes.deinit();
+        
+        var adv_spatial_it = self.advanced_spatial_indexes.iterator();
+        while (adv_spatial_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.advanced_spatial_indexes.deinit();
+        
+        var adv_network_it = self.advanced_network_indexes.iterator();
+        while (adv_network_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.advanced_network_indexes.deinit();
+        
+        var adv_signature_it = self.advanced_signature_indexes.iterator();
+        while (adv_signature_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.advanced_signature_indexes.deinit();
     }
 
     // Create a property index
@@ -547,7 +594,7 @@ pub const IndexManager = struct {
         const hash_value = std.hash_map.hashString(key);
         const bucket_index = hash_value % hash.size;
 
-        try hash.buckets[bucket_index].entries.append(.{
+        try hash.buckets[bucket_index].entries.append(self.allocator, .{
             .key = try self.allocator.dupe(u8, key),
             .value = value,
         });
@@ -665,12 +712,12 @@ pub const IndexManager = struct {
         vector: []const f32,
         node_id: u64,
     ) !void {
-        if (self.vector_indexes.get(index_name)) |vector_index| {
-            const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+        if (self.vector_indexes.get(index_name)) |vector_idx| {
+            const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
             try hnsw_index.insert(node_id, vector);
         } else if (self.property_indexes.getPtr(index_name)) |index| {
-            if (index.vector_index) |vector_index| {
-                const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+            if (index.vector_index) |vector_idx| {
+                const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
                 try hnsw_index.insert(node_id, vector);
                 index.statistics.entries += 1;
                 index.statistics.write_count += 1;
@@ -685,17 +732,193 @@ pub const IndexManager = struct {
         query_vector: []const f32,
         k: usize,
     ) ![]struct { id: u64, score: f64 } {
-        if (self.vector_indexes.get(index_name)) |vector_index| {
-            const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+        if (self.vector_indexes.get(index_name)) |vector_idx| {
+            const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
             return try hnsw_index.knnSearch(query_vector, k, .l2);
         } else if (self.property_indexes.getPtr(index_name)) |index| {
-            if (index.vector_index) |vector_index| {
-                const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_index));
+            if (index.vector_index) |vector_idx| {
+                const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
                 index.statistics.read_count += 1;
                 return try hnsw_index.knnSearch(query_vector, k, .l2);
             }
         }
 
         return try self.allocator.alloc(struct { id: u64, score: f64 }, 0);
+    }
+
+    // Advanced type index management functions
+    
+    pub fn createAdvancedVectorIndex(
+        self: *IndexManager,
+        name: []const u8,
+        dimension: u16,
+        metric: advanced_types.VectorIndexWrapper.DistanceMetric,
+    ) !void {
+        // Validate inputs
+        if (name.len == 0 or name.len > 255) return error.InvalidInput;
+        if (dimension == 0 or dimension > 8192) return error.InvalidInput;
+        
+        if (self.advanced_vector_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+        
+        const wrapper = try self.allocator.create(advanced_types.VectorIndexWrapper);
+        errdefer self.allocator.destroy(wrapper);
+        
+        wrapper.* = try advanced_types.VectorIndexWrapper.init(self.allocator, dimension, metric);
+        errdefer wrapper.deinit();
+        
+        try self.advanced_vector_indexes.put(name, wrapper);
+        self.statistics.total_indexes += 1;
+    }
+    
+    pub fn createAdvancedSpatialIndex(
+        self: *IndexManager,
+        name: []const u8,
+    ) !void {
+        // Validate inputs
+        if (name.len == 0 or name.len > 255) return error.InvalidInput;
+        
+        if (self.advanced_spatial_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+        
+        const wrapper = try self.allocator.create(advanced_types.SpatialIndexWrapper);
+        errdefer self.allocator.destroy(wrapper);
+        
+        wrapper.* = try advanced_types.SpatialIndexWrapper.init(self.allocator);
+        errdefer wrapper.deinit();
+        
+        try self.advanced_spatial_indexes.put(name, wrapper);
+        self.statistics.total_indexes += 1;
+    }
+    
+    pub fn createAdvancedNetworkIndex(
+        self: *IndexManager,
+        name: []const u8,
+    ) !void {
+        if (self.advanced_network_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+        
+        const wrapper = try self.allocator.create(advanced_types.NetworkIndexWrapper);
+        wrapper.* = try advanced_types.NetworkIndexWrapper.init(self.allocator);
+        
+        try self.advanced_network_indexes.put(name, wrapper);
+        self.statistics.total_indexes += 1;
+    }
+    
+    pub fn createAdvancedSignatureIndex(
+        self: *IndexManager,
+        name: []const u8,
+    ) !void {
+        if (self.advanced_signature_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+        
+        const wrapper = try self.allocator.create(advanced_types.SignatureIndexWrapper);
+        wrapper.* = try advanced_types.SignatureIndexWrapper.init(self.allocator);
+        
+        try self.advanced_signature_indexes.put(name, wrapper);
+        self.statistics.total_indexes += 1;
+    }
+    
+    // Advanced type index operations
+    
+    pub fn insertIntoAdvancedVectorIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        vector: @import("../types/vector.zig").VectorF32,
+        entity_id: u64,
+    ) !void {
+        if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
+            try wrapper.*.insert(entity_id, vector);
+            self.statistics.total_entries += 1;
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+    
+    pub fn insertIntoAdvancedSpatialIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        location: @import("../types/geographic.zig").LatLon,
+        entity_id: u64,
+    ) !void {
+        if (self.advanced_spatial_indexes.getPtr(index_name)) |wrapper| {
+            try wrapper.*.insert(entity_id, location);
+            self.statistics.total_entries += 1;
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+    
+    pub fn queryAdvancedVectorIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        query_vector: @import("../types/vector.zig").VectorF32,
+        k: u32,
+    ) ![]advanced_types.VectorSearchResult {
+        if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
+            return try wrapper.*.search(query_vector, k, self.allocator);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+    
+    pub fn queryAdvancedSpatialIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        query_location: @import("../types/geographic.zig").LatLon,
+        radius_km: f64,
+    ) ![]advanced_types.SpatialSearchResult {
+        if (self.advanced_spatial_indexes.getPtr(index_name)) |wrapper| {
+            return try wrapper.*.search(query_location, radius_km, self.allocator);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+    
+    pub fn dropAdvancedIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        index_type: IndexType,
+    ) !bool {
+        switch (index_type) {
+            .vector_f32 => {
+                if (self.advanced_vector_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            .spatial_geographic => {
+                if (self.advanced_spatial_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            .network_cidr => {
+                if (self.advanced_network_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            .signature_crypto => {
+                if (self.advanced_signature_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            else => return false,
+        }
+        return false;
     }
 };

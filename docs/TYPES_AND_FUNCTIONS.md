@@ -255,22 +255,42 @@
 ### Geographic Types
 
 #### LatLon
-- **Storage**: Tag `0x0C` + 8 bytes lat (LE) + 8 bytes lon (LE)
-- **Tag**: `0x0C`
-- **Units**: Decimal degrees
-- **Constructor**: `LatLon(lat, lon)`
+- **Storage**: Tag `0x12` + 8 bytes lat (LE) + 8 bytes lon (LE)
+- **Tag**: `0x12`
+- **Units**: Decimal degrees (WGS84)
+- **Range**: Latitude [-90,90], Longitude [-180,180]
+- **Constructor**: `LatLon(text)` - Parse from "lat,lon" string
+- **String Formats**: 
+  - `"40.7128,-74.0060"` (decimal degrees)
+  - `"(40.7128, -74.0060)"` (parenthesized)
 - **Functions**:
-  - `latitude(p)` - Extract latitude
-  - `longitude(p)` - Extract longitude
+  - `distanceKm(p1, p2)` - Haversine distance in kilometers
+  - `bearingTo(p1, p2)` - Initial bearing in degrees [0,360)
+  - `isValid(p)` - Coordinate validation
+- **Index Support**: R-tree spatial index for bounding box and radius queries
 
 #### LatLonAlt
-- **Storage**: Tag `0x0D` + lat + lon + alt (8 bytes each LE) + 1 byte ref
-- **Tag**: `0x0D`
-- **Reference**: ellipsoid (0) or geoid (1)
-- **Constructor**: `LatLonAlt(lat, lon, alt, ref)`
+- **Storage**: Tag `0x13` + lat + lon + alt (8 bytes each LE)
+- **Tag**: `0x13`
+- **Units**: Decimal degrees + meters altitude
+- **Constructor**: `LatLonAlt(text)` - Parse from "lat,lon,alt" string
+- **String Formats**:
+  - `"40.7128,-74.0060,100.0"` (decimal with altitude)
 - **Functions**:
-  - `altitude(p)` - Extract altitude
-  - `alt_ref(p)` - Get reference system
+  - `distance3D(p1, p2)` - 3D Euclidean distance in meters
+  - `distanceKm(p1, p2)` - 2D Haversine distance (ignores altitude)
+  - `altitude(p)` - Extract altitude in meters
+- **Index Support**: R-tree spatial index (2D projection for geographic queries)
+
+#### GeoPoint
+- **Storage**: Tag `0x14` + lat + lon + optional alt (8 bytes each LE)
+- **Tag**: `0x14`
+- **Enhanced**: Extended geographic point with metadata support
+- **Constructor**: `GeoPoint(text)` - Parse from coordinate string
+- **Functions**:
+  - All LatLon/LatLonAlt functions plus enhanced metadata access
+  - `precision()` - Get coordinate precision
+- **Index Support**: Full R-tree spatial indexing with metadata queries
 
 #### Geometry
 - **Storage**: Tag `0x0E` + 4 bytes length + WKB bytes
@@ -304,15 +324,42 @@
 ### Vector and ML Types
 
 #### VectorF32
-- **Storage**: Tag `0x11` + 2 bytes dimension + packed f32 array (LE)
-- **Tag**: `0x11`
-- **SIMD**: Optimized operations where available
-- **Constructor**: `Vector(list_of_numbers)`
+- **Storage**: Tag `0x10` + 2 bytes dimension + packed f32 array (LE)
+- **Tag**: `0x10`
+- **Precision**: Single-precision floating-point (32-bit)
+- **Max Dimension**: 65,535 elements
+- **Constructor**: `VectorF32(text)` - Parse from vector string
+- **String Formats**:
+  - `"[1.0, 2.0, 3.0]"` (bracketed)
+  - `"1.0,2.0,3.0"` (comma-separated)
 - **Functions**:
-  - `vector_dot(a, b)` - Dot product
-  - `vector_l2(a, b)` - Euclidean distance
-  - `vector_cosine(a, b)` - Cosine similarity (NULL if zero-norm)
-  - `vector_knn(property, query_vec, k, metric)` - K-nearest neighbors
+  - `distance(a, b)` - Euclidean (L2) distance
+  - `cosineSimilarity(a, b)` - Cosine similarity [-1,1]
+  - `dotProduct(a, b)` - Dot product
+  - `norm(v)` - L2 norm (magnitude)
+  - `normalize(v)` - Unit vector normalization
+  - `add(a, b)` - Element-wise addition
+  - `scale(v, scalar)` - Scalar multiplication
+- **Index Support**: HNSW (Hierarchical Navigable Small World) for approximate nearest neighbor search
+- **SIMD**: Optimized operations where available
+
+#### VectorI32
+- **Storage**: Tag `0x11` + 2 bytes dimension + packed i32 array (LE)
+- **Tag**: `0x11`
+- **Precision**: 32-bit signed integers
+- **Max Dimension**: 65,535 elements
+- **Constructor**: `VectorI32(text)` - Parse from vector string
+- **String Formats**:
+  - `"[1, 2, 3]"` (bracketed integers)
+  - `"1,2,3"` (comma-separated)
+- **Functions**:
+  - `manhattanDistance(a, b)` - L1 (Manhattan) distance
+  - `hammingDistance(a, b)` - Count of differing elements
+  - `dotProduct(a, b)` - Integer dot product
+  - `add(a, b)` - Element-wise addition
+  - `scale(v, scalar)` - Scalar multiplication
+- **Index Support**: HNSW with automatic f32 conversion for indexing
+- **Use Cases**: Discrete features, categorical embeddings, sparse vectors
 
 ### Advanced Types
 
@@ -433,18 +480,36 @@ distance_haversine(point1, point2)
 - **Query Optimization**: Automatic for `ip_contains(subnet_col, const_ip)`
 
 ### R-tree (Spatial Index)
-- **Purpose**: 2D spatial queries
-- **Node Capacity**: M=50 entries
+- **Purpose**: 2D spatial queries for geographic types
+- **Supported Types**: LatLon, LatLonAlt, GeoPoint
+- **Node Capacity**: M=8 entries (configurable)
 - **File Format**: `.rtree` snapshot + `.rtree.wal` WAL
-- **Query Types**: Intersects, contains, within
-- **Strategy**: Filter with MBR, then refine
+- **Query Types**: 
+  - Bounding box search: `searchBoundingBox(min_lat, min_lon, max_lat, max_lon)`
+  - Radius search: `searchRadius(center_lat, center_lon, radius_meters)`
+  - K-nearest neighbors: `searchKNearest(center_lat, center_lon, k)`
+- **Distance Calculation**: Haversine formula for accurate geographic distances
+- **Optimization**: Approximate distance filtering with exact refinement
+- **Index Management**: `SpatialIndexManager` for multiple named indexes
+- **Performance**: Automatic hierarchical search for large datasets (>50k points)
 
 ### HNSW (Vector Index)
-- **Purpose**: K-nearest neighbor search
-- **Parameters**: M=16, efConstruction=100
+- **Purpose**: Approximate k-nearest neighbor search for high-dimensional vectors
+- **Supported Types**: VectorF32, VectorI32 (auto-converted to f32)
+- **Parameters**: 
+  - M=16 (max connections per node)
+  - ef_construction=200 (search width during construction)
+  - Configurable ef_search for query-time accuracy/speed tradeoff
 - **File Format**: `.hnsw` graph + `.vec` vectors
-- **Fallback**: SIMD scan if index disabled
-- **Metrics**: L2, cosine, dot product
+- **Distance Metrics**: L2 (Euclidean), Cosine similarity, Dot product
+- **Optimization Features**:
+  - SIMD vectorized distance calculations (4x f32 vectors)
+  - Dynamic ef_search selection based on result count
+  - Vector quantization for memory efficiency (4-8 bit)
+  - Approximate search for large datasets (>10k vectors)
+- **Index Management**: `VectorIndexManager` for multiple named indexes
+- **Performance**: O(log N) search complexity with >90% recall
+- **Fallback**: Exact brute-force search for small datasets or when index unavailable
 
 ### Interval Tree (Range Index)
 - **Purpose**: Range overlap queries

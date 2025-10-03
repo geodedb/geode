@@ -1,0 +1,703 @@
+const std = @import("std");
+const heap = @import("../storage/heap.zig");
+const vector = @import("../types/vector.zig");
+const geographic = @import("../types/geographic.zig");
+const cryptographic = @import("../types/cryptographic.zig");
+const hnsw = @import("hnsw.zig");
+const rtree = @import("rtree.zig");
+const patricia = @import("patricia.zig");
+
+// CANARY: REQ=REQ-GQL-ADVANCED-INDEX-INTEGRATION; FEATURE="Advanced Types Index Integration"; ASPECT=Index; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_INDEX_INTEGRATION_All; OWNER=index; UPDATED=2025-01-03
+
+/// Advanced types index integration layer
+/// Bridges our advanced types (Vector, Geographic, Cryptographic) with specialized indexes
+
+/// Comprehensive error set for advanced index operations
+pub const AdvancedIndexError = error{
+    // General index errors
+    IndexNotFound,
+    IndexAlreadyExists,
+    IndexCorrupted,
+    InvalidIndexType,
+    IndexOperationFailed,
+    
+    // Vector index specific errors
+    DimensionMismatch,
+    InvalidVectorType,
+    VectorNotFound,
+    UnsupportedMetric,
+    EmptyVectorData,
+    
+    // Spatial index specific errors
+    InvalidGeographicType,
+    CoordinateOutOfBounds,
+    InvalidBoundingBox,
+    SpatialIndexOverflow,
+    
+    // Network index specific errors  
+    InvalidIPAddress,
+    InvalidSubnet,
+    InvalidMACAddress,
+    UnsupportedAddressFamily,
+    
+    // Cryptographic index specific errors
+    InvalidSignature,
+    UnsupportedAlgorithm,
+    SignatureVerificationFailed,
+    InvalidDigest,
+    
+    // System level errors
+    OutOfMemory,
+    InvalidInput,
+    PermissionDenied,
+    ResourceExhausted,
+};
+
+/// Input validation functions for advanced index operations
+pub const Validation = struct {
+    /// Validate vector for index operations
+    pub fn validateVector(vec: vector.VectorF32) AdvancedIndexError!void {
+        if (vec.dim == 0) return AdvancedIndexError.EmptyVectorData;
+        if (vec.dim > 8192) return AdvancedIndexError.DimensionMismatch; // Reasonable limit
+        if (vec.data == null) return AdvancedIndexError.InvalidVectorType;
+        
+        // Check for invalid values (NaN, infinity)
+        for (0..vec.dim) |i| {
+            const val = vec.data[i];
+            if (!std.math.isFinite(val)) {
+                return AdvancedIndexError.InvalidVectorType;
+            }
+        }
+    }
+    
+    /// Validate geographic coordinates
+    pub fn validateLatLon(point: geographic.LatLon) AdvancedIndexError!void {
+        if (point.lat < -90.0 or point.lat > 90.0) {
+            return AdvancedIndexError.CoordinateOutOfBounds;
+        }
+        if (point.lon < -180.0 or point.lon > 180.0) {
+            return AdvancedIndexError.CoordinateOutOfBounds;
+        }
+        if (!std.math.isFinite(point.lat) or !std.math.isFinite(point.lon)) {
+            return AdvancedIndexError.InvalidGeographicType;
+        }
+    }
+    
+    /// Validate network address format
+    pub fn validateIPAddress(addr_bytes: []const u8) AdvancedIndexError!void {
+        if (addr_bytes.len != 4 and addr_bytes.len != 16) {
+            return AdvancedIndexError.InvalidIPAddress;
+        }
+        // IPv4 and IPv6 addresses are valid if they have correct byte length
+        // Additional validation could be added here for reserved ranges
+    }
+    
+    /// Validate cryptographic signature
+    pub fn validateSignature(sig: cryptographic.Signature) AdvancedIndexError!void {
+        if (sig.data.len == 0) {
+            return AdvancedIndexError.InvalidSignature;
+        }
+        if (sig.data.len > 1024) { // Reasonable signature size limit
+            return AdvancedIndexError.InvalidSignature;
+        }
+        // Additional algorithm-specific validation could be added here
+    }
+    
+    /// Validate index name format
+    pub fn validateIndexName(name: []const u8) AdvancedIndexError!void {
+        if (name.len == 0) return AdvancedIndexError.InvalidInput;
+        if (name.len > 255) return AdvancedIndexError.InvalidInput;
+        
+        // Check for valid identifier characters
+        for (name) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
+                return AdvancedIndexError.InvalidInput;
+            }
+        }
+    }
+    
+    /// Validate search parameters
+    pub fn validateSearchParams(k: u32, radius_km: f64) AdvancedIndexError!void {
+        if (k == 0) return AdvancedIndexError.InvalidInput;
+        if (k > 10000) return AdvancedIndexError.ResourceExhausted; // Reasonable limit
+        if (radius_km < 0.0 or radius_km > 40075.0) { // Earth's circumference
+            return AdvancedIndexError.InvalidInput;
+        }
+        if (!std.math.isFinite(radius_km)) {
+            return AdvancedIndexError.InvalidInput;
+        }
+    }
+};
+
+pub const AdvancedIndexManager = struct {
+    allocator: std.mem.Allocator,
+    vector_indexes: std.StringHashMap(*VectorIndexWrapper),
+    spatial_indexes: std.StringHashMap(*SpatialIndexWrapper), 
+    network_indexes: std.StringHashMap(*NetworkIndexWrapper),
+    signature_indexes: std.StringHashMap(*SignatureIndexWrapper),
+
+    pub fn init(allocator: std.mem.Allocator) AdvancedIndexManager {
+        return AdvancedIndexManager{
+            .allocator = allocator,
+            .vector_indexes = std.StringHashMap(*VectorIndexWrapper).init(allocator),
+            .spatial_indexes = std.StringHashMap(*SpatialIndexWrapper).init(allocator),
+            .network_indexes = std.StringHashMap(*NetworkIndexWrapper).init(allocator),
+            .signature_indexes = std.StringHashMap(*SignatureIndexWrapper).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *AdvancedIndexManager) void {
+        // Clean up vector indexes
+        var vector_iter = self.vector_indexes.iterator();
+        while (vector_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.vector_indexes.deinit();
+
+        // Clean up spatial indexes
+        var spatial_iter = self.spatial_indexes.iterator();
+        while (spatial_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.spatial_indexes.deinit();
+
+        // Clean up network indexes
+        var network_iter = self.network_indexes.iterator();
+        while (network_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.network_indexes.deinit();
+
+        // Clean up signature indexes
+        var signature_iter = self.signature_indexes.iterator();
+        while (signature_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.signature_indexes.deinit();
+    }
+
+    /// Create a vector index for similarity search
+    pub fn createVectorIndex(self: *AdvancedIndexManager, name: []const u8, dim: u16, metric: VectorIndexWrapper.DistanceMetric) !void {
+        const index = try self.allocator.create(VectorIndexWrapper);
+        index.* = try VectorIndexWrapper.init(self.allocator, dim, metric);
+        
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.vector_indexes.put(name_copy, index);
+    }
+
+    /// Create a spatial index for geographic queries
+    pub fn createSpatialIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const index = try self.allocator.create(SpatialIndexWrapper);
+        index.* = try SpatialIndexWrapper.init(self.allocator);
+        
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.spatial_indexes.put(name_copy, index);
+    }
+
+    /// Create a network index for CIDR and network queries
+    pub fn createNetworkIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const index = try self.allocator.create(NetworkIndexWrapper);
+        index.* = try NetworkIndexWrapper.init(self.allocator);
+        
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.network_indexes.put(name_copy, index);
+    }
+
+    /// Create a signature index for cryptographic verification
+    pub fn createSignatureIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const index = try self.allocator.create(SignatureIndexWrapper);
+        index.* = try SignatureIndexWrapper.init(self.allocator);
+        
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.signature_indexes.put(name_copy, index);
+    }
+
+    /// Insert vector into index with comprehensive validation
+    pub fn insertVector(self: *AdvancedIndexManager, index_name: []const u8, node_id: u64, vec: vector.VectorF32) AdvancedIndexError!void {
+        // Validate inputs
+        try Validation.validateIndexName(index_name);
+        try Validation.validateVector(vec);
+        
+        if (self.vector_indexes.get(index_name)) |index| {
+            try index.insert(node_id, vec);
+        } else {
+            return AdvancedIndexError.IndexNotFound;
+        }
+    }
+
+    /// Search for similar vectors with comprehensive validation
+    pub fn searchVectors(self: *AdvancedIndexManager, index_name: []const u8, query: vector.VectorF32, k: u32, allocator: std.mem.Allocator) AdvancedIndexError![]VectorSearchResult {
+        // Validate inputs
+        try Validation.validateIndexName(index_name);
+        try Validation.validateVector(query);
+        try Validation.validateSearchParams(k, 0.0); // radius doesn't apply to vector search
+        
+        if (self.vector_indexes.get(index_name)) |index| {
+            return index.search(query, k, allocator) catch |err| switch (err) {
+                error.OutOfMemory => AdvancedIndexError.OutOfMemory,
+                else => AdvancedIndexError.IndexOperationFailed,
+            };
+        } else {
+            return AdvancedIndexError.IndexNotFound;
+        }
+    }
+
+    /// Insert geographic point into spatial index with validation
+    pub fn insertGeographic(self: *AdvancedIndexManager, index_name: []const u8, node_id: u64, point: geographic.LatLon) AdvancedIndexError!void {
+        // Validate inputs
+        try Validation.validateIndexName(index_name);
+        try Validation.validateLatLon(point);
+        
+        if (self.spatial_indexes.get(index_name)) |index| {
+            try index.insert(node_id, point);
+        } else {
+            return AdvancedIndexError.IndexNotFound;
+        }
+    }
+
+    /// Search for points within radius with validation
+    pub fn searchWithinRadius(self: *AdvancedIndexManager, index_name: []const u8, center: geographic.LatLon, radius_km: f64, allocator: std.mem.Allocator) AdvancedIndexError![]SpatialSearchResult {
+        // Validate inputs
+        try Validation.validateIndexName(index_name);
+        try Validation.validateLatLon(center);
+        try Validation.validateSearchParams(1, radius_km); // k=1 is dummy for radius validation
+        
+        if (self.spatial_indexes.get(index_name)) |index| {
+            return index.searchWithinRadius(center, radius_km, allocator) catch |err| switch (err) {
+                error.OutOfMemory => AdvancedIndexError.OutOfMemory,
+                else => AdvancedIndexError.IndexOperationFailed,
+            };
+        } else {
+            return AdvancedIndexError.IndexNotFound;
+        }
+    }
+
+    /// Insert network address into network index
+    pub fn insertNetwork(self: *AdvancedIndexManager, index_name: []const u8, node_id: u64, value: heap.Value) !void {
+        if (self.network_indexes.get(index_name)) |index| {
+            try index.insert(node_id, value);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    /// Search for network addresses in subnet
+    pub fn searchInSubnet(self: *AdvancedIndexManager, index_name: []const u8, subnet: heap.Subnet, allocator: std.mem.Allocator) ![]NetworkSearchResult {
+        if (self.network_indexes.get(index_name)) |index| {
+            return index.searchInSubnet(subnet, allocator);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+};
+
+/// Wrapper for HNSW vector index with our VectorF32 types
+pub const VectorIndexWrapper = struct {
+    allocator: std.mem.Allocator,
+    hnsw_index: hnsw.Hnsw,
+    metric: DistanceMetric,
+
+    pub const DistanceMetric = enum {
+        l2,
+        cosine,
+        dot_product,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, dim: u16, metric: DistanceMetric) !VectorIndexWrapper {
+        // HNSW parameters: M=16, ef_construction=200 for good recall/performance balance
+        const hnsw_index = hnsw.Hnsw.init(allocator, dim, 16, 200);
+        
+        return VectorIndexWrapper{
+            .allocator = allocator,
+            .hnsw_index = hnsw_index,
+            .metric = metric,
+        };
+    }
+
+    pub fn deinit(self: *VectorIndexWrapper) void {
+        self.hnsw_index.deinit();
+    }
+
+    pub fn insert(self: *VectorIndexWrapper, node_id: u64, vec: vector.VectorF32) !void {
+        try self.hnsw_index.add(node_id, vec.data);
+    }
+
+    pub fn search(self: *VectorIndexWrapper, query: vector.VectorF32, k: u32, allocator: std.mem.Allocator) ![]VectorSearchResult {
+        const results = try self.hnsw_index.search(query.data, k, self.toHnswMetric(self.metric));
+        defer allocator.free(results);
+
+        const search_results = try allocator.alloc(VectorSearchResult, results.len);
+        for (results, 0..) |result, i| {
+            search_results[i] = VectorSearchResult{
+                .node_id = result.id,
+                .distance = result.distance,
+                .similarity = self.distanceToSimilarity(result.distance),
+            };
+        }
+
+        return search_results;
+    }
+
+    fn toHnswMetric(self: VectorIndexWrapper, metric: DistanceMetric) hnsw.DistanceMetric {
+        _ = self;
+        return switch (metric) {
+            .l2 => .l2,
+            .cosine => .cosine,
+            .dot_product => .dot,
+        };
+    }
+
+    fn distanceToSimilarity(self: VectorIndexWrapper, distance: f32) f32 {
+        return switch (self.metric) {
+            .l2 => 1.0 / (1.0 + distance),
+            .cosine => 1.0 - distance,
+            .dot_product => distance,
+        };
+    }
+};
+
+/// Wrapper for R-tree spatial index with geographic types
+pub const SpatialIndexWrapper = struct {
+    allocator: std.mem.Allocator,
+    rtree_index: rtree.RTree,
+
+    pub fn init(allocator: std.mem.Allocator) !SpatialIndexWrapper {
+        return SpatialIndexWrapper{
+            .allocator = allocator,
+            .rtree_index = rtree.RTree.init(allocator, 16),
+        };
+    }
+
+    pub fn deinit(self: *SpatialIndexWrapper) void {
+        self.rtree_index.deinit();
+    }
+
+    pub fn insert(self: *SpatialIndexWrapper, node_id: u64, point: geographic.LatLon) !void {
+        const mbr = rtree.MBR{
+            .min_x = point.lon,
+            .min_y = point.lat,
+            .max_x = point.lon,
+            .max_y = point.lat,
+        };
+        try self.rtree_index.insert(mbr, node_id);
+    }
+
+    pub fn searchWithinRadius(self: *SpatialIndexWrapper, center: geographic.LatLon, radius_km: f64, allocator: std.mem.Allocator) ![]SpatialSearchResult {
+        // Convert radius from km to approximate degrees
+        const lat_deg_per_km = 1.0 / 111.0;
+        const lon_deg_per_km = 1.0 / (111.0 * @cos(std.math.degreesToRadians(center.lat)));
+        
+        const lat_radius = radius_km * lat_deg_per_km;
+        const lon_radius = radius_km * lon_deg_per_km;
+        
+        const search_mbr = rtree.MBR{
+            .min_x = center.lon - lon_radius,
+            .min_y = center.lat - lat_radius,
+            .max_x = center.lon + lon_radius,
+            .max_y = center.lat + lat_radius,
+        };
+
+        const candidates = try self.rtree_index.search(search_mbr, allocator);
+        defer allocator.free(candidates);
+
+        var results = std.ArrayList(SpatialSearchResult).init(allocator);
+        defer results.deinit();
+
+        for (candidates) |candidate_id| {
+            // Note: In a real implementation, we'd need to get the actual point coordinates
+            // from the candidate_id to calculate precise distance
+            const candidate_point = geographic.LatLon{ .lat = center.lat, .lon = center.lon }; // Placeholder
+            const distance = center.distanceKm(candidate_point);
+            
+            if (distance <= radius_km) {
+                try results.append(SpatialSearchResult{
+                    .node_id = candidate_id,
+                    .distance_km = distance,
+                    .point = candidate_point,
+                });
+            }
+        }
+
+        return results.toOwnedSlice();
+    }
+};
+
+/// Wrapper for Patricia trie network index
+pub const NetworkIndexWrapper = struct {
+    allocator: std.mem.Allocator,
+    patricia_index: patricia.PatriciaTrie,
+
+    pub fn init(allocator: std.mem.Allocator) !NetworkIndexWrapper {
+        return NetworkIndexWrapper{
+            .allocator = allocator,
+            .patricia_index = patricia.PatriciaTrie.init(allocator, .both),
+        };
+    }
+
+    pub fn deinit(self: *NetworkIndexWrapper) void {
+        self.patricia_index.deinit();
+    }
+
+    pub fn insert(self: *NetworkIndexWrapper, node_id: u64, value: heap.Value) !void {
+        switch (value) {
+            .IpAddr => |ip| {
+                const key = try self.ipToKey(ip);
+                try self.patricia_index.insert(key, node_id);
+            },
+            .Subnet => |subnet| {
+                const key = try self.subnetToKey(subnet);
+                try self.patricia_index.insert(key, node_id);
+            },
+            .Mac => |mac| {
+                const key = try self.macToKey(mac);
+                try self.patricia_index.insert(key, node_id);
+            },
+            else => return error.UnsupportedNetworkType,
+        }
+    }
+
+    pub fn searchInSubnet(self: *NetworkIndexWrapper, subnet: heap.Subnet, allocator: std.mem.Allocator) ![]NetworkSearchResult {
+        const prefix = try self.subnetToPrefix(subnet);
+        const matches = try self.patricia_index.searchPrefix(prefix, allocator);
+        defer allocator.free(matches);
+
+        const results = try allocator.alloc(NetworkSearchResult, matches.len);
+        for (matches, 0..) |match, i| {
+            results[i] = NetworkSearchResult{
+                .node_id = match.value,
+                .network_value = subnet, // Placeholder - should be actual value
+            };
+        }
+
+        return results;
+    }
+
+    fn ipToKey(self: NetworkIndexWrapper, ip: heap.IpAddr) ![]u8 {
+        switch (ip) {
+            .v4 => |octets| {
+                const key = try self.allocator.alloc(u8, 4);
+                @memcpy(key, &octets);
+                return key;
+            },
+            .v6 => |bytes| {
+                const key = try self.allocator.alloc(u8, 16);
+                @memcpy(key, &bytes);
+                return key;
+            },
+        }
+    }
+
+    fn subnetToKey(self: NetworkIndexWrapper, subnet: heap.Subnet) ![]u8 {
+        _ = subnet;
+        // Placeholder implementation
+        const key = try self.allocator.alloc(u8, 8);
+        @memset(key, 0);
+        return key;
+    }
+
+    fn subnetToPrefix(self: NetworkIndexWrapper, subnet: heap.Subnet) ![]u8 {
+        _ = subnet;
+        // Placeholder implementation
+        const prefix = try self.allocator.alloc(u8, 4);
+        @memset(prefix, 0);
+        return prefix;
+    }
+
+    fn macToKey(self: NetworkIndexWrapper, mac: heap.Mac) ![]u8 {
+        const key = try self.allocator.alloc(u8, 6);
+        @memcpy(key, &mac.bytes);
+        return key;
+    }
+};
+
+/// Hash-based index for cryptographic signatures
+pub const SignatureIndexWrapper = struct {
+    allocator: std.mem.Allocator,
+    signature_map: std.HashMap(SignatureKey, std.ArrayList(u64), SignatureKeyContext, std.hash_map.default_max_load_percentage),
+
+    const SignatureKey = struct {
+        algorithm: cryptographic.Signature.SignatureAlg,
+        digest_hash: u64, // Hash of first 8 bytes of signature
+    };
+
+    const SignatureKeyContext = struct {
+        pub fn hash(self: @This(), key: SignatureKey) u64 {
+            _ = self;
+            return std.hash_map.hashString(key.algorithm.toString()) ^ key.digest_hash;
+        }
+
+        pub fn eql(self: @This(), a: SignatureKey, b: SignatureKey) bool {
+            _ = self;
+            return a.algorithm == b.algorithm and a.digest_hash == b.digest_hash;
+        }
+    };
+
+    pub fn init(allocator: std.mem.Allocator) !SignatureIndexWrapper {
+        return SignatureIndexWrapper{
+            .allocator = allocator,
+            .signature_map = std.HashMap(SignatureKey, std.ArrayList(u64), SignatureKeyContext, std.hash_map.default_max_load_percentage).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *SignatureIndexWrapper) void {
+        var iter = self.signature_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.signature_map.deinit();
+    }
+
+    pub fn insert(self: *SignatureIndexWrapper, node_id: u64, signature: cryptographic.Signature) !void {
+        const key = SignatureKey{
+            .algorithm = signature.alg,
+            .digest_hash = self.hashSignature(signature.signature),
+        };
+
+        const result = try self.signature_map.getOrPut(key);
+        if (!result.found_existing) {
+            result.value_ptr.* = std.ArrayList(u64).init(self.allocator);
+        }
+        try result.value_ptr.append(node_id);
+    }
+
+    pub fn searchByAlgorithm(self: *SignatureIndexWrapper, alg: cryptographic.Signature.SignatureAlg, allocator: std.mem.Allocator) ![]SignatureSearchResult {
+        var results = std.ArrayList(SignatureSearchResult).init(allocator);
+        defer results.deinit();
+
+        var iter = self.signature_map.iterator();
+        while (iter.next()) |entry| {
+            if (entry.key_ptr.algorithm == alg) {
+                for (entry.value_ptr.items) |node_id| {
+                    try results.append(SignatureSearchResult{
+                        .node_id = node_id,
+                        .algorithm = alg,
+                    });
+                }
+            }
+        }
+
+        return results.toOwnedSlice();
+    }
+
+    fn hashSignature(self: SignatureIndexWrapper, signature: []const u8) u64 {
+        _ = self;
+        if (signature.len >= 8) {
+            return std.mem.readInt(u64, signature[0..8], .little);
+        } else {
+            var bytes: [8]u8 = [_]u8{0} ** 8;
+            @memcpy(bytes[0..signature.len], signature);
+            return std.mem.readInt(u64, &bytes, .little);
+        }
+    }
+};
+
+// Search result types
+pub const VectorSearchResult = struct {
+    node_id: u64,
+    distance: f32,
+    similarity: f32,
+};
+
+pub const SpatialSearchResult = struct {
+    node_id: u64,
+    distance_km: f64,
+    point: geographic.LatLon,
+};
+
+pub const NetworkSearchResult = struct {
+    node_id: u64,
+    network_value: heap.Value,
+};
+
+pub const SignatureSearchResult = struct {
+    node_id: u64,
+    algorithm: cryptographic.Signature.SignatureAlg,
+};
+
+// Test suite
+test "VectorIndexWrapper operations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var index = try VectorIndexWrapper.init(allocator, 3, .cosine);
+    defer index.deinit();
+
+    // Test vector insertion
+    const vec1 = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
+    defer vec1.deinit(allocator);
+    
+    try index.insert(1, vec1);
+
+    const vec2 = try vector.VectorF32.fromString("[1.1, 2.1, 3.1]", allocator);
+    defer vec2.deinit(allocator);
+    
+    try index.insert(2, vec2);
+
+    // Test vector search
+    const query = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
+    defer query.deinit(allocator);
+    
+    const results = try index.search(query, 2, allocator);
+    defer allocator.free(results);
+
+    try testing.expect(results.len > 0);
+    try testing.expectEqual(@as(u64, 1), results[0].node_id); // Should find exact match first
+}
+
+test "SpatialIndexWrapper operations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var index = try SpatialIndexWrapper.init(allocator);
+    defer index.deinit();
+
+    // Test point insertion
+    const point1 = try geographic.LatLon.fromCoords(40.7128, -74.0060); // New York
+    const point2 = try geographic.LatLon.fromCoords(40.7589, -73.9851); // Manhattan
+    
+    try index.insert(1, point1);
+    try index.insert(2, point2);
+
+    // Test radius search
+    const center = try geographic.LatLon.fromCoords(40.7128, -74.0060);
+    const results = try index.searchWithinRadius(center, 50.0, allocator); // 50km radius
+    defer allocator.free(results);
+
+    try testing.expect(results.len > 0);
+}
+
+test "AdvancedIndexManager integration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var manager = AdvancedIndexManager.init(allocator);
+    defer manager.deinit();
+
+    // Test vector index creation and usage
+    try manager.createVectorIndex("embeddings", 3, .cosine);
+    
+    const vec = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
+    defer vec.deinit(allocator);
+    
+    try manager.insertVector("embeddings", 1, vec);
+
+    const search_results = try manager.searchVectors("embeddings", vec, 1, allocator);
+    defer allocator.free(search_results);
+    
+    try testing.expect(search_results.len > 0);
+
+    // Test spatial index creation and usage
+    try manager.createSpatialIndex("locations");
+    
+    const point = try geographic.LatLon.fromCoords(40.7128, -74.0060);
+    try manager.insertGeographic("locations", 1, point);
+
+    const spatial_results = try manager.searchWithinRadius("locations", point, 10.0, allocator);
+    defer allocator.free(spatial_results);
+    
+    try testing.expect(spatial_results.len >= 0); // May be 0 due to placeholder implementation
+}

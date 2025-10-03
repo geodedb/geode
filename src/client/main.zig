@@ -4,6 +4,63 @@ const quic_transport = @import("transport/quic");
 const logger = @import("log/logger.zig");
 const geode = @import("geode");
 
+/// Escape a string for safe embedding in JSON
+fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    // Count how many characters need escaping to allocate correct size
+    var escape_count: usize = 0;
+    for (input) |c| {
+        switch (c) {
+            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
+            else => {},
+        }
+    }
+    
+    // If no escaping needed, just duplicate the string
+    if (escape_count == 0) {
+        return allocator.dupe(u8, input);
+    }
+    
+    // Allocate buffer for escaped string
+    const result = try allocator.alloc(u8, input.len + escape_count);
+    var write_idx: usize = 0;
+    
+    for (input) |c| {
+        switch (c) {
+            '"' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = '"';
+                write_idx += 2;
+            },
+            '\\' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = '\\';
+                write_idx += 2;
+            },
+            '\n' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = 'n';
+                write_idx += 2;
+            },
+            '\r' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = 'r';
+                write_idx += 2;
+            },
+            '\t' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = 't';
+                write_idx += 2;
+            },
+            else => {
+                result[write_idx] = c;
+                write_idx += 1;
+            },
+        }
+    }
+    
+    return result;
+}
+
 fn getStdOut() std.fs.File {
     return if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
@@ -313,13 +370,16 @@ pub fn main() !void {
             }
 
             // RUN_GQL
+            const escaped_text = try escapeJsonString(gpa, processed_text);
+            defer gpa.free(escaped_text);
+            
             if (param_name) |pn| {
                 const pj = param_json orelse "{}";
-                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ processed_text, pn, pj });
+                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ escaped_text, pn, pj });
                 defer gpa.free(msg);
                 try stream.writeAll(msg);
             } else {
-                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{processed_text});
+                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
                 defer gpa.free(msg);
                 try stream.writeAll(msg);
             }
@@ -512,10 +572,13 @@ pub fn main() !void {
         }
     }
     // RUN_GQL
+    const escaped_text = try escapeJsonString(gpa, processed_text);
+    defer gpa.free(escaped_text);
+    
     if (param_name) |pn| {
         const pj = param_json orelse "{}";
         try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-        try child_stdin_file.writeAll(processed_text);
+        try child_stdin_file.writeAll(escaped_text);
         try child_stdin_file.writeAll("\",\"params\":{\"");
         try child_stdin_file.writeAll(pn);
         try child_stdin_file.writeAll("\":");
@@ -523,7 +586,7 @@ pub fn main() !void {
         try child_stdin_file.writeAll("}}\n");
     } else {
         try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-        try child_stdin_file.writeAll(processed_text);
+        try child_stdin_file.writeAll(escaped_text);
         try child_stdin_file.writeAll("\"}\n");
     }
 
