@@ -4,7 +4,6 @@ const std = @import("std");
 
 /// Vector types for machine learning and scientific computing
 /// Supports both f32 and i32 vectors with efficient operations
-
 /// Single-precision floating-point vector
 pub const VectorF32 = struct {
     dim: u16,
@@ -20,10 +19,10 @@ pub const VectorF32 = struct {
     pub fn fromString(vec_str: []const u8, allocator: std.mem.Allocator) !VectorF32 {
         // Parse vector string format: "[1.0, 2.0, 3.0]" or "1.0,2.0,3.0"
         var cleaned_str = vec_str;
-        
+
         // Remove brackets if present
         if (std.mem.startsWith(u8, cleaned_str, "[") and std.mem.endsWith(u8, cleaned_str, "]")) {
-            cleaned_str = cleaned_str[1..cleaned_str.len-1];
+            cleaned_str = cleaned_str[1 .. cleaned_str.len - 1];
         }
 
         // Split by comma and parse each element
@@ -64,10 +63,15 @@ pub const VectorF32 = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    /// Euclidean distance between two vectors
+    /// Euclidean distance between two vectors (SIMD optimized)
     pub fn distance(self: VectorF32, other: VectorF32) !f32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
+        // Use SIMD for faster computation when available
+        if (self.dim >= 8) {
+            return self.distanceSIMD(other);
+        }
+
         var sum: f32 = 0.0;
         for (0..self.dim) |i| {
             const diff = self.data[i] - other.data[i];
@@ -76,14 +80,45 @@ pub const VectorF32 = struct {
         return @sqrt(sum);
     }
 
+    /// SIMD-optimized Euclidean distance for larger vectors
+    fn distanceSIMD(self: VectorF32, other: VectorF32) f32 {
+        const VecType = @Vector(8, f32);
+        var sum_vec = VecType{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+        const simd_chunks = self.dim / 8;
+        var i: usize = 0;
+
+        // Process 8 elements at a time with SIMD
+        while (i < simd_chunks * 8) : (i += 8) {
+            const a: VecType = self.data[i .. i + 8][0..8].*;
+            const b: VecType = other.data[i .. i + 8][0..8].*;
+            const diff = a - b;
+            sum_vec += diff * diff;
+        }
+
+        // Sum the SIMD vector elements
+        var sum: f32 = 0.0;
+        for (0..8) |j| {
+            sum += sum_vec[j];
+        }
+
+        // Handle remaining elements
+        while (i < self.dim) : (i += 1) {
+            const diff = self.data[i] - other.data[i];
+            sum += diff * diff;
+        }
+
+        return @sqrt(sum);
+    }
+
     /// Cosine similarity between two vectors
     pub fn cosineSimilarity(self: VectorF32, other: VectorF32) !f32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
         var dot_product: f32 = 0.0;
         var norm_a: f32 = 0.0;
         var norm_b: f32 = 0.0;
-        
+
         for (0..self.dim) |i| {
             const a = self.data[i];
             const b = other.data[i];
@@ -91,21 +126,55 @@ pub const VectorF32 = struct {
             norm_a += a * a;
             norm_b += b * b;
         }
-        
+
         const norm_product = @sqrt(norm_a * norm_b);
         if (norm_product == 0.0) return error.ZeroVector;
-        
+
         return dot_product / norm_product;
     }
 
-    /// Dot product of two vectors
+    /// Dot product of two vectors (SIMD optimized)
     pub fn dotProduct(self: VectorF32, other: VectorF32) !f32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
+        // Use SIMD for faster computation when available
+        if (self.dim >= 8) {
+            return self.dotProductSIMD(other);
+        }
+
         var result: f32 = 0.0;
         for (0..self.dim) |i| {
             result += self.data[i] * other.data[i];
         }
+        return result;
+    }
+
+    /// SIMD-optimized dot product for larger vectors
+    fn dotProductSIMD(self: VectorF32, other: VectorF32) f32 {
+        const VecType = @Vector(8, f32);
+        var sum_vec = VecType{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+        const simd_chunks = self.dim / 8;
+        var i: usize = 0;
+
+        // Process 8 elements at a time with SIMD
+        while (i < simd_chunks * 8) : (i += 8) {
+            const a: VecType = self.data[i .. i + 8][0..8].*;
+            const b: VecType = other.data[i .. i + 8][0..8].*;
+            sum_vec += a * b;
+        }
+
+        // Sum the SIMD vector elements
+        var result: f32 = 0.0;
+        for (0..8) |j| {
+            result += sum_vec[j];
+        }
+
+        // Handle remaining elements
+        while (i < self.dim) : (i += 1) {
+            result += self.data[i] * other.data[i];
+        }
+
         return result;
     }
 
@@ -122,12 +191,12 @@ pub const VectorF32 = struct {
     pub fn normalize(self: VectorF32, allocator: std.mem.Allocator) !VectorF32 {
         const vector_norm = self.norm();
         if (vector_norm == 0.0) return error.ZeroVector;
-        
+
         const normalized_data = try allocator.alloc(f32, self.dim);
         for (0..self.dim) |i| {
             normalized_data[i] = self.data[i] / vector_norm;
         }
-        
+
         return VectorF32{
             .dim = self.dim,
             .data = normalized_data,
@@ -137,12 +206,12 @@ pub const VectorF32 = struct {
     /// Add two vectors element-wise
     pub fn add(self: VectorF32, other: VectorF32, allocator: std.mem.Allocator) !VectorF32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
         const result_data = try allocator.alloc(f32, self.dim);
         for (0..self.dim) |i| {
             result_data[i] = self.data[i] + other.data[i];
         }
-        
+
         return VectorF32{
             .dim = self.dim,
             .data = result_data,
@@ -155,7 +224,7 @@ pub const VectorF32 = struct {
         for (0..self.dim) |i| {
             result_data[i] = self.data[i] * scalar;
         }
-        
+
         return VectorF32{
             .dim = self.dim,
             .data = result_data,
@@ -174,14 +243,14 @@ pub const VectorF32 = struct {
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !VectorF32 {
         const tag = try reader.readByte();
         if (tag != 0x10) return error.InvalidVectorTag;
-        
+
         const dim = try reader.readInt(u16, .little);
         const data = try allocator.alloc(f32, dim);
-        
+
         for (0..dim) |i| {
             data[i] = @bitCast(try reader.readInt(u32, .little));
         }
-        
+
         return VectorF32{
             .dim = dim,
             .data = data,
@@ -208,10 +277,10 @@ pub const VectorI32 = struct {
     pub fn fromString(vec_str: []const u8, allocator: std.mem.Allocator) !VectorI32 {
         // Parse vector string format: "[1, 2, 3]" or "1,2,3"
         var cleaned_str = vec_str;
-        
+
         // Remove brackets if present
         if (std.mem.startsWith(u8, cleaned_str, "[") and std.mem.endsWith(u8, cleaned_str, "]")) {
-            cleaned_str = cleaned_str[1..cleaned_str.len-1];
+            cleaned_str = cleaned_str[1 .. cleaned_str.len - 1];
         }
 
         // Split by comma and parse each element
@@ -255,7 +324,7 @@ pub const VectorI32 = struct {
     /// Manhattan distance between two vectors
     pub fn manhattanDistance(self: VectorI32, other: VectorI32) !i64 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
         var sum: i64 = 0;
         for (0..self.dim) |i| {
             const diff = @as(i64, self.data[i]) - @as(i64, other.data[i]);
@@ -267,7 +336,7 @@ pub const VectorI32 = struct {
     /// Hamming distance between two vectors (count of different elements)
     pub fn hammingDistance(self: VectorI32, other: VectorI32) !u32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
         var count: u32 = 0;
         for (0..self.dim) |i| {
             if (self.data[i] != other.data[i]) {
@@ -280,7 +349,7 @@ pub const VectorI32 = struct {
     /// Dot product of two vectors
     pub fn dotProduct(self: VectorI32, other: VectorI32) !i64 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
         var result: i64 = 0;
         for (0..self.dim) |i| {
             result += @as(i64, self.data[i]) * @as(i64, other.data[i]);
@@ -291,12 +360,12 @@ pub const VectorI32 = struct {
     /// Element-wise addition
     pub fn add(self: VectorI32, other: VectorI32, allocator: std.mem.Allocator) !VectorI32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
-        
+
         const result_data = try allocator.alloc(i32, self.dim);
         for (0..self.dim) |i| {
             result_data[i] = self.data[i] + other.data[i];
         }
-        
+
         return VectorI32{
             .dim = self.dim,
             .data = result_data,
@@ -309,7 +378,7 @@ pub const VectorI32 = struct {
         for (0..self.dim) |i| {
             result_data[i] = self.data[i] * scalar;
         }
-        
+
         return VectorI32{
             .dim = self.dim,
             .data = result_data,
@@ -328,14 +397,14 @@ pub const VectorI32 = struct {
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !VectorI32 {
         const tag = try reader.readByte();
         if (tag != 0x11) return error.InvalidVectorTag;
-        
+
         const dim = try reader.readInt(u16, .little);
         const data = try allocator.alloc(i32, dim);
-        
+
         for (0..dim) |i| {
             data[i] = try reader.readInt(i32, .little);
         }
-        
+
         return VectorI32{
             .dim = dim,
             .data = data,
@@ -372,7 +441,7 @@ test "VectorF32 operations" {
     // Test parsing and formatting
     const vec1 = try VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
     defer vec1.deinit(allocator);
-    
+
     try testing.expectEqual(@as(u16, 3), vec1.dim);
     try testing.expectEqual(@as(f32, 1.0), vec1.data[0]);
     try testing.expectEqual(@as(f32, 2.0), vec1.data[1]);
@@ -403,7 +472,7 @@ test "VectorI32 operations" {
     // Test parsing and formatting
     const vec1 = try VectorI32.fromString("[1, 2, 3]", allocator);
     defer vec1.deinit(allocator);
-    
+
     try testing.expectEqual(@as(u16, 3), vec1.dim);
     try testing.expectEqual(@as(i32, 1), vec1.data[0]);
     try testing.expectEqual(@as(i32, 2), vec1.data[1]);
@@ -433,7 +502,7 @@ test "Vector encoding and decoding" {
 
     var buffer: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    
+
     try vec_f32.encode(fbs.writer());
     fbs.pos = 0;
     const decoded_f32 = try VectorF32.decode(fbs.reader(), allocator);

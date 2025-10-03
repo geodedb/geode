@@ -9,30 +9,28 @@ pub const Mac = struct {
 
     pub fn fromString(mac_str: []const u8) !Mac {
         // Support multiple formats: AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, AABBCCDDEEFF
-        const clean_str = if (std.mem.indexOf(u8, mac_str, ":") != null or 
-                             std.mem.indexOf(u8, mac_str, "-") != null)
-            blk: {
-                // Remove separators for consistent parsing
-                var clean_buf: [12]u8 = undefined;
-                var clean_idx: usize = 0;
-                for (mac_str) |c| {
-                    if (c != ':' and c != '-') {
-                        if (clean_idx >= 12) return error.InvalidMacFormat;
-                        clean_buf[clean_idx] = c;
-                        clean_idx += 1;
-                    }
+        const clean_str = if (std.mem.indexOf(u8, mac_str, ":") != null or
+            std.mem.indexOf(u8, mac_str, "-") != null)
+        blk: {
+            // Remove separators for consistent parsing
+            var clean_buf: [12]u8 = undefined;
+            var clean_idx: usize = 0;
+            for (mac_str) |c| {
+                if (c != ':' and c != '-') {
+                    if (clean_idx >= 12) return error.InvalidMacFormat;
+                    clean_buf[clean_idx] = c;
+                    clean_idx += 1;
                 }
-                if (clean_idx != 12) return error.InvalidMacFormat;
-                break :blk clean_buf[0..12];
             }
-        else
-            if (mac_str.len == 12) mac_str else return error.InvalidMacFormat;
+            if (clean_idx != 12) return error.InvalidMacFormat;
+            break :blk clean_buf[0..12];
+        } else if (mac_str.len == 12) mac_str else return error.InvalidMacFormat;
 
         if (clean_str.len != 12) return error.InvalidMacFormat;
 
         var octets: [6]u8 = undefined;
         for (0..6) |i| {
-            const hex_pair = clean_str[i * 2..i * 2 + 2];
+            const hex_pair = clean_str[i * 2 .. i * 2 + 2];
             octets[i] = std.fmt.parseInt(u8, hex_pair, 16) catch return error.InvalidMacFormat;
         }
 

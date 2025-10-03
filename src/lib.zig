@@ -97,6 +97,9 @@ pub const types = struct {
     pub const geographic = @import("types/geographic.zig");
     pub const cryptographic = @import("types/cryptographic.zig");
 };
+
+// Re-export server graph common types
+pub const graph_common = @import("types/graph_common.zig");
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

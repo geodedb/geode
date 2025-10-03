@@ -11,7 +11,6 @@ const patricia = @import("patricia.zig");
 
 /// Advanced types index integration layer
 /// Bridges our advanced types (Vector, Geographic, Cryptographic) with specialized indexes
-
 /// Comprehensive error set for advanced index operations
 pub const AdvancedIndexError = error{
     // General index errors
@@ -20,32 +19,32 @@ pub const AdvancedIndexError = error{
     IndexCorrupted,
     InvalidIndexType,
     IndexOperationFailed,
-    
+
     // Vector index specific errors
     DimensionMismatch,
     InvalidVectorType,
     VectorNotFound,
     UnsupportedMetric,
     EmptyVectorData,
-    
+
     // Spatial index specific errors
     InvalidGeographicType,
     CoordinateOutOfBounds,
     InvalidBoundingBox,
     SpatialIndexOverflow,
-    
-    // Network index specific errors  
+
+    // Network index specific errors
     InvalidIPAddress,
     InvalidSubnet,
     InvalidMACAddress,
     UnsupportedAddressFamily,
-    
+
     // Cryptographic index specific errors
     InvalidSignature,
     UnsupportedAlgorithm,
     SignatureVerificationFailed,
     InvalidDigest,
-    
+
     // System level errors
     OutOfMemory,
     InvalidInput,
@@ -60,7 +59,7 @@ pub const Validation = struct {
         if (vec.dim == 0) return AdvancedIndexError.EmptyVectorData;
         if (vec.dim > 8192) return AdvancedIndexError.DimensionMismatch; // Reasonable limit
         if (vec.data == null) return AdvancedIndexError.InvalidVectorType;
-        
+
         // Check for invalid values (NaN, infinity)
         for (0..vec.dim) |i| {
             const val = vec.data[i];
@@ -69,7 +68,7 @@ pub const Validation = struct {
             }
         }
     }
-    
+
     /// Validate geographic coordinates
     pub fn validateLatLon(point: geographic.LatLon) AdvancedIndexError!void {
         if (point.lat < -90.0 or point.lat > 90.0) {
@@ -82,7 +81,7 @@ pub const Validation = struct {
             return AdvancedIndexError.InvalidGeographicType;
         }
     }
-    
+
     /// Validate network address format
     pub fn validateIPAddress(addr_bytes: []const u8) AdvancedIndexError!void {
         if (addr_bytes.len != 4 and addr_bytes.len != 16) {
@@ -91,7 +90,7 @@ pub const Validation = struct {
         // IPv4 and IPv6 addresses are valid if they have correct byte length
         // Additional validation could be added here for reserved ranges
     }
-    
+
     /// Validate cryptographic signature
     pub fn validateSignature(sig: cryptographic.Signature) AdvancedIndexError!void {
         if (sig.data.len == 0) {
@@ -102,12 +101,12 @@ pub const Validation = struct {
         }
         // Additional algorithm-specific validation could be added here
     }
-    
+
     /// Validate index name format
     pub fn validateIndexName(name: []const u8) AdvancedIndexError!void {
         if (name.len == 0) return AdvancedIndexError.InvalidInput;
         if (name.len > 255) return AdvancedIndexError.InvalidInput;
-        
+
         // Check for valid identifier characters
         for (name) |c| {
             if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
@@ -115,7 +114,7 @@ pub const Validation = struct {
             }
         }
     }
-    
+
     /// Validate search parameters
     pub fn validateSearchParams(k: u32, radius_km: f64) AdvancedIndexError!void {
         if (k == 0) return AdvancedIndexError.InvalidInput;
@@ -132,7 +131,7 @@ pub const Validation = struct {
 pub const AdvancedIndexManager = struct {
     allocator: std.mem.Allocator,
     vector_indexes: std.StringHashMap(*VectorIndexWrapper),
-    spatial_indexes: std.StringHashMap(*SpatialIndexWrapper), 
+    spatial_indexes: std.StringHashMap(*SpatialIndexWrapper),
     network_indexes: std.StringHashMap(*NetworkIndexWrapper),
     signature_indexes: std.StringHashMap(*SignatureIndexWrapper),
 
@@ -184,7 +183,7 @@ pub const AdvancedIndexManager = struct {
     pub fn createVectorIndex(self: *AdvancedIndexManager, name: []const u8, dim: u16, metric: VectorIndexWrapper.DistanceMetric) !void {
         const index = try self.allocator.create(VectorIndexWrapper);
         index.* = try VectorIndexWrapper.init(self.allocator, dim, metric);
-        
+
         const name_copy = try self.allocator.dupe(u8, name);
         try self.vector_indexes.put(name_copy, index);
     }
@@ -193,7 +192,7 @@ pub const AdvancedIndexManager = struct {
     pub fn createSpatialIndex(self: *AdvancedIndexManager, name: []const u8) !void {
         const index = try self.allocator.create(SpatialIndexWrapper);
         index.* = try SpatialIndexWrapper.init(self.allocator);
-        
+
         const name_copy = try self.allocator.dupe(u8, name);
         try self.spatial_indexes.put(name_copy, index);
     }
@@ -202,7 +201,7 @@ pub const AdvancedIndexManager = struct {
     pub fn createNetworkIndex(self: *AdvancedIndexManager, name: []const u8) !void {
         const index = try self.allocator.create(NetworkIndexWrapper);
         index.* = try NetworkIndexWrapper.init(self.allocator);
-        
+
         const name_copy = try self.allocator.dupe(u8, name);
         try self.network_indexes.put(name_copy, index);
     }
@@ -211,7 +210,7 @@ pub const AdvancedIndexManager = struct {
     pub fn createSignatureIndex(self: *AdvancedIndexManager, name: []const u8) !void {
         const index = try self.allocator.create(SignatureIndexWrapper);
         index.* = try SignatureIndexWrapper.init(self.allocator);
-        
+
         const name_copy = try self.allocator.dupe(u8, name);
         try self.signature_indexes.put(name_copy, index);
     }
@@ -221,7 +220,7 @@ pub const AdvancedIndexManager = struct {
         // Validate inputs
         try Validation.validateIndexName(index_name);
         try Validation.validateVector(vec);
-        
+
         if (self.vector_indexes.get(index_name)) |index| {
             try index.insert(node_id, vec);
         } else {
@@ -235,7 +234,7 @@ pub const AdvancedIndexManager = struct {
         try Validation.validateIndexName(index_name);
         try Validation.validateVector(query);
         try Validation.validateSearchParams(k, 0.0); // radius doesn't apply to vector search
-        
+
         if (self.vector_indexes.get(index_name)) |index| {
             return index.search(query, k, allocator) catch |err| switch (err) {
                 error.OutOfMemory => AdvancedIndexError.OutOfMemory,
@@ -251,7 +250,7 @@ pub const AdvancedIndexManager = struct {
         // Validate inputs
         try Validation.validateIndexName(index_name);
         try Validation.validateLatLon(point);
-        
+
         if (self.spatial_indexes.get(index_name)) |index| {
             try index.insert(node_id, point);
         } else {
@@ -265,7 +264,7 @@ pub const AdvancedIndexManager = struct {
         try Validation.validateIndexName(index_name);
         try Validation.validateLatLon(center);
         try Validation.validateSearchParams(1, radius_km); // k=1 is dummy for radius validation
-        
+
         if (self.spatial_indexes.get(index_name)) |index| {
             return index.searchWithinRadius(center, radius_km, allocator) catch |err| switch (err) {
                 error.OutOfMemory => AdvancedIndexError.OutOfMemory,
@@ -310,7 +309,7 @@ pub const VectorIndexWrapper = struct {
     pub fn init(allocator: std.mem.Allocator, dim: u16, metric: DistanceMetric) !VectorIndexWrapper {
         // HNSW parameters: M=16, ef_construction=200 for good recall/performance balance
         const hnsw_index = hnsw.Hnsw.init(allocator, dim, 16, 200);
-        
+
         return VectorIndexWrapper{
             .allocator = allocator,
             .hnsw_index = hnsw_index,
@@ -390,10 +389,10 @@ pub const SpatialIndexWrapper = struct {
         // Convert radius from km to approximate degrees
         const lat_deg_per_km = 1.0 / 111.0;
         const lon_deg_per_km = 1.0 / (111.0 * @cos(std.math.degreesToRadians(center.lat)));
-        
+
         const lat_radius = radius_km * lat_deg_per_km;
         const lon_radius = radius_km * lon_deg_per_km;
-        
+
         const search_mbr = rtree.MBR{
             .min_x = center.lon - lon_radius,
             .min_y = center.lat - lat_radius,
@@ -412,7 +411,7 @@ pub const SpatialIndexWrapper = struct {
             // from the candidate_id to calculate precise distance
             const candidate_point = geographic.LatLon{ .lat = center.lat, .lon = center.lon }; // Placeholder
             const distance = center.distanceKm(candidate_point);
-            
+
             if (distance <= radius_km) {
                 try results.append(SpatialSearchResult{
                     .node_id = candidate_id,
@@ -629,18 +628,18 @@ test "VectorIndexWrapper operations" {
     // Test vector insertion
     const vec1 = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
     defer vec1.deinit(allocator);
-    
+
     try index.insert(1, vec1);
 
     const vec2 = try vector.VectorF32.fromString("[1.1, 2.1, 3.1]", allocator);
     defer vec2.deinit(allocator);
-    
+
     try index.insert(2, vec2);
 
     // Test vector search
     const query = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
     defer query.deinit(allocator);
-    
+
     const results = try index.search(query, 2, allocator);
     defer allocator.free(results);
 
@@ -658,7 +657,7 @@ test "SpatialIndexWrapper operations" {
     // Test point insertion
     const point1 = try geographic.LatLon.fromCoords(40.7128, -74.0060); // New York
     const point2 = try geographic.LatLon.fromCoords(40.7589, -73.9851); // Manhattan
-    
+
     try index.insert(1, point1);
     try index.insert(2, point2);
 
@@ -679,25 +678,25 @@ test "AdvancedIndexManager integration" {
 
     // Test vector index creation and usage
     try manager.createVectorIndex("embeddings", 3, .cosine);
-    
+
     const vec = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
     defer vec.deinit(allocator);
-    
+
     try manager.insertVector("embeddings", 1, vec);
 
     const search_results = try manager.searchVectors("embeddings", vec, 1, allocator);
     defer allocator.free(search_results);
-    
+
     try testing.expect(search_results.len > 0);
 
     // Test spatial index creation and usage
     try manager.createSpatialIndex("locations");
-    
+
     const point = try geographic.LatLon.fromCoords(40.7128, -74.0060);
     try manager.insertGeographic("locations", 1, point);
 
     const spatial_results = try manager.searchWithinRadius("locations", point, 10.0, allocator);
     defer allocator.free(spatial_results);
-    
+
     try testing.expect(spatial_results.len >= 0); // May be 0 due to placeholder implementation
 }

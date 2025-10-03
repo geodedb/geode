@@ -2,9 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 
 // Import network types
-const IpAddr = @import("../src/types/network/ipaddr.zig").IpAddr;
-const Subnet = @import("../src/types/network/subnet.zig").Subnet;
-const Mac = @import("../src/types/network/mac.zig").Mac;
+const types = @import("geode").types;
+const IpAddr = types.network.IpAddr;
+const Subnet = types.network.Subnet;
+const Mac = types.network.Mac;
 
 // CANARY: REQ=REQ-GQL-NET-TYPES-REGRESSION; FEATURE="Network Types Regression Tests"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_REGRESSION_All; OWNER=testing; UPDATED=2025-01-03
 
@@ -203,10 +204,10 @@ test "TestCANARY_REQ_GQL_NET_TYPES_006_Edge cases and boundary conditions" {
     // Test edge case subnets
     const full_ipv4 = try Subnet.fromString("0.0.0.0/0");
     const single_ipv4 = try Subnet.fromString("192.168.1.1/32");
-    
+
     const any_addr = try IpAddr.fromString("8.8.8.8");
     const specific_addr = try IpAddr.fromString("192.168.1.1");
-    
+
     try testing.expect(full_ipv4.contains(any_addr));
     try testing.expect(single_ipv4.contains(specific_addr));
     try testing.expect(!single_ipv4.contains(any_addr));
@@ -214,7 +215,7 @@ test "TestCANARY_REQ_GQL_NET_TYPES_006_Edge cases and boundary conditions" {
     // Test IPv6 zero compression edge cases
     const ipv6_all_zeros = try IpAddr.fromString("::");
     try testing.expect(ipv6_all_zeros == .v6);
-    
+
     const ipv6_str = try ipv6_all_zeros.toString(allocator);
     defer allocator.free(ipv6_str);
     // Should compress to :: for all zeros
@@ -222,14 +223,14 @@ test "TestCANARY_REQ_GQL_NET_TYPES_006_Edge cases and boundary conditions" {
     // Test MAC address special cases
     const mac_all_f = try Mac.fromString("FF:FF:FF:FF:FF:FF");
     const mac_all_0 = try Mac.fromString("00:00:00:00:00:00");
-    
+
     try testing.expect(mac_all_f.isBroadcast());
     try testing.expect(mac_all_0.isNull());
 
     // Test MAC random generation with different OUIs
     var prng = std.rand.DefaultPrng.init(12345);
     const rng = prng.random();
-    
+
     const vmware_oui = [3]u8{ 0x00, 0x50, 0x56 };
     const random_mac = Mac.randomWithOui(vmware_oui, rng);
     try testing.expectEqual(vmware_oui, random_mac.getOui());
@@ -237,42 +238,42 @@ test "TestCANARY_REQ_GQL_NET_TYPES_006_Edge cases and boundary conditions" {
 
 test "TestCANARY_REQ_GQL_NET_TYPES_007_Performance and memory efficiency" {
     const allocator = testing.allocator;
-    
+
     // Performance test: parse many addresses quickly
     const test_ips = [_][]const u8{
         "192.168.1.1", "10.0.0.1", "172.16.0.1", "8.8.8.8",
-        "2001:db8::1", "::1", "fe80::1", "ff02::1",
+        "2001:db8::1", "::1",      "fe80::1",    "ff02::1",
     };
-    
+
     const test_subnets = [_][]const u8{
         "192.168.0.0/24", "10.0.0.0/8", "172.16.0.0/12",
-        "2001:db8::/32", "::/0", "fe80::/64",
+        "2001:db8::/32",  "::/0",       "fe80::/64",
     };
-    
+
     const test_macs = [_][]const u8{
         "00:11:22:33:44:55", "AA:BB:CC:DD:EE:FF",
         "aa-bb-cc-dd-ee-ff", "112233445566",
     };
-    
+
     // Test that all parsing works quickly
     for (test_ips) |ip_str| {
         const ip = try IpAddr.fromString(ip_str);
         const str = try ip.toString(allocator);
         allocator.free(str);
     }
-    
+
     for (test_subnets) |subnet_str| {
         const subnet = try Subnet.fromString(subnet_str);
         const str = try subnet.toString(allocator);
         allocator.free(str);
     }
-    
+
     for (test_macs) |mac_str| {
         const mac = try Mac.fromString(mac_str);
         const str = try mac.toString(allocator);
         allocator.free(str);
     }
-    
+
     // Memory efficiency: test that types are compact
     try testing.expectEqual(@sizeOf([4]u8) + @sizeOf(u8), @sizeOf(IpAddr.IPv4Addr));
     try testing.expectEqual(@sizeOf([8]u16) + @sizeOf(u8), @sizeOf(IpAddr.IPv6Addr));
@@ -283,28 +284,140 @@ test "TestCANARY_REQ_GQL_NET_TYPES_008_Cross-type operations" {
     // Test interactions between different network types
     const ipv4_addr = try IpAddr.fromString("192.168.1.100");
     const ipv6_addr = try IpAddr.fromString("2001:db8::100");
-    
+
     const ipv4_subnet = try Subnet.fromString("192.168.1.0/24");
     const ipv6_subnet = try Subnet.fromString("2001:db8::/64");
-    
+
     // IPv4 address in IPv4 subnet
     try testing.expect(ipv4_subnet.contains(ipv4_addr));
     try testing.expect(!ipv4_subnet.contains(ipv6_addr));
-    
+
     // IPv6 address in IPv6 subnet
     try testing.expect(ipv6_subnet.contains(ipv6_addr));
     try testing.expect(!ipv6_subnet.contains(ipv4_addr));
-    
+
     // Subnets of different families don't overlap
     try testing.expect(!ipv4_subnet.overlaps(ipv6_subnet));
     try testing.expect(!ipv6_subnet.overlaps(ipv4_subnet));
-    
+
     // Test comparison and ordering
     const mac1 = try Mac.fromString("00:11:22:33:44:55");
     const mac2 = try Mac.fromString("00:11:22:33:44:56");
     const mac3 = try Mac.fromString("00:11:22:33:44:55");
-    
+
     try testing.expectEqual(std.math.Order.lt, mac1.order(mac2));
     try testing.expectEqual(std.math.Order.gt, mac2.order(mac1));
     try testing.expectEqual(std.math.Order.eq, mac1.order(mac3));
+}
+
+test "TestCANARY_REQ_GQL_NET_TYPES_009_Utility functions regression" {
+    // Test that all network utility functions work correctly
+    try testing.expect(types.network.isValidIpAddr("192.168.1.1"));
+    try testing.expect(types.network.isValidIpAddr("2001:db8::1"));
+    try testing.expect(!types.network.isValidIpAddr("invalid"));
+    try testing.expect(!types.network.isValidIpAddr("256.1.1.1"));
+
+    try testing.expect(types.network.isValidSubnet("192.168.0.0/24"));
+    try testing.expect(types.network.isValidSubnet("2001:db8::/64"));
+    try testing.expect(!types.network.isValidSubnet("invalid"));
+    try testing.expect(!types.network.isValidSubnet("192.168.1.1/33"));
+
+    try testing.expect(types.network.isValidMac("AA:BB:CC:DD:EE:FF"));
+    try testing.expect(types.network.isValidMac("aa-bb-cc-dd-ee-ff"));
+    try testing.expect(types.network.isValidMac("AABBCCDDEEFF"));
+    try testing.expect(!types.network.isValidMac("invalid"));
+    try testing.expect(!types.network.isValidMac("GG:BB:CC:DD:EE:FF"));
+
+    // Test parse functions work correctly
+    const ip = try types.network.parseIpAddr("10.0.0.1");
+    try testing.expect(ip.family() == 4);
+
+    const subnet = try types.network.parseSubnet("10.0.0.0/8");
+    try testing.expect(subnet.prefixLength() == 8);
+
+    const mac = try types.network.parseMac("00:11:22:33:44:55");
+    try testing.expect(mac.isGloballyUnique());
+}
+
+test "TestCANARY_REQ_GQL_NET_TYPES_010_GQL integration functions" {
+    // Test built-in functions for GQL integration
+    const ip = try IpAddr.fromString("192.168.1.100");
+    const subnet = try Subnet.fromString("192.168.1.0/24");
+    const mac = try Mac.fromString("AA:BB:CC:DD:EE:FF");
+
+    // Test subnet containment function
+    try testing.expect(types.network.ip_contains(subnet, ip));
+    try testing.expect(!types.network.ip_contains(subnet, try IpAddr.fromString("10.0.0.1")));
+
+    // Test IP property functions
+    try testing.expect(types.network.ip_is_private(ip));
+    try testing.expect(!types.network.ip_is_loopback(ip));
+    try testing.expect(types.network.ip_is_loopback(try IpAddr.fromString("127.0.0.1")));
+
+    // Test MAC property functions
+    const oui = types.network.mac_vendor_oui(mac);
+    try testing.expectEqual([3]u8{ 0xAA, 0xBB, 0xCC }, oui);
+    try testing.expect(!types.network.mac_is_multicast(mac));
+    try testing.expect(types.network.mac_is_locally_administered(mac));
+}
+
+test "TestCANARY_REQ_GQL_NET_TYPES_011_IPv6_canonicalization_regression" {
+    const allocator = testing.allocator;
+
+    // Test RFC 5952 canonicalization consistency
+    const test_cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "2001:db8:0:0:0:0:0:1", .expected = "2001:db8::1" },
+        .{ .input = "2001:0db8:0000:0000:0000:0000:0000:0001", .expected = "2001:db8::1" },
+        .{ .input = "::1", .expected = "::1" },
+        .{ .input = "::", .expected = "::" },
+        .{ .input = "fe80::1", .expected = "fe80::1" },
+        .{ .input = "2001:db8:85a3::8a2e:370:7334", .expected = "2001:db8:85a3::8a2e:370:7334" },
+    };
+
+    for (test_cases) |case| {
+        const ip = try IpAddr.fromString(case.input);
+        try testing.expect(ip.family() == 6);
+        const str = try ip.toString(allocator);
+        defer allocator.free(str);
+        try testing.expectEqualStrings(case.expected, str);
+    }
+}
+
+test "TestCANARY_REQ_GQL_NET_TYPES_012_Subnet_boundary_regression" {
+    // Test subnet boundary conditions
+    const subnet_24 = try Subnet.fromString("192.168.1.0/24");
+    const subnet_25 = try Subnet.fromString("192.168.1.0/25");
+    const subnet_23 = try Subnet.fromString("192.168.0.0/23");
+
+    const ip_first = try IpAddr.fromString("192.168.1.0");
+    const ip_last_24 = try IpAddr.fromString("192.168.1.255");
+    const ip_middle = try IpAddr.fromString("192.168.1.100");
+    const ip_outside = try IpAddr.fromString("192.168.2.1");
+
+    // Test /24 subnet boundaries
+    try testing.expect(subnet_24.contains(ip_first));
+    try testing.expect(subnet_24.contains(ip_last_24));
+    try testing.expect(subnet_24.contains(ip_middle));
+    try testing.expect(!subnet_24.contains(ip_outside));
+
+    // Test subnet hierarchy
+    try testing.expect(subnet_23.contains(ip_first));
+    try testing.expect(subnet_25.contains(ip_first));
+    try testing.expect(!subnet_25.contains(ip_last_24)); // 192.168.1.255 not in /25
+
+    // Test prefix length boundaries for IPv4
+    for (0..33) |prefix| {
+        const subnet_str = try std.fmt.allocPrint(testing.allocator, "192.168.1.0/{d}", .{prefix});
+        defer testing.allocator.free(subnet_str);
+        const subnet = try Subnet.fromString(subnet_str);
+        try testing.expect(subnet.prefixLength() == prefix);
+    }
+
+    // Test prefix length boundaries for IPv6
+    for (0..129) |prefix| {
+        const subnet_str = try std.fmt.allocPrint(testing.allocator, "2001:db8::/{d}", .{prefix});
+        defer testing.allocator.free(subnet_str);
+        const subnet = try Subnet.fromString(subnet_str);
+        try testing.expect(subnet.prefixLength() == prefix);
+    }
 }

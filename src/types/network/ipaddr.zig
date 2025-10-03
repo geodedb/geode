@@ -59,16 +59,16 @@ pub const IpAddr = union(enum) {
         pub fn fromString(addr_str: []const u8) !IPv6Addr {
             // Handle IPv6 address parsing with :: expansion
             var segments: [8]u16 = [_]u16{0} ** 8;
-            
+
             // Find double colon position for zero compression
             const double_colon_pos = std.mem.indexOf(u8, addr_str, "::");
-            
+
             if (double_colon_pos) |pos| {
                 // Handle zero compression
                 const before_parts = std.mem.splitSequence(u8, addr_str[0..pos], ":");
-                const after_parts = if (pos + 2 < addr_str.len) 
-                    std.mem.splitSequence(u8, addr_str[pos + 2..], ":") 
-                else 
+                const after_parts = if (pos + 2 < addr_str.len)
+                    std.mem.splitSequence(u8, addr_str[pos + 2 ..], ":")
+                else
                     std.mem.splitSequence(u8, "", ":");
 
                 var before_count: usize = 0;
@@ -265,14 +265,14 @@ test "IPv4 address parsing and formatting" {
     const addr1 = try IpAddr.fromString("192.168.1.1");
     try testing.expect(addr1 == .v4);
     try testing.expect(addr1.family() == 4);
-    
+
     const addr1_str = try addr1.toString(allocator);
     defer allocator.free(addr1_str);
     try testing.expectEqualStrings("192.168.1.1", addr1_str);
 
     // Test private address detection
     try testing.expect(addr1.isPrivate());
-    
+
     const public_addr = try IpAddr.fromString("8.8.8.8");
     try testing.expect(!public_addr.isPrivate());
 
@@ -306,7 +306,7 @@ test "IP address encoding/decoding" {
     // Test IPv4 round-trip
     const ipv4 = try IpAddr.fromString("192.168.1.100");
     try ipv4.encode(fbs.writer());
-    
+
     fbs.pos = 0;
     const decoded_ipv4 = try IpAddr.decode(fbs.reader());
     try testing.expect(decoded_ipv4 == .v4);
@@ -316,7 +316,7 @@ test "IP address encoding/decoding" {
     fbs.pos = 0;
     const ipv6 = try IpAddr.fromString("2001:db8::1");
     try ipv6.encode(fbs.writer());
-    
+
     fbs.pos = 0;
     const decoded_ipv6 = try IpAddr.decode(fbs.reader());
     try testing.expect(decoded_ipv6 == .v6);

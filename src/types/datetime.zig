@@ -175,9 +175,13 @@ pub const TimestampTZ = struct {
     pub fn fromStr(str: []const u8) Date.Error!TimestampTZ {
         if (str.len < 20) return Date.Error.ParseError; // Need at least YYYY-MM-DDTHH:MM:SSZ
 
-        const tz_start = std.mem.indexOfAny(u8, str, "Z+-") orelse return Date.Error.ParseError;
+        // Find timezone marker after the timestamp part (look from position 19 onwards)
+        const tz_start = if (str.len > 19)
+            std.mem.indexOfAnyPos(u8, str, 19, "Z+-") orelse return Date.Error.ParseError
+        else
+            return Date.Error.ParseError;
         const ts_part = str[0..tz_start];
-        if (ts_part.len < 19) return Date.Error.ParseError; // Timestamp needs at least 19 chars
+        if (ts_part.len < 19) return Date.Error.ParseError; // Timestamp needs at least 19 chars (YYYY-MM-DDTHH:MM:SS)
         const ts = try Timestamp.fromStr(ts_part);
 
         var offset_seconds: i32 = 0;

@@ -141,5 +141,6 @@ test "decimal128 basics" {
     const result = try d1.add(d2);
     const rounded = try result.roundHalfEven(3);
 
-    std.testing.expect(rounded.coeff == 123999 and rounded.scale == 3) catch unreachable;
+    // 123.45 + 0.550 = 124.000, rounded to 3 decimal places should be 124.000 (coeff=124000, scale=3)
+    try std.testing.expect(rounded.coeff == 124000 and rounded.scale == 3);
 }

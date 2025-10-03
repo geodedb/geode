@@ -35,7 +35,7 @@ pub const VectorIndex = struct {
 
     pub fn deinit(self: *VectorIndex) void {
         self.hnsw_index.deinit();
-        
+
         // Clean up stored values
         var iter = self.value_storage.iterator();
         while (iter.next()) |entry| {
@@ -49,14 +49,14 @@ pub const VectorIndex = struct {
         if (vector.dim != self.dimension) return IndexError.DimensionMismatch;
 
         const id = node_id orelse self.getNextId();
-        
+
         // Insert into HNSW index
         try self.hnsw_index.insert(id, vector.data);
-        
+
         // Store the original value for retrieval
         const stored_value = heap.Value{ .vector_f32 = vector };
         try self.value_storage.put(id, stored_value);
-        
+
         return id;
     }
 
@@ -65,22 +65,22 @@ pub const VectorIndex = struct {
         if (vector.dim != self.dimension) return IndexError.DimensionMismatch;
 
         const id = node_id orelse self.getNextId();
-        
+
         // Convert i32 vector to f32 for HNSW indexing
         const f32_data = try self.allocator.alloc(f32, vector.dim);
         defer self.allocator.free(f32_data);
-        
+
         for (0..vector.dim) |i| {
             f32_data[i] = @floatFromInt(vector.data[i]);
         }
-        
+
         // Insert into HNSW index
         try self.hnsw_index.insert(id, f32_data);
-        
+
         // Store the original value
         const stored_value = heap.Value{ .vector_i32 = vector };
         try self.value_storage.put(id, stored_value);
-        
+
         return id;
     }
 
@@ -92,7 +92,7 @@ pub const VectorIndex = struct {
         defer self.allocator.free(results);
 
         var search_result = VectorSearchResult.init(self.allocator);
-        
+
         for (results) |result| {
             if (self.value_storage.get(result.id)) |stored_value| {
                 try search_result.results.append(.{
@@ -102,7 +102,7 @@ pub const VectorIndex = struct {
                 });
             }
         }
-        
+
         return search_result;
     }
 
@@ -113,7 +113,7 @@ pub const VectorIndex = struct {
         // Convert i32 query to f32 for HNSW search
         const f32_query = try self.allocator.alloc(f32, query.dim);
         defer self.allocator.free(f32_query);
-        
+
         for (0..query.dim) |i| {
             f32_query[i] = @floatFromInt(query.data[i]);
         }
@@ -122,7 +122,7 @@ pub const VectorIndex = struct {
         defer self.allocator.free(results);
 
         var search_result = VectorSearchResult.init(self.allocator);
-        
+
         for (results) |result| {
             if (self.value_storage.get(result.id)) |stored_value| {
                 try search_result.results.append(.{
@@ -132,7 +132,7 @@ pub const VectorIndex = struct {
                 });
             }
         }
-        
+
         return search_result;
     }
 
@@ -141,7 +141,7 @@ pub const VectorIndex = struct {
         if (self.value_storage.get(id)) |_| {
             // Remove from value storage
             _ = self.value_storage.remove(id);
-            
+
             // HNSW doesn't have efficient removal, so we mark as deleted
             // In production, this would need a more sophisticated approach
             return true;
@@ -245,7 +245,7 @@ pub const VectorIndexManager = struct {
 
         const index = try self.allocator.create(VectorIndex);
         index.* = VectorIndex.init(self.allocator, dimension, metric);
-        
+
         const owned_name = try self.allocator.dupe(u8, name);
         try self.indexes.put(owned_name, index);
     }
@@ -303,7 +303,7 @@ test "VectorIndex basic operations" {
     defer results.deinit();
 
     try testing.expect(results.len() >= 1);
-    
+
     // The first result should be vec1 (exact match)
     const first_match = results.get(0).?;
     try testing.expectEqual(id1, first_match.id);

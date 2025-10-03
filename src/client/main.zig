@@ -14,16 +14,16 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
             else => {},
         }
     }
-    
+
     // If no escaping needed, just duplicate the string
     if (escape_count == 0) {
         return allocator.dupe(u8, input);
     }
-    
+
     // Allocate buffer for escaped string
     const result = try allocator.alloc(u8, input.len + escape_count);
     var write_idx: usize = 0;
-    
+
     for (input) |c| {
         switch (c) {
             '"' => {
@@ -57,7 +57,7 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
             },
         }
     }
-    
+
     return result;
 }
 
@@ -372,7 +372,7 @@ pub fn main() !void {
             // RUN_GQL
             const escaped_text = try escapeJsonString(gpa, processed_text);
             defer gpa.free(escaped_text);
-            
+
             if (param_name) |pn| {
                 const pj = param_json orelse "{}";
                 const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ escaped_text, pn, pj });
@@ -574,7 +574,7 @@ pub fn main() !void {
     // RUN_GQL
     const escaped_text = try escapeJsonString(gpa, processed_text);
     defer gpa.free(escaped_text);
-    
+
     if (param_name) |pn| {
         const pj = param_json orelse "{}";
         try child_stdin_file.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");

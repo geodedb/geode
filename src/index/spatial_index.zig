@@ -40,10 +40,10 @@ pub const SpatialIndex = struct {
             // Convert radius in meters to approximate degrees
             const lat_deg_per_meter = 1.0 / 111111.0; // Approximate
             const lon_deg_per_meter = 1.0 / (111111.0 * @cos(self.lat * std.math.pi / 180.0));
-            
+
             const lat_offset = radius_meters * lat_deg_per_meter;
             const lon_offset = radius_meters * lon_deg_per_meter;
-            
+
             return rtree.MBR{
                 .min_x = self.lon - lon_offset,
                 .min_y = self.lat - lat_offset,
@@ -65,7 +65,7 @@ pub const SpatialIndex = struct {
 
     pub fn deinit(self: *SpatialIndex) void {
         self.rtree_index.deinit();
-        
+
         // Clean up stored values
         var iter = self.value_storage.iterator();
         while (iter.next()) |entry| {
@@ -78,54 +78,54 @@ pub const SpatialIndex = struct {
     /// Insert a LatLon point into the spatial index
     pub fn insertLatLon(self: *SpatialIndex, latlon: geographic_types.LatLon, node_id: ?u64) !u64 {
         const id = node_id orelse self.getNextId();
-        
+
         const coord = Coordinate{ .lat = latlon.lat, .lon = latlon.lon };
         const mbr = coord.toMBR();
-        
+
         // Insert into R-tree
         try self.rtree_index.insert(mbr, id);
-        
+
         // Store the original value and coordinate
         const stored_value = heap.Value{ .latlon = latlon };
         try self.value_storage.put(id, stored_value);
         try self.coordinate_storage.put(id, coord);
-        
+
         return id;
     }
 
     /// Insert a LatLonAlt point into the spatial index
     pub fn insertLatLonAlt(self: *SpatialIndex, latlonalt: geographic_types.LatLonAlt, node_id: ?u64) !u64 {
         const id = node_id orelse self.getNextId();
-        
+
         const coord = Coordinate{ .lat = latlonalt.lat, .lon = latlonalt.lon, .alt = latlonalt.alt };
         const mbr = coord.toMBR();
-        
+
         // Insert into R-tree (2D projection)
         try self.rtree_index.insert(mbr, id);
-        
+
         // Store the original value and coordinate
         const stored_value = heap.Value{ .latlonalt = latlonalt };
         try self.value_storage.put(id, stored_value);
         try self.coordinate_storage.put(id, coord);
-        
+
         return id;
     }
 
     /// Insert a GeoPoint into the spatial index
     pub fn insertGeoPoint(self: *SpatialIndex, geopoint: geographic_types.GeoPoint, node_id: ?u64) !u64 {
         const id = node_id orelse self.getNextId();
-        
+
         const coord = Coordinate{ .lat = geopoint.lat, .lon = geopoint.lon, .alt = geopoint.alt };
         const mbr = coord.toMBR();
-        
+
         // Insert into R-tree
         try self.rtree_index.insert(mbr, id);
-        
+
         // Store the original value and coordinate
         const stored_value = heap.Value{ .geopoint = geopoint };
         try self.value_storage.put(id, stored_value);
         try self.coordinate_storage.put(id, coord);
-        
+
         return id;
     }
 
@@ -140,11 +140,11 @@ pub const SpatialIndex = struct {
 
         var result_ids = std.ArrayList(u64).init(self.allocator);
         defer result_ids.deinit();
-        
+
         try self.rtree_index.search(query_mbr, &result_ids);
 
         var search_result = SpatialSearchResult.init(self.allocator);
-        
+
         for (result_ids.items) |id| {
             if (self.value_storage.get(id)) |stored_value| {
                 if (self.coordinate_storage.get(id)) |coord| {
@@ -156,7 +156,7 @@ pub const SpatialIndex = struct {
                 }
             }
         }
-        
+
         return search_result;
     }
 
@@ -167,11 +167,11 @@ pub const SpatialIndex = struct {
 
         var result_ids = std.ArrayList(u64).init(self.allocator);
         defer result_ids.deinit();
-        
+
         try self.rtree_index.search(query_mbr, &result_ids);
 
         var search_result = SpatialSearchResult.init(self.allocator);
-        
+
         // Filter results by actual distance
         for (result_ids.items) |id| {
             if (self.value_storage.get(id)) |stored_value| {
@@ -188,7 +188,7 @@ pub const SpatialIndex = struct {
                 }
             }
         }
-        
+
         // Sort by distance
         std.sort.pdq(
             SpatialMatch,
@@ -202,7 +202,7 @@ pub const SpatialIndex = struct {
                 }
             }.lessThan,
         );
-        
+
         return search_result;
     }
 
@@ -211,7 +211,7 @@ pub const SpatialIndex = struct {
         // Start with a small radius and expand until we have enough results
         var radius_meters: f64 = 1000; // Start with 1km
         const max_radius: f64 = 40075000; // Half of Earth's circumference
-        
+
         while (radius_meters <= max_radius) {
             var results = try self.searchRadius(center_lat, center_lon, radius_meters);
             if (results.len() >= k) {
@@ -224,7 +224,7 @@ pub const SpatialIndex = struct {
             results.deinit();
             radius_meters *= 2; // Double the search radius
         }
-        
+
         // Return all found results if we couldn't find k points
         return self.searchRadius(center_lat, center_lon, max_radius);
     }
@@ -233,14 +233,14 @@ pub const SpatialIndex = struct {
     pub fn remove(self: *SpatialIndex, id: u64) bool {
         if (self.coordinate_storage.get(id)) |coord| {
             const mbr = coord.toMBR();
-            
+
             // Remove from R-tree
             const removed = self.rtree_index.remove(mbr, id);
-            
+
             // Remove from storage
             _ = self.value_storage.remove(id);
             _ = self.coordinate_storage.remove(id);
-            
+
             return removed;
         }
         return false;
@@ -271,17 +271,17 @@ pub const SpatialIndex = struct {
 fn haversineDistance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) f64 {
     const R = 6371000.0; // Earth's radius in meters
     const pi = std.math.pi;
-    
+
     const lat1_rad = lat1 * pi / 180.0;
     const lat2_rad = lat2 * pi / 180.0;
     const dlat = (lat2 - lat1) * pi / 180.0;
     const dlon = (lon2 - lon1) * pi / 180.0;
-    
+
     const a = @sin(dlat / 2.0) * @sin(dlat / 2.0) +
-              @cos(lat1_rad) * @cos(lat2_rad) *
-              @sin(dlon / 2.0) * @sin(dlon / 2.0);
+        @cos(lat1_rad) * @cos(lat2_rad) *
+            @sin(dlon / 2.0) * @sin(dlon / 2.0);
     const c = 2.0 * std.math.atan2(@sqrt(a), @sqrt(1.0 - a));
-    
+
     return R * c;
 }
 
@@ -357,7 +357,7 @@ pub const SpatialIndexManager = struct {
 
         const index = try self.allocator.create(SpatialIndex);
         index.* = SpatialIndex.init(self.allocator);
-        
+
         const owned_name = try self.allocator.dupe(u8, name);
         try self.indexes.put(owned_name, index);
     }
@@ -446,7 +446,7 @@ test "SpatialIndex distance calculations" {
     defer results.deinit();
 
     try testing.expect(results.len() >= 1);
-    
+
     // Check that distances are calculated
     for (results.results.items) |result| {
         try testing.expect(result.distance_meters != null);
@@ -479,7 +479,7 @@ test "SpatialIndex k-nearest neighbors" {
     defer results.deinit();
 
     try testing.expectEqual(@as(usize, 3), results.len());
-    
+
     // Results should be sorted by distance
     for (0..results.len() - 1) |i| {
         const dist1 = results.get(i).?.distance_meters.?;

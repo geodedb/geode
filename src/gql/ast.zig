@@ -55,12 +55,7 @@ pub const Query = struct {
 };
 
 pub const UnionQuery = struct {
-    pub const Part = struct { 
-        operation: SetOperation = .union_op,
-        all: bool, 
-        distinct: bool, 
-        query: Query 
-    };
+    pub const Part = struct { operation: SetOperation = .union_op, all: bool, distinct: bool, query: Query };
     first: Query,
     tails: []Part,
 };

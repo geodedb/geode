@@ -557,26 +557,26 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 .Ident => |ident| ident.orig,
                 else => break :blk_call .{ .Null = {} }, // Not a simple function call
             };
-            
+
             // Try to use the extended function registry for advanced type functions
             const eval_ext = @import("eval_extended.zig");
-            
+
             // Initialize registry
             var registry = eval_ext.initFunctionRegistry(ally) catch {
                 break :blk_call .{ .Null = {} };
             };
             defer registry.deinit();
-            
+
             // Convert function name to lowercase for lookup
             var lowercase_name = ally.alloc(u8, function_name.len) catch {
                 break :blk_call .{ .Null = {} };
             };
             defer ally.free(lowercase_name);
-            
+
             for (function_name, 0..) |c, i| {
                 lowercase_name[i] = std.ascii.toLower(c);
             }
-            
+
             // Look up function in extended registry
             if (registry.get(lowercase_name)) |func| {
                 // Convert arguments from AST to ExtValue
@@ -584,32 +584,32 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     break :blk_call .{ .Null = {} };
                 };
                 defer ally.free(args);
-                
+
                 for (call.args, 0..) |arg, i| {
                     const arg_value = evalExpr(ally, arg.*, env) catch {
                         break :blk_call .{ .Null = {} };
                     };
                     args[i] = valueToExtValue(arg_value);
                 }
-                
+
                 // Call the extended function
                 const result = func(ally, args) catch {
                     break :blk_call .{ .Null = {} };
                 };
-                
+
                 // Convert result back to eval.Value
                 break :blk_call extValueToValue(result);
             }
-            
+
             // Try basic built-in functions if not found in extended registry
             const result = tryBasicFunction(ally, lowercase_name, call.args, env) catch {
                 break :blk_call .{ .Null = {} };
             };
-            
+
             if (result) |val| {
                 break :blk_call val;
             }
-            
+
             // Function not found, return null
             break :blk_call .{ .Null = {} };
         },
@@ -635,7 +635,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             // First, get the object from the environment
             const _object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
             _ = _object; // Suppress unused variable warning
-            
+
             // Try to extract the property value from the object
             // For now, this is a simplified implementation
             // In a full implementation, this would access the object's properties
@@ -750,13 +750,13 @@ fn heapValueToEvalValue(value: heap.Value) Value {
 /// Try to execute basic built-in functions (length, upper, lower, etc.)
 fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
-    
+
     // Evaluate arguments first
     if (args.len == 0) return null;
-    
+
     const first_arg = try evalExpr(ally, args[0].*, env);
     const heap_first_arg = evalValueToHeapValue(first_arg);
-    
+
     // Handle common string functions
     if (std.mem.eql(u8, function_name, "length")) {
         const result = evaluator_functions.length_chars(heap_first_arg) catch return null;
@@ -783,12 +783,12 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
     }
-    
+
     // Handle two-argument functions
     if (args.len >= 2) {
         const second_arg = try evalExpr(ally, args[1].*, env);
         const heap_second_arg = evalValueToHeapValue(second_arg);
-        
+
         if (std.mem.eql(u8, function_name, "substring")) {
             if (args.len >= 3) {
                 const third_arg = try evalExpr(ally, args[2].*, env);
@@ -809,7 +809,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             }
         }
     }
-    
+
     // Function not recognized
     return null;
 }

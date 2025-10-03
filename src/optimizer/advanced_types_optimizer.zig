@@ -9,7 +9,6 @@ const hnsw = @import("../index/hnsw.zig");
 
 /// Advanced types query optimizer
 /// Provides cost-based optimization for vector, geographic, and cryptographic operations
-
 pub const AdvancedTypesOptimizer = struct {
     allocator: std.mem.Allocator,
     statistics: AdvancedTypeStatistics,
@@ -62,13 +61,13 @@ pub const AdvancedTypesOptimizer = struct {
                             // Choose optimal distance metric based on query patterns and index stats
                             const stats = vector_idx.getStats();
                             vec_op.metric = self.chooseOptimalMetricWithStats(vec_op, stats);
-                            
+
                             // Decide whether to use exact or approximate search based on index size
                             if (vec_op.k > self.statistics.exact_search_threshold or stats.total_vectors > 10000) {
                                 vec_op.use_approximate = true;
                                 vec_op.ef_search = self.calculateOptimalEfSearch(vec_op.k);
                             }
-                            
+
                             // Consider vector quantization for memory efficiency
                             if (vec_op.dimension > self.statistics.quantization_threshold) {
                                 vec_op.use_quantization = true;
@@ -98,20 +97,20 @@ pub const AdvancedTypesOptimizer = struct {
                         if (sm.getIndex(spatial_op.index_name)) |spatial_idx| {
                             // Get index statistics to inform optimization
                             const stats = spatial_idx.getStats();
-                            
+
                             // Choose optimal spatial index structure based on stats
                             spatial_op.index_type = self.chooseOptimalSpatialIndexWithStats(spatial_op, stats);
-                            
+
                             // Optimize radius search with hierarchical bounding
                             if (spatial_op.search_type == .radius) {
                                 spatial_op.use_hierarchical_search = spatial_op.radius_km > self.statistics.hierarchical_threshold_km;
-                                
+
                                 // Use approximate distance for initial filtering on large datasets
                                 if (spatial_op.radius_km > self.statistics.approximate_distance_threshold_km or stats.total_points > 50000) {
                                     spatial_op.use_approximate_distance = true;
                                 }
                             }
-                            
+
                             // Optimize bounding box queries
                             if (spatial_op.search_type == .bounding_box) {
                                 spatial_op.use_spatial_hash = self.shouldUseSpatialHashWithStats(spatial_op, stats);
@@ -137,10 +136,10 @@ pub const AdvancedTypesOptimizer = struct {
                 .CryptographicVerify => |*crypto_op| {
                     // Batch signature verifications when possible
                     crypto_op.use_batch_verification = crypto_op.signature_count > self.statistics.batch_verify_threshold;
-                    
+
                     // Choose optimal verification strategy
                     crypto_op.verification_strategy = self.chooseVerificationStrategy(crypto_op);
-                    
+
                     // Pre-filter by algorithm before expensive verification
                     crypto_op.pre_filter_by_algorithm = true;
                 },
@@ -353,7 +352,7 @@ pub const AdvancedTypesOptimizer = struct {
             std.math.pi * spatial_op.radius_km * spatial_op.radius_km
         else
             spatial_op.bounding_box.area();
-        
+
         return @min(search_area / self.statistics.total_area, 1.0);
     }
 
@@ -365,7 +364,7 @@ pub const AdvancedTypesOptimizer = struct {
             spatial_op.radius_km * spatial_op.radius_km
         else
             spatial_op.bounding_box.area();
-        
+
         return base_cost * area_factor * 0.001;
     }
 
@@ -383,14 +382,14 @@ pub const AdvancedTypeStatistics = struct {
     // Vector operation thresholds
     exact_search_threshold: u32 = 1000,
     quantization_threshold: u32 = 512,
-    
+
     // Geographic operation thresholds
     hierarchical_threshold_km: f64 = 100.0,
     approximate_distance_threshold_km: f64 = 500.0,
     high_density_threshold: f64 = 1000.0, // points per km²
     spatial_hash_area_threshold: f64 = 10.0, // km²
     total_area: f64 = 10000.0, // Total indexed area in km²
-    
+
     // Cryptographic operation thresholds
     batch_verify_threshold: u32 = 10,
     parallel_verify_threshold: u32 = 100,
@@ -410,13 +409,13 @@ pub const AdvancedTypeStatistics = struct {
 // Query plan structures
 pub const QueryPlan = struct {
     operations: std.ArrayList(Operation),
-    
+
     pub fn init(allocator: std.mem.Allocator) QueryPlan {
         return QueryPlan{
             .operations = std.ArrayList(Operation).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *QueryPlan) void {
         self.operations.deinit();
     }
@@ -520,7 +519,7 @@ pub const BoundingBox = struct {
     min_lon: f64 = 0.0,
     max_lat: f64 = 0.0,
     max_lon: f64 = 0.0,
-    
+
     pub fn area(self: BoundingBox) f64 {
         return (self.max_lat - self.min_lat) * (self.max_lon - self.min_lon);
     }
@@ -531,14 +530,14 @@ pub const IndexOperation = struct {
     selectivity: f64,
     cost: f64,
     operation: Operation,
-    
+
     pub const IndexType = enum {
         vector,
         spatial,
         network,
         crypto,
     };
-    
+
     pub fn compareCostEffectiveness(context: void, a: IndexOperation, b: IndexOperation) bool {
         _ = context;
         const effectiveness_a = a.selectivity / a.cost;
@@ -585,15 +584,15 @@ test "AdvancedTypeStatistics updates" {
     const testing = std.testing;
 
     var stats = AdvancedTypeStatistics.init();
-    
+
     const operation_stats = OperationStats{
         .vector_avg_time = 0.002,
         .spatial_avg_radius = 20.0,
         .crypto_avg_batch_size = 15.0,
     };
-    
+
     stats.updateFromStats(operation_stats);
-    
+
     try testing.expectEqual(@as(u32, 2), stats.exact_search_threshold);
     try testing.expectEqual(@as(f64, 40.0), stats.hierarchical_threshold_km);
     try testing.expectEqual(@as(u32, 15), stats.batch_verify_threshold);

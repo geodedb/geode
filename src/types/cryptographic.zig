@@ -24,7 +24,7 @@ pub const Signature = struct {
         ECDSA_P384 = 3,
         RSA_PSS_SHA256 = 4,
         RSA_PSS_SHA512 = 5,
-        
+
         pub fn toString(self: SignatureAlg) []const u8 {
             return switch (self) {
                 .Ed25519 => "Ed25519",
@@ -69,7 +69,7 @@ pub const Signature = struct {
         // Decode hex signature
         const sig_bytes = try allocator.alloc(u8, hex_sig.len / 2);
         _ = try std.fmt.hexToBytes(sig_bytes, hex_sig);
-        
+
         // Validate signature length
         if (sig_bytes.len != alg.expectedSignatureSize()) {
             allocator.free(sig_bytes);
@@ -81,7 +81,7 @@ pub const Signature = struct {
         if (hex_pubkey) |hex_pk| {
             const pk_bytes = try allocator.alloc(u8, hex_pk.len / 2);
             _ = try std.fmt.hexToBytes(pk_bytes, hex_pk);
-            
+
             if (pk_bytes.len != alg.expectedPublicKeySize()) {
                 allocator.free(sig_bytes);
                 allocator.free(pk_bytes);
@@ -100,11 +100,11 @@ pub const Signature = struct {
     pub fn fromString(sig_str: []const u8, allocator: std.mem.Allocator) !Signature {
         // Parse format: "algorithm:signature:public_key" or "algorithm:signature"
         var parts = std.mem.splitSequence(u8, sig_str, ":");
-        
+
         const alg_str = parts.next() orelse return error.InvalidSignatureFormat;
         const sig_str_part = parts.next() orelse return error.InvalidSignatureFormat;
         const pubkey_str = parts.next();
-        
+
         const alg = try SignatureAlg.fromString(alg_str);
         return fromHex(alg, sig_str_part, pubkey_str, allocator);
     }
@@ -118,7 +118,7 @@ pub const Signature = struct {
             const pubkey_hex = try allocator.alloc(u8, pubkey.len * 2);
             defer allocator.free(pubkey_hex);
             _ = std.fmt.bufPrint(pubkey_hex, "{x}", .{std.fmt.fmtSliceHexLower(pubkey)}) catch unreachable;
-            
+
             return std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ self.alg.toString(), sig_hex, pubkey_hex });
         } else {
             return std.fmt.allocPrint(allocator, "{s}:{s}", .{ self.alg.toString(), sig_hex });
@@ -130,13 +130,13 @@ pub const Signature = struct {
         // Note: This is a placeholder implementation
         // In a real implementation, this would use the appropriate cryptographic library
         // based on the algorithm (Ed25519, ECDSA, RSA-PSS, etc.)
-        
+
         if (self.public_key == null) return error.PublicKeyRequired;
-        
+
         // Basic validation
         if (self.signature.len != self.alg.expectedSignatureSize()) return false;
         if (self.public_key.?.len != self.alg.expectedPublicKeySize()) return false;
-        
+
         // Placeholder: In real implementation, perform actual cryptographic verification
         _ = data;
         return true; // Always return true for now
@@ -146,11 +146,11 @@ pub const Signature = struct {
     pub fn encode(self: Signature, writer: anytype) !void {
         try writer.writeByte(0x15); // Signature tag
         try writer.writeByte(@intFromEnum(self.alg));
-        
+
         // Write signature
         try writer.writeInt(u16, @intCast(self.signature.len), .little);
         try writer.writeAll(self.signature);
-        
+
         // Write public key if present
         if (self.public_key) |pubkey| {
             try writer.writeByte(1); // Has public key
@@ -164,26 +164,26 @@ pub const Signature = struct {
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !Signature {
         const tag = try reader.readByte();
         if (tag != 0x15) return error.InvalidSignatureTag;
-        
+
         const alg_byte = try reader.readByte();
         const alg = @as(SignatureAlg, @enumFromInt(alg_byte));
-        
+
         // Read signature
         const sig_len = try reader.readInt(u16, .little);
         const signature = try allocator.alloc(u8, sig_len);
         try reader.readNoEof(signature);
-        
+
         // Read public key if present
         const has_pubkey = try reader.readByte();
         var public_key: ?[]const u8 = null;
-        
+
         if (has_pubkey == 1) {
             const pubkey_len = try reader.readInt(u16, .little);
             const pubkey_data = try allocator.alloc(u8, pubkey_len);
             try reader.readNoEof(pubkey_data);
             public_key = pubkey_data;
         }
-        
+
         return Signature{
             .alg = alg,
             .signature = signature,
@@ -210,13 +210,13 @@ pub const KeyPair = struct {
         // In real implementation, this would use secure random generation
         var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         const rng = prng.random();
-        
+
         const private_key = try allocator.alloc(u8, alg.expectedSignatureSize());
         const public_key = try allocator.alloc(u8, alg.expectedPublicKeySize());
-        
+
         rng.bytes(private_key);
         rng.bytes(public_key);
-        
+
         return KeyPair{
             .alg = alg,
             .private_key = private_key,
@@ -229,13 +229,13 @@ pub const KeyPair = struct {
         // Placeholder signing
         // In real implementation, this would perform actual cryptographic signing
         _ = data;
-        
+
         const signature_bytes = try allocator.alloc(u8, self.alg.expectedSignatureSize());
         var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         prng.random().bytes(signature_bytes);
-        
+
         const public_key_copy = try allocator.dupe(u8, self.public_key);
-        
+
         return Signature{
             .alg = self.alg,
             .signature = signature_bytes,
@@ -262,7 +262,7 @@ pub const Hmac = struct {
         HMAC_SHA512 = 2,
         HMAC_SHA3_256 = 3,
         HMAC_SHA3_512 = 4,
-        
+
         pub fn toString(self: HmacAlg) []const u8 {
             return switch (self) {
                 .HMAC_SHA256 => "HMAC-SHA256",
@@ -282,7 +282,7 @@ pub const Hmac = struct {
 
     pub fn compute(alg: HmacAlg, key: []const u8, data: []const u8, allocator: std.mem.Allocator) !Hmac {
         const digest = try allocator.alloc(u8, alg.digestSize());
-        
+
         switch (alg) {
             .HMAC_SHA256 => {
                 var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(key);
@@ -309,9 +309,9 @@ pub const Hmac = struct {
                 hasher.final(digest[0..64]);
             },
         }
-        
+
         const key_copy = try allocator.dupe(u8, key);
-        
+
         return Hmac{
             .alg = alg,
             .key = key_copy,
@@ -322,7 +322,7 @@ pub const Hmac = struct {
     pub fn verify(self: Hmac, data: []const u8, allocator: std.mem.Allocator) !bool {
         const expected = try compute(self.alg, self.key, data, allocator);
         defer expected.deinit(allocator);
-        
+
         return std.crypto.utils.timingSafeEql([32]u8, self.digest[0..32].*, expected.digest[0..32].*);
     }
 
@@ -330,7 +330,7 @@ pub const Hmac = struct {
         const digest_hex = try allocator.alloc(u8, self.digest.len * 2);
         defer allocator.free(digest_hex);
         _ = std.fmt.bufPrint(digest_hex, "{x}", .{std.fmt.fmtSliceHexLower(self.digest)}) catch unreachable;
-        
+
         return std.fmt.allocPrint(allocator, "{s}:{s}", .{ self.alg.toString(), digest_hex });
     }
 
@@ -361,12 +361,7 @@ test "Signature operations" {
     const allocator = testing.allocator;
 
     // Test signature creation from hex
-    const sig = try Signature.fromHex(
-        .Ed25519,
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        allocator
-    );
+    const sig = try Signature.fromHex(.Ed25519, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", allocator);
     defer sig.deinit(allocator);
 
     try testing.expectEqual(Signature.SignatureAlg.Ed25519, sig.alg);
@@ -390,7 +385,7 @@ test "HMAC operations" {
     // Test HMAC computation
     const key = "secret_key";
     const data = "hello world";
-    
+
     const hmac = try Hmac.compute(.HMAC_SHA256, key, data, allocator);
     defer hmac.deinit(allocator);
 
@@ -432,17 +427,12 @@ test "Cryptographic encoding and decoding" {
     const allocator = testing.allocator;
 
     // Test Signature encoding/decoding
-    const sig = try Signature.fromHex(
-        .Ed25519,
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        allocator
-    );
+    const sig = try Signature.fromHex(.Ed25519, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", allocator);
     defer sig.deinit(allocator);
 
     var buffer: [512]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    
+
     try sig.encode(fbs.writer());
     fbs.pos = 0;
     const decoded_sig = try Signature.decode(fbs.reader(), allocator);

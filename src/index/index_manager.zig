@@ -215,7 +215,7 @@ pub const IndexManager = struct {
             self.allocator.destroy(hnsw_index);
         }
         self.vector_indexes.deinit();
-        
+
         // Cleanup advanced type indexes
         var adv_vector_it = self.advanced_vector_indexes.iterator();
         while (adv_vector_it.next()) |entry| {
@@ -223,21 +223,21 @@ pub const IndexManager = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.advanced_vector_indexes.deinit();
-        
+
         var adv_spatial_it = self.advanced_spatial_indexes.iterator();
         while (adv_spatial_it.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.advanced_spatial_indexes.deinit();
-        
+
         var adv_network_it = self.advanced_network_indexes.iterator();
         while (adv_network_it.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.advanced_network_indexes.deinit();
-        
+
         var adv_signature_it = self.advanced_signature_indexes.iterator();
         while (adv_signature_it.next()) |entry| {
             entry.value_ptr.*.deinit();
@@ -747,7 +747,7 @@ pub const IndexManager = struct {
     }
 
     // Advanced type index management functions
-    
+
     pub fn createAdvancedVectorIndex(
         self: *IndexManager,
         name: []const u8,
@@ -757,42 +757,42 @@ pub const IndexManager = struct {
         // Validate inputs
         if (name.len == 0 or name.len > 255) return error.InvalidInput;
         if (dimension == 0 or dimension > 8192) return error.InvalidInput;
-        
+
         if (self.advanced_vector_indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
-        
+
         const wrapper = try self.allocator.create(advanced_types.VectorIndexWrapper);
         errdefer self.allocator.destroy(wrapper);
-        
+
         wrapper.* = try advanced_types.VectorIndexWrapper.init(self.allocator, dimension, metric);
         errdefer wrapper.deinit();
-        
+
         try self.advanced_vector_indexes.put(name, wrapper);
         self.statistics.total_indexes += 1;
     }
-    
+
     pub fn createAdvancedSpatialIndex(
         self: *IndexManager,
         name: []const u8,
     ) !void {
         // Validate inputs
         if (name.len == 0 or name.len > 255) return error.InvalidInput;
-        
+
         if (self.advanced_spatial_indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
-        
+
         const wrapper = try self.allocator.create(advanced_types.SpatialIndexWrapper);
         errdefer self.allocator.destroy(wrapper);
-        
+
         wrapper.* = try advanced_types.SpatialIndexWrapper.init(self.allocator);
         errdefer wrapper.deinit();
-        
+
         try self.advanced_spatial_indexes.put(name, wrapper);
         self.statistics.total_indexes += 1;
     }
-    
+
     pub fn createAdvancedNetworkIndex(
         self: *IndexManager,
         name: []const u8,
@@ -800,14 +800,14 @@ pub const IndexManager = struct {
         if (self.advanced_network_indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
-        
+
         const wrapper = try self.allocator.create(advanced_types.NetworkIndexWrapper);
         wrapper.* = try advanced_types.NetworkIndexWrapper.init(self.allocator);
-        
+
         try self.advanced_network_indexes.put(name, wrapper);
         self.statistics.total_indexes += 1;
     }
-    
+
     pub fn createAdvancedSignatureIndex(
         self: *IndexManager,
         name: []const u8,
@@ -815,16 +815,16 @@ pub const IndexManager = struct {
         if (self.advanced_signature_indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
-        
+
         const wrapper = try self.allocator.create(advanced_types.SignatureIndexWrapper);
         wrapper.* = try advanced_types.SignatureIndexWrapper.init(self.allocator);
-        
+
         try self.advanced_signature_indexes.put(name, wrapper);
         self.statistics.total_indexes += 1;
     }
-    
+
     // Advanced type index operations
-    
+
     pub fn insertIntoAdvancedVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
@@ -838,7 +838,7 @@ pub const IndexManager = struct {
             return error.IndexNotFound;
         }
     }
-    
+
     pub fn insertIntoAdvancedSpatialIndex(
         self: *IndexManager,
         index_name: []const u8,
@@ -852,7 +852,7 @@ pub const IndexManager = struct {
             return error.IndexNotFound;
         }
     }
-    
+
     pub fn queryAdvancedVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
@@ -865,7 +865,7 @@ pub const IndexManager = struct {
             return error.IndexNotFound;
         }
     }
-    
+
     pub fn queryAdvancedSpatialIndex(
         self: *IndexManager,
         index_name: []const u8,
@@ -878,7 +878,7 @@ pub const IndexManager = struct {
             return error.IndexNotFound;
         }
     }
-    
+
     pub fn dropAdvancedIndex(
         self: *IndexManager,
         index_name: []const u8,

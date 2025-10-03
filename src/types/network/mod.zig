@@ -65,10 +65,10 @@ test "network types module integration" {
     // Test validation functions
     try testing.expect(isValidIpAddr("192.168.1.1"));
     try testing.expect(!isValidIpAddr("invalid"));
-    
+
     try testing.expect(isValidSubnet("10.0.0.0/8"));
     try testing.expect(!isValidSubnet("invalid"));
-    
+
     try testing.expect(isValidMac("00:11:22:33:44:55"));
     try testing.expect(!isValidMac("invalid"));
 }

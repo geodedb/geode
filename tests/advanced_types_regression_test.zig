@@ -2,9 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 
 // Import advanced types
-const vector = @import("../src/types/vector.zig");
-const geographic = @import("../src/types/geographic.zig");
-const cryptographic = @import("../src/types/cryptographic.zig");
+const types = @import("geode").types;
+const vector = types.vector;
+const geographic = types.geographic;
+const cryptographic = types.cryptographic;
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-REGRESSION; FEATURE="Advanced Types Regression Tests"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_TYPES_REGRESSION_All; OWNER=testing; UPDATED=2025-01-03
 
@@ -14,7 +15,7 @@ test "TestCANARY_REQ_GQL_VECTOR_TYPES_001_VectorF32 comprehensive functionality"
     // Test string parsing
     const vec1 = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
     defer vec1.deinit(allocator);
-    
+
     try testing.expectEqual(@as(u16, 3), vec1.dim);
     try testing.expectEqual(@as(f32, 1.0), vec1.data[0]);
     try testing.expectEqual(@as(f32, 2.0), vec1.data[1]);
@@ -69,7 +70,7 @@ test "TestCANARY_REQ_GQL_VECTOR_TYPES_002_VectorI32 comprehensive functionality"
     // Test string parsing
     const vec1 = try vector.VectorI32.fromString("[1, 2, 3]", allocator);
     defer vec1.deinit(allocator);
-    
+
     try testing.expectEqual(@as(u16, 3), vec1.dim);
     try testing.expectEqual(@as(i32, 1), vec1.data[0]);
     try testing.expectEqual(@as(i32, 2), vec1.data[1]);
@@ -109,7 +110,7 @@ test "TestCANARY_REQ_GQL_GEO_TYPES_001_LatLon comprehensive functionality" {
     // Test coordinate creation and validation
     const coord1 = try geographic.LatLon.fromCoords(40.7128, -74.0060); // New York
     const coord2 = try geographic.LatLon.fromCoords(34.0522, -118.2437); // Los Angeles
-    
+
     try testing.expect(coord1.isValid());
     try testing.expect(coord2.isValid());
 
@@ -157,7 +158,7 @@ test "TestCANARY_REQ_GQL_GEO_TYPES_002_LatLonAlt comprehensive functionality" {
     // Test 3D coordinates
     const coord1 = try geographic.LatLonAlt.fromCoords(40.7128, -74.0060, 100.0);
     const coord2 = try geographic.LatLonAlt.fromCoords(40.7128, -74.0060, 200.0);
-    
+
     try testing.expect(coord1.isValid());
     try testing.expect(coord2.isValid());
 
@@ -193,7 +194,7 @@ test "TestCANARY_REQ_GQL_GEO_TYPES_003_GeoPoint comprehensive functionality" {
     // Test point creation
     const point1 = try geographic.GeoPoint.fromCoords(40.7128, -74.0060);
     const point2 = try geographic.GeoPoint.fromString("34.0522,-118.2437");
-    
+
     // Test distance
     const distance = point1.distanceKm(point2);
     try testing.expect(distance > 3900.0 and distance < 4000.0);
@@ -213,12 +214,7 @@ test "TestCANARY_REQ_GQL_CRYPTO_TYPES_001_Signature comprehensive functionality"
     const allocator = testing.allocator;
 
     // Test signature creation from hex
-    const sig = try cryptographic.Signature.fromHex(
-        .Ed25519,
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        allocator
-    );
+    const sig = try cryptographic.Signature.fromHex(.Ed25519, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", allocator);
     defer sig.deinit(allocator);
 
     try testing.expectEqual(cryptographic.Signature.SignatureAlg.Ed25519, sig.alg);
@@ -242,7 +238,7 @@ test "TestCANARY_REQ_GQL_CRYPTO_TYPES_001_Signature comprehensive functionality"
 
     // Test algorithm string conversion
     try testing.expectEqualStrings("Ed25519", sig.alg.toString());
-    
+
     const alg_parsed = try cryptographic.Signature.SignatureAlg.fromString("ECDSA-P256");
     try testing.expectEqual(cryptographic.Signature.SignatureAlg.ECDSA_P256, alg_parsed);
 }
@@ -253,7 +249,7 @@ test "TestCANARY_REQ_GQL_CRYPTO_TYPES_002_HMAC comprehensive functionality" {
     // Test HMAC computation
     const key = "secret_key";
     const data = "hello world";
-    
+
     const hmac = try cryptographic.Hmac.compute(.HMAC_SHA256, key, data, allocator);
     defer hmac.deinit(allocator);
 
@@ -272,7 +268,7 @@ test "TestCANARY_REQ_GQL_CRYPTO_TYPES_002_HMAC comprehensive functionality" {
     const hmac_str = try hmac.toString(allocator);
     defer allocator.free(hmac_str);
     try testing.expect(std.mem.startsWith(u8, hmac_str, "HMAC-SHA256:"));
-    
+
     // Test algorithm properties
     try testing.expectEqual(@as(usize, 32), hmac.alg.digestSize());
     try testing.expectEqualStrings("HMAC-SHA256", hmac.alg.toString());
@@ -321,22 +317,17 @@ test "TestCANARY_REQ_GQL_ADVANCED_TYPES_004_Binary encoding round-trip" {
     // Test LatLon encoding/decoding
     fbs.pos = 0;
     const coord = try geographic.LatLon.fromCoords(40.7128, -74.0060);
-    
+
     try coord.encode(fbs.writer());
     fbs.pos = 0;
     const decoded_coord = try geographic.LatLon.decode(fbs.reader());
-    
+
     try testing.expectEqual(coord.lat, decoded_coord.lat);
     try testing.expectEqual(coord.lon, decoded_coord.lon);
 
     // Test Signature encoding/decoding
     fbs.pos = 0;
-    const sig = try cryptographic.Signature.fromHex(
-        .Ed25519,
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        allocator
-    );
+    const sig = try cryptographic.Signature.fromHex(.Ed25519, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", allocator);
     defer sig.deinit(allocator);
 
     try sig.encode(fbs.writer());
@@ -355,7 +346,7 @@ test "TestCANARY_REQ_GQL_ADVANCED_TYPES_005_Error handling comprehensive" {
     // Vector error cases
     try testing.expectError(error.InvalidVectorFormat, vector.VectorF32.fromString("[1.0, invalid]", allocator));
     try testing.expectError(error.EmptyVector, vector.VectorF32.fromString("[]", allocator));
-    
+
     const vec1 = try vector.VectorF32.fromString("[1.0, 2.0]", allocator);
     defer vec1.deinit(allocator);
     const vec2 = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
@@ -376,34 +367,34 @@ test "TestCANARY_REQ_GQL_ADVANCED_TYPES_005_Error handling comprehensive" {
 
 test "TestCANARY_REQ_GQL_ADVANCED_TYPES_006_Performance and memory efficiency" {
     const allocator = testing.allocator;
-    
+
     // Performance test: create and operate on many objects quickly
     const iterations = 100;
-    
+
     // Vector performance
     for (0..iterations) |i| {
         const vec_str = try std.fmt.allocPrint(allocator, "[{d}, {d}, {d}]", .{ i, i + 1, i + 2 });
         defer allocator.free(vec_str);
-        
+
         const vec = try vector.VectorF32.fromString(vec_str, allocator);
         defer vec.deinit(allocator);
-        
+
         const norm = vec.norm();
         try testing.expect(norm > 0.0);
     }
-    
+
     // Geographic performance
     for (0..iterations) |i| {
         const lat = 40.0 + @as(f64, @floatFromInt(i)) * 0.01;
         const lon = -74.0 + @as(f64, @floatFromInt(i)) * 0.01;
-        
+
         const coord = try geographic.LatLon.fromCoords(lat, lon);
         try testing.expect(coord.isValid());
-        
+
         const coord_str = try coord.toString(allocator);
         allocator.free(coord_str);
     }
-    
+
     // Memory efficiency tests
     try testing.expectEqual(@sizeOf(f64) * 2, @sizeOf(geographic.LatLon));
     try testing.expectEqual(@sizeOf(f64) * 3, @sizeOf(geographic.LatLonAlt));
@@ -415,29 +406,26 @@ test "TestCANARY_REQ_GQL_ADVANCED_TYPES_007_Cross-type operations" {
     // Test vector operations with geographic coordinates
     const coord1 = try geographic.LatLon.fromCoords(40.7128, -74.0060);
     const coord2 = try geographic.LatLon.fromCoords(34.0522, -118.2437);
-    
+
     // Create vectors from coordinate differences
     const lat_diff = coord2.lat - coord1.lat;
     const lon_diff = coord2.lon - coord1.lon;
-    
-    const coord_vec = try vector.VectorF32.fromString(
-        try std.fmt.allocPrint(allocator, "[{d}, {d}]", .{ lat_diff, lon_diff }),
-        allocator
-    );
+
+    const coord_vec = try vector.VectorF32.fromString(try std.fmt.allocPrint(allocator, "[{d}, {d}]", .{ lat_diff, lon_diff }), allocator);
     defer {
         allocator.free(coord_vec.data);
         coord_vec.deinit(allocator);
     }
-    
+
     try testing.expectEqual(@as(u16, 2), coord_vec.dim);
-    
+
     // Test cryptographic hashing of geographic data
     const coord_str = try coord1.toString(allocator);
     defer allocator.free(coord_str);
-    
+
     const hmac = try cryptographic.Hmac.compute(.HMAC_SHA256, "geo_key", coord_str, allocator);
     defer hmac.deinit(allocator);
-    
+
     try testing.expectEqual(@as(usize, 32), hmac.digest.len);
 }
 
@@ -447,16 +435,16 @@ test "TestCANARY_REQ_GQL_ADVANCED_TYPES_008_Integration with existing types" {
     // Test that advanced types work with basic operations
     const vec = try vector.VectorF32.fromString("[1.0, 2.0, 3.0]", allocator);
     defer vec.deinit(allocator);
-    
+
     // Vector should have expected properties
     try testing.expectEqual(@as(u16, 3), vec.dim);
     try testing.expect(vec.data.len == 3);
-    
+
     const coord = try geographic.LatLon.fromCoords(0.0, 0.0);
     try testing.expect(coord.isValid());
     try testing.expectEqual(@as(f64, 0.0), coord.lat);
     try testing.expectEqual(@as(f64, 0.0), coord.lon);
-    
+
     // Test that signature algorithms have expected properties
     const ed25519_sig_size = cryptographic.Signature.SignatureAlg.Ed25519.expectedSignatureSize();
     const ed25519_key_size = cryptographic.Signature.SignatureAlg.Ed25519.expectedPublicKeySize();

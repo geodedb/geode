@@ -838,8 +838,8 @@ const missing_keywords = [_][]const u8{ "ACYCLIC", "AGGREGATE", "ANY", "AVG", "C
 
 /// Missing operators that need parser support
 const missing_operators = [_][]const u8{
-    "IS :Label", "IS LABELED", "IS DESTINATION OF",        "IS SOURCE OF", "ALL_DIFFERENT",
-    "LIKE",      "SIMILAR TO", "||", // path concatenation
+    "IS :Label", "IS LABELED", "IS DESTINATION OF", "IS SOURCE OF", "ALL_DIFFERENT",
+    "LIKE", "SIMILAR TO", "||", // path concatenation
 };
 
 /// Missing data types that need implementation

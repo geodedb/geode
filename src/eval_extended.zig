@@ -167,7 +167,7 @@ fn constructIpAddr(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
     const text = args[0].Str;
     const addr = network.IpAddr.fromString(text) catch return error.InvalidIpAddress;
-    
+
     // Convert to heap.IpAddr format
     const heap_addr = switch (addr) {
         .v4 => |ipv4| heap.IpAddr{ .v4 = ipv4.octets },
@@ -180,7 +180,7 @@ fn constructIpAddr(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
             break :blk heap.IpAddr{ .v6 = bytes };
         },
     };
-    
+
     return .{ .IpAddr = heap_addr };
 }
 
@@ -190,7 +190,7 @@ fn constructSubnet(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
     const text = args[0].Str;
     const subnet = network.Subnet.fromString(text) catch return error.InvalidSubnet;
-    
+
     // Convert to heap.Subnet format
     const heap_addr = switch (subnet) {
         .v4 => |ipv4_subnet| heap.IpAddr{ .v4 = ipv4_subnet.network },
@@ -203,22 +203,22 @@ fn constructSubnet(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
             break :blk heap.IpAddr{ .v6 = bytes };
         },
     };
-    
+
     const prefix_len = switch (subnet) {
         .v4 => |ipv4_subnet| ipv4_subnet.prefix_len,
         .v6 => |ipv6_subnet| ipv6_subnet.prefix_len,
     };
-    
+
     return .{ .Subnet = .{ .addr = heap_addr, .prefix_len = prefix_len } };
 }
 
 fn constructMac(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
     if (args[0] != .Str) return error.TypeMismatch;
-    
+
     const text = args[0].Str;
     const mac = network.Mac.fromString(text) catch return error.InvalidMac;
-    
+
     return .{ .Mac = .{ .bytes = mac.octets } };
 }
 
@@ -505,14 +505,13 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
-    
+
     // Use the evaluator_functions implementation
     const eval_funcs = @import("types/evaluator_functions.zig");
     const result = eval_funcs.VectorF32(allocator, text) catch return error.InvalidFormat;
-    
+
     return .{ .VectorF32 = result.VectorF32 };
 }
-
 
 // IP/CIDR functions
 fn ipContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
