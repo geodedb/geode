@@ -1252,53 +1252,53 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         } else |_| {}
         var bindings = try graph_exec.executeMatch(ally, graph, &q, q.where_clause, m_opts, eval_diag, null);
 
-        // Apply WITH clause if present (TODO: implement executeWith)
-        if (q.with_clause) |_| {
-            // bindings = try graph_exec.executeWith(ally, bindings, with, q.where_clause, graph);
+        // Apply WITH clause if present
+        if (q.with_clause) |with_clause| {
+            bindings = try graph_exec.executeWith(ally, bindings, with_clause, q.where_clause, graph);
         }
 
-        // Apply SET clauses if present (TODO: implement SET clause execution)
+        // Apply SET clauses if present
         if (q.set_clauses.len > 0) {
-            // for (q.set_clauses) |set_clause| {
-            //     // For each binding, find the object and set its property
-            //     for (bindings) |*binding| {
-            //         if (binding.vars.get(set_clause.target.object)) |obj| {
-            //             // Evaluate the expression as a simple value for now
-            //             // In the future, this should evaluate in the context of the binding
-            //             const prop_val = evalExprToPropertyValue(ally, set_clause.value);
-            //
-            //             switch (obj) {
-            //                 .Node => |node_id| {
-            //                     try graph.setNodeProperty(node_id, set_clause.target.property, prop_val);
-            //                 },
-            //                 .Edge => |edge_id| {
-            //                     try graph.setEdgeProperty(edge_id, set_clause.target.property, prop_val);
-            //                 },
-            //                 else => {},
-            //             }
-            //         }
-            //     }
-            // }
+            for (q.set_clauses) |set_clause| {
+                // For each binding, find the object and set its property
+                for (bindings) |*binding| {
+                    if (binding.vars.get(set_clause.target.object)) |obj| {
+                        // Evaluate the expression as a simple value for now
+                        // In the future, this should evaluate in the context of the binding
+                        const prop_val = evalExprToPropertyValue(ally, set_clause.value);
+
+                        switch (obj) {
+                            .Node => |node| {
+                                try graph.setNodeProperty(node.id, set_clause.target.property, prop_val);
+                            },
+                            .Edge => |edge| {
+                                try graph.setEdgeProperty(edge.id, set_clause.target.property, prop_val);
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
         }
 
-        // Apply REMOVE clauses if present (TODO: implement REMOVE clause execution)
+        // Apply REMOVE clauses if present
         if (q.remove_clauses.len > 0) {
-            // for (q.remove_clauses) |remove_clause| {
-            //     // For each binding, find the object and remove its property
-            //     for (bindings) |*binding| {
-            //         if (binding.vars.get(remove_clause.target.object)) |obj| {
-            //             switch (obj) {
-            //                 .Node => |node_id| {
-            //                     try graph.removeNodeProperty(node_id, remove_clause.target.property);
-            //                 },
-            //                 .Edge => |edge_id| {
-            //                     try graph.removeEdgeProperty(edge_id, remove_clause.target.property);
-            //                 },
-            //                 else => {},
-            //             }
-            //         }
-            //     }
-            // }
+            for (q.remove_clauses) |remove_clause| {
+                // For each binding, find the object and remove its property
+                for (bindings) |*binding| {
+                    if (binding.vars.get(remove_clause.target.object)) |obj| {
+                        switch (obj) {
+                            .Node => |node| {
+                                try graph.removeNodeProperty(node.id, remove_clause.target.property);
+                            },
+                            .Edge => |edge| {
+                                try graph.removeEdgeProperty(edge.id, remove_clause.target.property);
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
         }
 
         // Build column metadata (names inferred from RETURN items; types set to MIXED placeholder)
@@ -4998,10 +4998,21 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
         started_auto = true;
     }
 
-    // Execute MATCH if present to find items to delete (TODO: implement DELETE with MATCH)
-    const bindings: []graph_exec.Binding = &.{};
-    if (stmt.match_clause) |_| {
-        // bindings = try graph_exec.executeMatch(allocator, graph, match, stmt.where_clause, null, null, null);
+    // Execute MATCH if present to find items to delete
+    var bindings: []graph_exec.Binding = &.{};
+    if (stmt.match_clause) |match_pattern| {
+        // Create a temporary query for the MATCH clause
+        const temp_query = geode.ast.Query{
+            .optional_match = false,
+            .match = match_pattern,
+            .where_clause = stmt.where_clause,
+            .with_clause = null,
+            .ret = geode.ast.ReturnClause{ .items = &.{}, .distinct = false },
+            .order_by = null,
+            .limit = null,
+            .offset = null,
+        };
+        bindings = try graph_exec.executeMatch(allocator, graph, &temp_query, stmt.where_clause, null, null, null);
     }
 
     var deleted_count: usize = 0;

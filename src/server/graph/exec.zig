@@ -293,6 +293,96 @@ fn compareBindings(_: void, a: Binding, b: Binding) bool {
     return a_node_id < b_node_id;
 }
 
+// Execute WITH clause - processes intermediate results and applies transformations
+pub fn executeWith(
+    allocator: std.mem.Allocator,
+    input_bindings: []const Binding,
+    with_clause: ast.WithClause,
+    where_clause: ?ast.Expr,
+    graph: *const GraphStorage,
+) ![]Binding {
+    _ = where_clause; // TODO: implement WHERE filtering on WITH results
+    _ = graph;
+    
+    var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
+    
+    // Process each input binding and transform according to WITH items
+    for (input_bindings) |input_binding| {
+        var new_binding = Binding.init(allocator);
+        
+        // Process each WITH item to create new variable bindings
+        for (with_clause.items) |item| {
+            const alias = item.alias orelse getExpressionName(item.expr);
+            
+            // Evaluate the expression in the context of the current binding
+            const value = try evaluateExpressionInBinding(allocator, item.expr, &input_binding);
+            try new_binding.vars.put(alias, value);
+            
+            // Set the main binding value to the first WITH item for compatibility
+            if (new_binding.value == .Null) {
+                new_binding.name = alias;
+                new_binding.value = value;
+            }
+        }
+        
+        try results.append(allocator, new_binding);
+    }
+    
+    return results.toOwnedSlice(allocator);
+}
+
+// Helper function to get a name for an expression (for aliasing)
+fn getExpressionName(expr: ast.Expr) []const u8 {
+    return switch (expr) {
+        .Ident => |ident| ident.orig,
+        .PropertyAccess => |prop| prop.property,
+        .Member => |member| member.field,
+        .Call => |call| switch (call.callee.*) {
+            .Ident => |ident| ident.orig,
+            else => "expr",
+        },
+        else => "expr",
+    };
+}
+
+// Helper function to evaluate an expression in the context of a binding
+fn evaluateExpressionInBinding(
+    allocator: std.mem.Allocator,
+    expr: ast.Expr,
+    binding: *const Binding,
+) !BindingValue {
+    _ = allocator;
+    
+    return switch (expr) {
+        .Ident => |ident| binding.vars.get(ident.orig) orelse .Null,
+        .PropertyAccess => |prop| blk: {
+            if (binding.vars.get(prop.object)) |obj| {
+                switch (obj) {
+                    .Node => |node| {
+                        if (node.properties.get(prop.property)) |val| {
+                            break :blk .{ .Property = val };
+                        }
+                    },
+                    .Edge => |edge| {
+                        if (edge.properties.get(prop.property)) |val| {
+                            break :blk .{ .Property = val };
+                        }
+                    },
+                    else => {},
+                }
+            }
+            break :blk .Null;
+        },
+        .String => |s| .{ .Value = .{ .String = s } },
+        .Int => |i| .{ .Value = .{ .Int = i } },
+        .Bool => |b| .{ .Value = .{ .Bool = b } },
+        .Null => .Null,
+        // For complex expressions, return null for now
+        // TODO: implement full expression evaluation
+        else => .Null,
+    };
+}
+
 // Convert bindings to JSON format
 pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, ret_items: []const ast.ReturnItem, graph: *const GraphStorage) ![]u8 {
     _ = graph;
