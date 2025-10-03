@@ -327,6 +327,19 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
             }
             return EvalError.TypeMismatch;
         },
+        .Concat => blk6: {
+            if (l == .Str and r == .Str) {
+                // String concatenation: allocate new string with combined length
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const alloc = gpa.allocator();
+                const result = alloc.alloc(u8, l.Str.len + r.Str.len) catch return EvalError.Unsupported;
+                @memcpy(result[0..l.Str.len], l.Str);
+                @memcpy(result[l.Str.len..], r.Str);
+                break :blk6 .{ .Str = result };
+            }
+            return EvalError.TypeMismatch;
+        },
     };
 }
 

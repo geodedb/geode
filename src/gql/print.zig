@@ -161,6 +161,7 @@ fn tagName(st: ast.Statement) []const u8 {
         .DropIndex => "DropIndex",
         .Backup => "Backup",
         .Restore => "Restore",
+        .UseGraph => "UseGraph",
     };
 }
 
@@ -511,6 +512,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 .Sub => " - ",
                 .Mul => " * ",
                 .Div => " / ",
+                .Concat => " || ",
             };
             try w.print("{s}", .{op});
             try printExprWith(w, b.right.*, 0, opts);

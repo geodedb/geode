@@ -82,6 +82,21 @@ pub const Parser = struct {
         self.advance();
         return out;
     }
+    
+    // Helper function to accept identifiers or keywords as identifiers (for aliases, etc.)
+    fn expectIdentifierOrKeyword(self: *Parser) !tok.Token {
+        if (self.cur.kind == .identifier or 
+            self.cur.kind == .COUNT or self.cur.kind == .SUM or self.cur.kind == .AVG or 
+            self.cur.kind == .MIN or self.cur.kind == .MAX or self.cur.kind == .PATH or
+            self.cur.kind == .TYPE or self.cur.kind == .VALUE or self.cur.kind == .EXISTS or
+            self.cur.kind == .LAST or self.cur.kind == .REPLACE or self.cur.kind == .PROPERTY) {
+            const out = self.cur;
+            self.advance();
+            return out;
+        }
+        self.last_error = "identifier";
+        return error.UnexpectedToken;
+    }
 
     // Parser operations can fail due to syntax or allocation issues.
     // We’ll thread a tiny error wrapper with a message alongside generic errors when needed.
@@ -187,7 +202,7 @@ pub const Parser = struct {
                     var alias: ?[]const u8 = null;
                     if (self.cur.kind == .AS) {
                         self.advance();
-                        const al = try self.expect(.identifier);
+                        const al = try self.expectIdentifierOrKeyword();
                         alias = al.lexeme;
                     }
                     try items.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
@@ -539,7 +554,7 @@ pub const Parser = struct {
         var with_clause: ?ast.WithClause = null;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
-        const path_variable: ?[]const u8 = null;
+        var path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
             _ = try self.expect(.MATCH);
             // For the top-level MATCH pattern, collect aliases freshly.
@@ -551,6 +566,14 @@ pub const Parser = struct {
             // Parse first MATCH pattern
             var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             const first_gp = try self.parseGraphPattern();
+            
+            // Extract path variable from the first named chain
+            for (first_gp.chains) |chain| {
+                if (chain.name) |name| {
+                    path_variable = name;
+                    break;
+                }
+            }
             for (first_gp.chains) |chain| {
                 try all_chains.append(self.arena.allocator(), chain);
             }
@@ -844,9 +867,9 @@ pub const Parser = struct {
             var hops = std.ArrayList(ast.Hop).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             // Optional path alias: ident '=' before a node pattern
             var chain_name: ?[]const u8 = null;
-            if (self.cur.kind == .identifier and self.peekKind() == .eq) {
+            if ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq) {
                 chain_name = self.cur.lexeme;
-                self.advance(); // ident
+                self.advance(); // ident or PATH
                 _ = try self.expect(.eq);
             }
             var left = try self.parseNodePattern();
@@ -1013,7 +1036,7 @@ pub const Parser = struct {
             var alias: ?[]const u8 = null;
             if (self.cur.kind == .AS) {
                 self.advance();
-                const a = try self.expect(.identifier);
+                const a = try self.expectIdentifierOrKeyword();
                 alias = a.lexeme;
             }
             try out.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
@@ -1300,9 +1323,9 @@ pub const Parser = struct {
     fn parsePrimaryExpr(self: *Parser) ParserError!ast.Expr {
         return switch (self.cur.kind) {
             .dollar => blk_param: {
-                // Parameter: $identifier
+                // Parameter: $identifier (allow keywords as parameter names)
                 self.advance();
-                const name = try self.expect(.identifier);
+                const name = try self.expectIdentifierOrKeyword();
                 break :blk_param .{ .Param = name.lexeme };
             },
             .date_lit => blk_dt: {
@@ -1364,7 +1387,7 @@ pub const Parser = struct {
                 const wh_slice = try whens.toOwnedSlice(self.arena.allocator());
                 break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
             },
-            .identifier, .EXISTS, .COUNT, .SUM, .AVG, .MIN, .MAX, .VALUE, .TYPE, .LAST, .REPLACE => blk: {
+            .identifier, .EXISTS, .COUNT, .SUM, .AVG, .MIN, .MAX, .VALUE, .TYPE, .LAST, .REPLACE, .PATH => blk: {
                 const tkn = self.cur;
                 self.advance();
                 // Create CNF representation for identifiers
@@ -1429,7 +1452,7 @@ pub const Parser = struct {
                 // Heuristic: next meaningful token starts a node/connector or alias (identifier '=')
                 self.advance();
                 var starts_pattern = false;
-                if (self.cur.kind == .l_paren or self.cur.kind == .arrow_l or self.cur.kind == .minus or (self.cur.kind == .identifier and self.peekKind() == .eq)) {
+                if (self.cur.kind == .l_paren or self.cur.kind == .arrow_l or self.cur.kind == .minus or ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq)) {
                     starts_pattern = true;
                 }
                 if (!starts_pattern) {
@@ -1854,9 +1877,8 @@ pub const Parser = struct {
 
         _ = try self.expect(.dot);
 
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const property = self.cur.lexeme;
-        self.advance();
+        const property_token = try self.expectIdentifierOrKeyword();
+        const property = property_token.lexeme;
 
         _ = try self.expect(.eq);
 
@@ -1893,9 +1915,8 @@ pub const Parser = struct {
 
         _ = try self.expect(.dot);
 
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const property = self.cur.lexeme;
-        self.advance();
+        const property_token = try self.expectIdentifierOrKeyword();
+        const property = property_token.lexeme;
 
         return .{
             .target = .{ .object = object, .property = property },
