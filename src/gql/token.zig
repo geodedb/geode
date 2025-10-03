@@ -133,7 +133,7 @@ pub const TokenKind = enum {
     END_NODE,
     TYPE,
     TYPES,
-    
+
     // Critical missing ISO GQL keywords (avoiding duplicates)
     ACYCLIC,
     AGGREGATE,
@@ -309,7 +309,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "END_NODE")) return .END_NODE;
     if (std.ascii.eqlIgnoreCase(word, "TYPE")) return .TYPE;
     if (std.ascii.eqlIgnoreCase(word, "TYPES")) return .TYPES;
-    
+
     // Critical missing ISO GQL keywords (avoiding duplicates)
     if (std.ascii.eqlIgnoreCase(word, "ACYCLIC")) return .ACYCLIC;
     if (std.ascii.eqlIgnoreCase(word, "AGGREGATE")) return .AGGREGATE;
@@ -349,7 +349,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "WALK")) return .WALK;
     if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
     if (std.ascii.eqlIgnoreCase(word, "ZONED")) return .ZONED;
-    
+
     // Temporal keywords
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;

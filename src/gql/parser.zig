@@ -39,23 +39,135 @@ pub const Parser = struct {
         _ = self;
         // Check if the token kind is a keyword (not a delimiter, literal, or identifier)
         return switch (kind) {
-            .MATCH, .OPTIONAL, .WHERE, .RETURN, .WITH, .CASE, .WHEN, .THEN, .ELSE, .END,
-            .AND, .OR, .NOT, .IN, .IS, .STARTS, .ENDS, .CONTAINS, .CALL, .YIELD,
-            .TRUE, .FALSE, .NULL, .AS, .DISTINCT, .UNION, .INTERSECT, .EXCEPT, .ALL,
-            .SESSION, .SET, .RESET, .CLOSE, .INSERT, .VALUE, .VALUES, .SCAN, .START,
-            .TRANSACTION, .COMMIT, .ROLLBACK, .CREATE, .DELETE, .MERGE, .GRAPH,
-            .PROPERTY, .DROP, .ORDER, .BY, .GROUP, .ASC, .DESC, .LIMIT, .OFFSET,
-            .SKIP, .HAVING, .NULLS, .FIRST, .LAST, .ON, .UNKNOWN, .FILTER, .LET,
-            .SELECT, .FROM, .EXISTS, .DETACH, .REMOVE, .FOR, .FOREACH, .UNWIND,
-            .USE, .USING, .INDEX, .JOIN, .IF, .TO, .KEY, .KEYS, .LABELS, .LOAD,
-            .CSV, .PERIODIC, .PROPERTIES, .RELATIONSHIPS, .START_NODE, .END_NODE,
-            .TYPE, .TYPES,
+            .MATCH,
+            .OPTIONAL,
+            .WHERE,
+            .RETURN,
+            .WITH,
+            .CASE,
+            .WHEN,
+            .THEN,
+            .ELSE,
+            .END,
+            .AND,
+            .OR,
+            .NOT,
+            .IN,
+            .IS,
+            .STARTS,
+            .ENDS,
+            .CONTAINS,
+            .CALL,
+            .YIELD,
+            .TRUE,
+            .FALSE,
+            .NULL,
+            .AS,
+            .DISTINCT,
+            .UNION,
+            .INTERSECT,
+            .EXCEPT,
+            .ALL,
+            .SESSION,
+            .SET,
+            .RESET,
+            .CLOSE,
+            .INSERT,
+            .VALUE,
+            .VALUES,
+            .SCAN,
+            .START,
+            .TRANSACTION,
+            .COMMIT,
+            .ROLLBACK,
+            .CREATE,
+            .DELETE,
+            .MERGE,
+            .GRAPH,
+            .PROPERTY,
+            .DROP,
+            .ORDER,
+            .BY,
+            .GROUP,
+            .ASC,
+            .DESC,
+            .LIMIT,
+            .OFFSET,
+            .SKIP,
+            .HAVING,
+            .NULLS,
+            .FIRST,
+            .LAST,
+            .ON,
+            .UNKNOWN,
+            .FILTER,
+            .LET,
+            .SELECT,
+            .FROM,
+            .EXISTS,
+            .DETACH,
+            .REMOVE,
+            .FOR,
+            .FOREACH,
+            .UNWIND,
+            .USE,
+            .USING,
+            .INDEX,
+            .JOIN,
+            .IF,
+            .TO,
+            .KEY,
+            .KEYS,
+            .LABELS,
+            .LOAD,
+            .CSV,
+            .PERIODIC,
+            .PROPERTIES,
+            .RELATIONSHIPS,
+            .START_NODE,
+            .END_NODE,
+            .TYPE,
+            .TYPES,
             // Critical missing ISO GQL keywords (avoiding duplicates)
-            .ACYCLIC, .AGGREGATE, .ANY, .AVG, .CATALOG, .CAST, .CONSTRAINT, .COUNT,
-            .CURRENT, .DIFFERENT, .DURATION, .EDGES, .ELEMENT, .FINISH, .HOME,
-            .LABELED, .LIKE, .LIST, .MAX, .MIN, .NEXT, .NODE, .OF, .OTHERWISE,
-            .PATH, .PATHS, .RECORD, .REPEATABLE, .REPLACE, .SCHEMA, .SHORTEST,
-            .SIMPLE, .SUM, .TABLE, .TRAIL, .WALK, .XOR, .ZONED => true,
+            .ACYCLIC,
+            .AGGREGATE,
+            .ANY,
+            .AVG,
+            .CATALOG,
+            .CAST,
+            .CONSTRAINT,
+            .COUNT,
+            .CURRENT,
+            .DIFFERENT,
+            .DURATION,
+            .EDGES,
+            .ELEMENT,
+            .FINISH,
+            .HOME,
+            .LABELED,
+            .LIKE,
+            .LIST,
+            .MAX,
+            .MIN,
+            .NEXT,
+            .NODE,
+            .OF,
+            .OTHERWISE,
+            .PATH,
+            .PATHS,
+            .RECORD,
+            .REPEATABLE,
+            .REPLACE,
+            .SCHEMA,
+            .SHORTEST,
+            .SIMPLE,
+            .SUM,
+            .TABLE,
+            .TRAIL,
+            .WALK,
+            .XOR,
+            .ZONED,
+            => true,
             else => false,
         };
     }
@@ -82,14 +194,15 @@ pub const Parser = struct {
         self.advance();
         return out;
     }
-    
+
     // Helper function to accept identifiers or keywords as identifiers (for aliases, etc.)
     fn expectIdentifierOrKeyword(self: *Parser) !tok.Token {
-        if (self.cur.kind == .identifier or 
-            self.cur.kind == .COUNT or self.cur.kind == .SUM or self.cur.kind == .AVG or 
+        if (self.cur.kind == .identifier or
+            self.cur.kind == .COUNT or self.cur.kind == .SUM or self.cur.kind == .AVG or
             self.cur.kind == .MIN or self.cur.kind == .MAX or self.cur.kind == .PATH or
             self.cur.kind == .TYPE or self.cur.kind == .VALUE or self.cur.kind == .EXISTS or
-            self.cur.kind == .LAST or self.cur.kind == .REPLACE or self.cur.kind == .PROPERTY) {
+            self.cur.kind == .LAST or self.cur.kind == .REPLACE or self.cur.kind == .PROPERTY)
+        {
             const out = self.cur;
             self.advance();
             return out;
@@ -229,7 +342,7 @@ pub const Parser = struct {
                 // We need to look ahead after parsing the MATCH pattern
                 const saved_pos = self.lx.*;
                 const saved_cur = self.cur;
-                
+
                 // Try to detect MATCH...DELETE pattern
                 self.advance(); // Skip MATCH
                 _ = self.parseGraphPattern() catch {
@@ -239,53 +352,53 @@ pub const Parser = struct {
                     const first = try self.parseQuery();
                     break :blk_match self.handleQueryResult(first);
                 };
-                
+
                 // Check for optional WHERE
                 if (self.cur.kind == .WHERE) {
                     self.advance();
                     _ = self.parseOrExpr() catch {};
                 }
-                
+
                 // Check if DELETE or DETACH DELETE follows
                 const is_delete = self.cur.kind == .DELETE or self.cur.kind == .DETACH;
-                
+
                 // Restore position
                 self.lx.* = saved_pos;
                 self.cur = saved_cur;
-                
+
                 if (is_delete) {
                     // Parse as MATCH...DELETE statement
                     self.advance(); // Skip MATCH
                     const match_pattern = try self.parseGraphPattern();
-                    
+
                     var where_clause: ?ast.Expr = null;
                     if (self.cur.kind == .WHERE) {
                         self.advance();
                         where_clause = try self.parseOrExpr();
                     }
-                    
+
                     // Handle optional DETACH
                     const detach = if (self.cur.kind == .DETACH) blk: {
                         self.advance();
                         break :blk true;
                     } else false;
-                    
+
                     _ = try self.expect(.DELETE);
-                    
+
                     // Parse items to delete
                     var delete_items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
-                    
+
                     // Parse first item
                     const first_item = try self.parseDeleteItem();
                     try delete_items.append(self.arena.allocator(), first_item);
-                    
+
                     // Parse additional items
                     while (self.cur.kind == .comma) {
                         self.advance();
                         const item = try self.parseDeleteItem();
                         try delete_items.append(self.arena.allocator(), item);
                     }
-                    
+
                     // Optional RETURN clause
                     var return_clause: ?ast.ReturnClause = null;
                     if (self.cur.kind == .RETURN) {
@@ -301,16 +414,16 @@ pub const Parser = struct {
                             .distinct = distinct,
                         };
                     }
-                    
+
                     break :blk_match .{ .Delete = .{
                         .match_clause = match_pattern,
                         .where_clause = where_clause,
                         .detach = detach,
                         .items = try delete_items.toOwnedSlice(self.arena.allocator()),
                         .return_clause = return_clause,
-                    }};
+                    } };
                 }
-                
+
                 // Otherwise, parse as regular query
                 const first = try self.parseQuery();
                 break :blk_match self.handleQueryResult(first);
@@ -457,7 +570,7 @@ pub const Parser = struct {
                 self.advance();
                 // Parse procedure call expression (e.g., db.labels())
                 const procedure = try self.parseOrExpr();
-                
+
                 // Optional YIELD clause
                 var yield_items: ?[]ast.ReturnItem = null;
                 if (self.cur.kind == .YIELD) {
@@ -466,7 +579,7 @@ pub const Parser = struct {
                     try self.parseProjectionItems(&items);
                     yield_items = try items.toOwnedSlice(self.arena.allocator());
                 }
-                
+
                 // Optional RETURN clause
                 var return_clause: ?ast.ReturnClause = null;
                 if (self.cur.kind == .RETURN) {
@@ -482,12 +595,12 @@ pub const Parser = struct {
                         .distinct = distinct,
                     };
                 }
-                
+
                 break :blk_call .{ .Call = .{
                     .procedure = procedure,
                     .yield_items = yield_items,
                     .return_clause = return_clause,
-                }};
+                } };
             },
             else => return error.UnexpectedToken,
         };
@@ -566,7 +679,7 @@ pub const Parser = struct {
             // Parse first MATCH pattern
             var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             const first_gp = try self.parseGraphPattern();
-            
+
             // Extract path variable from the first named chain
             for (first_gp.chains) |chain| {
                 if (chain.name) |name| {
@@ -672,7 +785,7 @@ pub const Parser = struct {
             var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             try self.parseProjectionItems(&items);
             return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
-            
+
             // Allow GROUP BY (and optional HAVING) after RETURN as well
             if (self.cur.kind == .GROUP) {
                 self.advance();
@@ -1007,14 +1120,11 @@ pub const Parser = struct {
                 // Keywords like VALUE, RETURN, etc. are valid property names
                 const key = if (self.cur.kind == .string_lit)
                     try self.expect(.string_lit)
-                else if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind))
-                    blk: {
-                        const token = self.cur;
-                        self.advance();
-                        break :blk token;
-                    }
-                else
-                    return self.unexpected("property key");
+                else if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
+                    const token = self.cur;
+                    self.advance();
+                    break :blk token;
+                } else return self.unexpected("property key");
                 _ = try self.expect(.colon);
                 const expr = try self.parseOrExpr();
                 const a = self.arena.allocator();
@@ -1245,14 +1355,11 @@ pub const Parser = struct {
         while (true) {
             if (self.cur.kind == .dot) {
                 self.advance();
-                const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind))
-                    blk: {
-                        const token = self.cur;
-                        self.advance();
-                        break :blk token;
-                    }
-                else
-                    try self.expect(.identifier);
+                const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
+                    const token = self.cur;
+                    self.advance();
+                    break :blk token;
+                } else try self.expect(.identifier);
                 const a = self.arena.allocator();
                 const bp = try a.create(ast.Expr);
                 bp.* = base;
@@ -1458,25 +1565,25 @@ pub const Parser = struct {
                 if (!starts_pattern) {
                     // Try to parse as array literal: [expr, expr, ...]
                     var elements = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    
+
                     // Handle empty array
                     if (self.cur.kind == .r_bracket) {
                         self.advance();
                         const elements_slice = try elements.toOwnedSlice(self.arena.allocator());
                         break :blk_pc .{ .ArrayLit = elements_slice };
                     }
-                    
+
                     // Parse comma-separated expressions
                     while (true) {
                         const elem = try self.parseOrExpr();
                         const ep = try self.arena.allocator().create(ast.Expr);
                         ep.* = elem;
                         try elements.append(self.arena.allocator(), ep);
-                        
+
                         if (self.cur.kind != .comma) break;
                         self.advance();
                     }
-                    
+
                     _ = try self.expect(.r_bracket);
                     const elements_slice = try elements.toOwnedSlice(self.arena.allocator());
                     break :blk_pc .{ .ArrayLit = elements_slice };
@@ -2187,7 +2294,7 @@ pub const Parser = struct {
     fn parseSetSessionStatement(self: *Parser) ParserError!ast.Statement {
         self.advance(); // consume SET
         _ = try self.expect(.SESSION);
-        
+
         // Expect property name (currently only GRAPH is supported)
         const property = if (self.cur.kind == .GRAPH) blk: {
             self.advance();
@@ -2195,9 +2302,9 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         };
-        
+
         _ = try self.expect(.eq); // expect '='
-        
+
         // Expect value (string literal or identifier)
         const value = if (self.cur.kind == .string_lit or self.cur.kind == .identifier) blk: {
             const val = self.cur.lexeme;
@@ -2206,7 +2313,7 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         };
-        
+
         return .{ .SessionSet = .{
             .property = property,
             .value = value,
@@ -2216,12 +2323,12 @@ pub const Parser = struct {
     // Parse USE GRAPH statement
     fn parseUseStatement(self: *Parser) ParserError!ast.Statement {
         self.advance(); // consume USE
-        
+
         // Optional GRAPH keyword
         if (self.cur.kind == .GRAPH) {
             self.advance();
         }
-        
+
         // Expect graph name (identifier or string literal)
         const graph_name = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
             const name = self.cur.lexeme;
@@ -2230,7 +2337,7 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         };
-        
+
         return .{ .UseGraph = .{
             .graph_name = graph_name,
         } };

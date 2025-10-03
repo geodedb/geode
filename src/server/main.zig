@@ -1255,7 +1255,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                         // Evaluate the expression as a simple value for now
                         // In the future, this should evaluate in the context of the binding
                         const prop_val = evalExprToPropertyValue(ally, set_clause.value);
-                        
+
                         switch (obj) {
                             .Node => |node_id| {
                                 try graph.setNodeProperty(node_id, set_clause.target.property, prop_val);

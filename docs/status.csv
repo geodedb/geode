@@ -20,7 +20,9 @@ REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,IMPL,TestCANARY_R
 REQ-AUTH-POLICY-010,CLI Password Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation,,security,2025-09-30,src/cli/main.zig
 REQ-AUTH-POLICY-011,Pre-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation,,security,2025-09-30,src/cli/main.zig
 REQ-GQL-###,Name,...,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,...,...,...,YYYY-MM-DD,tools/canaryscan/README.md
+REQ-GQL-001,BasicQuery,Testing,TESTED,TestBasicQuery,,test,2025-10-02,TESTING.md
 REQ-GQL-001,Binary Protocol Frames,Wire,IMPL,"TestCANARY_REQ_GQL_005_HelloRoundTrip,TestCANARY_REQ_GQL_001_WireMalformedFrame",,wire,2025-09-20,src/canary.zig
+REQ-GQL-001,ISO GQL Compliance,Testing,IMPL,TestCANARY_REQ_GQL_001_ISO_Compliance,,parser,2025-01-02,tests/gql_iso_compliance_suite.zig
 REQ-GQL-002,HELLO Capabilities,Wire,IMPL,"TestCANARY_REQ_GQL_005_HelloRoundTrip,TestCANARY_REQ_GQL_002_WireUnsupportedCapability",,wire,2025-09-20,src/canary.zig
 REQ-GQL-004,Pagination,PaginationAutoCalibration,TESTED,TestCANARY_REQ_GQL_004_PaginationAutoCalibratePageSize,,planner,2025-09-26,src/pagination/calibration.zig
 REQ-GQL-004,Pagination,PaginationAutoCalibration,TESTED,TestCANARY_REQ_GQL_004_PaginationAutoCalibratePageSize,,planner,2025-09-26,tests/canary_pagination_variance_autocalib.zig
@@ -729,6 +731,7 @@ REQ-GQL-AUTH-004,MFA recovery code,TEST,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recov
 REQ-GQL-BENCH,Distributed Features Benchmark,Performance,TESTED,BenchmarkCANARY_Distributed,,bench,2025-09-29,benchmarks/benchmark_distributed_features.zig
 REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,e2e_cbo_toggle,,planner,2025-09-25,src/planner/cbo.zig
 REQ-GQL-CDC-SINKS,CDC External Sinks,KafkaWebhook,TESTED,e2e_cdc_sinks,,streaming,2025-09-25,src/cdc/sinks.zig
+REQ-GQL-COMPLIANCE-001,GQL Compliance Regression,Parser,TESTED,TestCANARY_REQ_GQL_COMPLIANCE_001_Parser,,parser,2025-01-03,tests/gql_compliance_regression_test.zig
 REQ-GQL-DATASET,DatasetIntegrationTests,Testing,TESTED,dataset_integration_test.zig,benchmark_dataset_load.zig,test-team,2025-09-29,tests/integration/dataset_integration_test.zig
 REQ-GQL-DATASET-E2E,DatasetIntegrationE2E,Testing,TESTED,e2e_dataset_integration.zig,benchmark_dataset_e2e.zig,test-team,2025-09-29,tests/e2e_dataset_integration.zig
 REQ-GQL-DATASET-ZIG,DatasetIntegrationZigClient,Testing,TESTED,dataset_integration_test.zig,benchmark_dataset_client.zig,client-team,2025-09-29,clients/zig/dataset_integration_test.zig
@@ -750,6 +753,7 @@ REQ-GQL-GRAPH-001,Leiden Community Detection,Graph,IMPL,TestCANARY_Leiden,,graph
     // CANARY: REQ=REQ-GQL-INDEX-PERFORMANCE",IndexPerformance,Performance,TESTED,TestCANARY_REQ_GQL_INDEX_PERFORMANCE,,team,2025-10-02,tests/integration/test_index_performance.zig
 "REQ-GQL-IOT-NETWORK"" {
     // CANARY: REQ=REQ-GQL-IOT-NETWORK",IoTNetwork,Domain,TESTED,TestCANARY_REQ_GQL_IOT_NETWORK,,team,2025-10-02,tests/integration/test_iot_network_dataset.zig
+REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,TestCANARY_REQ_GQL_KEYWORD_001_Parser,,parser,2025-01-03,tests/gql_keyword_regression_test.zig
 "REQ-GQL-LARGE-DATASET"" {
     // CANARY: REQ=REQ-GQL-LARGE-DATASET",LargeDataset,Scalability,TESTED,TestCANARY_REQ_GQL_LARGE_DATASET,,team,2025-10-02,tests/integration/test_large_social_network.zig
 REQ-GQL-LEIDEN-TEST,Leiden Test Suite,Testing,TESTED,TestCANARY_Leiden_Suite,,test,2025-09-29,tests/test_leiden_community.zig
