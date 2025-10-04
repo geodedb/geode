@@ -174,6 +174,9 @@ pub const TokenKind = enum {
     WALK,
     XOR,
     ZONED,
+    BINDING,
+    TIME,
+    ZONE,
 
     // pattern and string operators (extras)
     regex_match, // =~
@@ -349,6 +352,9 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "WALK")) return .WALK;
     if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
     if (std.ascii.eqlIgnoreCase(word, "ZONED")) return .ZONED;
+    if (std.ascii.eqlIgnoreCase(word, "BINDING")) return .BINDING;
+    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .TIME;
+    if (std.ascii.eqlIgnoreCase(word, "ZONE")) return .ZONE;
 
     // Temporal keywords
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;

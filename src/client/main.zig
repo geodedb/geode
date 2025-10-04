@@ -61,6 +61,56 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
+/// Resolve environment variables in query text (client-side only for security)
+/// Supports ${VAR_NAME} and ${VAR_NAME:default_value} syntax
+pub fn resolveEnvironmentVariables(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var result = std.ArrayList(u8).initCapacity(allocator, input.len) catch return error.OutOfMemory;
+    defer result.deinit(allocator);
+    
+    var i: usize = 0;
+    while (i < input.len) {
+        if (i + 1 < input.len and input[i] == '$' and input[i + 1] == '{') {
+            // Find the closing brace
+            var j = i + 2;
+            while (j < input.len and input[j] != '}') {
+                j += 1;
+            }
+            
+            if (j < input.len) { // Found closing brace
+                const var_expr = input[i + 2..j];
+                
+                // Check for default value syntax (VAR_NAME:default_value)
+                var var_name: []const u8 = undefined;
+                var default_value: ?[]const u8 = null;
+                
+                if (std.mem.indexOf(u8, var_expr, ":")) |colon_pos| {
+                    var_name = var_expr[0..colon_pos];
+                    default_value = var_expr[colon_pos + 1..];
+                } else {
+                    var_name = var_expr;
+                }
+                
+                // Get environment variable value
+                const env_value = std.process.getEnvVarOwned(allocator, var_name) catch null;
+                defer if (env_value) |ev| allocator.free(ev);
+                const replacement = env_value orelse default_value orelse "";
+                
+                try result.appendSlice(allocator, replacement);
+                i = j + 1; // Skip past the closing brace
+            } else {
+                // No closing brace found, treat as literal text
+                try result.append(allocator, input[i]);
+                i += 1;
+            }
+        } else {
+            try result.append(allocator, input[i]);
+            i += 1;
+        }
+    }
+    
+    return result.toOwnedSlice(allocator);
+}
+
 fn getStdOut() std.fs.File {
     return if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
@@ -307,6 +357,19 @@ pub fn main() !void {
             processed_text = f;
         }
     }
+    
+    // CANARY: REQ=REQ-CLIENT-ENV-001; FEATURE="ClientEnvironmentVariables"; ASPECT=VariableResolution; STATUS=IMPL; TEST=TestCANARY_ClientCli_EnvVarResolution; OWNER=clients; UPDATED=2025-10-04
+    // Client-side environment variable resolution (security: client-only, never server-side)
+    if (std.mem.indexOf(u8, processed_text, "${") != null) {
+        const env_resolved = resolveEnvironmentVariables(gpa, processed_text) catch |err| blk: {
+            logger.warn("client.env_var_resolution_failed", .{.{ .key = "err", .value = @errorName(err) }});
+            break :blk try gpa.dupe(u8, processed_text); // Fallback to original text
+        };
+        if (owned_text) |ot| gpa.free(ot);
+        owned_text = env_resolved;
+        processed_text = env_resolved;
+    }
+    
     // CANARY: REQ=REQ-GQL-UNICODE-004; FEATURE="UnicodeCore"; ASPECT=CliNormalizationFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_NormalizeNfc; OWNER=clients; UPDATED=2025-09-27
     // CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CliFoldCaseFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_FoldCase; OWNER=clients; UPDATED=2025-09-27
     // CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UnicodeUtf16"; ASPECT=CliUtf16HexInputFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_Utf16Input; OWNER=clients; UPDATED=2025-09-27

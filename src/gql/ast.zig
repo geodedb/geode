@@ -10,7 +10,7 @@ pub const Statement = union(enum) {
     Intersect: BinarySet,
     Except: BinarySet,
     SessionSet: SessionSetStatement,
-    SessionReset,
+    SessionReset: SessionResetStatement,
     SessionClose,
     UseGraph: UseGraphStatement,
     StartTransaction,
@@ -238,8 +238,71 @@ pub const PropertyAccess = struct {
 };
 
 pub const SessionSetStatement = struct {
-    property: []const u8, // e.g., "GRAPH"
-    value: []const u8, // e.g., "G1"
+    clause_type: SessionSetClauseType,
+};
+
+pub const SessionSetClauseType = union(enum) {
+    Schema: SchemaReference,
+    Graph: GraphClause,
+    TimeZone: TimeZoneClause,
+    Parameter: ParameterClause,
+};
+
+pub const SchemaReference = struct {
+    name: []const u8,
+};
+
+pub const GraphClause = struct {
+    property_graph: bool = true, // [PROPERTY] GRAPH
+    expression: []const u8, // graph expression or reference
+};
+
+pub const TimeZoneClause = struct {
+    value: []const u8, // time zone string value
+};
+
+pub const ParameterClause = union(enum) {
+    GraphParam: GraphParameterClause,
+    BindingTableParam: BindingTableParameterClause,
+    ValueParam: ValueParameterClause,
+};
+
+pub const GraphParameterClause = struct {
+    property_graph: bool = true, // [PROPERTY] GRAPH
+    parameter_name: SessionParameterName,
+    initializer: ?[]const u8 = null, // typed graph initializer
+};
+
+pub const BindingTableParameterClause = struct {
+    parameter_name: SessionParameterName,
+    initializer: ?[]const u8 = null, // typed binding table initializer
+};
+
+pub const ValueParameterClause = struct {
+    parameter_name: SessionParameterName,
+    initializer: ?[]const u8 = null, // typed value initializer
+};
+
+pub const SessionParameterName = struct {
+    if_not_exists: bool = false,
+    specification: []const u8, // parameter specification
+};
+
+pub const SessionResetStatement = struct {
+    arguments: ?SessionResetArguments = null,
+};
+
+pub const SessionResetArguments = union(enum) {
+    All: SessionResetAllType,
+    Schema,
+    Graph: bool, // true if PROPERTY GRAPH, false if just GRAPH
+    TimeZone,
+    Parameter: []const u8, // parameter specification
+};
+
+pub const SessionResetAllType = enum {
+    Parameters, // ALL PARAMETERS
+    Characteristics, // ALL CHARACTERISTICS
 };
 
 pub const UseGraphStatement = struct {

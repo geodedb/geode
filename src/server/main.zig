@@ -226,6 +226,155 @@ const CatalogGraph = struct {
     edge_count: u64 = 0,
 };
 
+// Session configuration management
+const SessionConfiguration = struct {
+    // Schema settings
+    current_schema: ?[]const u8 = null,
+    
+    // Graph settings
+    current_graph: ?[]const u8 = null,
+    property_graph_default: bool = true,
+    
+    // Time zone settings
+    time_zone: ?[]const u8 = null,
+    
+    // Session parameters (key-value pairs)
+    parameters: std.StringHashMap(SessionParameterValue),
+    
+    // Allocator for parameter storage
+    allocator: std.mem.Allocator,
+    
+    pub fn init(allocator: std.mem.Allocator) SessionConfiguration {
+        return .{
+            .parameters = std.StringHashMap(SessionParameterValue).init(allocator),
+            .allocator = allocator,
+        };
+    }
+    
+    pub fn deinit(self: *SessionConfiguration) void {
+        // Free all parameter keys and values
+        var iterator = self.parameters.iterator();
+        while (iterator.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            switch (entry.value_ptr.*) {
+                .String => |s| self.allocator.free(s),
+                .Graph => |g| self.allocator.free(g),
+                .BindingTable => |bt| self.allocator.free(bt),
+                else => {},
+            }
+        }
+        self.parameters.deinit();
+        
+        // Free schema and graph names if allocated
+        if (self.current_schema) |schema| {
+            self.allocator.free(schema);
+        }
+        if (self.current_graph) |graph| {
+            self.allocator.free(graph);
+        }
+        if (self.time_zone) |tz| {
+            self.allocator.free(tz);
+        }
+    }
+    
+    pub fn setParameter(self: *SessionConfiguration, name: []const u8, value: SessionParameterValue) !void {
+        const owned_name = try self.allocator.dupe(u8, name);
+        try self.parameters.put(owned_name, value);
+    }
+    
+    pub fn getParameter(self: *SessionConfiguration, name: []const u8) ?SessionParameterValue {
+        return self.parameters.get(name);
+    }
+    
+    pub fn removeParameter(self: *SessionConfiguration, name: []const u8) void {
+        if (self.parameters.fetchRemove(name)) |kv| {
+            self.allocator.free(kv.key);
+            switch (kv.value) {
+                .String => |s| self.allocator.free(s),
+                .Graph => |g| self.allocator.free(g),
+                .BindingTable => |bt| self.allocator.free(bt),
+                else => {},
+            }
+        }
+    }
+    
+    pub fn reset(self: *SessionConfiguration, reset_type: SessionResetType) void {
+        switch (reset_type) {
+            .AllParameters => {
+                // Clear all parameters
+                var iterator = self.parameters.iterator();
+                while (iterator.next()) |entry| {
+                    self.allocator.free(entry.key_ptr.*);
+                    switch (entry.value_ptr.*) {
+                        .String => |s| self.allocator.free(s),
+                        .Graph => |g| self.allocator.free(g),
+                        .BindingTable => |bt| self.allocator.free(bt),
+                        else => {},
+                    }
+                }
+                self.parameters.clearAndFree();
+            },
+            .AllCharacteristics => {
+                // Reset all session characteristics (schema, graph, time zone, etc.)
+                if (self.current_schema) |schema| {
+                    self.allocator.free(schema);
+                    self.current_schema = null;
+                }
+                if (self.current_graph) |graph| {
+                    self.allocator.free(graph);
+                    self.current_graph = null;
+                }
+                if (self.time_zone) |tz| {
+                    self.allocator.free(tz);
+                    self.time_zone = null;
+                }
+                self.property_graph_default = true;
+            },
+            .Schema => {
+                if (self.current_schema) |schema| {
+                    self.allocator.free(schema);
+                    self.current_schema = null;
+                }
+            },
+            .Graph => {
+                if (self.current_graph) |graph| {
+                    self.allocator.free(graph);
+                    self.current_graph = null;
+                }
+                self.property_graph_default = true;
+            },
+            .TimeZone => {
+                if (self.time_zone) |tz| {
+                    self.allocator.free(tz);
+                    self.time_zone = null;
+                }
+            },
+            .Parameter => |param_name| {
+                self.removeParameter(param_name);
+            },
+        }
+    }
+};
+
+const SessionParameterValue = union(enum) {
+    String: []const u8,
+    Graph: []const u8,
+    BindingTable: []const u8,
+    Value: []const u8,
+    Integer: i64,
+    Float: f64,
+    Boolean: bool,
+};
+
+const SessionResetType = union(enum) {
+    AllParameters,
+    AllCharacteristics,
+    Schema,
+    Graph,
+    TimeZone,
+    Parameter: []const u8,
+};
+
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
     query_mem_limit_bytes: usize = 0,
@@ -276,6 +425,9 @@ const ServerState = struct {
     // Optional CDC engine pointer for diagnostics protocol frame
     // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
     cdc_engine: ?*@import("cdc_enhanced").CDCEngine = null,
+
+    // Session management state
+    session_config: ?SessionConfiguration = null,
 
     // Index manager for managing database indexes
     index_manager_ptr: ?*anyopaque = null,
@@ -2500,7 +2652,10 @@ fn handleQuicConnection(
     }
 
     // Initialize state
-    var state = ServerState{ .allocator = gpa };
+    var state = ServerState{ 
+        .allocator = gpa,
+        .session_config = SessionConfiguration.init(gpa),
+    };
     state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
         defer gpa.free(v);
         break :blk true;
@@ -3226,7 +3381,10 @@ pub fn main() !void {
         return;
     }
 
-    var state = ServerState{ .allocator = gpa };
+    var state = ServerState{ 
+        .allocator = gpa,
+        .session_config = SessionConfiguration.init(gpa),
+    };
     state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
         defer gpa.free(v);
         break :blk true;
@@ -5184,27 +5342,17 @@ pub fn main() !void {
                                 continue;
                             },
                             .SessionSet => |session_stmt| {
-                                // Handle SESSION SET statement
-                                // For now, we'll implement basic session property setting
-                                // This should be expanded to handle actual session management
-                                
-                                const message = std.fmt.allocPrint(gpa, "Session property '{s}' set to '{s}'", .{session_stmt.property, session_stmt.value}) catch "Session property set";
-                                defer if (message.ptr != "Session property set".ptr) gpa.free(message);
-
-                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"{s}\"}}\n", .{message}) catch null;
-                                if (success_line) |sl| {
-                                    defer gpa.free(sl);
-                                    _ = stdout_file.write(sl) catch {};
-                                }
+                                // Handle SESSION SET statement with enhanced syntax
+                                const result = try executeSessionSetStatement(gpa, &state, session_stmt);
+                                defer gpa.free(result);
+                                _ = stdout_file.write(result) catch {};
                                 continue;
                             },
-                            .SessionReset => {
-                                // Handle SESSION RESET statement
-                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"Session properties reset\"}}\n", .{}) catch null;
-                                if (success_line) |sl| {
-                                    defer gpa.free(sl);
-                                    _ = stdout_file.write(sl) catch {};
-                                }
+                            .SessionReset => |session_reset| {
+                                // Handle SESSION RESET statement with enhanced syntax
+                                const result = try executeSessionResetStatement(gpa, &state, session_reset);
+                                defer gpa.free(result);
+                                _ = stdout_file.write(result) catch {};
                                 continue;
                             },
                             .SessionClose => {
@@ -6256,4 +6404,134 @@ fn convertEvalValueToBindingValue(val: geode.eval.Value) graph_exec.BindingValue
         .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
         else => .Null,
     };
+}
+
+// Execute SESSION SET statement with full ISO GQL syntax support
+fn executeSessionSetStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.SessionSetStatement) ![]const u8 {
+    // Ensure session config is initialized
+    if (state.session_config == null) {
+        state.session_config = SessionConfiguration.init(allocator);
+    }
+
+    var session_config = &state.session_config.?;
+
+    switch (stmt.clause_type) {
+        .Schema => |schema_ref| {
+            // Set current schema
+            if (session_config.current_schema) |old_schema| {
+                allocator.free(old_schema);
+            }
+            session_config.current_schema = try allocator.dupe(u8, schema_ref.name);
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session schema set to '{s}'\"}}\n", .{schema_ref.name});
+        },
+        .Graph => |graph_clause| {
+            // Set current graph
+            if (session_config.current_graph) |old_graph| {
+                allocator.free(old_graph);
+            }
+            session_config.current_graph = try allocator.dupe(u8, graph_clause.expression);
+            session_config.property_graph_default = graph_clause.property_graph;
+            
+            const graph_type = if (graph_clause.property_graph) "property graph" else "graph";
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} set to '{s}'\"}}\n", .{ graph_type, graph_clause.expression });
+        },
+        .TimeZone => |tz_clause| {
+            // Set time zone
+            if (session_config.time_zone) |old_tz| {
+                allocator.free(old_tz);
+            }
+            session_config.time_zone = try allocator.dupe(u8, tz_clause.value);
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session time zone set to '{s}'\"}}\n", .{tz_clause.value});
+        },
+        .Parameter => |param_clause| {
+            // Set session parameter
+            return try executeSessionParameterSet(allocator, session_config, param_clause);
+        },
+    }
+}
+
+// Execute SESSION RESET statement with full ISO GQL syntax support
+fn executeSessionResetStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.SessionResetStatement) ![]const u8 {
+    // Ensure session config is initialized
+    if (state.session_config == null) {
+        state.session_config = SessionConfiguration.init(allocator);
+    }
+
+    var session_config = &state.session_config.?;
+
+    if (stmt.arguments) |args| {
+        switch (args) {
+            .All => |all_type| {
+                switch (all_type) {
+                    .Parameters => {
+                        session_config.reset(.AllParameters);
+                        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"All session parameters reset\"}}\n", .{});
+                    },
+                    .Characteristics => {
+                        session_config.reset(.AllCharacteristics);
+                        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"All session characteristics reset\"}}\n", .{});
+                    },
+                }
+            },
+            .Schema => {
+                session_config.reset(.Schema);
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session schema reset\"}}\n", .{});
+            },
+            .Graph => |property_graph| {
+                session_config.reset(.Graph);
+                const graph_type = if (property_graph) "property graph" else "graph";
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} reset\"}}\n", .{graph_type});
+            },
+            .TimeZone => {
+                session_config.reset(.TimeZone);
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session time zone reset\"}}\n", .{});
+            },
+            .Parameter => |param_spec| {
+                session_config.reset(.{ .Parameter = param_spec });
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session parameter '{s}' reset\"}}\n", .{param_spec});
+            },
+        }
+    } else {
+        // SESSION RESET without arguments - reset everything
+        session_config.reset(.AllParameters);
+        session_config.reset(.AllCharacteristics);
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"All session settings reset\"}}\n", .{});
+    }
+}
+
+// Execute session parameter setting
+fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *SessionConfiguration, param_clause: geode.ast.ParameterClause) ![]const u8 {
+    switch (param_clause) {
+        .ValueParam => |value_param| {
+            const param_name = value_param.parameter_name.specification;
+            const value = if (value_param.initializer) |init| 
+                SessionParameterValue{ .Value = try allocator.dupe(u8, init) }
+            else 
+                SessionParameterValue{ .Value = try allocator.dupe(u8, "") };
+
+            try session_config.setParameter(param_name, value);
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session value parameter '{s}' set\"}}\n", .{param_name});
+        },
+        .GraphParam => |graph_param| {
+            const param_name = graph_param.parameter_name.specification;
+            const value = if (graph_param.initializer) |init| 
+                SessionParameterValue{ .Graph = try allocator.dupe(u8, init) }
+            else 
+                SessionParameterValue{ .Graph = try allocator.dupe(u8, "") };
+
+            try session_config.setParameter(param_name, value);
+            const graph_type = if (graph_param.property_graph) "property graph" else "graph";
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} parameter '{s}' set\"}}\n", .{ graph_type, param_name });
+        },
+        .BindingTableParam => |binding_param| {
+            const param_name = binding_param.parameter_name.specification;
+            const value = if (binding_param.initializer) |init| 
+                SessionParameterValue{ .BindingTable = try allocator.dupe(u8, init) }
+            else 
+                SessionParameterValue{ .BindingTable = try allocator.dupe(u8, "") };
+
+            try session_config.setParameter(param_name, value);
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session binding table parameter '{s}' set\"}}\n", .{param_name});
+        },
+    }
 }

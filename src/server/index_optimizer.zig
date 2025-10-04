@@ -45,6 +45,26 @@ pub const IndexOptimizer = struct {
         self.stats_manager = stats_mgr;
     }
 
+    // Initialize vector index statistics when creating a vector index
+    pub fn initializeVectorIndexStatistics(
+        self: *IndexOptimizer,
+        index_name: []const u8,
+        label: []const u8,
+        property: []const u8,
+        dimension: u16,
+        index_type: IndexType,
+    ) !void {
+        if (self.stats_manager) |stats_mgr| {
+            // Create statistics for the vector index
+            try stats_mgr.createIndexStatistics(index_name, index_type, label, &[_][]const u8{property});
+            
+            // Set vector-specific parameters
+            if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                stats.setVectorParameters(dimension);
+            }
+        }
+    }
+
     // Optimize a node scan by choosing between sequential scan and index scan
     pub fn optimizeNodeScan(
         self: *IndexOptimizer,
@@ -739,12 +759,128 @@ const QueryPatternType = enum {
     spatial_query, // Spatial operations (distance, contains, etc.)
     fulltext_search, // Full-text search operations
     vector_knn, // K-nearest neighbor vector search
+    vector_similarity, // Vector similarity with distance threshold
+    vector_range, // Vector distance within range
+};
+
+// Advanced vector distance metrics supported by the optimizer
+pub const VectorDistanceMetric = enum {
+    l2, // Euclidean distance
+    cosine, // Cosine similarity (1 - cosine_distance)
+    dot, // Dot product
+    manhattan, // Manhattan (L1) distance  
+    hamming, // Hamming distance (for binary vectors)
+    jaccard, // Jaccard similarity
+    
+    pub fn toString(self: VectorDistanceMetric) []const u8 {
+        return switch (self) {
+            .l2 => "l2",
+            .cosine => "cosine", 
+            .dot => "dot",
+            .manhattan => "manhattan",
+            .hamming => "hamming",
+            .jaccard => "jaccard",
+        };
+    }
+    
+    pub fn fromString(str: []const u8) ?VectorDistanceMetric {
+        if (std.mem.eql(u8, str, "l2")) return .l2;
+        if (std.mem.eql(u8, str, "cosine")) return .cosine;
+        if (std.mem.eql(u8, str, "dot")) return .dot;
+        if (std.mem.eql(u8, str, "manhattan")) return .manhattan;
+        if (std.mem.eql(u8, str, "hamming")) return .hamming;
+        if (std.mem.eql(u8, str, "jaccard")) return .jaccard;
+        return null;
+    }
+};
+
+// Vector query types for different search patterns
+pub const VectorQueryType = enum {
+    knn, // K-nearest neighbors
+    similarity_threshold, // Find all vectors within similarity threshold
+    distance_range, // Find all vectors within distance range
+    approximate_knn, // Approximate K-NN with relaxed precision
+};
+
+// Vector query options for advanced search patterns
+pub const VectorQueryOptions = struct {
+    query_type: VectorQueryType = .knn,
+    distance_metric: VectorDistanceMetric = .l2,
+    k: u32 = 10,
+    similarity_threshold: ?f64 = null, // For similarity_threshold queries
+    max_distance: ?f64 = null, // For distance_range queries
+    min_distance: ?f64 = null, // For distance_range queries
+    ef_search: ?u16 = null, // HNSW search parameter for precision/speed tradeoff
+    approximate: bool = false, // Enable approximate search for speed
+    include_distances: bool = true, // Include distance scores in results
 };
 
 // Vector K-NN query optimization methods
 pub const VectorKNNOptimizer = struct {
-    // Optimize K-NN vector similarity search
+    // Advanced vector query optimization with comprehensive options support
+    pub fn optimizeAdvancedVectorQuery(
+        self: *IndexOptimizer,
+        property: []const u8,
+        query_vector: []const f32,
+        options: VectorQueryOptions,
+        labels: []const []const u8,
+    ) ScanPlan {
+        // Look for available vector indexes on this property
+        const best_vector_index = self.findBestVectorIndexAdvanced(property, query_vector.len, options);
+
+        if (best_vector_index) |index_info| {
+            const vector_cost = self.estimateAdvancedVectorCost(index_info, options, query_vector.len);
+            const estimated_rows = self.estimateVectorQueryRows(options);
+
+            const vector_info = graph_common.AdvancedVectorKNNInfo{
+                .index_name = index_info.name,
+                .query_vector = query_vector,
+                .property = property,
+                .options = options,
+            };
+
+            return ScanPlan{
+                .type = .{ .advanced_vector_knn = vector_info },
+                .estimated_cost = vector_cost,
+                .estimated_rows = estimated_rows,
+                .explain_info = self.createAdvancedVectorExplain(index_info, vector_cost, estimated_rows, options),
+            };
+        }
+
+        // Fallback to sequential scan with advanced vector processing
+        const sequential_cost = self.estimateSequentialAdvancedVectorScanCost(labels, query_vector.len, options);
+        const sequential_rows = self.estimateSequentialScanRows(labels);
+
+        return ScanPlan{
+            .type = .sequential,
+            .estimated_cost = sequential_cost,
+            .estimated_rows = sequential_rows,
+            .explain_info = self.createSequentialAdvancedVectorScanExplain(labels, sequential_cost, sequential_rows, options),
+        };
+    }
+
+    // Optimize K-NN vector similarity search with advanced options
     pub fn optimizeVectorKNNScan(
+        self: *IndexOptimizer,
+        property: []const u8,
+        query_vector: []const f32,
+        k: u32,
+        metric: []const u8,
+        labels: []const []const u8,
+    ) ScanPlan {
+        // Convert legacy parameters to new VectorQueryOptions format
+        const options = VectorQueryOptions{
+            .query_type = .knn,
+            .distance_metric = VectorDistanceMetric.fromString(metric) orelse .l2,
+            .k = k,
+            .include_distances = true,
+        };
+
+        return self.optimizeAdvancedVectorQuery(property, query_vector, options, labels);
+    }
+
+    // Legacy method - calls new advanced optimization
+    fn optimizeVectorKNNScanLegacy(
         self: *IndexOptimizer,
         property: []const u8,
         query_vector: []const f32,
@@ -783,6 +919,128 @@ pub const VectorKNNOptimizer = struct {
             .estimated_rows = sequential_rows,
             .explain_info = self.createSequentialVectorScanExplain(labels, sequential_cost, sequential_rows, k),
         };
+    }
+
+    // Find the best vector index for advanced queries with comprehensive options
+    fn findBestVectorIndexAdvanced(
+        self: *IndexOptimizer,
+        property: []const u8,
+        vector_dim: usize,
+        options: VectorQueryOptions,
+    ) ?IndexInfo {
+        // Query index manager for vector indexes on this property
+        const available_indexes = self.index_manager.getIndexesForProperty(property) catch return null;
+        defer self.allocator.free(available_indexes);
+
+        for (available_indexes) |index_info| {
+            if (index_info.index_type == .vector_hnsw or index_info.index_type == .vector_f32) {
+                // Check if dimension matches and the index supports the query type
+                if (self.vectorIndexSupportsQuery(index_info, vector_dim, options)) {
+                    return index_info;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Check if a vector index supports the specific query requirements
+    fn vectorIndexSupportsQuery(
+        self: *IndexOptimizer,
+        index_info: IndexInfo,
+        vector_dim: usize,
+        options: VectorQueryOptions,
+    ) bool {
+        _ = self;
+        _ = index_info;
+        _ = vector_dim;
+
+        // All HNSW indexes support different query types
+        // In production, this would check index metadata for supported metrics
+        return switch (options.query_type) {
+            .knn, .approximate_knn => true, // HNSW excels at K-NN
+            .similarity_threshold => true, // Can be implemented with large K + filtering
+            .distance_range => true, // Can be implemented with range search
+        };
+    }
+
+    // Estimate cost for advanced vector queries
+    fn estimateAdvancedVectorCost(
+        self: *IndexOptimizer,
+        index_info: IndexInfo,
+        options: VectorQueryOptions,
+        vector_dim: usize,
+    ) f64 {
+        // Base cost depends on query type
+        const base_cost = switch (options.query_type) {
+            .knn => self.estimateVectorKNNCost(index_info, options.k, vector_dim),
+            .approximate_knn => self.estimateVectorKNNCost(index_info, options.k, vector_dim) * 0.7, // 30% faster
+            .similarity_threshold => {
+                // Threshold queries require larger search scope
+                const effective_k = if (options.similarity_threshold) |_| options.k * 3 else options.k;
+                return self.estimateVectorKNNCost(index_info, effective_k, vector_dim) * 1.2;
+            },
+            .distance_range => {
+                // Range queries are most expensive
+                const effective_k = options.k * 5; // Much larger search scope
+                return self.estimateVectorKNNCost(index_info, effective_k, vector_dim) * 1.5;
+            },
+        };
+
+        // Apply distance metric cost adjustment
+        const metric_factor = switch (options.distance_metric) {
+            .l2 => 1.0, // Baseline
+            .cosine => 1.1, // Slightly more expensive due to normalization
+            .dot => 0.9, // Simpler computation
+            .manhattan => 1.05, // L1 distance
+            .hamming => 0.8, // Binary operations
+            .jaccard => 1.3, // Set operations
+        };
+
+        return base_cost * metric_factor;
+    }
+
+    // Estimate result set size for different vector query types
+    fn estimateVectorQueryRows(self: *IndexOptimizer, options: VectorQueryOptions) u64 {
+        _ = self;
+
+        return switch (options.query_type) {
+            .knn, .approximate_knn => options.k, // Exactly k results
+            .similarity_threshold => {
+                // Variable result size based on data distribution
+                // Estimate based on threshold selectivity
+                if (options.similarity_threshold) |threshold| {
+                    if (threshold > 0.9) return options.k; // Very selective
+                    if (threshold > 0.7) return options.k * 2; // Moderately selective
+                    return options.k * 5; // Broad threshold
+                }
+                return options.k * 3; // Default estimate
+            },
+            .distance_range => {
+                // Range queries can return many results
+                return options.k * 10; // Conservative estimate
+            },
+        };
+    }
+
+    // Estimate cost for sequential scan with advanced vector processing
+    fn estimateSequentialAdvancedVectorScanCost(
+        self: *IndexOptimizer,
+        labels: []const []const u8,
+        vector_dim: usize,
+        options: VectorQueryOptions,
+    ) f64 {
+        const base_cost = self.estimateSequentialVectorScanCost(labels, vector_dim);
+        
+        // Advanced query types add processing overhead
+        const query_overhead = switch (options.query_type) {
+            .knn => 1.0, // Baseline
+            .approximate_knn => 0.9, // Slightly less precise
+            .similarity_threshold => 1.2, // Threshold comparison overhead
+            .distance_range => 1.3, // Range checking overhead
+        };
+
+        return base_cost * query_overhead;
     }
 
     // Find the best vector index for a given property and query characteristics
@@ -835,11 +1093,8 @@ pub const VectorKNNOptimizer = struct {
         // Try to get actual statistics if available
         if (self.stats_manager) |stats_mgr| {
             if (stats_mgr.getIndexStatistics(index_info.name)) |stats| {
-                // HNSW cost is logarithmic in the number of vectors
-                const log_size = @log(@as(f64, @floatFromInt(stats.total_entries + 1)));
-                const base_cost = log_size * @as(f64, @floatFromInt(k));
-                const dimension_factor = @as(f64, @floatFromInt(vector_dim)) / 128.0; // Normalize to 128D
-                return base_cost * dimension_factor;
+                // Use enhanced vector K-NN cost estimation from statistics
+                return stats.estimateVectorKnnCost(k, stats.total_entries);
             }
         }
 
@@ -971,6 +1226,25 @@ pub const VectorKNNOptimizer = struct {
             return self.executeSequentialVectorScan(graph, knn_info, labels, var_name);
         };
         defer query_result.deinit();
+
+        // Record vector K-NN query statistics
+        if (self.stats_manager) |stats_mgr| {
+            // Calculate average distance from results
+            var total_distance: f64 = 0;
+            for (query_result.results.items) |match| {
+                total_distance += match.score;
+            }
+            const avg_distance = if (query_result.results.items.len > 0) 
+                total_distance / @as(f64, @floatFromInt(query_result.results.items.len))
+            else 
+                0.0;
+            
+            // Record the K-NN query for statistics
+            stats_mgr.recordIndexAccess(knn_info.index_name, query_result.results.items.len, 1);
+            if (stats_mgr.getIndexStatistics(knn_info.index_name)) |stats| {
+                stats.recordVectorKnnQuery(knn_info.k, avg_distance);
+            }
+        }
 
         // Convert vector search results to graph bindings
         for (query_result.results.items) |match| {

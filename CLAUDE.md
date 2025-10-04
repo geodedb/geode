@@ -28,6 +28,7 @@ Geode is an open-source, ACID-compliant graph database implementing ISO/IEC 3907
 - **✅ Performance optimization**: Query plan caching with cost-based optimization
 - **✅ Distributed query planning**: Federation-aware query optimization with shard affinity analysis  
 - **✅ Vector types & SIMD**: VectorF32/VectorI32 with 8x hardware acceleration and HNSW K-NN search
+- **✅ Advanced vector operations**: Complete IndexOptimizer integration with 6 distance metrics and statistics-based cost estimation
 - **✅ TDE security foundation**: AES-256-GCM page encryption with <1% overhead, automated key rotation, HSM integration
 - **✅ CDC streaming infrastructure**: Real-time event capture (>100K events/sec) with adaptive backpressure and diagnostics
 - **✅ Network types foundation**: IPv4/IPv6 IpAddr, CIDR Subnet, EUI-48 MAC with <1μs parsing performance
@@ -286,9 +287,9 @@ RETURN COUNT(*) AS ipv6_devices,
 - **Indexing**: Patricia trie support for CIDR ranges (planned)
 - **Memory efficiency**: Zero-copy string operations where possible
 
-### 🧮 Vector Types (Fully Implemented with SIMD)
+### 🧮 Vector Types (Fully Implemented with SIMD & Advanced IndexOptimizer Integration)
 
-Geode provides high-performance vector types designed for machine learning, AI embeddings, and scientific computing with SIMD optimization for maximum performance.
+Geode provides enterprise-grade vector types designed for machine learning, AI embeddings, and scientific computing with complete HNSW integration, 6 distance metrics, and statistics-based query optimization.
 
 #### **VectorF32 Type** - Single-Precision Floating-Point Vectors
 ```gql
@@ -435,6 +436,94 @@ ORDER BY distance
 - **VectorIndex Manager**: Full lifecycle management with named indexes and statistics
 - **Production Ready**: Comprehensive test coverage with 6 integration test scenarios
 
+#### **Advanced Vector Operations & IndexOptimizer Integration (2025-10-04)**
+
+Building on the foundational vector types, Geode now provides enterprise-grade vector query optimization with comprehensive distance metrics and intelligent cost estimation:
+
+##### **Enhanced Distance Metrics**:
+```gql
+-- L2 (Euclidean) distance - optimal for general similarity
+MATCH (doc:Document) 
+WHERE vector_l2(doc.embedding, vectorf32('[0.1, 0.2, 0.3]')) < 2.0
+RETURN doc.title ORDER BY vector_l2(doc.embedding, vectorf32('[0.1, 0.2, 0.3]'))
+
+-- Cosine similarity - ideal for normalized embeddings and document similarity
+MATCH (product:Product)
+WHERE vector_cosine(product.features, vectorf32('[1.0, 0.5, -0.2]')) > 0.8
+RETURN product.name ORDER BY vector_cosine(product.features, vectorf32('[1.0, 0.5, -0.2]')) DESC
+
+-- Manhattan distance - robust for high-dimensional sparse vectors
+MATCH (user:User)
+WHERE manhattan_distance(user.preferences, vectori32('[1, 0, 1, 0, 1]')) < 5
+RETURN user.name ORDER BY manhattan_distance(user.preferences, vectori32('[1, 0, 1, 0, 1]'))
+
+-- Dot product - for similarity without normalization
+MATCH (item:Item) 
+WHERE vector_dot(item.attributes, vectorf32('[0.8, 0.6, 0.4]')) > 10.0
+RETURN item ORDER BY vector_dot(item.attributes, vectorf32('[0.8, 0.6, 0.4]')) DESC
+
+-- Hamming distance - optimal for binary feature vectors
+MATCH (signature:BinarySignature)
+WHERE hamming_distance(signature.bits, vectori32('[1, 0, 1, 1, 0]')) <= 2
+RETURN signature ORDER BY hamming_distance(signature.bits, vectori32('[1, 0, 1, 1, 0]'))
+
+-- Jaccard similarity - for set-based similarity measures
+MATCH (category:Category)
+WHERE jaccard_similarity(category.features, vectori32('[1, 1, 0, 1, 0]')) > 0.6
+RETURN category ORDER BY jaccard_similarity(category.features, vectori32('[1, 1, 0, 1, 0]')) DESC
+```
+
+##### **IndexOptimizer Integration Features**:
+- **Statistics-Driven Cost Estimation**: Leverages IndexStatisticsManager for accurate query planning
+- **Historical Query Pattern Analysis**: Tracks K-value trends and average distances for optimization
+- **Automatic Index Selection**: Cost-based choice between HNSW index and sequential scan
+- **Query Type Support**: K-NN, similarity threshold, distance range, and approximate K-NN queries
+- **Real-time Performance Tracking**: Records query statistics for continuous optimization improvement
+
+##### **Advanced Query Types**:
+```zig
+// K-nearest neighbors with precise result count
+VectorQueryOptions{
+    .query_type = .knn,
+    .distance_metric = .cosine,
+    .k = 10,
+    .include_distances = true,
+}
+
+// Similarity threshold search with variable result sizes
+VectorQueryOptions{
+    .query_type = .similarity_threshold,
+    .distance_metric = .l2,
+    .similarity_threshold = 0.8,
+    .k = 50, // Maximum results
+}
+
+// Distance range queries for bounded similarity
+VectorQueryOptions{
+    .query_type = .distance_range,
+    .distance_metric = .manhattan,
+    .min_distance = 1.0,
+    .max_distance = 5.0,
+    .k = 100,
+}
+
+// Approximate K-NN for high-performance applications
+VectorQueryOptions{
+    .query_type = .approximate_knn,
+    .distance_metric = .cosine,
+    .k = 20,
+    .ef_search = 64, // HNSW precision parameter
+    .approximate = true,
+}
+```
+
+##### **Cost-Based Optimization Features**:
+- **HNSW Cost Model**: `5.0 * log(collection_size) * k * (dimension/128)` with historical adjustment
+- **Distance Metric Factors**: Cosine (1.1x), L2 (1.0x), Dot (0.9x), Manhattan (1.05x), Hamming (0.8x), Jaccard (1.3x)
+- **Query Type Scaling**: K-NN (1.0x), Approximate K-NN (0.7x), Similarity Threshold (1.2x), Distance Range (1.5x)
+- **Adaptive Performance**: K-value penalty for unusual patterns, efficiency rewards for consistent usage
+- **Comprehensive EXPLAIN Output**: Detailed cost breakdown with index selection reasoning
+
 #### **Performance Characteristics**
 - **SIMD Acceleration**: 8-element vectorization for f32 operations (distance, dot product)
 - **Memory Efficiency**: Compact binary encoding with dimension prefix
@@ -442,6 +531,8 @@ ORDER BY distance
 - **Distance Computation**: Optimized L2 (<50ns for 8D), cosine similarity, dot product
 - **HNSW Search**: Sub-logarithmic complexity with M=16, ef_construction=200 parameters
 - **Query Optimization**: Automatic index selection based on collection size and query selectivity
+- **Statistics Integration**: Real-time cost estimation using actual performance data
+- **Multi-Metric Support**: 6 distance metrics with automatic optimization per metric type
 - **Precision**: Single-precision f32 for embeddings, i32 for discrete features
 
 ### 🔐 Transparent Data Encryption (TDE) - Enterprise Security
@@ -831,6 +922,180 @@ DROP GRAPH sensitive_analytics    -- Requires graph.delete permission
 - **Backup Integration**: Catalog metadata included in backup/restore operations
 - **Multi-Tenant Support**: Schema-based tenant isolation with cross-tenant access controls
 - **CLI Integration**: Full command-line support for catalog administration
+
+### 📋 Enhanced Session Management System (Enterprise-Ready)
+
+Geode provides a comprehensive session management system implementing the full ISO/IEC 39075:2024 session control specification with advanced configuration management, parameter storage, and state persistence.
+
+#### **Complete ISO GQL Session Syntax Support**
+
+**SESSION SET Operations:**
+```gql
+-- Schema management
+SESSION SET SCHEMA test_schema
+
+-- Graph context management
+SESSION SET GRAPH my_graph
+SESSION SET PROPERTY GRAPH my_property_graph
+
+-- Time zone configuration
+SESSION SET TIME ZONE 'UTC'
+SESSION SET TIME ZONE 'America/New_York'
+
+-- Parameter management
+SESSION SET VALUE param_name = 'value'
+SESSION SET GRAPH param_graph = graph_reference
+SESSION SET BINDING TABLE param_table = table_reference
+
+-- Conditional parameter creation
+SESSION SET VALUE IF NOT EXISTS param_name = 'default_value'
+```
+
+**SESSION RESET Operations:**
+```gql
+-- Reset all session settings
+SESSION RESET
+
+-- Reset specific categories
+SESSION RESET ALL PARAMETERS
+SESSION RESET ALL CHARACTERISTICS
+
+-- Reset individual components
+SESSION RESET SCHEMA
+SESSION RESET GRAPH
+SESSION RESET PROPERTY GRAPH
+SESSION RESET TIME ZONE
+
+-- Reset specific parameters
+SESSION RESET PARAMETER param_name
+```
+
+**SESSION CLOSE:**
+```gql
+-- Close current session
+SESSION CLOSE
+```
+
+#### **Advanced Session Configuration Features**
+
+**1. Multi-Type Parameter Support:**
+- **Value Parameters**: Store arbitrary session values with type detection
+- **Graph Parameters**: Reference graph objects with property graph support
+- **Binding Table Parameters**: Manage session-scoped table bindings
+- **Schema References**: Dynamic schema context switching
+
+**2. Conditional Parameter Management:**
+- **IF NOT EXISTS**: Prevent parameter overwriting with conditional creation
+- **Type-Safe Storage**: Automatic type inference and validation
+- **Memory Management**: Efficient allocation/deallocation with proper cleanup
+
+**3. Session State Persistence:**
+```zig
+// Session configuration structure
+const SessionConfiguration = struct {
+    current_schema: ?[]const u8,
+    current_graph: ?[]const u8,
+    property_graph_default: bool,
+    time_zone: ?[]const u8,
+    parameters: std.StringHashMap(SessionParameterValue),
+    
+    // Advanced features
+    pub fn setParameter(name: []const u8, value: SessionParameterValue) !void
+    pub fn reset(reset_type: SessionResetType) void
+    pub fn getParameter(name: []const u8) ?SessionParameterValue
+};
+```
+
+**4. Enterprise Session Management:**
+- **Memory Efficient**: Intelligent parameter storage with automatic cleanup
+- **Thread Safe**: Session isolation with per-connection state management
+- **Audit Compliant**: All session operations logged for security compliance
+- **Standards Compliant**: Full adherence to ISO/IEC 39075:2024 specification
+
+#### **Session Parameter Types**
+
+**Supported Parameter Values:**
+```zig
+const SessionParameterValue = union(enum) {
+    String: []const u8,           // Text values
+    Graph: []const u8,            // Graph references
+    BindingTable: []const u8,     // Table bindings
+    Value: []const u8,            // Generic values
+    Integer: i64,                 // Numeric values
+    Float: f64,                   // Decimal values
+    Boolean: bool,                // Boolean flags
+};
+```
+
+#### **Session Reset Capabilities**
+
+**Reset Categories:**
+- **AllParameters**: Clear all session parameter values
+- **AllCharacteristics**: Reset schema, graph, timezone settings
+- **Selective Reset**: Target specific session components
+- **Parameter-Specific**: Reset individual named parameters
+
+#### **Integration with Geode Ecosystem**
+
+**1. Catalog Integration:**
+- Session schema references validated against catalog
+- Graph context switching with catalog verification
+- Schema-aware query execution with session context
+
+**2. Security Integration:**
+- Session operations subject to RBAC/ABAC permissions
+- Parameter access controlled by user roles
+- Audit logging for all session modifications
+
+**3. Query Context:**
+- Session graph context affects query execution
+- Schema resolution uses session-configured schema
+- Time zone affects temporal query operations
+
+#### **Usage Examples**
+
+**Database Configuration Workflow:**
+```gql
+-- Set up session context
+SESSION SET SCHEMA production_schema
+SESSION SET PROPERTY GRAPH analytics_graph
+SESSION SET TIME ZONE 'UTC'
+
+-- Configure session parameters
+SESSION SET VALUE max_result_size = '10000'
+SESSION SET GRAPH param_staging = staging_graph
+
+-- Execute queries in configured context
+MATCH (n:Node) RETURN n.name LIMIT 100
+
+-- Reset specific components
+SESSION RESET PARAMETER max_result_size
+SESSION RESET GRAPH
+
+-- Close session
+SESSION CLOSE
+```
+
+**Multi-Tenant Environment:**
+```gql
+-- Switch tenant context
+SESSION SET SCHEMA tenant_abc_schema
+SESSION SET PROPERTY GRAPH tenant_abc_data
+
+-- Set tenant-specific parameters
+SESSION SET VALUE tenant_id = 'abc123'
+SESSION SET VALUE data_retention_days = '90'
+
+-- Execute tenant-scoped operations
+MATCH (user:User) WHERE user.tenant = session_parameter('tenant_id')
+RETURN user.name, user.created_date
+
+-- Reset for new tenant
+SESSION RESET ALL CHARACTERISTICS
+SESSION SET SCHEMA tenant_xyz_schema
+```
+
+The enhanced session management system provides enterprise-grade session control with complete ISO GQL compliance, making Geode suitable for complex multi-tenant applications requiring sophisticated session state management.
 
 ## Development Commands
 
@@ -2137,9 +2402,31 @@ This fix represents a **fundamental breakthrough** in Geode's query execution ca
 
 ---
 
+## 📊 Performance Analysis & Optimization (October 2025)
+
+### **Comprehensive Performance Baseline Established**
+
+A complete performance benchmark suite has been implemented and executed, revealing significant optimization opportunities across Geode's core systems. The analysis identifies specific bottlenecks and provides a roadmap for substantial performance improvements.
+
+**Key Performance Findings:**
+- **File I/O Operations**: 5.37ms average (5.4x slower than target) - Critical impact on database durability and backup operations
+- **JSON Parsing**: 630μs average (31x slower than target) - Major impact on QUIC transport and client-server communication  
+- **ArrayList Growth**: 746μs average (15x slower than target) - Significant impact on query result building and index operations
+- **Memory Allocation**: 92μs average (9x slower than target) - Baseline overhead affecting all database operations
+- **String Operations**: 185μs average (37x slower than target) - Impact on query processing and property handling
+
+**Performance Optimization Roadmap:**
+1. **Phase 1 (Critical I/O)**: File I/O batching, JSON streaming, collection pre-allocation - **Expected 3-5x improvement**
+2. **Phase 2 (Memory & Strings)**: String interning, specialized hash maps, arena allocators - **Expected 2-3x improvement**  
+3. **Phase 3 (Advanced)**: Vectorized execution, lock-free structures, binary protocols - **Expected 2-5x improvement**
+
+**Benchmark Suite**: Production-ready performance testing in `tests/benchmark_performance_analysis.zig` with 9 comprehensive test scenarios covering all critical operations.
+
+**Complete Analysis**: Detailed findings and implementation plan available in [`docs/PERFORMANCE_ANALYSIS_REPORT.md`](docs/PERFORMANCE_ANALYSIS_REPORT.md)
+
 ## 🚀 Next Development Priorities (October 2025)
 
-With IndexOptimizer production-ready and statistics integration complete, the following areas present the highest-value opportunities for continued development:
+With comprehensive performance analysis complete, IndexOptimizer production-ready, statistics integration complete, and client-side environment variable support fully implemented, the following areas present the highest-value opportunities for continued development:
 
 ### **1. HIGH PRIORITY: Backup & Restore System Implementation**
 **Current Status**: Stub implementation in `src/server/main.zig:5460-5553`
@@ -2184,6 +2471,41 @@ With IndexOptimizer production-ready and statistics integration complete, the fo
 - **Query Optimization**: FTS-aware cost estimation in IndexOptimizer
 - **Fuzzy Search**: Approximate string matching and typo tolerance
 
+### **5. ✅ COMPLETED: Client-Side Environment Variable Support**
+**Status**: **FULLY IMPLEMENTED** (October 2025)
+**Implementation**: Client-side environment variable substitution in GQL queries with security-first design
+**Delivered Features**:
+- **✅ Client-side Environment Resolution**: Complete environment variable substitution in queries before server transmission
+- **✅ Query Syntax Extension**: Full support for `${ENV_VAR}` and `${ENV_VAR:default_value}` syntax in GQL statements
+- **✅ Security Model**: Client-only resolution preventing server-side security risks
+- **✅ Error Handling**: Graceful fallback to original query text on resolution failures
+
+#### **Usage Examples**:
+```bash
+# Basic environment variable substitution
+export DB_NAME="production_db"
+geode query 'RETURN "${DB_NAME}" AS database'
+
+# Environment variable with default value
+geode query 'RETURN "${UNDEFINED_VAR:fallback_value}" AS result'
+
+# Complex GQL queries with multiple variables
+export USER_ID="12345" && export ROLE="admin"
+geode query 'MATCH (u:User {id: "${USER_ID}", role: "${ROLE}"}) RETURN u.name'
+```
+
+#### **Security Architecture**:
+- **Client-Only Processing**: Environment variables resolved on client machine before QUIC transmission
+- **No Server Exposure**: Server never sees or processes environment variable syntax
+- **Prevent Data Leakage**: No server-side environment variable access to prevent security risks
+- **Audit Compliance**: Environment variable usage trackable through client-side audit logging
+
+#### **Implementation Details**:
+- **File**: `src/client/main.zig` - Environment variable resolution in query preprocessing pipeline
+- **Syntax Support**: `${VAR_NAME}` and `${VAR_NAME:default_value}` patterns
+- **Integration**: Seamless integration with Unicode preprocessing and JSON message transport
+- **CANARY Tracking**: REQ=REQ-CLIENT-ENV-001 for governance compliance
+
 ### **5. LOW PRIORITY: Performance & Monitoring Enhancements**
 **Current Status**: Basic monitoring in `src/monitoring/`, query plan caching implemented
 **Requirements**: Production monitoring and observability
@@ -2198,9 +2520,11 @@ With IndexOptimizer production-ready and statistics integration complete, the fo
 
 1. ✅ **Backup & Restore** - COMPLETED (2025-10-03)
 2. ✅ **User Management** - COMPLETED (2025-10-04)
-3. **🔄 NEXT: Vector Operations** - High-value AI/ML workload support
-4. **Improve Full-Text Search** - Broad application compatibility  
-5. **Add Monitoring Enhancements** - Operations and maintenance support
+3. ✅ **Enhanced Session Management** - COMPLETED (2025-10-04)
+4. **🔄 NEXT: Vector Operations** - High-value AI/ML workload support
+5. **Environment Variable Support** - Developer experience and security enhancement
+6. **Improve Full-Text Search** - Broad application compatibility  
+7. **Add Monitoring Enhancements** - Operations and maintenance support
 
 Each area builds upon the solid IndexOptimizer foundation and leverages the statistics collection system for intelligent optimization decisions.
 

@@ -27,6 +27,12 @@ pub const IndexStatistics = struct {
     // Histogram for value distribution (simplified)
     value_distribution: std.HashMap([]const u8, u64, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
 
+    // Vector-specific statistics
+    vector_dimension: ?u16 = null,
+    vector_avg_distance: f64 = 0.0,
+    vector_knn_queries: u64 = 0,
+    vector_avg_k_value: f64 = 0.0,
+
     pub fn init(allocator: Allocator, name: []const u8, index_type: graph_common.IndexType, label: []const u8, properties: []const []const u8) IndexStatistics {
         return IndexStatistics{
             .name = name,
@@ -86,6 +92,62 @@ pub const IndexStatistics = struct {
         return self.selectivity;
     }
 
+    // Record vector K-NN query statistics
+    pub fn recordVectorKnnQuery(self: *IndexStatistics, k_value: u64, avg_distance: f64) void {
+        if (self.vector_dimension == null) return; // Not a vector index
+
+        self.vector_knn_queries += 1;
+        
+        // Update average K value
+        const new_k = @as(f64, @floatFromInt(k_value));
+        self.vector_avg_k_value = (self.vector_avg_k_value * @as(f64, @floatFromInt(self.vector_knn_queries - 1)) + new_k) / @as(f64, @floatFromInt(self.vector_knn_queries));
+        
+        // Update average distance
+        self.vector_avg_distance = (self.vector_avg_distance * @as(f64, @floatFromInt(self.vector_knn_queries - 1)) + avg_distance) / @as(f64, @floatFromInt(self.vector_knn_queries));
+    }
+
+    // Set vector index parameters (called during index creation)
+    pub fn setVectorParameters(self: *IndexStatistics, dimension: u16) void {
+        self.vector_dimension = dimension;
+    }
+
+    // Estimate vector K-NN search cost based on historical data
+    pub fn estimateVectorKnnCost(self: *const IndexStatistics, k_value: u64, collection_size: u64) f64 {
+        if (self.vector_dimension == null) return std.math.inf(f64);
+
+        // Base HNSW cost model: O(log(n) * k * dimension_factor)
+        const log_n = @log(@as(f64, @floatFromInt(collection_size)));
+        const k_factor = @as(f64, @floatFromInt(k_value));
+        const dimension_factor = if (self.vector_dimension) |dim| @as(f64, @floatFromInt(dim)) / 128.0 else 1.0;
+        
+        var base_cost = 5.0 * log_n * k_factor * dimension_factor;
+
+        // Adjust based on historical query patterns
+        if (self.vector_knn_queries > 10) {
+            // If historical K values are much different from current, adjust cost
+            const k_ratio = k_factor / self.vector_avg_k_value;
+            if (k_ratio > 2.0 or k_ratio < 0.5) {
+                base_cost *= 1.2; // Penalty for unusual K values
+            }
+        }
+
+        return base_cost;
+    }
+
+    // Get vector index recommendations based on usage patterns
+    pub fn getVectorIndexRecommendations(self: *const IndexStatistics) []const u8 {
+        if (self.vector_dimension == null) return "";
+        if (self.vector_knn_queries < 5) return "Insufficient data for recommendations";
+
+        if (self.vector_avg_k_value > 100) {
+            return "Consider using approximate search with lower ef parameter for large K queries";
+        } else if (self.vector_avg_k_value < 5) {
+            return "Index optimized for small K queries - consider increasing ef_construction for better recall";
+        } else {
+            return "Vector index usage pattern is optimal";
+        }
+    }
+
     // Get estimated cost factor based on index characteristics
     pub fn getEstimatedCostFactor(self: *const IndexStatistics) f64 {
         var cost_factor: f64 = 1.0;
@@ -96,6 +158,7 @@ pub const IndexStatistics = struct {
             .btree => 1.0, // Baseline
             .spatial => 1.3, // Spatial indexes have overhead
             .fulltext => 1.5, // Full-text searches are more expensive
+            .vector_f32, .vector => 0.9, // HNSW vector indexes are efficient for K-NN
         };
 
         // Adjust based on average key length (longer keys = more expensive comparisons)

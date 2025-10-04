@@ -270,7 +270,6 @@ pub const Parser = struct {
             .DETACH => self.parseDeleteStatement(),
             .MERGE => self.parseMergeStatement(),
             .DROP => self.parseDropStatement(),
-            .SET => self.parseSetSessionStatement(),
             .USE => self.parseUseStatement(),
             .identifier => blk_ident: {
                 // Check for BACKUP and RESTORE keywords
@@ -503,46 +502,10 @@ pub const Parser = struct {
             .SESSION => blk: {
                 self.advance();
                 if (self.cur.kind == .SET) {
-                    self.advance();
-                    // Parse SESSION SET PROPERTY GRAPH <name>
-                    var property: []const u8 = "";
-                    var value: []const u8 = "";
-
-                    // Check for PROPERTY keyword
-                    if (self.cur.kind == .PROPERTY) {
-                        self.advance();
-                        // Expect GRAPH
-                        if (self.cur.kind == .GRAPH) {
-                            property = "GRAPH";
-                            self.advance();
-                            // Expect graph name (identifier or quoted identifier or string)
-                            if (self.cur.kind == .identifier) {
-                                value = self.cur.lexeme;
-                                self.advance();
-                            } else if (self.cur.kind == .string_lit) {
-                                value = self.cur.lexeme;
-                                self.advance();
-                            } else {
-                                return error.UnexpectedToken;
-                            }
-                        } else {
-                            return error.UnexpectedToken;
-                        }
-                    } else if (self.cur.kind == .identifier) {
-                        // Other session properties (not implemented)
-                        property = self.cur.lexeme;
-                        self.advance();
-                        if (self.cur.kind == .identifier or self.cur.kind == .string_lit) {
-                            value = self.cur.lexeme;
-                            self.advance();
-                        }
-                    }
-
-                    break :blk .{ .SessionSet = .{ .property = property, .value = value } };
+                    break :blk try self.parseSessionSetStatement();
                 }
                 if (self.cur.kind == .RESET) {
-                    self.advance();
-                    break :blk .SessionReset;
+                    break :blk try self.parseSessionResetStatement();
                 }
                 if (self.cur.kind == .CLOSE) {
                     self.advance();
@@ -2471,34 +2434,251 @@ pub const Parser = struct {
         } };
     }
 
-    // Parse SET SESSION statement
-    fn parseSetSessionStatement(self: *Parser) ParserError!ast.Statement {
+    // Parse SESSION SET statement with full ISO GQL syntax
+    fn parseSessionSetStatement(self: *Parser) ParserError!ast.Statement {
         self.advance(); // consume SET
-        _ = try self.expect(.SESSION);
 
-        // Expect property name (currently only GRAPH is supported)
-        const property = if (self.cur.kind == .GRAPH) blk: {
+        // Parse the different types of SESSION SET clauses
+        if (self.cur.kind == .SCHEMA) {
             self.advance();
-            break :blk "GRAPH";
+            // Parse schema reference
+            const schema_name = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
+                const name = self.cur.lexeme;
+                self.advance();
+                break :blk name;
+            } else {
+                return error.UnexpectedToken;
+            };
+
+            return .{ .SessionSet = .{
+                .clause_type = .{ .Schema = .{ .name = schema_name } },
+            } };
+        } else if (self.cur.kind == .GRAPH or self.cur.kind == .PROPERTY) {
+            // Parse [PROPERTY] GRAPH clause
+            const property_graph = if (self.cur.kind == .PROPERTY) blk: {
+                self.advance();
+                _ = try self.expect(.GRAPH);
+                break :blk true;
+            } else blk: {
+                self.advance(); // consume GRAPH
+                break :blk false;
+            };
+
+            // Parse graph expression
+            const graph_expr = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
+                const expr = self.cur.lexeme;
+                self.advance();
+                break :blk expr;
+            } else {
+                return error.UnexpectedToken;
+            };
+
+            return .{ .SessionSet = .{
+                .clause_type = .{ .Graph = .{
+                    .property_graph = property_graph,
+                    .expression = graph_expr,
+                } },
+            } };
+        } else if (self.cur.kind == .TIME) {
+            self.advance();
+            _ = try self.expect(.identifier); // expect ZONE
+
+            // Parse time zone value
+            const tz_value = if (self.cur.kind == .string_lit) blk: {
+                const val = self.cur.lexeme;
+                self.advance();
+                break :blk val;
+            } else {
+                return error.UnexpectedToken;
+            };
+
+            return .{ .SessionSet = .{
+                .clause_type = .{ .TimeZone = .{ .value = tz_value } },
+            } };
+        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or 
+                   (self.cur.kind == .identifier and 
+                    (std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE") or 
+                     std.ascii.eqlIgnoreCase(self.cur.lexeme, "VALUE")))) {
+            // Parse parameter clauses
+            return .{ .SessionSet = .{
+                .clause_type = .{ .Parameter = try self.parseSessionParameterClause() },
+            } };
+        } else {
+            return error.UnexpectedToken;
+        }
+    }
+
+    // Parse SESSION RESET statement with full ISO GQL syntax
+    fn parseSessionResetStatement(self: *Parser) ParserError!ast.Statement {
+        self.advance(); // consume RESET
+
+        // Parse optional reset arguments
+        if (self.cur.kind == .semicolon or self.cur.kind == .eof) {
+            // SESSION RESET without arguments
+            return .{ .SessionReset = .{ .arguments = null } };
+        }
+
+        // Parse reset arguments
+        if (self.cur.kind == .identifier) {
+            const arg = self.cur.lexeme;
+            if (std.ascii.eqlIgnoreCase(arg, "ALL")) {
+                self.advance();
+                // Parse ALL PARAMETERS or ALL CHARACTERISTICS
+                if (self.cur.kind == .identifier) {
+                    const type_arg = self.cur.lexeme;
+                    self.advance();
+                    if (std.ascii.eqlIgnoreCase(type_arg, "PARAMETERS")) {
+                        return .{ .SessionReset = .{
+                            .arguments = .{ .All = .Parameters },
+                        } };
+                    } else if (std.ascii.eqlIgnoreCase(type_arg, "CHARACTERISTICS")) {
+                        return .{ .SessionReset = .{
+                            .arguments = .{ .All = .Characteristics },
+                        } };
+                    }
+                }
+            } else if (std.ascii.eqlIgnoreCase(arg, "PARAMETER")) {
+                self.advance();
+                // Parse parameter specification
+                const param_spec = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
+                    const spec = self.cur.lexeme;
+                    self.advance();
+                    break :blk spec;
+                } else {
+                    return error.UnexpectedToken;
+                };
+
+                return .{ .SessionReset = .{
+                    .arguments = .{ .Parameter = param_spec },
+                } };
+            }
+        } else if (self.cur.kind == .SCHEMA) {
+            self.advance();
+            return .{ .SessionReset = .{
+                .arguments = .Schema,
+            } };
+        } else if (self.cur.kind == .GRAPH or self.cur.kind == .PROPERTY) {
+            // Parse [PROPERTY] GRAPH
+            const property_graph = if (self.cur.kind == .PROPERTY) blk: {
+                self.advance();
+                _ = try self.expect(.GRAPH);
+                break :blk true;
+            } else blk: {
+                self.advance(); // consume GRAPH
+                break :blk false;
+            };
+
+            return .{ .SessionReset = .{
+                .arguments = .{ .Graph = property_graph },
+            } };
+        } else if (self.cur.kind == .TIME) {
+            self.advance();
+            _ = try self.expect(.identifier); // expect ZONE
+            return .{ .SessionReset = .{
+                .arguments = .TimeZone,
+            } };
+        }
+
+        return error.UnexpectedToken;
+    }
+
+    // Parse session parameter clause (for SESSION SET parameter)
+    fn parseSessionParameterClause(self: *Parser) ParserError!ast.ParameterClause {
+        if (self.cur.kind == .VALUE) {
+            self.advance();
+            const param_name = try self.parseSessionParameterName();
+            // Optional typed value initializer
+            var initializer: ?[]const u8 = null;
+            if (self.cur.kind == .eq) {
+                self.advance();
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                    initializer = self.cur.lexeme;
+                    self.advance();
+                }
+            }
+
+            return .{ .ValueParam = .{
+                .parameter_name = param_name,
+                .initializer = initializer,
+            } };
+        } else if (self.cur.kind == .BINDING or 
+                   (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE"))) {
+            // [BINDING] TABLE
+            if (self.cur.kind == .BINDING) {
+                self.advance();
+            }
+            _ = try self.expect(.identifier); // TABLE
+
+            const param_name = try self.parseSessionParameterName();
+            var initializer: ?[]const u8 = null;
+            if (self.cur.kind == .eq) {
+                self.advance();
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                    initializer = self.cur.lexeme;
+                    self.advance();
+                }
+            }
+
+            return .{ .BindingTableParam = .{
+                .parameter_name = param_name,
+                .initializer = initializer,
+            } };
+        } else if (self.cur.kind == .GRAPH or self.cur.kind == .PROPERTY) {
+            // [PROPERTY] GRAPH parameter
+            const property_graph = if (self.cur.kind == .PROPERTY) blk: {
+                self.advance();
+                _ = try self.expect(.GRAPH);
+                break :blk true;
+            } else blk: {
+                self.advance(); // consume GRAPH
+                break :blk false;
+            };
+
+            const param_name = try self.parseSessionParameterName();
+            var initializer: ?[]const u8 = null;
+            if (self.cur.kind == .eq) {
+                self.advance();
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                    initializer = self.cur.lexeme;
+                    self.advance();
+                }
+            }
+
+            return .{ .GraphParam = .{
+                .property_graph = property_graph,
+                .parameter_name = param_name,
+                .initializer = initializer,
+            } };
+        } else {
+            return error.UnexpectedToken;
+        }
+    }
+
+    // Parse session parameter name with optional IF NOT EXISTS
+    fn parseSessionParameterName(self: *Parser) ParserError!ast.SessionParameterName {
+        var if_not_exists = false;
+
+        // Check for optional IF NOT EXISTS
+        if (self.cur.kind == .IF) {
+            self.advance();
+            _ = try self.expect(.NOT);
+            _ = try self.expect(.identifier); // EXISTS
+            if_not_exists = true;
+        }
+
+        // Parse parameter specification
+        const specification = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
+            const spec = self.cur.lexeme;
+            self.advance();
+            break :blk spec;
         } else {
             return error.UnexpectedToken;
         };
 
-        _ = try self.expect(.eq); // expect '='
-
-        // Expect value (string literal or identifier)
-        const value = if (self.cur.kind == .string_lit or self.cur.kind == .identifier) blk: {
-            const val = self.cur.lexeme;
-            self.advance();
-            break :blk val;
-        } else {
-            return error.UnexpectedToken;
+        return .{
+            .if_not_exists = if_not_exists,
+            .specification = specification,
         };
-
-        return .{ .SessionSet = .{
-            .property = property,
-            .value = value,
-        } };
     }
 
     // Parse USE GRAPH statement
