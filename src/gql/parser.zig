@@ -1770,6 +1770,18 @@ pub const Parser = struct {
     fn parseCreateStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.CREATE);
 
+        // Check for OR REPLACE
+        var or_replace = false;
+        if (self.cur.kind == .OR) {
+            self.advance();
+            if (self.cur.kind == .REPLACE) {
+                self.advance();
+                or_replace = true;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
         // Check if this is CREATE INDEX
         if (self.cur.kind == .INDEX or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")) or
@@ -1788,7 +1800,8 @@ pub const Parser = struct {
             self.cur.kind == .PROPERTY or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
         {
-            return self.parseCreateGraph();
+            // For now, let the individual functions handle TYPE detection
+            return self.parseCreateGraphWithReplace(or_replace);
         }
 
         // Otherwise, parse the pattern to create
@@ -2150,6 +2163,7 @@ pub const Parser = struct {
             self.cur.kind == .PROPERTY or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
         {
+            // For now, let the individual functions handle TYPE detection
             return self.parseDropGraph();
         }
 
@@ -2223,10 +2237,9 @@ pub const Parser = struct {
         } };
     }
 
-    // Parse CREATE GRAPH statement
-    fn parseCreateGraph(self: *Parser) ParserError!ast.Statement {
+    // Parse CREATE GRAPH statement with optional OR REPLACE
+    fn parseCreateGraphWithReplace(self: *Parser, or_replace: bool) ParserError!ast.Statement {
         var property_graph = true;
-        const or_replace = false;
 
         // Check for PROPERTY keyword
         if (self.cur.kind == .PROPERTY or 
@@ -2261,11 +2274,202 @@ pub const Parser = struct {
         const name = self.cur.lexeme;
         self.advance();
 
+        // Initialize optional fields
+        var typed_spec: ?[]const u8 = null;
+        var like_source: ?[]const u8 = null;
+        var copy_source: ?[]const u8 = null;
+
+        // Check for TYPE (graph type creation) or TYPED clause
+        if (self.cur.kind == .TYPE or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+            // This is CREATE [PROPERTY] GRAPH TYPE
+            // TYPE is already detected, don't consume it here - let parseCreateGraphType handle it
+            return self.parseCreateGraphType(or_replace, property_graph);
+        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPED")) {
+            self.advance(); // Skip TYPED
+            // Expect type specification
+            if (self.cur.kind == .identifier) {
+                typed_spec = self.cur.lexeme;
+                self.advance();
+            } else if (self.cur.kind == .ANY) {
+                typed_spec = "ANY";
+                self.advance();
+            } else {
+                return error.UnexpectedToken;
+            }
+            // Optional PROPERTY GRAPH after type spec
+            if (self.cur.kind == .PROPERTY or 
+                (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+                self.advance();
+                if (self.cur.kind == .GRAPH) {
+                    self.advance();
+                }
+            }
+        }
+        // Check for ANY keyword (without TYPED)
+        else if (self.cur.kind == .ANY) {
+            self.advance();
+            // Optional PROPERTY GRAPH keywords after ANY
+            if (self.cur.kind == .PROPERTY or 
+                (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+                self.advance();
+                if (self.cur.kind == .GRAPH) {
+                    self.advance();
+                }
+            } else if (self.cur.kind == .GRAPH) {
+                self.advance();
+            }
+        }
+        // Check for LIKE clause first (independent of TYPED/ANY)
+        else if (self.cur.kind == .LIKE) {
+            self.advance(); // Skip LIKE
+            if (self.cur.kind == .identifier) {
+                like_source = self.cur.lexeme;
+                self.advance();
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Check for AS COPY OF clause (can be combined with TYPED/ANY but not LIKE)
+        if (self.cur.kind == .AS and like_source == null) {
+            self.advance(); // Skip AS
+            if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "COPY")) {
+                self.advance(); // Skip COPY
+                if (self.cur.kind == .OF or 
+                    (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OF"))) {
+                    self.advance(); // Skip OF
+                    if (self.cur.kind == .identifier) {
+                        copy_source = self.cur.lexeme;
+                        self.advance();
+                    } else {
+                        return error.UnexpectedToken;
+                    }
+                } else {
+                    return error.UnexpectedToken;
+                }
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
         return .{ .CreateGraph = .{
             .name = name,
             .if_not_exists = if_not_exists,
             .or_replace = or_replace,
             .property_graph = property_graph,
+            .typed_spec = typed_spec,
+            .like_source = like_source,
+            .copy_source = copy_source,
+        } };
+    }
+
+    // Parse CREATE GRAPH statement (wrapper for compatibility)
+    fn parseCreateGraph(self: *Parser) ParserError!ast.Statement {
+        return self.parseCreateGraphWithReplace(false);
+    }
+
+    // Parse CREATE GRAPH TYPE statement
+    fn parseCreateGraphType(self: *Parser, or_replace: bool, property_graph: bool) ParserError!ast.Statement {
+        // Expect TYPE keyword
+        if (self.cur.kind != .TYPE and 
+            !(self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+            return error.UnexpectedToken;
+        }
+        self.advance();
+
+        // Optional IF NOT EXISTS
+        var if_not_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .NOT) {
+                self.advance();
+                if (self.cur.kind == .EXISTS) {
+                    self.advance();
+                    if_not_exists = true;
+                } else {
+                    return error.UnexpectedToken;
+                }
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Graph type name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        // Initialize optional fields
+        var like_source: ?[]const u8 = null;
+        var copy_source: ?[]const u8 = null;
+        var type_definition: []const u8 = "{ }"; // Default empty type definition
+
+        // Check for AS keyword (COPY OF or type definition)
+        if (self.cur.kind == .AS) {
+            self.advance(); // Skip AS
+            
+            // Check for COPY OF
+            if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "COPY")) {
+                self.advance(); // Skip COPY
+                if (self.cur.kind == .OF or 
+                    (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OF"))) {
+                    self.advance(); // Skip OF
+                    if (self.cur.kind == .identifier) {
+                        copy_source = self.cur.lexeme;
+                        self.advance();
+                    } else {
+                        return error.UnexpectedToken;
+                    }
+                } else {
+                    return error.UnexpectedToken;
+                }
+            } else {
+                // This should be a type definition starting with {
+                if (self.cur.kind == .l_brace) {
+                    // For now, we'll just use "{ }" as placeholder and advance past the braces
+                    // TODO: Implement proper type definition parsing
+                    type_definition = "{ }";
+                    self.advance(); // Skip opening brace
+                    
+                    // Skip until matching closing brace
+                    var brace_count: i32 = 1;
+                    while (brace_count > 0 and self.cur.kind != .eof) {
+                        if (self.cur.kind == .l_brace) {
+                            brace_count += 1;
+                        } else if (self.cur.kind == .r_brace) {
+                            brace_count -= 1;
+                        }
+                        self.advance();
+                    }
+                    
+                    if (brace_count != 0) {
+                        return error.UnexpectedToken;
+                    }
+                } else {
+                    return error.UnexpectedToken;
+                }
+            }
+        }
+        // Check for LIKE clause
+        else if (self.cur.kind == .LIKE) {
+            self.advance(); // Skip LIKE
+            if (self.cur.kind == .identifier) {
+                like_source = self.cur.lexeme;
+                self.advance();
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        return .{ .CreateGraphType = .{
+            .name = name,
+            .if_not_exists = if_not_exists,
+            .or_replace = or_replace,
+            .property_graph = property_graph,
+            .type_definition = type_definition,
+            .like_source = like_source,
+            .copy_source = copy_source,
         } };
     }
 
@@ -2311,6 +2515,12 @@ pub const Parser = struct {
         if (self.cur.kind != .GRAPH) return error.UnexpectedToken;
         self.advance();
 
+        // Check for TYPE keyword (DROP GRAPH TYPE)
+        if (self.cur.kind == .TYPE or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+            return self.parseDropGraphType(property_graph);
+        }
+
         // Optional IF EXISTS
         var if_exists = false;
         if (self.cur.kind == .IF) {
@@ -2329,6 +2539,39 @@ pub const Parser = struct {
         self.advance();
 
         return .{ .DropGraph = .{
+            .name = name,
+            .if_exists = if_exists,
+            .property_graph = property_graph,
+        } };
+    }
+
+    // Parse DROP GRAPH TYPE statement (disabled for now)
+    fn parseDropGraphType(self: *Parser, property_graph: bool) ParserError!ast.Statement {
+        // Expect TYPE keyword
+        if (self.cur.kind != .TYPE and 
+            !(self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+            return error.UnexpectedToken;
+        }
+        self.advance();
+
+        // Optional IF EXISTS
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .EXISTS) {
+                self.advance();
+                if_exists = true;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Graph type name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        return .{ .DropGraphType = .{
             .name = name,
             .if_exists = if_exists,
             .property_graph = property_graph,

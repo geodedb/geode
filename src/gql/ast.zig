@@ -37,6 +37,8 @@ pub const Statement = union(enum) {
     DropSchema: DropSchemaStatement,
     CreateGraph: CreateGraphStatement,
     DropGraph: DropGraphStatement,
+    CreateGraphType: CreateGraphTypeStatement,
+    DropGraphType: DropGraphTypeStatement,
 };
 
 pub const Query = struct {
@@ -368,9 +370,28 @@ pub const CreateGraphStatement = struct {
     if_not_exists: bool = false,
     or_replace: bool = false,
     property_graph: bool = true, // GQL property graphs are default
+    typed_spec: ?[]const u8 = null, // TYPED type_name
+    like_source: ?[]const u8 = null, // LIKE source_graph
+    copy_source: ?[]const u8 = null, // AS COPY OF source_graph
 };
 
 pub const DropGraphStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+    property_graph: bool = true, // GQL property graphs are default
+};
+
+pub const CreateGraphTypeStatement = struct {
+    name: []const u8,
+    if_not_exists: bool = false,
+    or_replace: bool = false,
+    property_graph: bool = true, // GQL property graphs are default
+    type_definition: []const u8, // The graph type definition (e.g., "{ }")
+    like_source: ?[]const u8 = null, // LIKE source_graph
+    copy_source: ?[]const u8 = null, // AS COPY OF source_type
+};
+
+pub const DropGraphTypeStatement = struct {
     name: []const u8,
     if_exists: bool = false,
     property_graph: bool = true, // GQL property graphs are default

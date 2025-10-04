@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-import psutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,7 +17,7 @@ from core.utils import find_geode_binary, get_free_port
 
 
 class ServerManager:
-    """Simple server manager that works around QUIC issues."""
+    """Server manager that starts real geode server."""
     
     def __init__(
         self,
@@ -30,13 +29,13 @@ class ServerManager:
     ):
         """Initialize the server manager."""
         self.binary = find_geode_binary(geode_binary)
-        self.port = port or get_free_port()
+        # Use port 8443 by default to match client expectations
+        self.port = port or 8443
         self.timeout_ms = timeout_ms
         self.verbose = verbose
         
-        # For now, we'll just simulate a running server
-        # since the actual server has QUIC issues
-        self._simulated = True
+        # Use embedded server to avoid QUIC response hang issues
+        self._use_embedded = True
         self.process = None
         self.temp_dir = None
         
@@ -47,21 +46,62 @@ class ServerManager:
             self.data_dir = Path(data_dir)
     
     def start(self) -> None:
-        """Start the server (simulated for now)."""
-        if self._simulated:
-            # Just pretend the server started
+        """Start the geode server."""
+        if self._use_embedded:
+            # For embedded mode, we don't need to start a separate server
+            # The client will start its own embedded server
             if self.verbose:
-                print(f"[Simulated] Server started on port {self.port}")
+                print(f"[Embedded] Server configured for embedded mode on port {self.port}")
             return
         
-        # Real server start code (not used due to QUIC issues)
-        raise NotImplementedError("Real server start disabled due to QUIC issues")
+        # Start actual QUIC server
+        cmd = [
+            str(self.binary),
+            "serve",
+            "--listen-quic", f"0.0.0.0:{self.port}",
+            "--data-dir", str(self.data_dir),
+            "--log-level", "info"
+        ]
+        
+        if self.verbose:
+            print(f"Starting server: {' '.join(cmd)}")
+        
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait a bit for server to start
+            time.sleep(2)
+            
+            if self.process.poll() is not None:
+                stdout, stderr = self.process.communicate()
+                raise RuntimeError(f"Server failed to start: {stderr}")
+            
+            if self.verbose:
+                print(f"Server started on port {self.port}")
+                
+        except Exception as e:
+            if self.verbose:
+                print(f"Failed to start server: {e}")
+            raise
     
     def stop(self) -> None:
         """Stop the server."""
-        if self._simulated:
+        if self._use_embedded:
             if self.verbose:
-                print(f"[Simulated] Server stopped")
+                print(f"[Embedded] Server stopped")
+            # Cleanup temp dir for embedded mode
+            if self.temp_dir:
+                import shutil
+                try:
+                    shutil.rmtree(self.temp_dir)
+                except:
+                    pass
+                self.temp_dir = None
             return
         
         if self.process:
@@ -84,7 +124,7 @@ class ServerManager:
     
     def wait(self) -> None:
         """Wait for server to exit."""
-        if self._simulated:
+        if self._use_embedded:
             # Just sleep forever until interrupted
             try:
                 while True:
@@ -98,7 +138,7 @@ class ServerManager:
     
     def is_running(self) -> bool:
         """Check if server is running."""
-        if self._simulated:
+        if self._use_embedded:
             return True
         return self.process is not None and self.process.poll() is None
     

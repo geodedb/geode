@@ -8,6 +8,7 @@ out/
 results
 .mcp.json
 .geode_embedded/
+__pycache__/
 
 test_io
 test_formatter
@@ -24,6 +25,7 @@ auth
 zig-cache/
 zig-out/
 status_new*
+test_logs/
 
 # build folders
 bin/

@@ -103,6 +103,7 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("pressure", &constructPressure);
     try registry.put("vector", &constructVector);
     try registry.put("vectorf32", &constructVectorF32);
+    try registry.put("decimal", &constructDecimal);
 
     // IP/CIDR functions
     try registry.put("ip_contains", &ipContains);
@@ -145,6 +146,12 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("vector_l2", &vectorL2);
     try registry.put("vector_cosine", &vectorCosine);
     try registry.put("vector_knn", &vectorKnn);
+
+    // Decimal arithmetic functions
+    try registry.put("decimal_add", &decimalAdd);
+    try registry.put("decimal_sub", &decimalSub);
+    try registry.put("decimal_mul", &decimalMul);
+    try registry.put("decimal_div", &decimalDiv);
 
     // Experimental extended functions (bridged)
     try registry.put("uuid_v4", adapterFactory("uuid_v4"));
@@ -1042,4 +1049,74 @@ fn vectorKnn(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
     // For MVP, return empty list
     return .{ .List = &[_]ExtValue{} };
+}
+
+// Decimal constructor
+fn constructDecimal(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Str) return error.TypeMismatch;
+    if (args[1] != .Int) return error.TypeMismatch;
+
+    const value_str = args[0].Str;
+    const scale_val = args[1].Int;
+
+    // Import the decimal module
+    const decimal128 = @import("types/decimal128.zig");
+    const dec = decimal128.Decimal128.fromStr(value_str) catch return error.InvalidFormat;
+    const final_scale = @as(i16, @intCast(scale_val));
+    const rounded = dec.roundHalfEven(final_scale) catch return error.DecimalOverflow;
+    
+    return .{ .Decimal = .{ .coeff = rounded.coeff, .scale = @intCast(rounded.scale) } };
+}
+
+// Decimal arithmetic functions
+fn decimalAdd(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
+
+    const decimal128 = @import("types/decimal128.zig");
+    const da = decimal128.Decimal128{ .coeff = args[0].Decimal.coeff, .scale = args[0].Decimal.scale };
+    const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
+
+    const result = da.add(db) catch return error.DecimalOverflow;
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+}
+
+fn decimalSub(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
+
+    const decimal128 = @import("types/decimal128.zig");
+    const da = decimal128.Decimal128{ .coeff = args[0].Decimal.coeff, .scale = args[0].Decimal.scale };
+    const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
+
+    const result = da.sub(db) catch return error.DecimalOverflow;
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+}
+
+fn decimalMul(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
+
+    const decimal128 = @import("types/decimal128.zig");
+    const da = decimal128.Decimal128{ .coeff = args[0].Decimal.coeff, .scale = args[0].Decimal.scale };
+    const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
+
+    const result = da.mul(db) catch return error.DecimalOverflow;
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+}
+
+fn decimalDiv(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
+
+    const decimal128 = @import("types/decimal128.zig");
+    const da = decimal128.Decimal128{ .coeff = args[0].Decimal.coeff, .scale = args[0].Decimal.scale };
+    const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
+
+    const result = da.div(db) catch |err| switch (err) {
+        decimal128.Decimal128.Error.DivisionByZero => return error.DecimalDivZero,
+        else => return error.DecimalOverflow,
+    };
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
 }

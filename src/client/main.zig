@@ -455,6 +455,12 @@ pub fn main() !void {
                 const stderr_file = getStdErr();
                 try stderr_file.writeAll(line1);
                 try stderr_file.writeAll("\n");
+                
+                // Check for mathematical and validation errors and return exit code 1
+                if (std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch.DivZero\"") != null or
+                    std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch\"") != null) {
+                    std.process.exit(1);
+                }
                 std.process.exit(2);
             }
 
@@ -690,6 +696,12 @@ pub fn main() !void {
             child.stdin = null;
         }
         _ = try child.wait();
+        
+        // Check for mathematical and validation errors and return exit code 1
+        if (std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch.DivZero\"") != null or
+            std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch\"") != null) {
+            std.process.exit(1);
+        }
         std.process.exit(2);
     }
 

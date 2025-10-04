@@ -165,6 +165,8 @@ fn tagName(st: ast.Statement) []const u8 {
         .DropSchema => "DropSchema",
         .CreateGraph => "CreateGraph",
         .DropGraph => "DropGraph",
+        .CreateGraphType => "CreateGraphType",
+        .DropGraphType => "DropGraphType",
         .UseGraph => "UseGraph",
     };
 }

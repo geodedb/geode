@@ -25,6 +25,10 @@ pub const EvalError = error{
     DecimalOverflow,
     DecimalDivZero,
     IdnaError,
+    InvalidIpAddress,
+    InvalidSubnet,
+    InvalidMac,
+    InvalidArgs,
 };
 
 pub const Value = union(enum) {
@@ -592,13 +596,33 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     args[i] = valueToExtValue(arg_value);
                 }
 
-                // Call the extended function
-                const result = func(ally, args) catch {
+                // Call the extended function and handle validation errors
+                if (func(ally, args)) |result| {
+                    // Convert result back to eval.Value
+                    break :blk_call extValueToValue(result);
+                } else |err| {
+                    // Propagate validation errors instead of converting to null
+                    const err_name = @errorName(err);
+                    if (std.mem.eql(u8, err_name, "InvalidIpAddress")) {
+                        return EvalError.InvalidIpAddress;
+                    } else if (std.mem.eql(u8, err_name, "InvalidSubnet")) {
+                        return EvalError.InvalidSubnet;
+                    } else if (std.mem.eql(u8, err_name, "InvalidMac")) {
+                        return EvalError.InvalidMac;
+                    } else if (std.mem.eql(u8, err_name, "InvalidArgs")) {
+                        return EvalError.InvalidArgs;
+                    } else if (std.mem.eql(u8, err_name, "TypeMismatch")) {
+                        return EvalError.TypeMismatch;
+                    } else if (std.mem.eql(u8, err_name, "DecimalDivZero")) {
+                        return EvalError.DecimalDivZero;
+                    } else if (std.mem.eql(u8, err_name, "DivisionByZero")) {
+                        return EvalError.DivisionByZero;
+                    } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
+                        return EvalError.DecimalOverflow;
+                    }
+                    // For other errors, fall back to null
                     break :blk_call .{ .Null = {} };
-                };
-
-                // Convert result back to eval.Value
-                break :blk_call extValueToValue(result);
+                }
             }
 
             // Try basic built-in functions if not found in extended registry
@@ -810,6 +834,26 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
                 const result = evaluator_functions.replace(ally, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
                 return heapValueToEvalValue(result);
             }
+        } else if (std.mem.eql(u8, function_name, "decimal_add")) {
+            const result = evaluator_functions.decimal_add(heap_first_arg, heap_second_arg) catch |err| {
+                return err;
+            };
+            return heapValueToEvalValue(result);
+        } else if (std.mem.eql(u8, function_name, "decimal_sub")) {
+            const result = evaluator_functions.decimal_sub(heap_first_arg, heap_second_arg) catch |err| {
+                return err;
+            };
+            return heapValueToEvalValue(result);
+        } else if (std.mem.eql(u8, function_name, "decimal_mul")) {
+            const result = evaluator_functions.decimal_mul(heap_first_arg, heap_second_arg) catch |err| {
+                return err;
+            };
+            return heapValueToEvalValue(result);
+        } else if (std.mem.eql(u8, function_name, "decimal_div")) {
+            const result = evaluator_functions.decimal_div(heap_first_arg, heap_second_arg) catch |err| {
+                return err;
+            };
+            return heapValueToEvalValue(result);
         }
     }
 

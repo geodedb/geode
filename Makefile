@@ -37,6 +37,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
+.PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test no-feature-flags status-generate
@@ -109,6 +110,14 @@ go-vendor-check:
 	@echo "  make geodetestlab-backup - Run backup and restore tests"
 	@echo "  make geodetestlab-vector-knn - Run vector K-NN and similarity tests"
 	@echo "  make geodetestlab-fulltext-bm25 - Run full-text search and BM25 tests"
+	@echo ""
+	@echo "Parallel testing targets:"
+	@echo "  make geodetestlab-parallel [WORKERS=4] [TIMEOUT=10] - Run parallel tests with configurable workers/timeout"
+	@echo "  make geodetestlab-quick - Run quick subset of tests for rapid iteration"
+	@echo "  make geodetestlab-report - Generate comprehensive progress report"
+	@echo "  make geodetestlab-compare - Compare last two test runs"
+	@echo "  make geodetestlab-export [FILE=failures.csv] - Export failure data to CSV"
+	@echo "  make geodetestlab-trends [RUNS=5] - Analyze failure trends over N runs"
 	@echo ""
 	@echo "Go client targets:"
 	@echo "  make go-build    - Build Go client library only"
@@ -306,12 +315,17 @@ geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-us
 # Run comprehensive geodetestlab test suite
 geodetestlab-comprehensive: build
 	@echo "Running comprehensive geodetestlab tests..."
-	@if [ -x "extended_test_runner.py" ]; then \
+	@if [ -x "parallel_test_runner.py" ]; then \
+		echo "Using parallel test runner with default settings..."; \
+		python3 parallel_test_runner.py --max-workers 4 --timeout 10; \
+	elif [ -x "extended_test_runner.py" ]; then \
+		echo "Using extended test runner..."; \
 		python3 extended_test_runner.py; \
 	elif [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
+		echo "Using geodetestlab core runner..."; \
 		python3 -m geodetestlab.geodetestlab.core.runner --config geodetestlab/config.yml; \
 	else \
-		echo "Geodetestlab runner not found or not executable"; \
+		echo "No geodetestlab runner found or not executable"; \
 		exit 1; \
 	fi
 
@@ -362,6 +376,79 @@ geodetestlab-fulltext-bm25: build
 		python3 -m geodetestlab.geodetestlab.core.runner --spec geodetestlab/specs/geode_fulltext_bm25_comprehensive.yml; \
 	else \
 		echo "Full-text BM25 test spec not found or runner not found"; \
+		exit 1; \
+	fi
+
+# Parallel testing infrastructure targets
+WORKERS ?= 4
+TIMEOUT ?= 10
+RUNS ?= 5
+FILE ?= failures.csv
+
+# Run parallel geodetestlab tests with configurable workers and timeout
+geodetestlab-parallel: build
+	@echo "Running parallel geodetestlab tests (workers=$(WORKERS), timeout=$(TIMEOUT)s)..."
+	@if [ -x "parallel_test_runner.py" ]; then \
+		python3 parallel_test_runner.py --max-workers $(WORKERS) --timeout $(TIMEOUT); \
+	else \
+		echo "parallel_test_runner.py not found or not executable"; \
+		echo "Please ensure the parallel test runner is available"; \
+		exit 1; \
+	fi
+
+# Run quick subset of tests for rapid development iteration
+geodetestlab-quick: build
+	@echo "Running quick geodetestlab subset tests..."
+	@if [ -x "quick_test_runner.py" ]; then \
+		python3 quick_test_runner.py; \
+	else \
+		echo "quick_test_runner.py not found or not executable"; \
+		echo "Please ensure the quick test runner is available"; \
+		exit 1; \
+	fi
+
+# Generate comprehensive progress report from test logs
+geodetestlab-report:
+	@echo "Generating geodetestlab progress report..."
+	@if [ -x "failure_tracker.py" ]; then \
+		python3 failure_tracker.py --report; \
+	else \
+		echo "failure_tracker.py not found or not executable"; \
+		echo "Please ensure the failure tracker is available"; \
+		exit 1; \
+	fi
+
+# Compare last two test runs
+geodetestlab-compare:
+	@echo "Comparing last two geodetestlab test runs..."
+	@if [ -x "failure_tracker.py" ]; then \
+		python3 failure_tracker.py --compare; \
+	else \
+		echo "failure_tracker.py not found or not executable"; \
+		echo "Please ensure the failure tracker is available"; \
+		exit 1; \
+	fi
+
+# Export failure data to CSV for external analysis
+geodetestlab-export:
+	@echo "Exporting geodetestlab failure data to $(FILE)..."
+	@if [ -x "failure_tracker.py" ]; then \
+		python3 failure_tracker.py --export-csv $(FILE) --trends 0; \
+		echo "Failure data exported to $(FILE)"; \
+	else \
+		echo "failure_tracker.py not found or not executable"; \
+		echo "Please ensure the failure tracker is available"; \
+		exit 1; \
+	fi
+
+# Analyze failure trends over multiple runs
+geodetestlab-trends:
+	@echo "Analyzing geodetestlab failure trends over $(RUNS) runs..."
+	@if [ -x "failure_tracker.py" ]; then \
+		python3 failure_tracker.py --trends $(RUNS); \
+	else \
+		echo "failure_tracker.py not found or not executable"; \
+		echo "Please ensure the failure tracker is available"; \
 		exit 1; \
 	fi
 

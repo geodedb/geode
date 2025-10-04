@@ -194,6 +194,12 @@ pub fn mapEvalError(e: anytype) ?Code {
     const name = @errorName(e);
     if (std.mem.eql(u8, name, "TypeMismatch")) return .TypeMismatch;
     if (std.mem.eql(u8, name, "DivisionByZero")) return .TypeMismatchDivZero;
+    if (std.mem.eql(u8, name, "DecimalDivZero")) return .TypeMismatchDivZero;
+    if (std.mem.eql(u8, name, "DecimalOverflow")) return .TypeMismatch;
+    if (std.mem.eql(u8, name, "InvalidIpAddress")) return .TypeMismatch;
+    if (std.mem.eql(u8, name, "InvalidSubnet")) return .TypeMismatch;
+    if (std.mem.eql(u8, name, "InvalidMac")) return .TypeMismatch;
+    if (std.mem.eql(u8, name, "InvalidArgs")) return .TypeMismatch;
     return null;
 }
 
