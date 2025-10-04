@@ -353,13 +353,15 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
     if (std.ascii.eqlIgnoreCase(word, "ZONED")) return .ZONED;
     if (std.ascii.eqlIgnoreCase(word, "BINDING")) return .BINDING;
-    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .TIME;
     if (std.ascii.eqlIgnoreCase(word, "ZONE")) return .ZONE;
 
-    // Temporal keywords
+    // Temporal keywords - checked before regular TIME keyword
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
     if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
     if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit;
+    
+    // Regular TIME keyword for TIME ZONE statements (after temporal literal check)
+    // Note: This won't be reached for TIME"..." because lexer handles temporal literals first
     return .identifier;
 }

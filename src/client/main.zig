@@ -591,13 +591,30 @@ pub fn main() !void {
 
     // Spawn server
     // Build server args
-    var server_args = std.ArrayList([]const u8).initCapacity(gpa, 4 + server_extra_args.items.len) catch return error.OutOfMemory;
+    var server_args = std.ArrayList([]const u8).initCapacity(gpa, 6 + server_extra_args.items.len) catch return error.OutOfMemory;
     defer server_args.deinit(gpa);
     try server_args.append(gpa, server_path);
     if (test_wal_skip_ratio) |val| {
         try server_args.append(gpa, "--test-wal-skip-ratio");
         try server_args.append(gpa, val);
     }
+    
+    // Add default data directory for embedded server persistence
+    // Check if data directory is already specified in server_extra_args
+    var has_data_dir = false;
+    for (server_extra_args.items) |arg| {
+        if (std.mem.startsWith(u8, arg, "--data_dir") or std.mem.startsWith(u8, arg, "--data-dir")) {
+            has_data_dir = true;
+            break;
+        }
+    }
+    
+    // Add default persistent data directory if not specified
+    if (!has_data_dir) {
+        try server_args.append(gpa, "--data_dir");
+        try server_args.append(gpa, ".geode_embedded");
+    }
+    
     // Append any passthrough server args after binary path
     var sai: usize = 0;
     while (sai < server_extra_args.items.len) : (sai += 1) {

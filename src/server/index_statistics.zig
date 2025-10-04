@@ -33,6 +33,16 @@ pub const IndexStatistics = struct {
     vector_knn_queries: u64 = 0,
     vector_avg_k_value: f64 = 0.0,
 
+    // Full-text search specific statistics
+    fts_total_documents: u64 = 0,
+    fts_avg_document_length: f64 = 0.0,
+    fts_vocabulary_size: u64 = 0,
+    fts_avg_term_frequency: f64 = 0.0,
+    fts_search_queries: u64 = 0,
+    fts_avg_score: f64 = 0.0,
+    fts_phrase_queries: u64 = 0,
+    fts_proximity_queries: u64 = 0,
+
     pub fn init(allocator: Allocator, name: []const u8, index_type: graph_common.IndexType, label: []const u8, properties: []const []const u8) IndexStatistics {
         return IndexStatistics{
             .name = name,
@@ -147,6 +157,108 @@ pub const IndexStatistics = struct {
             return "Vector index usage pattern is optimal";
         }
     }
+
+    // Record full-text search query statistics
+    // CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS Statistics"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_FTSStatistics; OWNER=fts; UPDATED=2025-10-04
+    pub fn recordFtsQuery(self: *IndexStatistics, query_type: FtsQueryType, score: f64, documents_found: u64) void {
+        if (self.index_type != .fulltext) return; // Not a full-text index
+
+        self.fts_search_queries += 1;
+        
+        // Update average score
+        self.fts_avg_score = (self.fts_avg_score * @as(f64, @floatFromInt(self.fts_search_queries - 1)) + score) / @as(f64, @floatFromInt(self.fts_search_queries));
+        
+        // Track query types
+        switch (query_type) {
+            .phrase => self.fts_phrase_queries += 1,
+            .proximity => self.fts_proximity_queries += 1,
+            .simple => {}, // Just count as general search
+        }
+
+        // Update hit ratio for FTS
+        if (self.fts_total_documents > 0) {
+            const current_hit_ratio = @as(f64, @floatFromInt(documents_found)) / @as(f64, @floatFromInt(self.fts_total_documents));
+            self.hit_ratio = (self.hit_ratio * @as(f64, @floatFromInt(self.fts_search_queries - 1)) + current_hit_ratio) / @as(f64, @floatFromInt(self.fts_search_queries));
+        }
+    }
+
+    // Record document indexing for FTS
+    pub fn recordFtsDocument(self: *IndexStatistics, document_length: u64, unique_terms: u64) void {
+        if (self.index_type != .fulltext) return; // Not a full-text index
+
+        self.fts_total_documents += 1;
+        
+        // Update average document length
+        const new_length = @as(f64, @floatFromInt(document_length));
+        self.fts_avg_document_length = (self.fts_avg_document_length * @as(f64, @floatFromInt(self.fts_total_documents - 1)) + new_length) / @as(f64, @floatFromInt(self.fts_total_documents));
+        
+        // Update vocabulary size (approximate)
+        self.fts_vocabulary_size += unique_terms;
+        
+        // Update average term frequency
+        if (self.fts_total_documents > 0) {
+            self.fts_avg_term_frequency = @as(f64, @floatFromInt(self.fts_vocabulary_size)) / @as(f64, @floatFromInt(self.fts_total_documents));
+        }
+    }
+
+    // Estimate full-text search cost based on query complexity and index statistics
+    pub fn estimateFtsCost(self: *const IndexStatistics, query_terms: u64, query_type: FtsQueryType) f64 {
+        if (self.index_type != .fulltext) return std.math.inf(f64);
+
+        // Base BM25 scoring cost: O(vocabulary_size * log(documents))
+        const log_docs = if (self.fts_total_documents > 1) @log(@as(f64, @floatFromInt(self.fts_total_documents))) else 1.0;
+        const vocab_factor = if (self.fts_vocabulary_size > 0) @log(@as(f64, @floatFromInt(self.fts_vocabulary_size))) else 1.0;
+        const terms_factor = @as(f64, @floatFromInt(query_terms));
+        
+        var base_cost = 20.0 * vocab_factor * log_docs * terms_factor;
+
+        // Adjust based on query type complexity
+        base_cost *= switch (query_type) {
+            .simple => 1.0,
+            .phrase => 1.5, // Phrase queries require position checking
+            .proximity => 2.0, // Proximity queries require distance calculations
+        };
+
+        // Adjust based on average document length (longer docs = more expensive processing)
+        if (self.fts_avg_document_length > 100.0) {
+            base_cost *= 1.0 + (self.fts_avg_document_length - 100.0) / 500.0;
+        }
+
+        // Adjust based on historical hit ratio
+        if (self.fts_search_queries > 10) {
+            if (self.hit_ratio > 0.8) {
+                base_cost *= 0.9; // High hit ratio means efficient searches
+            } else if (self.hit_ratio < 0.2) {
+                base_cost *= 1.3; // Low hit ratio means expensive searches
+            }
+        }
+
+        return base_cost;
+    }
+
+    // Get full-text search recommendations based on usage patterns
+    pub fn getFtsRecommendations(self: *const IndexStatistics) []const u8 {
+        if (self.index_type != .fulltext) return "";
+        if (self.fts_search_queries < 5) return "Insufficient data for FTS recommendations";
+
+        if (self.fts_avg_document_length > 1000.0) {
+            return "Consider document chunking for better search performance on large documents";
+        } else if (self.hit_ratio < 0.3) {
+            return "Low hit ratio - consider expanding stop word lists or improving query preprocessing";
+        } else if (self.fts_phrase_queries > self.fts_search_queries / 2) {
+            return "High phrase query usage - consider optimizing phrase index structures";
+        } else if (self.fts_vocabulary_size / self.fts_total_documents > 50.0) {
+            return "Large vocabulary per document - consider more aggressive stemming or normalization";
+        } else {
+            return "Full-text search usage pattern is optimal";
+        }
+    }
+
+    pub const FtsQueryType = enum {
+        simple,
+        phrase,
+        proximity,
+    };
 
     // Get estimated cost factor based on index characteristics
     pub fn getEstimatedCostFactor(self: *const IndexStatistics) f64 {

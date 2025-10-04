@@ -51,7 +51,14 @@ pub const UnionTypeInference = struct {
             if (std.json.parseFromSlice(std.json.Value, self.allocator, row, .{})) |parsed| {
                 defer parsed.deinit();
 
-                if (parsed.value.object.get(col_name)) |value| {
+                // Handle both array format [{"col": "value"}] and object format {"col": "value"}
+                const row_obj = switch (parsed.value) {
+                    .array => |arr| if (arr.items.len > 0) arr.items[0] else continue,
+                    .object => parsed.value,
+                    else => continue,
+                };
+
+                if (row_obj.object.get(col_name)) |value| {
                     const type_name = switch (value) {
                         .string => "STRING",
                         .integer => "INT",

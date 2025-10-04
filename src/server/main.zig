@@ -625,6 +625,8 @@ var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive
 var g_graph_storage: ?*graph_exec.GraphStorage = null;
 // Global MVCC manager for transaction conflict detection
 var g_mvcc_manager: ?*mvcc.MVCCManager = null;
+// Global data directory for persistence
+var g_data_dir: ?[]const u8 = null;
 
 // Implementation-defined flag cache (codes only). Allocated once on first use.
 var g_impl_defined_codes: [][]const u8 = &.{};
@@ -665,7 +667,27 @@ fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
 }
 
 fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
-    if (g_graph_storage) |graph| return graph;
+    std.log.err("DEBUG: getOrCreateGraphStorage called, g_graph_storage is {s}", .{if (g_graph_storage == null) "null" else "set"});
+    if (g_graph_storage) |graph| {
+        std.log.err("DEBUG: Returning existing graph with {} nodes", .{graph.nodes.count()});
+        return graph;
+    }
+    
+    // Try to load from persistent data first if data directory is available
+    if (g_data_dir) |data_dir| {
+        if (tryLoadGraphFromDir(ally, data_dir)) |loaded_graph| {
+            std.log.err("DEBUG: Loaded graph from persistent data: {} nodes, {} edges", .{ loaded_graph.nodes.count(), loaded_graph.edges.items.len });
+            g_graph_storage = loaded_graph;
+            return loaded_graph;
+        } else |err| {
+            std.log.err("DEBUG: Failed to load graph from persistent data: {}", .{err});
+            // Loading failed, continue to create new graph
+        }
+    } else {
+        std.log.err("DEBUG: No data directory available for persistence", .{});
+    }
+    
+    // Create new graph and initialize with sample data if no persistent data
     const graph = ally.create(graph_exec.GraphStorage) catch unreachable;
     graph.* = graph_exec.GraphStorage.init(ally);
     initializeSampleGraph(ally, graph) catch {};
@@ -725,10 +747,10 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
                             .null => .{ .Null = {} },
                             .bool => |b| .{ .Bool = b },
                             .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = s },
+                            .string => |s| .{ .String = ally.dupe(u8, s) catch s },
                             else => .{ .Null = {} },
                         };
-                        g.setNodeProperty(id, key, pv2) catch {};
+                        g.setNodeProperty(ally, id, key, pv2) catch {};
                     }
                 }
             }
@@ -771,10 +793,10 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
                             .null => .{ .Null = {} },
                             .bool => |b| .{ .Bool = b },
                             .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = s },
+                            .string => |s| .{ .String = ally.dupe(u8, s) catch s },
                             else => .{ .Null = {} },
                         };
-                        g.setEdgeProperty(@intCast(eid), key, pv2) catch {};
+                        g.setEdgeProperty(ally, @intCast(eid), key, pv2) catch {};
                     }
                 }
             }
@@ -784,23 +806,53 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
 }
 
 fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
-    std.fs.cwd().makePath(dir_path) catch return;
+    // Create directory with error handling
+    std.fs.cwd().makePath(dir_path) catch |err| {
+        std.log.warn("Failed to create directory {s}: {}", .{ dir_path, err });
+        return;
+    };
 
-    // Save nodes
-    const nodes_path = std.mem.concat(ally, u8, &.{ dir_path, "/nodes.jsonl" }) catch return;
+    // Save nodes with comprehensive error handling
+    const nodes_path = std.mem.concat(ally, u8, &.{ dir_path, "/nodes.jsonl" }) catch {
+        std.log.warn("Failed to allocate nodes path", .{});
+        return;
+    };
     defer ally.free(nodes_path);
 
-    var nodes_content = std.ArrayList(u8).initCapacity(ally, 0) catch return;
+    var nodes_content = std.ArrayList(u8).initCapacity(ally, 0) catch {
+        std.log.warn("Failed to allocate nodes content buffer", .{});
+        return;
+    };
     defer nodes_content.deinit(ally);
 
+    var node_count: usize = 0;
     var it = g.nodes.iterator();
     while (it.next()) |entry| {
+        node_count += 1;
         const node = entry.value_ptr.*;
-        std.fmt.format(nodes_content.writer(ally), "{{\"id\":{d},\"labels\":[", .{node.id}) catch {};
-        var li: usize = 0;
-        while (li < node.labels.len) : (li += 1) {
-            if (li > 0) nodes_content.appendSlice(ally, ",") catch {};
-            std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{node.labels[li]}) catch {};
+        
+        // Validate node structure before processing
+        if (node_count > 10000) {
+            std.log.warn("Too many nodes, stopping save at {}", .{node_count});
+            break;
+        }
+        
+        std.fmt.format(nodes_content.writer(ally), "{{\"id\":{d},\"labels\":[", .{node.id}) catch continue;
+        
+        // Safe label processing with validation
+        if (node.labels.len > 0 and node.labels.len < 100) { // Reasonable label count limit
+            for (node.labels, 0..) |label, li| {
+                if (li > 0) nodes_content.appendSlice(ally, ",") catch continue;
+                
+                // Validate label string
+                if (label.len > 0 and label.len < 256) { // Reasonable label length
+                    std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{label}) catch {
+                        nodes_content.appendSlice(ally, "\"\"") catch continue;
+                    };
+                } else {
+                    nodes_content.appendSlice(ally, "\"\"") catch continue;
+                }
+            }
         }
         nodes_content.appendSlice(ally, "],\"properties\":{") catch {};
         var pit = node.properties.iterator();
@@ -842,26 +894,26 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
 fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
     // Add sample nodes
     try graph.addNode(ally, 1, &.{"Person"});
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
-    try graph.setNodeProperty(1, "age", .{ .Int = 30 });
+    try graph.setNodeProperty(ally, 1, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(ally, 1, "age", .{ .Int = 30 });
 
     try graph.addNode(ally, 2, &.{"Person"});
-    try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
-    try graph.setNodeProperty(2, "age", .{ .Int = 25 });
+    try graph.setNodeProperty(ally, 2, "name", .{ .String = "Bob" });
+    try graph.setNodeProperty(ally, 2, "age", .{ .Int = 25 });
 
     try graph.addNode(ally, 3, &.{"Person"});
-    try graph.setNodeProperty(3, "name", .{ .String = "Charlie" });
-    try graph.setNodeProperty(3, "age", .{ .Int = 35 });
+    try graph.setNodeProperty(ally, 3, "name", .{ .String = "Charlie" });
+    try graph.setNodeProperty(ally, 3, "age", .{ .Int = 35 });
 
     // Add sample edges
     const e1 = try graph.addEdge(ally, 1, 2, "KNOWS");
-    try graph.setEdgeProperty(e1, "since", .{ .Int = 2020 });
+    try graph.setEdgeProperty(ally, e1, "since", .{ .Int = 2020 });
 
     const e2 = try graph.addEdge(ally, 2, 3, "KNOWS");
-    try graph.setEdgeProperty(e2, "since", .{ .Int = 2021 });
+    try graph.setEdgeProperty(ally, e2, "since", .{ .Int = 2021 });
 
     const e3 = try graph.addEdge(ally, 1, 3, "WORKS_WITH");
-    try graph.setEdgeProperty(e3, "department", .{ .String = "Engineering" });
+    try graph.setEdgeProperty(ally, e3, "department", .{ .String = "Engineering" });
 }
 
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
@@ -1694,14 +1746,14 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     if (binding.vars.get(set_clause.target.object)) |obj| {
                         // Evaluate the expression as a simple value for now
                         // In the future, this should evaluate in the context of the binding
-                        const prop_val = evalExprToPropertyValue(ally, set_clause.value);
+                        const prop_val = try evalExprToPropertyValue(ally, set_clause.value);
 
                         switch (obj) {
                             .Node => |node| {
-                                try graph.setNodeProperty(node.id, set_clause.target.property, prop_val);
+                                try graph.setNodeProperty(ally, node.id, set_clause.target.property, prop_val);
                             },
                             .Edge => |edge| {
-                                try graph.setEdgeProperty(edge.id, set_clause.target.property, prop_val);
+                                try graph.setEdgeProperty(ally, edge.id, set_clause.target.property, prop_val);
                             },
                             else => {},
                         }
@@ -3288,6 +3340,7 @@ pub fn main() !void {
 
     // Apply ORDER BY key policy based on CLI flag
     g_order_keys_expr = order_keys_mode_expr;
+    g_data_dir = data_dir;
 
     // Initialize persistent page manager if data_dir provided and wire StorageCatalog
     var pm_persist_active = false;
@@ -5506,8 +5559,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 // Set properties if any
                 if (head_node.props) |props| {
                     for (props) |prop| {
-                        const val = evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(node_id, prop.key, val);
+                        const val = try evalExprToPropertyValue(allocator, prop.value.*);
+                        try graph.setNodeProperty(allocator, node_id, prop.key, val);
                     }
                 }
             }
@@ -5522,8 +5575,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 // Set properties if any
                 if (hop.left.props) |props| {
                     for (props) |prop| {
-                        const val = evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(left_node_id, prop.key, val);
+                        const val = try evalExprToPropertyValue(allocator, prop.value.*);
+                        try graph.setNodeProperty(allocator, left_node_id, prop.key, val);
                     }
                 }
 
@@ -5535,8 +5588,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 // Set properties if any
                 if (hop.right.props) |props| {
                     for (props) |prop| {
-                        const val = evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(right_node_id, prop.key, val);
+                        const val = try evalExprToPropertyValue(allocator, prop.value.*);
+                        try graph.setNodeProperty(allocator, right_node_id, prop.key, val);
                     }
                 }
 
@@ -5551,8 +5604,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                     // Set edge properties if any
                     if (hop.rel.props) |props| {
                         for (props) |prop| {
-                            const val = evalExprToPropertyValue(allocator, prop.value.*);
-                            try graph.setEdgeProperty(edge_id, prop.key, val);
+                            const val = try evalExprToPropertyValue(allocator, prop.value.*);
+                            try graph.setEdgeProperty(allocator, edge_id, prop.key, val);
                         }
                     }
                 }
@@ -5713,8 +5766,8 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
                 if (binding.vars.get(set_clause.target.object)) |val| {
                     switch (val) {
                         .Node => |node_id| {
-                            const prop_val = evalExprToPropertyValue(allocator, set_clause.value);
-                            try graph.setNodeProperty(node_id, set_clause.target.property, prop_val);
+                            const prop_val = try evalExprToPropertyValue(allocator, set_clause.value);
+                            try graph.setNodeProperty(allocator, node_id, set_clause.target.property, prop_val);
                         },
                         else => {},
                     }
@@ -5739,8 +5792,8 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
                     // Apply ON CREATE clauses
                     for (stmt.on_create) |set_clause| {
                         if (std.mem.eql(u8, set_clause.target.object, name)) {
-                            const prop_val = evalExprToPropertyValue(allocator, set_clause.value);
-                            try graph.setNodeProperty(node_id, set_clause.target.property, prop_val);
+                            const prop_val = try evalExprToPropertyValue(allocator, set_clause.value);
+                            try graph.setNodeProperty(allocator, node_id, set_clause.target.property, prop_val);
                         }
                     }
                 }
@@ -5824,12 +5877,12 @@ fn getOrCreateBackupManager(allocator: std.mem.Allocator, state: *ServerState) !
 }
 
 // Helper function to convert AST expression to property value
-fn evalExprToPropertyValue(_: std.mem.Allocator, expr: geode.ast.Expr) graph_exec.PropertyValue {
+fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: geode.ast.Expr) !graph_exec.PropertyValue {
     return switch (expr) {
         .Null => .{ .Null = {} },
         .Bool => |b| .{ .Bool = b },
         .Int => |i| .{ .Int = i },
-        .String => |s| .{ .String = s },
+        .String => |s| .{ .String = try allocator.dupe(u8, s) }, // Deep copy string to prevent dangling pointers
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         else => .{ .Null = {} }, // Default for unsupported expressions
     };

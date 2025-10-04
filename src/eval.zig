@@ -632,15 +632,18 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         },
         .PropertyAccess => |pa| blk_property: {
             // Property access like n.name
+            // This implementation is for basic expression evaluation context.
+            // For graph queries, property access is handled in the server context
+            // via EvalInBinding.evalRet() which has access to the graph storage.
+            
             // First, get the object from the environment
             const _object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
             _ = _object; // Suppress unused variable warning
 
-            // Try to extract the property value from the object
-            // For now, this is a simplified implementation
-            // In a full implementation, this would access the object's properties
-            // from the graph storage system
-            break :blk_property .{ .Null = {} }; // TODO: Implement actual property access
+            // In basic evaluation context, we don't have access to graph storage,
+            // so property access returns null. This is handled properly in the
+            // server context where graph storage is available.
+            break :blk_property .{ .Null = {} };
         },
         .Case => |c| {
             // ISO 3VL semantics

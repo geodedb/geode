@@ -496,11 +496,46 @@ pub const IndexOptimizer = struct {
                 break :blk 0.5; // Poor selectivity for non-spatial data
             },
             .fulltext => blk: {
-                // Full-text indexes for text search
-                // Selectivity varies greatly based on text content and query
+                // Full-text indexes for text search with BM25 scoring
+                // CANARY: REQ=REQ-GQL-FTS-004; FEATURE="FTS IndexOptimizer"; ASPECT=CostEstimation; STATUS=IMPL; TEST=TestCANARY_FTSIndexOptimizer; OWNER=fts; UPDATED=2025-10-04
+                
+                // Try to get advanced FTS statistics first
+                if (self.stats_manager) |stats_mgr| {
+                    var index_name_buf: [256]u8 = undefined;
+                    const index_name = std.fmt.bufPrint(&index_name_buf, "_{s}_fulltext_idx", .{property}) catch "";
+                    
+                    if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                        // Use sophisticated FTS selectivity based on corpus characteristics
+                        var selectivity = stats.getEstimatedSelectivity();
+                        
+                        // Adjust based on FTS-specific factors
+                        if (stats.fts_total_documents > 0) {
+                            // Factor in vocabulary density
+                            const vocab_density = @as(f64, @floatFromInt(stats.fts_vocabulary_size)) / @as(f64, @floatFromInt(stats.fts_total_documents));
+                            if (vocab_density > 100.0) {
+                                selectivity *= 0.8; // Rich vocabulary = more selective
+                            } else if (vocab_density < 20.0) {
+                                selectivity *= 1.2; // Sparse vocabulary = less selective
+                            }
+                            
+                            // Factor in document length variance
+                            if (stats.fts_avg_document_length > 500.0) {
+                                selectivity *= 0.9; // Long documents = more selective matches
+                            }
+                        }
+                        
+                        break :blk selectivity;
+                    }
+                }
+                
+                // Fallback to heuristic-based estimates for common text fields
                 if (std.mem.eql(u8, property, "description")) break :blk 0.15;
                 if (std.mem.eql(u8, property, "content")) break :blk 0.2;
                 if (std.mem.eql(u8, property, "title")) break :blk 0.1;
+                if (std.mem.eql(u8, property, "summary")) break :blk 0.12;
+                if (std.mem.eql(u8, property, "abstract")) break :blk 0.08;
+                if (std.mem.eql(u8, property, "body")) break :blk 0.25;
+                if (std.mem.eql(u8, property, "comment")) break :blk 0.3;
                 break :blk 0.3; // Default for text properties
             },
         };
@@ -526,6 +561,28 @@ pub const IndexOptimizer = struct {
                 if (stats.index_type == index_type) {
                     // Use the cost factor from statistics
                     cost_factor = stats.getEstimatedCostFactor();
+                    
+                    // For FTS indexes, apply additional cost factors based on corpus characteristics
+                    if (index_type == .fulltext and stats.fts_total_documents > 0) {
+                        // Adjust cost based on average document length
+                        const doc_length_factor = 1.0 + (stats.fts_avg_document_length - 100.0) / 500.0;
+                        cost_factor *= @max(0.5, @min(2.0, doc_length_factor));
+                        
+                        // Adjust based on vocabulary complexity
+                        const vocab_complexity = @as(f64, @floatFromInt(stats.fts_vocabulary_size)) / @as(f64, @floatFromInt(stats.fts_total_documents));
+                        if (vocab_complexity > 50.0) {
+                            cost_factor *= 1.1; // Complex vocabulary = higher processing cost
+                        }
+                        
+                        // Adjust based on search efficiency (hit ratio)
+                        if (stats.fts_search_queries > 10) {
+                            if (stats.hit_ratio > 0.7) {
+                                cost_factor *= 0.9; // Efficient searches cost less
+                            } else if (stats.hit_ratio < 0.3) {
+                                cost_factor *= 1.2; // Inefficient searches cost more
+                            }
+                        }
+                    }
                     break;
                 }
             }
@@ -708,6 +765,181 @@ pub const IndexOptimizer = struct {
             .details = details_owned,
             .cost_breakdown = cost_components,
             .index_usage = null,
+        };
+    }
+
+    // Optimize full-text search queries with BM25 scoring and advanced statistics
+    // CANARY: REQ=REQ-GQL-FTS-005; FEATURE="FTS Query Optimization"; ASPECT=QueryPlanning; STATUS=IMPL; TEST=TestCANARY_FTSQueryOptimization; OWNER=fts; UPDATED=2025-10-04
+    pub fn optimizeFtsQuery(
+        self: *IndexOptimizer,
+        labels: []const []const u8,
+        text_property: []const u8,
+        query_terms: []const []const u8,
+        query_type: @import("index_statistics.zig").IndexStatistics.FtsQueryType,
+    ) ScanPlan {
+        var best_plan = ScanPlan{
+            .type = .sequential,
+            .estimated_cost = self.estimateSequentialScanCost(labels),
+            .estimated_rows = self.estimateSequentialScanRows(labels),
+            .explain_info = null,
+        };
+
+        // Look for full-text indexes on the specified property
+        for (labels) |label| {
+            var index_name_buf: [256]u8 = undefined;
+            const index_name = std.fmt.bufPrint(&index_name_buf, "{s}_{s}_fulltext_idx", .{ label, text_property }) catch continue;
+
+            if (self.index_manager.property_indexes.contains(index_name)) {
+                const index_info = IndexInfo{
+                    .name = self.allocator.dupe(u8, index_name) catch continue,
+                    .label = label,
+                    .property = text_property,
+                    .index_type = .fulltext,
+                };
+
+                // Calculate FTS-specific cost
+                const fts_cost = self.estimateFtsQueryCost(index_info, query_terms, query_type);
+                const fts_rows = self.estimateFtsResultRows(index_info, query_terms, query_type);
+
+                if (fts_cost < best_plan.estimated_cost) {
+                    best_plan = ScanPlan{
+                        .type = .{ .index = index_info },
+                        .estimated_cost = fts_cost,
+                        .estimated_rows = fts_rows,
+                        .explain_info = self.createFtsExplainInfo(index_info, fts_cost, fts_rows, query_terms, query_type),
+                    };
+                }
+            }
+        }
+
+        return best_plan;
+    }
+
+    // Estimate cost for full-text search query
+    fn estimateFtsQueryCost(
+        self: *IndexOptimizer,
+        index_info: IndexInfo,
+        query_terms: []const []const u8,
+        query_type: @import("index_statistics.zig").IndexStatistics.FtsQueryType,
+    ) f64 {
+        // Use statistics-based cost estimation if available
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_info.name)) |stats| {
+                return stats.estimateFtsCost(@intCast(query_terms.len), query_type);
+            }
+        }
+
+        // Fallback to heuristic-based cost estimation
+        const base_cost: f64 = 20.0; // Base full-text search cost
+        const terms_factor = @as(f64, @floatFromInt(query_terms.len));
+        
+        const query_complexity_factor: f64 = switch (query_type) {
+            .simple => 1.0,
+            .phrase => 1.5,
+            .proximity => 2.0,
+        };
+
+        // Estimate based on typical text corpus characteristics
+        const estimated_docs: f64 = 1000.0; // Default document count
+        const log_docs = @log(estimated_docs);
+        
+        return base_cost * terms_factor * query_complexity_factor * log_docs;
+    }
+
+    // Estimate result rows for full-text search
+    fn estimateFtsResultRows(
+        self: *IndexOptimizer,
+        index_info: IndexInfo,
+        query_terms: []const []const u8,
+        query_type: @import("index_statistics.zig").IndexStatistics.FtsQueryType,
+    ) u64 {
+        _ = query_type;
+        
+        // Use statistics if available
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_info.name)) |stats| {
+                // Estimate based on historical hit ratios and document count
+                const base_docs = stats.fts_total_documents;
+                if (base_docs > 0) {
+                    var selectivity = stats.hit_ratio;
+                    
+                    // Adjust based on query complexity
+                    const terms_factor = 1.0 / @as(f64, @floatFromInt(query_terms.len + 1));
+                    selectivity *= terms_factor;
+                    
+                    return @intFromFloat(@max(1.0, @as(f64, @floatFromInt(base_docs)) * selectivity));
+                }
+            }
+        }
+
+        // Fallback heuristic: more terms = fewer results
+        const base_estimate: u64 = 100;
+        const terms_penalty = query_terms.len * 2;
+        return @max(1, base_estimate - terms_penalty);
+    }
+
+    // Create explain information for FTS queries
+    fn createFtsExplainInfo(
+        self: *IndexOptimizer,
+        index_info: IndexInfo,
+        cost: f64,
+        rows: u64,
+        query_terms: []const []const u8,
+        query_type: @import("index_statistics.zig").IndexStatistics.FtsQueryType,
+    ) ?graph_common.ExplainInfo {
+        const operation = self.allocator.dupe(u8, "Full-Text Index Scan") catch return null;
+        
+        // Create detailed description
+        var desc_buf: [512]u8 = undefined;
+        const query_type_str = switch (query_type) {
+            .simple => "simple",
+            .phrase => "phrase",
+            .proximity => "proximity",
+        };
+        
+        const description = std.fmt.bufPrint(&desc_buf, 
+            "Full-text search using BM25 scoring on index '{s}' for {s} query with {} terms. " ++
+            "Cost: {d:.2}, Estimated rows: {}", 
+            .{ index_info.name, query_type_str, query_terms.len, cost, rows }
+        ) catch return null;
+        
+        const details_owned = self.allocator.dupe(u8, description) catch return null;
+
+        // Create cost breakdown
+        var cost_components = std.ArrayList(graph_common.CostComponent).initCapacity(self.allocator, 0) catch return null;
+        
+        cost_components.append(self.allocator, .{
+            .operation = self.allocator.dupe(u8, "BM25 Scoring") catch return null,
+            .cost = cost * 0.6,
+            .description = self.allocator.dupe(u8, "Document scoring and ranking") catch return null,
+        }) catch {};
+        
+        cost_components.append(self.allocator, .{
+            .operation = self.allocator.dupe(u8, "Term Processing") catch return null,
+            .cost = cost * 0.3,
+            .description = self.allocator.dupe(u8, "Query tokenization and normalization") catch return null,
+        }) catch {};
+        
+        cost_components.append(self.allocator, .{
+            .operation = self.allocator.dupe(u8, "Result Assembly") catch return null,
+            .cost = cost * 0.1,
+            .description = self.allocator.dupe(u8, "Result formatting and highlights") catch return null,
+        }) catch {};
+
+        // Create index usage info
+        const index_usage = graph_common.IndexUsageInfo{
+            .index_name = self.allocator.dupe(u8, index_info.name) catch return null,
+            .index_type = "fulltext",
+            .properties = &[_][]const u8{index_info.property},
+            .scan_type = "FTS BM25",
+            .selectivity = 1.0 / @as(f64, @floatFromInt(rows + 1)),
+        };
+
+        return graph_common.ExplainInfo{
+            .operation = operation,
+            .details = details_owned,
+            .cost_breakdown = cost_components.toOwnedSlice(self.allocator) catch return null,
+            .index_usage = index_usage,
         };
     }
 };

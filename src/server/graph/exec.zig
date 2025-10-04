@@ -123,6 +123,9 @@ pub fn nodeScan(
         binding.value = .{ .Node = node };
         // Add the node to the vars map
         try binding.vars.put(var_name orelse "n", .{ .Node = node });
+        
+        // Debug: log node properties
+        // Node properties are available for binding access
 
         try results.append(allocator, binding);
     }
@@ -361,9 +364,37 @@ fn evaluateExpressionInBinding(
 ) !BindingValue {
     _ = allocator;
 
+    // Expression evaluation - removed debug logging
+
     return switch (expr) {
         .Ident => |ident| binding.vars.get(ident.orig) orelse .Null,
+        .Member => |member| blk: {
+            // Handle member access like n.name
+            if (member.target.* == .Ident) {
+                const target_name = member.target.Ident.orig;
+                
+                if (binding.vars.get(target_name)) |obj| {
+                    switch (obj) {
+                        .Node => |node| {
+                            const field_name = member.field;
+                            if (node.properties.get(field_name)) |val| {
+                                break :blk .{ .Property = val };
+                            }
+                        },
+                        .Edge => |edge| {
+                            const field_name = member.field;
+                            if (edge.properties.get(field_name)) |val| {
+                                break :blk .{ .Property = val };
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            }
+            break :blk .Null;
+        },
         .PropertyAccess => |prop| blk: {
+            // Handle property access (legacy - Member is the main pattern)
             if (binding.vars.get(prop.object)) |obj| {
                 switch (obj) {
                     .Node => |node| {
@@ -447,7 +478,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                     }
                 },
                 .Node => |node| {
-                    // For nodes that weren't converted to properties, show basic info
+                    // For nodes that weren't converted to properties, show basic info including properties
                     try result.append(allocator, '{');
                     try result.appendSlice(allocator, "\"id\": ");
                     try result.writer(allocator).print("{d}", .{node.id});
@@ -458,7 +489,33 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                         try result.appendSlice(allocator, label);
                         try result.append(allocator, '"');
                     }
-                    try result.appendSlice(allocator, "]}");
+                    try result.appendSlice(allocator, "], \"properties\": {");
+                    
+                    // Add node properties
+                    var prop_iter = node.properties.iterator();
+                    var prop_count: usize = 0;
+                    while (prop_iter.next()) |prop_entry| {
+                        if (prop_count > 0) try result.appendSlice(allocator, ", ");
+                        try result.append(allocator, '"');
+                        try result.appendSlice(allocator, prop_entry.key_ptr.*);
+                        try result.appendSlice(allocator, "\": ");
+                        
+                        // Serialize property value
+                        switch (prop_entry.value_ptr.*) {
+                            .String => |s| {
+                                try result.append(allocator, '"');
+                                try result.appendSlice(allocator, s);
+                                try result.append(allocator, '"');
+                            },
+                            .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                            .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
+                            .Null => try result.appendSlice(allocator, "null"),
+                            .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                        }
+                        prop_count += 1;
+                    }
+                    
+                    try result.appendSlice(allocator, "}}");
                 },
                 .Edge => |edge| {
                     // For edges that weren't converted to properties, show basic info
