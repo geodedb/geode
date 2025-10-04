@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     dev-env.url = "github:spyderorg/dev-env";
     quic.url = "github:spyderorg/quic";
@@ -12,6 +13,7 @@
     {
       self,
       nixpkgs,
+      unstable,
       dev-env,
       quic,
       flake-utils,
@@ -22,6 +24,12 @@
         nixpkgs: system:
         let
           pkgs = import nixpkgs {
+            inherit system;
+            config = { allowUnfree = true; };
+            overlays = [ self.overlays.default ];
+          };
+
+          unstablePkgs = import unstable {
             inherit system;
             config = { allowUnfree = true; };
             overlays = [ self.overlays.default ];
@@ -75,7 +83,7 @@
             pkgs.systemd
             pkgs.prometheus
             pkgs.grafana
-            pkgs.zig-zlint
+            unstablePkgs.zig-zlint
           ];
 
           # Documentation packages
@@ -225,11 +233,13 @@
                   
                   # Python environment for geodetestlab
                   pythonWithPackages
-                  zig-zlint
                   
                   # Platform specific
                   (if pkgs.stdenv.isLinux then glibc else null)
                   (if system == "x86_64-linux" then wine else null)
+                ])
+                ++ (with unstablePkgs; [
+                  zig-zlint
                 ])
               );
             };
