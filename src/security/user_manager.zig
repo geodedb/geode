@@ -3,13 +3,15 @@ const Allocator = std.mem.Allocator;
 const auth = @import("auth");
 const rls = @import("rls");
 const storage = @import("interface");
+const user_storage = @import("../storage/user_storage.zig");
 
-// User Management CLI and API
+// User Management CLI and API  
 pub const UserManager = struct {
     allocator: Allocator,
     security_manager: *auth.SecurityManager,
     rls_engine: *rls.RLSEngine,
     storage_backend: storage.StorageEngine,
+    user_storage: *user_storage.UserStorageBackend,
 
     const Self = @This();
 
@@ -18,12 +20,14 @@ pub const UserManager = struct {
         security_manager: *auth.SecurityManager,
         rls_engine: *rls.RLSEngine,
         storage_backend: storage.StorageEngine,
+        user_storage_backend: *user_storage.UserStorageBackend,
     ) !Self {
         return Self{
             .allocator = allocator,
             .security_manager = security_manager,
             .rls_engine = rls_engine,
             .storage_backend = storage_backend,
+            .user_storage = user_storage_backend,
         };
     }
 
@@ -512,45 +516,87 @@ pub const UserManager = struct {
 
     // Storage persistence
     fn persistUser(self: *Self, user: auth.User) !void {
-        _ = self;
-        _ = user;
-        // TODO: Implement actual persistence to storage backend
+        try self.user_storage.persistUser(
+            user.id,
+            user.username,
+            user.email,
+            user.password_hash,
+            user.salt orelse "",
+        );
     }
 
     fn removeUserFromStorage(self: *Self, user_id: auth.UserId) !void {
-        _ = self;
-        _ = user_id;
-        // TODO: Implement removal from storage backend
+        try self.user_storage.removeUser(user_id);
     }
 
     fn persistRole(self: *Self, role: auth.Role) !void {
-        _ = self;
-        _ = role;
-        // TODO: Implement actual persistence to storage backend
+        try self.user_storage.persistRole(
+            role.id,
+            role.name,
+            role.description,
+            role.parent_role orelse 0,
+            role.priority,
+            role.is_system,
+        );
     }
 
     fn removeRoleFromStorage(self: *Self, role_id: auth.RoleId) !void {
-        _ = self;
-        _ = role_id;
-        // TODO: Implement removal from storage backend
+        try self.user_storage.removeRole(role_id);
     }
 
     fn persistPermission(self: *Self, permission: auth.Permission) !void {
-        _ = self;
-        _ = permission;
-        // TODO: Implement actual persistence to storage backend
+        const action_byte: u8 = switch (permission.action) {
+            .read => 0,
+            .write => 1,
+            .delete => 2,
+            .admin => 3,
+        };
+        
+        try self.user_storage.persistPermission(
+            permission.id,
+            permission.name,
+            permission.resource,
+            action_byte,
+            permission.conditions,
+        );
     }
 
     fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy) !void {
-        _ = self;
-        _ = policy;
-        // TODO: Implement actual persistence to storage backend
+        const operation_byte: u8 = switch (policy.operation) {
+            .SELECT => 0,
+            .INSERT => 1,
+            .UPDATE => 2,
+            .DELETE => 3,
+            .ALL => 4,
+        };
+        
+        const audit_level_byte: u8 = switch (policy.audit_level) {
+            .none => 0,
+            .denials => 1,
+            .all => 2,
+        };
+        
+        const using_clause = if (policy.using_expr) |expr| expr.raw else null;
+        const check_clause = if (policy.check_expr) |expr| expr.raw else null;
+        
+        try self.user_storage.persistPolicy(
+            policy.id,
+            policy.name,
+            policy.description,
+            policy.graph,
+            policy.table,
+            operation_byte,
+            policy.permissive,
+            policy.enabled,
+            using_clause,
+            check_clause,
+            audit_level_byte,
+            policy.created_by,
+        );
     }
 
     fn removePolicyFromStorage(self: *Self, policy_id: u64) !void {
-        _ = self;
-        _ = policy_id;
-        // TODO: Implement removal from storage backend
+        try self.user_storage.removePolicy(policy_id);
     }
 
     fn generateMFASecret(self: *Self) ![]const u8 {

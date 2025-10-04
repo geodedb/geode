@@ -225,6 +225,24 @@ pub const GraphStorage = struct {
 pub const ScanType = union(enum) {
     sequential,
     index: IndexInfo,
+    vector_knn: VectorKNNInfo,
+    fulltext_search: FullTextInfo,
+};
+
+pub const VectorKNNInfo = struct {
+    index_name: []const u8,
+    query_vector: []const f32,
+    k: u32,
+    metric: []const u8, // "l2", "cosine", "dot"
+    property: []const u8,
+};
+
+pub const FullTextInfo = struct {
+    index_name: []const u8,
+    query_terms: []const []const u8,
+    property: []const u8,
+    analyzer: []const u8, // "simple", "standard", "english"
+    max_results: u32,
 };
 
 pub const ScanPlan = struct {
@@ -272,6 +290,7 @@ pub const IndexType = enum {
     hash,
     spatial,
     fulltext,
+    vector_hnsw,
 };
 
 // Options for MATCH execution
