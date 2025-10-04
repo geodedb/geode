@@ -41,14 +41,14 @@ const CompositeIndexManager = struct {
     pub fn addCompositeIndex(self: *CompositeIndexManager, label: []const u8, properties: []const []const u8) !void {
         var composite_name_buf: [512]u8 = undefined;
         var name_len: usize = 0;
-        
+
         // Build: label_prop1_prop2_..._composite_idx
         name_len += (std.fmt.bufPrint(composite_name_buf[name_len..], "{s}", .{label}) catch return).len;
         for (properties) |prop| {
             name_len += (std.fmt.bufPrint(composite_name_buf[name_len..], "_{s}", .{prop}) catch return).len;
         }
         name_len += (std.fmt.bufPrint(composite_name_buf[name_len..], "_composite_idx", .{}) catch return).len;
-        
+
         const composite_name = composite_name_buf[0..name_len];
         try self.property_indexes.put(try self.allocator.dupe(u8, composite_name), {});
     }
@@ -74,27 +74,24 @@ test "TestCANARY_REQ_GQL_016_CompositeIndexOptimization" {
 
     const labels = [_][]const u8{"Person"};
     const prop_keys = [_][]const u8{ "name", "age" };
-    const prop_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "Alice" }, 
-        .{ .Int = 30 } 
-    };
+    const prop_vals = [_]graph_common.PropertyValue{ .{ .String = "Alice" }, .{ .Int = 30 } };
 
     // Test that composite index is selected for multi-property queries
     const plan = optimizer.optimizeNodeScanWithFilters(&labels, &prop_keys, &prop_vals);
 
     try testing.expect(plan.type == .index);
-    
+
     if (plan.type == .index) {
         try testing.expect(plan.type.index.is_composite);
         try testing.expect(plan.type.index.properties.len == 2);
-        
+
         // Composite index should have very high selectivity (product of individual selectivities)
         // name: 0.1, age: 0.02 -> composite: 0.1 * 0.02 = 0.002
         try testing.expect(plan.type.index.selectivity == 0.002);
-        
+
         // Cost should be lower than sequential scan
         try testing.expect(plan.estimated_cost < 100.0);
-        
+
         std.debug.print("\nComposite index optimization:\n");
         std.debug.print("  Index name: {s}\n", .{plan.type.index.name});
         std.debug.print("  Properties: {any}\n", .{plan.type.index.properties});
@@ -125,10 +122,7 @@ test "CompositeIndexOptimizer: single vs composite comparison" {
 
     // Test what happens when no composite index exists for multi-property query
     const prop_keys = [_][]const u8{ "email", "status" };
-    const prop_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "user@example.com" }, 
-        .{ .String = "active" } 
-    };
+    const prop_vals = [_]graph_common.PropertyValue{ .{ .String = "user@example.com" }, .{ .String = "active" } };
     const multi_plan_no_composite = optimizer.optimizeNodeScanWithFilters(&labels, &prop_keys, &prop_vals);
 
     try testing.expect(single_plan.type == .index);
@@ -155,29 +149,25 @@ test "CompositeIndexOptimizer: three-property composite" {
 
     const labels = [_][]const u8{"Address"};
     const prop_keys = [_][]const u8{ "country", "state", "city" };
-    const prop_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "USA" }, 
-        .{ .String = "CA" },
-        .{ .String = "San Francisco" }
-    };
+    const prop_vals = [_]graph_common.PropertyValue{ .{ .String = "USA" }, .{ .String = "CA" }, .{ .String = "San Francisco" } };
 
     const plan = optimizer.optimizeNodeScanWithFilters(&labels, &prop_keys, &prop_vals);
 
     try testing.expect(plan.type == .index);
-    
+
     if (plan.type == .index) {
         try testing.expect(plan.type.index.is_composite);
         try testing.expect(plan.type.index.properties.len == 3);
-        
+
         // Three-property composite should have extremely high selectivity
         // 0.1 * 0.1 * 0.1 = 0.001
         try testing.expect(plan.type.index.selectivity == 0.001);
-        
+
         // Base cost should account for three properties: 8.0 + (3 * 2.0) = 14.0
         const expected_base_cost = 14.0;
         const expected_total_cost = expected_base_cost * 0.001;
         try testing.expect(std.math.approxEqAbs(f64, plan.estimated_cost, expected_total_cost, 0.001));
-        
+
         std.debug.print("\nThree-property composite index:\n");
         std.debug.print("  Properties: {any}\n", .{plan.type.index.properties});
         std.debug.print("  Selectivity: {d:.4}\n", .{plan.type.index.selectivity});
@@ -240,18 +230,12 @@ test "CompositeIndexOptimizer: selectivity calculation" {
 
     // Test selectivity for category+brand (both have default 0.1 selectivity)
     const cat_brand_keys = [_][]const u8{ "category", "brand" };
-    const cat_brand_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "Electronics" }, 
-        .{ .String = "Apple" } 
-    };
+    const cat_brand_vals = [_]graph_common.PropertyValue{ .{ .String = "Electronics" }, .{ .String = "Apple" } };
     const cat_brand_plan = optimizer.optimizeNodeScanWithFilters(&labels, &cat_brand_keys, &cat_brand_vals);
 
     // Test selectivity for id+sku (id has 0.001, sku defaults to 0.1)
     const id_sku_keys = [_][]const u8{ "id", "sku" };
-    const id_sku_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "PROD123" }, 
-        .{ .String = "SKU456" } 
-    };
+    const id_sku_vals = [_]graph_common.PropertyValue{ .{ .String = "PROD123" }, .{ .String = "SKU456" } };
     const id_sku_plan = optimizer.optimizeNodeScanWithFilters(&labels, &id_sku_keys, &id_sku_vals);
 
     try testing.expect(cat_brand_plan.type == .index);
@@ -260,18 +244,16 @@ test "CompositeIndexOptimizer: selectivity calculation" {
     if (cat_brand_plan.type == .index and id_sku_plan.type == .index) {
         // category+brand: 0.1 * 0.1 = 0.01
         try testing.expect(cat_brand_plan.type.index.selectivity == 0.01);
-        
+
         // id+sku: 0.001 * 0.1 = 0.0001
         try testing.expect(id_sku_plan.type.index.selectivity == 0.0001);
-        
+
         // id+sku should be more selective and thus cheaper
         try testing.expect(id_sku_plan.estimated_cost < cat_brand_plan.estimated_cost);
-        
+
         std.debug.print("\nSelectivity comparison:\n");
-        std.debug.print("  Category+Brand selectivity: {d:.4}, cost: {d:.4}\n", 
-            .{ cat_brand_plan.type.index.selectivity, cat_brand_plan.estimated_cost });
-        std.debug.print("  ID+SKU selectivity: {d:.4}, cost: {d:.4}\n", 
-            .{ id_sku_plan.type.index.selectivity, id_sku_plan.estimated_cost });
+        std.debug.print("  Category+Brand selectivity: {d:.4}, cost: {d:.4}\n", .{ cat_brand_plan.type.index.selectivity, cat_brand_plan.estimated_cost });
+        std.debug.print("  ID+SKU selectivity: {d:.4}, cost: {d:.4}\n", .{ id_sku_plan.type.index.selectivity, id_sku_plan.estimated_cost });
     }
 }
 
@@ -293,16 +275,13 @@ test "CompositeIndexOptimizer: edge cases" {
 
     // Test with mismatched property and value counts
     const prop_keys = [_][]const u8{ "prop1", "prop2" };
-    const prop_vals = [_]graph_common.PropertyValue{ .{ .String = "value1" } }; // Only one value
+    const prop_vals = [_]graph_common.PropertyValue{.{ .String = "value1" }}; // Only one value
     const mismatch_plan = optimizer.optimizeNodeScanWithFilters(&labels, &prop_keys, &prop_vals);
     try testing.expect(mismatch_plan.type == .sequential);
 
     // Test with no available indexes
     const no_index_keys = [_][]const u8{ "nonexistent1", "nonexistent2" };
-    const no_index_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "val1" }, 
-        .{ .String = "val2" } 
-    };
+    const no_index_vals = [_]graph_common.PropertyValue{ .{ .String = "val1" }, .{ .String = "val2" } };
     const no_index_plan = optimizer.optimizeNodeScanWithFilters(&labels, &no_index_keys, &no_index_vals);
     try testing.expect(no_index_plan.type == .sequential);
 }

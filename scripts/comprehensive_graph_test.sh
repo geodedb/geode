@@ -32,7 +32,7 @@ test_feature() {
     
     local output
     local exit_code
-    output=$(timeout 10 eval "$cmd" 2>&1) || exit_code=$?
+    output=$(timeout 10 bash -c "$cmd" 2>&1) || exit_code=$?
     
     if [ "$expect_failure" = "true" ]; then
         # We expect this to fail (known issue)

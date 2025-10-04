@@ -799,10 +799,19 @@ pub fn build(b: *std.Build) void {
 
     const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
 
+    // Add interface to page manager module
+    storage_page_manager_shared.addImport("interface", storage_interface_mod);
+
+    // Create user storage module
+    const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
+    user_storage_mod.addImport("interface", storage_interface_mod);
+    user_storage_mod.addImport("storage_page_manager", storage_page_manager_shared);
+
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("auth", auth_mod);
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("interface", storage_interface_mod);
+    user_manager_mod.addImport("user_storage", user_storage_mod);
 
     // Create a new inmemory storage module that imports interface
     const storage_inmemory_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
@@ -813,6 +822,7 @@ pub fn build(b: *std.Build) void {
     user_auth_exe.root_module.addImport("user_manager", user_manager_mod);
     user_auth_exe.root_module.addImport("storage/inmemory", storage_inmemory_mod);
     user_auth_exe.root_module.addImport("interface", storage_interface_mod);
+    user_auth_exe.root_module.addImport("user_storage", user_storage_mod);
 
     b.installArtifact(user_auth_exe);
     const user_auth_run = b.addRunArtifact(user_auth_exe);
@@ -1037,6 +1047,7 @@ pub fn build(b: *std.Build) void {
     e2e_rls_test.root_module.addImport("user_manager", user_manager_mod);
     e2e_rls_test.root_module.addImport("storage/inmemory", storage_inmemory_mod);
     e2e_rls_test.root_module.addImport("interface", storage_interface_mod);
+    e2e_rls_test.root_module.addImport("user_storage", user_storage_mod);
     test_step.dependOn(&e2e_rls_test.step);
 
     // Client builds

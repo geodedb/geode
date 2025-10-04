@@ -20,15 +20,20 @@ tests:
   # Schema and type operations
   - name: "create-schema"
     description: "Create a comprehensive graph schema"
-    args: ["query", "--server", "${server_address}", 
-           "CREATE (p1:Person {name: 'Alice', age: 28, email: 'alice@example.com'})," +
-           "(p2:Person {name: 'Bob', age: 32, email: 'bob@example.com'})," +
-           "(c1:Company {name: 'TechCorp', founded: 2010})," +
-           "(c2:Company {name: 'DataInc', founded: 2015})," +
-           "(p1)-[:WORKS_FOR {since: 2020, role: 'Engineer'}]->(c1)," +
-           "(p2)-[:WORKS_FOR {since: 2018, role: 'Manager'}]->(c2)," +
-           "(p1)-[:KNOWS {since: 2019}]->(p2)" +
-           " RETURN count(*) AS created"]
+    args: 
+      - "query"
+      - "--server" 
+      - "${server_address}"
+      - |
+        CREATE 
+          (p1:Person {name: 'Alice', age: 28, email: 'alice@example.com'}),
+          (p2:Person {name: 'Bob', age: 32, email: 'bob@example.com'}),
+          (c1:Company {name: 'TechCorp', founded: 2010}),
+          (c2:Company {name: 'DataInc', founded: 2015}),
+          (p1)-[:WORKS_FOR {since: 2020, role: 'Engineer'}]->(c1),
+          (p2)-[:WORKS_FOR {since: 2018, role: 'Manager'}]->(c2),
+          (p1)-[:KNOWS {since: 2019}]->(p2)
+        RETURN count(*) AS created
     expect:
       exit_code: 0
       geode_query:

@@ -169,7 +169,7 @@ const SimplifiedBackupManager = struct {
 
     pub fn restoreToPointInTime(self: *SimplifiedBackupManager, target_time: i64, restore_dir: []const u8) !void {
         _ = target_time;
-        
+
         // Ensure restore directory exists
         std.fs.cwd().makePath(restore_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
@@ -206,6 +206,25 @@ const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_
 // ORDER/LIMIT/OFFSET legality (US001), EXPLAIN/PROFILE, pagination, txn demarcation.
 
 const ServerStateInsertedValue = struct { value: []const u8, creator_txn: u64, commit_ts: ?u64 = null, aborted: bool = false };
+
+// Catalog structures for managing schemas and graphs
+const CatalogSchema = struct {
+    name: []const u8,
+    created_at: i64,
+    created_by: []const u8 = "system",
+    description: ?[]const u8 = null,
+};
+
+const CatalogGraph = struct {
+    name: []const u8,
+    schema_name: ?[]const u8 = null,
+    property_graph: bool = true,
+    created_at: i64,
+    created_by: []const u8 = "system",
+    description: ?[]const u8 = null,
+    node_count: u64 = 0,
+    edge_count: u64 = 0,
+};
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -282,6 +301,14 @@ const ServerState = struct {
     // Distributed query planner for federation-aware optimization
     distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,
     federation_manager: ?*geode.distributed.query_planner.FederationManager = null,
+
+    // Catalog management for schemas and graphs
+    catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
+    catalog_graphs: std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
+
+    // Security management for RBAC/ABAC - comment out for now to avoid import issues
+    // security_manager: ?*SecurityManager = null,
+    // current_user_id: ?UserId = null,
 
     fn resetResult(self: *ServerState) void {
         // Free row fragments
@@ -1434,6 +1461,74 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         } else |_| {}
         var bindings = try graph_exec.executeMatch(ally, graph, &q, q.where_clause, m_opts, eval_diag, null);
 
+        // Check if the query has aggregation functions
+        var has_aggregation = false;
+        for (q.ret.items) |item| {
+            if (hasAggregationFunction(item.expr)) {
+                has_aggregation = true;
+                break;
+            }
+        }
+
+        // If aggregation is detected, handle it directly
+        if (has_aggregation) {
+            // Create a single aggregated result
+            var agg_binding = graph_exec.Binding.init(ally);
+
+            // Process each return item
+            for (q.ret.items, 0..) |item, i| {
+                const alias = item.alias orelse blk_al: {
+                    const tmp = geode.printer.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
+                    break :blk_al tmp;
+                };
+
+                // Handle aggregation functions
+                if (item.expr == .Call) {
+                    const call = item.expr.Call;
+                    const callee = call.callee.*;
+                    if (callee == .Ident) {
+                        const func_name = callee.Ident.orig;
+                        if (std.mem.eql(u8, func_name, "count")) {
+                            // Count aggregation
+                            const count_value = graph_exec.BindingValue{ .Value = .{ .Int = @intCast(bindings.len) } };
+                            try agg_binding.vars.put(alias, count_value);
+
+                            // Set as main binding value for the first item
+                            if (i == 0) {
+                                agg_binding.name = alias;
+                                agg_binding.value = count_value;
+                            }
+                        } else {
+                            // Other aggregations - TODO: implement sum, avg, min, max
+                            const placeholder_value = graph_exec.BindingValue{ .Value = .{ .Int = 0 } };
+                            try agg_binding.vars.put(alias, placeholder_value);
+
+                            // Set as main binding value for the first item
+                            if (i == 0) {
+                                agg_binding.name = alias;
+                                agg_binding.value = placeholder_value;
+                            }
+                        }
+                    }
+                } else {
+                    // Non-aggregation expression in aggregation context
+                    const null_value = graph_exec.BindingValue.Null;
+                    try agg_binding.vars.put(alias, null_value);
+
+                    // Set as main binding value for the first item
+                    if (i == 0) {
+                        agg_binding.name = alias;
+                        agg_binding.value = null_value;
+                    }
+                }
+            }
+
+            // Replace bindings with single aggregated result
+            var agg_bindings = try ally.alloc(graph_exec.Binding, 1);
+            agg_bindings[0] = agg_binding;
+            bindings = agg_bindings;
+        }
+
         // Apply WITH clause if present
         if (q.with_clause) |with_clause| {
             bindings = try graph_exec.executeWith(ally, bindings, with_clause, q.where_clause, graph);
@@ -2412,6 +2507,8 @@ fn handleQuicConnection(
     } else |_| false;
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
+    state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
+    state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.wal_ptr = @ptrCast(&wal);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
@@ -3156,6 +3253,8 @@ pub fn main() !void {
     };
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
+    state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
+    state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.wal_ptr = @ptrCast(&wal);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
@@ -4678,6 +4777,34 @@ pub fn main() !void {
                                 _ = stdout_file.write(result) catch {};
                                 continue;
                             },
+                            .CreateSchema => |schema_stmt| {
+                                // Execute CREATE SCHEMA statement
+                                const result = try executeCreateSchemaStatement(gpa, &state, schema_stmt);
+                                defer gpa.free(result);
+                                _ = stdout_file.write(result) catch {};
+                                continue;
+                            },
+                            .DropSchema => |drop_schema_stmt| {
+                                // Execute DROP SCHEMA statement
+                                const result = try executeDropSchemaStatement(gpa, &state, drop_schema_stmt);
+                                defer gpa.free(result);
+                                _ = stdout_file.write(result) catch {};
+                                continue;
+                            },
+                            .CreateGraph => |graph_stmt| {
+                                // Execute CREATE GRAPH statement
+                                const result = try executeCreateGraphStatement(gpa, &state, graph_stmt);
+                                defer gpa.free(result);
+                                _ = stdout_file.write(result) catch {};
+                                continue;
+                            },
+                            .DropGraph => |drop_graph_stmt| {
+                                // Execute DROP GRAPH statement
+                                const result = try executeDropGraphStatement(gpa, &state, drop_graph_stmt);
+                                defer gpa.free(result);
+                                _ = stdout_file.write(result) catch {};
+                                continue;
+                            },
                             .Union => |u_stmt| {
                                 // Evaluate union then optionally EXPLAIN/PROFILE or pagination
                                 var param_names: [][]const u8 = &.{};
@@ -4941,6 +5068,151 @@ pub fn main() !void {
                                         defer gpa.free(line);
                                         _ = stdout_file.write(line) catch {};
                                     } else |_| {}
+                                }
+                                continue;
+                            },
+                            .StartTransaction => {
+                                // Handle START TRANSACTION statement
+                                if (state.in_txn) {
+                                    const error_line = protocol.buildErrorLine(gpa, "TransactionError", "Transaction already active", "") catch null;
+                                    if (error_line) |el| {
+                                        defer gpa.free(el);
+                                        _ = stdout_file.write(el) catch {};
+                                    }
+                                    continue;
+                                }
+                                
+                                // Start a new transaction
+                                state.active_txn = .{ .id = state.global_commit_ts + 1, .start_ts = state.global_commit_ts };
+                                state.in_txn = true;
+                                state.global_commit_ts += 1;
+
+                                // Write START TRANSACTION record to WAL if available
+                                if (state.wal_ptr) |wp| {
+                                    const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
+                                    _ = wptr.append(state.active_txn.?.id, .Begin, &.{}, 0) catch {};
+                                }
+
+                                // Return success response
+                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"Transaction started\"}}\n", .{}) catch null;
+                                if (success_line) |sl| {
+                                    defer gpa.free(sl);
+                                    _ = stdout_file.write(sl) catch {};
+                                }
+                                continue;
+                            },
+                            .Commit => {
+                                // Handle COMMIT statement
+                                if (!state.in_txn) {
+                                    const error_line = protocol.buildErrorLine(gpa, "TransactionError", "No active transaction", "") catch null;
+                                    if (error_line) |el| {
+                                        defer gpa.free(el);
+                                        _ = stdout_file.write(el) catch {};
+                                    }
+                                    continue;
+                                }
+
+                                if (state.active_txn) |tx| {
+                                    // Commit the transaction
+                                    const commit_ts = state.global_commit_ts + 1;
+                                    state.global_commit_ts = commit_ts;
+
+                                    // Update committed timestamp for inserted values
+                                    for (state.inserted_values.items) |*value| {
+                                        if (value.creator_txn == tx.id and value.commit_ts == null) {
+                                            value.commit_ts = commit_ts;
+                                        }
+                                    }
+
+                                    // Write COMMIT record to WAL if available
+                                    if (state.wal_ptr) |wp| {
+                                        const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
+                                        _ = wptr.append(tx.id, .Commit, &.{}, 0) catch {};
+                                        wptr.fsync() catch {};
+                                    }
+                                }
+
+                                state.active_txn = null;
+                                state.in_txn = false;
+
+                                // Return success response
+                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"Transaction committed\"}}\n", .{}) catch null;
+                                if (success_line) |sl| {
+                                    defer gpa.free(sl);
+                                    _ = stdout_file.write(sl) catch {};
+                                }
+                                continue;
+                            },
+                            .Rollback => {
+                                // Handle ROLLBACK statement
+                                if (!state.in_txn) {
+                                    const error_line = protocol.buildErrorLine(gpa, "TransactionError", "No active transaction", "") catch null;
+                                    if (error_line) |el| {
+                                        defer gpa.free(el);
+                                        _ = stdout_file.write(el) catch {};
+                                    }
+                                    continue;
+                                }
+
+                                if (state.active_txn) |tx| {
+                                    // Rollback the transaction - remove uncommitted changes
+                                    var new_values = std.ArrayList(ServerStateInsertedValue).initCapacity(gpa, 0) catch return;
+                                    for (state.inserted_values.items) |value| {
+                                        if (value.creator_txn != tx.id) {
+                                            new_values.append(gpa, value) catch {};
+                                        }
+                                    }
+                                    state.inserted_values.deinit(gpa);
+                                    state.inserted_values = new_values;
+
+                                    // Write ROLLBACK record to WAL if available
+                                    if (state.wal_ptr) |wp| {
+                                        const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
+                                        _ = wptr.append(tx.id, .Abort, &.{}, 0) catch {};
+                                    }
+                                }
+
+                                state.active_txn = null;
+                                state.in_txn = false;
+
+                                // Return success response
+                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"Transaction rolled back\"}}\n", .{}) catch null;
+                                if (success_line) |sl| {
+                                    defer gpa.free(sl);
+                                    _ = stdout_file.write(sl) catch {};
+                                }
+                                continue;
+                            },
+                            .SessionSet => |session_stmt| {
+                                // Handle SESSION SET statement
+                                // For now, we'll implement basic session property setting
+                                // This should be expanded to handle actual session management
+                                
+                                const message = std.fmt.allocPrint(gpa, "Session property '{s}' set to '{s}'", .{session_stmt.property, session_stmt.value}) catch "Session property set";
+                                defer if (message.ptr != "Session property set".ptr) gpa.free(message);
+
+                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"{s}\"}}\n", .{message}) catch null;
+                                if (success_line) |sl| {
+                                    defer gpa.free(sl);
+                                    _ = stdout_file.write(sl) catch {};
+                                }
+                                continue;
+                            },
+                            .SessionReset => {
+                                // Handle SESSION RESET statement
+                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"Session properties reset\"}}\n", .{}) catch null;
+                                if (success_line) |sl| {
+                                    defer gpa.free(sl);
+                                    _ = stdout_file.write(sl) catch {};
+                                }
+                                continue;
+                            },
+                            .SessionClose => {
+                                // Handle SESSION CLOSE statement
+                                const success_line = std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"message\":\"Session closed\"}}\n", .{}) catch null;
+                                if (success_line) |sl| {
+                                    defer gpa.free(sl);
+                                    _ = stdout_file.write(sl) catch {};
                                 }
                                 continue;
                             },
@@ -5388,18 +5660,18 @@ fn getOrCreateBackupManager(allocator: std.mem.Allocator, state: *ServerState) !
             .encryption = false, // Can be enabled based on TDE configuration
             .retention_days = 30,
         };
-        
+
         const backup_dir = "backup"; // Default backup directory
-        
+
         const backup_mgr = try allocator.create(SimplifiedBackupManager);
         backup_mgr.* = try SimplifiedBackupManager.init(allocator, backup_dir, config);
-        
+
         // Load existing metadata if available
         backup_mgr.loadMetadata() catch {}; // Ignore errors for missing metadata
-        
+
         state.backup_manager = backup_mgr;
     }
-    
+
     return @ptrCast(@alignCast(state.backup_manager.?));
 }
 
@@ -5569,7 +5841,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
     // Create statistics tracking for the new index
     const IndexStatisticsManager = @import("index_statistics.zig").IndexStatisticsManager;
     const stats_manager: *IndexStatisticsManager = @ptrCast(@alignCast(state.index_stats_manager.?));
-    
+
     // Map AST index type to graph_common IndexType for statistics
     const stats_index_type = switch (stmt.index_type) {
         .btree => geode.graph_common.IndexType.btree,
@@ -5578,7 +5850,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         .spatial => geode.graph_common.IndexType.spatial,
         else => geode.graph_common.IndexType.btree, // Default fallback
     };
-    
+
     // Create statistics entry for the new index
     stats_manager.createIndexStatistics(stmt.name, stats_index_type, stmt.label, stmt.properties) catch |err| {
         // Log error but don't fail index creation
@@ -5589,8 +5861,8 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
     if (population_count > 0) {
         // Estimate number of unique values (assuming reasonable uniqueness for populated data)
         const estimated_unique = @min(population_count, @max(1, population_count / 2));
-        
-        // Record entries one by one to build up statistics  
+
+        // Record entries one by one to build up statistics
         var entry_count: u32 = 0;
         while (entry_count < population_count) : (entry_count += 1) {
             // Use synthetic key for counting (real implementation would use actual keys)
@@ -5691,9 +5963,9 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     };
 
     // Determine backup type and execute
-    const backup_result = if (stmt.incremental) 
+    const backup_result = if (stmt.incremental)
         backup_manager.createIncrementalBackup(0) // Start from LSN 0 for simplicity
-    else 
+    else
         backup_manager.createFullBackup();
 
     const metadata = backup_result catch |err| {
@@ -5706,7 +5978,7 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Format response based on backup type and results
     const backup_type_str = switch (metadata.backup_type) {
         .full => "full",
-        .incremental => "incremental", 
+        .incremental => "incremental",
         .differential => "differential",
     };
 
@@ -5720,10 +5992,7 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     const size_mb = @as(f64, @floatFromInt(metadata.size_bytes)) / (1024.0 * 1024.0);
     const encrypted_str = if (metadata.encrypted) "encrypted" else "unencrypted";
 
-    return std.fmt.allocPrint(allocator, 
-        "{{\"status_class\":\"00000\",\"message\":\"Backup completed successfully\",\"backup_id\":\"{x}\",\"type\":\"{s}\",\"size_mb\":{d:.2},\"compression\":\"{s}\",\"encryption\":\"{s}\",\"lsn_range\":\"{d}-{d}\"}}\n", 
-        .{ metadata.backup_id, backup_type_str, size_mb, compression_str, encrypted_str, metadata.start_lsn, metadata.end_lsn }
-    );
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup completed successfully\",\"backup_id\":\"{x}\",\"type\":\"{s}\",\"size_mb\":{d:.2},\"compression\":\"{s}\",\"encryption\":\"{s}\",\"lsn_range\":\"{d}-{d}\"}}\n", .{ metadata.backup_id, backup_type_str, size_mb, compression_str, encrypted_str, metadata.start_lsn, metadata.end_lsn });
 }
 
 fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.RestoreStatement) ![]const u8 {
@@ -5743,7 +6012,7 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Cannot open backup file: {s}\"}}\n", .{@errorName(err)});
         };
         defer file.close();
-        
+
         // Simple validation - could be enhanced with backup manager validation
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup file verification completed successfully\"}}\n", .{});
     }
@@ -5788,4 +6057,203 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
     // This would involve reading the restored pages and rebuilding the in-memory structures
 
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Point-in-time restore completed successfully to timestamp {}\"}}\n", .{target_timestamp});
+}
+
+// Actions enum for permission checking
+const Action = enum { create, read, update, delete, execute, grant, revoke, all };
+
+// Check if current user has permission to perform an action on a resource
+fn checkPermission(allocator: std.mem.Allocator, state: *ServerState, resource: []const u8, action: Action) !bool {
+    _ = allocator; // Not used in this function
+    _ = state; // Not used in simplified version
+    _ = resource; // Not used in simplified version
+    _ = action; // Not used in simplified version
+    
+    // TODO: Integrate with actual security manager when ready
+    // For now, allow all operations (development mode)
+    return true;
+}
+
+// Execute CREATE SCHEMA statement
+fn executeCreateSchemaStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateSchemaStatement) ![]const u8 {
+    // Check permission first
+    if (!try checkPermission(allocator, state, "schema", Action.create)) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to create schema\"}}\n", .{});
+    }
+
+    // Validate the schema name
+    if (stmt.name.len == 0) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid schema name\"}}\n", .{});
+    }
+
+    // Check if schema already exists
+    if (state.catalog_schemas.contains(stmt.name)) {
+        if (stmt.if_not_exists) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} already exists\"}}\n", .{stmt.name});
+        } else {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P06\",\"message\":\"Schema {s} already exists\"}}\n", .{stmt.name});
+        }
+    }
+
+    // Create new schema
+    const schema_name = try allocator.dupe(u8, stmt.name);
+    const new_schema = CatalogSchema{
+        .name = schema_name,
+        .created_at = std.time.milliTimestamp(),
+        .created_by = "system",
+        .description = null,
+    };
+
+    try state.catalog_schemas.put(schema_name, new_schema);
+
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} created successfully\"}}\n", .{stmt.name});
+}
+
+// Execute DROP SCHEMA statement
+fn executeDropSchemaStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropSchemaStatement) ![]const u8 {
+    // Check permission first
+    if (!try checkPermission(allocator, state, "schema", Action.delete)) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to drop schema\"}}\n", .{});
+    }
+
+    // Validate the schema name
+    if (stmt.name.len == 0) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid schema name\"}}\n", .{});
+    }
+
+    // Check if schema exists
+    if (state.catalog_schemas.fetchRemove(stmt.name)) |entry| {
+        // Free the allocated schema name
+        allocator.free(entry.key);
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} dropped successfully\"}}\n", .{stmt.name});
+    } else {
+        if (stmt.if_exists) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} does not exist\"}}\n", .{stmt.name});
+        } else {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Schema {s} does not exist\"}}\n", .{stmt.name});
+        }
+    }
+}
+
+// Execute CREATE GRAPH statement
+fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateGraphStatement) ![]const u8 {
+    // Check permission first
+    if (!try checkPermission(allocator, state, "graph", Action.create)) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to create graph\"}}\n", .{});
+    }
+
+    // Validate the graph name
+    if (stmt.name.len == 0) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph name\"}}\n", .{});
+    }
+
+    const graph_type = if (stmt.property_graph) "property graph" else "graph";
+
+    // Handle OR REPLACE
+    if (stmt.or_replace) {
+        // Remove existing graph if it exists
+        if (state.catalog_graphs.fetchRemove(stmt.name)) |entry| {
+            allocator.free(entry.key);
+        }
+    } else {
+        // Check if graph already exists
+        if (state.catalog_graphs.contains(stmt.name)) {
+            if (stmt.if_not_exists) {
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} already exists\"}}\n", .{ graph_type, stmt.name });
+            } else {
+                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P07\",\"message\":\"{s} {s} already exists\"}}\n", .{ graph_type, stmt.name });
+            }
+        }
+    }
+
+    // Create new graph
+    const graph_name = try allocator.dupe(u8, stmt.name);
+    const new_graph = CatalogGraph{
+        .name = graph_name,
+        .property_graph = stmt.property_graph,
+        .created_at = std.time.milliTimestamp(),
+        .created_by = "system",
+        .description = null,
+        .node_count = 0,
+        .edge_count = 0,
+    };
+
+    try state.catalog_graphs.put(graph_name, new_graph);
+
+    const action = if (stmt.or_replace) "replaced" else "created";
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type, stmt.name, action });
+}
+
+// Execute DROP GRAPH statement
+fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropGraphStatement) ![]const u8 {
+    // Check permission first
+    if (!try checkPermission(allocator, state, "graph", Action.delete)) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to drop graph\"}}\n", .{});
+    }
+
+    // Validate the graph name
+    if (stmt.name.len == 0) {
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph name\"}}\n", .{});
+    }
+
+    const graph_type = if (stmt.property_graph) "property graph" else "graph";
+
+    // Check if graph exists and remove it
+    if (state.catalog_graphs.fetchRemove(stmt.name)) |entry| {
+        // Free the allocated graph name
+        allocator.free(entry.key);
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type, stmt.name });
+    } else {
+        if (stmt.if_exists) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type, stmt.name });
+        } else {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type, stmt.name });
+        }
+    }
+}
+
+// Helper function to detect if an expression contains aggregation functions
+fn hasAggregationFunction(expr: geode.ast.Expr) bool {
+    return switch (expr) {
+        .Call => |call| {
+            const callee = call.callee.*;
+            if (callee == .Ident) {
+                const func_name = callee.Ident.orig;
+                if (std.mem.eql(u8, func_name, "count") or
+                    std.mem.eql(u8, func_name, "sum") or
+                    std.mem.eql(u8, func_name, "avg") or
+                    std.mem.eql(u8, func_name, "min") or
+                    std.mem.eql(u8, func_name, "max"))
+                {
+                    return true;
+                }
+            }
+            // Check arguments recursively
+            for (call.args) |arg| {
+                if (hasAggregationFunction(arg.*)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .Binary => |bin| {
+            return hasAggregationFunction(bin.left.*) or hasAggregationFunction(bin.right.*);
+        },
+        .Unary => |un| {
+            return hasAggregationFunction(un.expr.*);
+        },
+        else => false,
+    };
+}
+
+// Helper function to convert eval.Value to graph_exec.BindingValue
+fn convertEvalValueToBindingValue(val: geode.eval.Value) graph_exec.BindingValue {
+    return switch (val) {
+        .Null => .Null,
+        .Bool => |b| .{ .Value = .{ .Bool = b } },
+        .Int => |i| .{ .Value = .{ .Int = i } },
+        .Str => |s| .{ .Value = .{ .String = s } },
+        .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
+        else => .Null,
+    };
 }

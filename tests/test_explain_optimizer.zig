@@ -40,13 +40,13 @@ const ExplainIndexManager = struct {
     pub fn addCompositeIndex(self: *ExplainIndexManager, label: []const u8, properties: []const []const u8) !void {
         var composite_name_buf: [512]u8 = undefined;
         var name_len: usize = 0;
-        
+
         name_len += (std.fmt.bufPrint(composite_name_buf[name_len..], "{s}", .{label}) catch return).len;
         for (properties) |prop| {
             name_len += (std.fmt.bufPrint(composite_name_buf[name_len..], "_{s}", .{prop}) catch return).len;
         }
         name_len += (std.fmt.bufPrint(composite_name_buf[name_len..], "_composite_idx", .{}) catch return).len;
-        
+
         const composite_name = composite_name_buf[0..name_len];
         try self.property_indexes.put(try self.allocator.dupe(u8, composite_name), {});
     }
@@ -159,10 +159,7 @@ test "EXPLAIN: composite index scan" {
 
     const labels = [_][]const u8{"Person"};
     const prop_keys = [_][]const u8{ "first_name", "last_name" };
-    const prop_vals = [_]graph_common.PropertyValue{ 
-        .{ .String = "John" }, 
-        .{ .String = "Doe" } 
-    };
+    const prop_vals = [_]graph_common.PropertyValue{ .{ .String = "John" }, .{ .String = "Doe" } };
 
     // Test composite index scan EXPLAIN
     const plan = optimizer.optimizeNodeScanWithFilters(&labels, &prop_keys, &prop_vals);
@@ -217,18 +214,18 @@ test "EXPLAIN: cost breakdown accuracy" {
 
     if (plan.explain_info) |explain_info| {
         try testing.expect(explain_info.cost_breakdown.len == 2);
-        
+
         var total_cost: f64 = 0;
         for (explain_info.cost_breakdown) |component| {
             total_cost += component.cost;
-            
+
             // Verify cost components are reasonable
             try testing.expect(component.cost >= 0);
             if (std.mem.eql(u8, component.component, "Index Lookup")) {
                 try testing.expect(component.cost == 10.0); // B-tree base cost
             }
         }
-        
+
         // Total should match plan cost
         try testing.expect(std.math.approxEqAbs(f64, total_cost, plan.estimated_cost, 0.001));
 
@@ -268,11 +265,11 @@ test "EXPLAIN: index selection reasoning" {
         if (explain_info.index_usage) |usage| {
             // Hash should be chosen for exact matches
             try testing.expect(std.mem.eql(u8, usage.index_type, "hash"));
-            
+
             // Verify reasoning explains why hash was chosen
             try testing.expect(std.mem.indexOf(u8, usage.reason, "hash index type") != null);
             try testing.expect(std.mem.indexOf(u8, usage.reason, "selectivity") != null);
-            
+
             std.debug.print("\nIndex selection reasoning: {s}\n", .{usage.reason});
         }
 
@@ -309,7 +306,7 @@ test "EXPLAIN: no suitable index found" {
     if (plan.explain_info) |explain_info| {
         // Should mention that indexes were considered but not suitable
         try testing.expect(std.mem.indexOf(u8, explain_info.details, "Considered") != null or
-                          std.mem.indexOf(u8, explain_info.details, "No indexes available") != null);
+            std.mem.indexOf(u8, explain_info.details, "No indexes available") != null);
 
         const formatted = try formatExplainOutput(allocator, explain_info);
         defer allocator.free(formatted);

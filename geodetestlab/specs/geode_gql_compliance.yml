@@ -20,20 +20,24 @@ tests:
   # Setup test data for comprehensive testing
   - name: "setup-comprehensive-schema"
     description: "Create comprehensive test schema with all data types"
-    args: ["query", "--server", "${server_address}", 
-           "CREATE " +
-           "(alice:Person {name: 'Alice', age: 30, email: 'alice@example.com', active: true, salary: 75000.50, tags: ['developer', 'team-lead'], metadata: {department: 'Engineering', level: 'Senior'}})," +
-           "(bob:Person {name: 'Bob', age: 25, email: 'bob@example.com', active: false, salary: 65000.00, tags: ['developer'], metadata: {department: 'Engineering', level: 'Junior'}})," +
-           "(charlie:Person {name: 'Charlie', age: 35, email: 'charlie@example.com', active: true, salary: 85000.75, tags: ['manager'], metadata: {department: 'Product', level: 'Director'}})," +
-           "(techcorp:Company {name: 'TechCorp', founded: 2010, revenue: 1500000.00, active: true, locations: ['San Francisco', 'New York'], metadata: {type: 'Technology', size: 'Large'}})," +
-           "(startup:Company {name: 'StartupInc', founded: 2020, revenue: 250000.00, active: true, locations: ['Austin'], metadata: {type: 'Technology', size: 'Small'}})," +
-           "(alice)-[:WORKS_FOR {since: 2020, role: 'Senior Engineer', salary: 75000.50}]->(techcorp)," +
-           "(bob)-[:WORKS_FOR {since: 2022, role: 'Developer', salary: 65000.00}]->(techcorp)," +
-           "(charlie)-[:WORKS_FOR {since: 2015, role: 'Product Director', salary: 85000.75}]->(techcorp)," +
-           "(alice)-[:KNOWS {since: 2020, strength: 0.8}]->(bob)," +
-           "(alice)-[:KNOWS {since: 2018, strength: 0.9}]->(charlie)," +
-           "(bob)-[:KNOWS {since: 2021, strength: 0.7}]->(charlie)" +
-           " RETURN count(*) AS created"]
+    args: 
+      - "query"
+      - "--server" 
+      - "${server_address}"
+      - |
+        CREATE 
+          (alice:Person {name: 'Alice', age: 30, email: 'alice@example.com', active: true, salary: 75000.50, tags: ['developer', 'team-lead'], metadata: {department: 'Engineering', level: 'Senior'}}),
+          (bob:Person {name: 'Bob', age: 25, email: 'bob@example.com', active: false, salary: 65000.00, tags: ['developer'], metadata: {department: 'Engineering', level: 'Junior'}}),
+          (charlie:Person {name: 'Charlie', age: 35, email: 'charlie@example.com', active: true, salary: 85000.75, tags: ['manager'], metadata: {department: 'Product', level: 'Director'}}),
+          (techcorp:Company {name: 'TechCorp', founded: 2010, revenue: 1500000.00, active: true, locations: ['San Francisco', 'New York'], metadata: {type: 'Technology', size: 'Large'}}),
+          (startup:Company {name: 'StartupInc', founded: 2020, revenue: 250000.00, active: true, locations: ['Austin'], metadata: {type: 'Technology', size: 'Small'}}),
+          (alice)-[:WORKS_FOR {since: 2020, role: 'Senior Engineer', salary: 75000.50}]->(techcorp),
+          (bob)-[:WORKS_FOR {since: 2022, role: 'Developer', salary: 65000.00}]->(techcorp),
+          (charlie)-[:WORKS_FOR {since: 2015, role: 'Product Director', salary: 85000.75}]->(techcorp),
+          (alice)-[:KNOWS {since: 2020, strength: 0.8}]->(bob),
+          (alice)-[:KNOWS {since: 2018, strength: 0.9}]->(charlie),
+          (bob)-[:KNOWS {since: 2021, strength: 0.7}]->(charlie)
+        RETURN count(*) AS created
     expect:
       exit_code: 0
       geode_query:
@@ -241,15 +245,7 @@ tests:
         columns: ["name", "age_type", "has_email", "age_string"]
     tags: ["type", "functions"]
 
-  - name: "utility-functions"
-    description: "Test utility functions"
-    args: ["query", "--server", "${server_address}", "RETURN range(1, 5) AS number_range, reverse('hello') AS reversed_string, split('a,b,c', ',') AS split_array"]
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-        columns: ["number_range", "reversed_string", "split_array"]
-    tags: ["utility", "functions"]
+  # Note: Removed utility-functions test - range(), reverse(), split() functions not in ISO GQL standard
 
   # ===============================
   # PATH QUANTIFIERS AND PATTERNS

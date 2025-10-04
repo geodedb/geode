@@ -67,7 +67,7 @@ pub const IndexOptimizer = struct {
         if (prop_keys.len == 0 or prop_vals.len == 0 or prop_keys.len != prop_vals.len) {
             const sequential_cost = self.estimateSequentialScanCost(labels);
             const sequential_rows = self.estimateSequentialScanRows(labels);
-            
+
             return ScanPlan{
                 .type = .sequential,
                 .estimated_cost = sequential_cost,
@@ -112,7 +112,7 @@ pub const IndexOptimizer = struct {
                     }
                 }
             }
-            
+
             // Try composite indexes for multi-property queries
             if (prop_keys.len > 1) {
                 if (self.findBestCompositeIndex(label, prop_keys)) |composite_index| {
@@ -141,12 +141,7 @@ pub const IndexOptimizer = struct {
 
         // If sequential scan was chosen, create explain info with alternatives
         if (best_plan.type == .sequential) {
-            best_plan.explain_info = self.createSequentialScanExplainWithAlternatives(
-                labels, 
-                best_plan.estimated_cost, 
-                best_plan.estimated_rows, 
-                considered_indexes.items
-            );
+            best_plan.explain_info = self.createSequentialScanExplainWithAlternatives(labels, best_plan.estimated_cost, best_plan.estimated_rows, considered_indexes.items);
         }
 
         return best_plan;
@@ -270,7 +265,7 @@ pub const IndexOptimizer = struct {
 
         // Check different index types for this label+property combination
         const index_types = [_]IndexType{ .btree, .hash, .spatial, .fulltext };
-        
+
         for (index_types) |index_type| {
             var index_name_buf: [256]u8 = undefined;
             const index_name = std.fmt.bufPrint(&index_name_buf, "{s}_{s}_{s}_idx", .{ label, property, @tagName(index_type) }) catch continue;
@@ -284,10 +279,10 @@ pub const IndexOptimizer = struct {
                     .index_type = index_type,
                     .selectivity = selectivity,
                 };
-                
+
                 // Calculate cost for this index type
                 const cost = self.estimateIndexTypeCost(index_type, selectivity);
-                
+
                 if (cost < best_cost) {
                     best_cost = cost;
                     best_index = index_info;
@@ -342,7 +337,7 @@ pub const IndexOptimizer = struct {
             };
 
             const cost = self.estimateCompositeIndexBaseCost(properties.len) * composite_selectivity;
-            
+
             if (cost < best_cost) {
                 best_cost = cost;
                 best_index = index_info;
@@ -448,21 +443,21 @@ pub const IndexOptimizer = struct {
             // Try to find index statistics for this property
             var index_name_buf: [256]u8 = undefined;
             const index_name = std.fmt.bufPrint(&index_name_buf, "_{s}_{s}_idx", .{ property, @tagName(index_type) }) catch property;
-            
+
             if (stats_mgr.getIndexStatistics(index_name)) |stats| {
                 // Use actual selectivity from collected statistics
                 return stats.getEstimatedSelectivity();
             }
         }
-        
+
         // Fallback to heuristic-based estimates if no statistics available
         return switch (index_type) {
             .btree => blk: {
                 // B-tree good for range queries and exact matches
                 // Selectivity depends on data distribution
                 if (std.mem.eql(u8, property, "id")) break :blk 0.001; // Very selective for IDs
-                if (std.mem.eql(u8, property, "name")) break :blk 0.1;  // Moderately selective for names
-                if (std.mem.eql(u8, property, "age")) break :blk 0.02;  // Good for numeric ranges
+                if (std.mem.eql(u8, property, "name")) break :blk 0.1; // Moderately selective for names
+                if (std.mem.eql(u8, property, "age")) break :blk 0.02; // Good for numeric ranges
                 break :blk 0.1; // Default selectivity
             },
             .hash => blk: {
@@ -494,19 +489,19 @@ pub const IndexOptimizer = struct {
     // Estimate cost based on index type characteristics
     fn estimateIndexTypeCost(self: *IndexOptimizer, index_type: IndexType, selectivity: f64) f64 {
         const base_cost = switch (index_type) {
-            .btree => 10.0,     // Balanced tree traversal cost
-            .hash => 5.0,       // O(1) hash lookup cost
-            .spatial => 15.0,   // Spatial index traversal cost
-            .fulltext => 20.0,  // Text processing and matching cost
+            .btree => 10.0, // Balanced tree traversal cost
+            .hash => 5.0, // O(1) hash lookup cost
+            .spatial => 15.0, // Spatial index traversal cost
+            .fulltext => 20.0, // Text processing and matching cost
         };
-        
+
         // Apply statistics-based cost factors if available
         var cost_factor: f64 = 1.0;
         if (self.stats_manager) |stats_mgr| {
             // Check if we have statistics for any index of this type
             const all_stats = stats_mgr.getAllStatistics();
             defer self.allocator.free(all_stats);
-            
+
             for (all_stats) |stats| {
                 if (stats.index_type == index_type) {
                     // Use the cost factor from statistics
@@ -515,21 +510,16 @@ pub const IndexOptimizer = struct {
                 }
             }
         }
-        
+
         // Cost scales with selectivity - more selective indexes are cheaper to process results
         return base_cost * selectivity * cost_factor;
     }
 
     // Determine if an index type is suitable for a given query pattern
-    fn isIndexTypeSuitableForQuery(
-        self: *IndexOptimizer, 
-        index_type: IndexType, 
-        property: []const u8, 
-        query_type: QueryPatternType
-    ) bool {
+    fn isIndexTypeSuitableForQuery(self: *IndexOptimizer, index_type: IndexType, property: []const u8, query_type: QueryPatternType) bool {
         _ = self;
         _ = property;
-        
+
         return switch (index_type) {
             .btree => switch (query_type) {
                 .exact_match, .range_query, .prefix_match => true,
@@ -559,7 +549,7 @@ pub const IndexOptimizer = struct {
     ) f64 {
         _ = prop_keys;
         _ = prop_vals;
-        
+
         const base_cost = self.estimateCompositeIndexBaseCost(index_info.properties.len);
         return base_cost * index_info.selectivity;
     }
@@ -573,7 +563,7 @@ pub const IndexOptimizer = struct {
         _ = self;
         _ = prop_keys;
         _ = prop_vals;
-        
+
         // Composite indexes should be very selective
         const total_rows: f64 = 1000.0; // Assumed total dataset size
         return @intFromFloat(total_rows * index_info.selectivity);
@@ -581,7 +571,7 @@ pub const IndexOptimizer = struct {
 
     fn estimateCompositeIndexBaseCost(self: *IndexOptimizer, property_count: usize) f64 {
         _ = self;
-        
+
         // Base cost increases slightly with more properties but is still much better than sequential
         return 8.0 + (@as(f64, @floatFromInt(property_count)) * 2.0);
     }
@@ -589,9 +579,9 @@ pub const IndexOptimizer = struct {
     // EXPLAIN functionality helpers
     fn createSequentialScanExplain(self: *IndexOptimizer, labels: []const []const u8, cost: f64, rows: u64) ?graph_common.ExplainInfo {
         _ = rows;
-        
+
         const operation = self.allocator.dupe(u8, "Sequential Scan") catch return null;
-        
+
         var details_buf: [256]u8 = undefined;
         const details = std.fmt.bufPrint(&details_buf, "Scanning all nodes with labels: {any}", .{labels}) catch return null;
         const details_owned = self.allocator.dupe(u8, details) catch return null;
@@ -611,21 +601,14 @@ pub const IndexOptimizer = struct {
         };
     }
 
-    fn createIndexScanExplain(
-        self: *IndexOptimizer, 
-        index_info: IndexInfo, 
-        cost: f64, 
-        rows: u64,
-        prop_keys: []const []const u8,
-        is_composite: bool
-    ) ?graph_common.ExplainInfo {
+    fn createIndexScanExplain(self: *IndexOptimizer, index_info: IndexInfo, cost: f64, rows: u64, prop_keys: []const []const u8, is_composite: bool) ?graph_common.ExplainInfo {
         _ = rows;
-        
-        const operation = if (is_composite) 
+
+        const operation = if (is_composite)
             self.allocator.dupe(u8, "Composite Index Scan") catch return null
-        else 
+        else
             self.allocator.dupe(u8, "Index Scan") catch return null;
-        
+
         var details_buf: [512]u8 = undefined;
         const details = if (is_composite)
             std.fmt.bufPrint(&details_buf, "Using composite index on properties: {any}", .{prop_keys}) catch return null
@@ -635,18 +618,18 @@ pub const IndexOptimizer = struct {
 
         // Cost breakdown
         var cost_components = self.allocator.alloc(graph_common.CostComponent, 2) catch return null;
-        
-        const base_cost = if (is_composite) 
+
+        const base_cost = if (is_composite)
             self.estimateCompositeIndexBaseCost(index_info.properties.len)
-        else 
+        else
             self.estimateIndexTypeCost(index_info.index_type, 1.0);
-            
+
         cost_components[0] = graph_common.CostComponent{
             .component = self.allocator.dupe(u8, "Index Lookup") catch return null,
             .cost = base_cost,
             .description = self.allocator.dupe(u8, "Cost to traverse index structure") catch return null,
         };
-        
+
         cost_components[1] = graph_common.CostComponent{
             .component = self.allocator.dupe(u8, "Result Processing") catch return null,
             .cost = cost - base_cost,
@@ -659,7 +642,7 @@ pub const IndexOptimizer = struct {
             std.fmt.bufPrint(&reason_buf, "Chosen for excellent selectivity ({d:.4}) across {d} properties", .{ index_info.selectivity, index_info.properties.len }) catch return null
         else
             std.fmt.bufPrint(&reason_buf, "Chosen for {s} index type with selectivity {d:.4}", .{ @tagName(index_info.index_type), index_info.selectivity }) catch return null;
-        
+
         const index_usage = graph_common.IndexUsageInfo{
             .index_name = index_info.name,
             .index_type = self.allocator.dupe(u8, @tagName(index_info.index_type)) catch return null,
@@ -685,7 +668,7 @@ pub const IndexOptimizer = struct {
     ) ?graph_common.ExplainInfo {
         _ = rows;
         const operation = self.allocator.dupe(u8, "Sequential Scan") catch return null;
-        
+
         var details_buf: [512]u8 = undefined;
         const details = if (considered_indexes.len > 0)
             std.fmt.bufPrint(&details_buf, "No suitable index found. Considered {d} indexes but sequential scan was cheaper", .{considered_indexes.len}) catch return null
@@ -725,7 +708,7 @@ pub fn formatExplainOutput(allocator: std.mem.Allocator, explain_info: graph_com
     try output.writer().print("Query Plan:\n");
     try output.writer().print("  Operation: {s}\n", .{explain_info.operation});
     try output.writer().print("  Details: {s}\n", .{explain_info.details});
-    
+
     if (explain_info.cost_breakdown.len > 0) {
         try output.writer().print("  Cost Breakdown:\n");
         var total_cost: f64 = 0;
@@ -735,7 +718,7 @@ pub fn formatExplainOutput(allocator: std.mem.Allocator, explain_info: graph_com
         }
         try output.writer().print("    Total Cost: {d:.2}\n", .{total_cost});
     }
-    
+
     if (explain_info.index_usage) |index_usage| {
         try output.writer().print("  Index Usage:\n");
         try output.writer().print("    Index Name: {s}\n", .{index_usage.index_name});
@@ -750,12 +733,12 @@ pub fn formatExplainOutput(allocator: std.mem.Allocator, explain_info: graph_com
 
 // Query pattern types for index type selection
 const QueryPatternType = enum {
-    exact_match,    // WHERE property = value
-    range_query,    // WHERE property > value AND property < value2
-    prefix_match,   // WHERE property STARTS WITH value
-    spatial_query,  // Spatial operations (distance, contains, etc.)
+    exact_match, // WHERE property = value
+    range_query, // WHERE property > value AND property < value2
+    prefix_match, // WHERE property STARTS WITH value
+    spatial_query, // Spatial operations (distance, contains, etc.)
     fulltext_search, // Full-text search operations
-    vector_knn,     // K-nearest neighbor vector search
+    vector_knn, // K-nearest neighbor vector search
 };
 
 // Vector K-NN query optimization methods
@@ -771,11 +754,11 @@ pub const VectorKNNOptimizer = struct {
     ) ScanPlan {
         // Look for available vector indexes on this property
         const best_vector_index = self.findBestVectorIndex(property, query_vector.len, metric);
-        
+
         if (best_vector_index) |index_info| {
             const knn_cost = self.estimateVectorKNNCost(index_info, k, query_vector.len);
             const knn_rows = @min(k, 1000); // K-NN returns at most k results
-            
+
             return ScanPlan{
                 .type = .{ .vector_knn = graph_common.VectorKNNInfo{
                     .index_name = index_info.name,
@@ -783,17 +766,17 @@ pub const VectorKNNOptimizer = struct {
                     .k = k,
                     .metric = metric,
                     .property = property,
-                }},
+                } },
                 .estimated_cost = knn_cost,
                 .estimated_rows = knn_rows,
                 .explain_info = self.createVectorKNNExplain(index_info, knn_cost, knn_rows, k, metric),
             };
         }
-        
+
         // Fallback to sequential scan with vector distance computation
         const sequential_cost = self.estimateSequentialVectorScanCost(labels, query_vector.len);
         const sequential_rows = self.estimateSequentialScanRows(labels);
-        
+
         return ScanPlan{
             .type = .sequential,
             .estimated_cost = sequential_cost,
@@ -801,7 +784,7 @@ pub const VectorKNNOptimizer = struct {
             .explain_info = self.createSequentialVectorScanExplain(labels, sequential_cost, sequential_rows, k),
         };
     }
-    
+
     // Find the best vector index for a given property and query characteristics
     fn findBestVectorIndex(
         self: *IndexOptimizer,
@@ -812,7 +795,7 @@ pub const VectorKNNOptimizer = struct {
         // Query index manager for vector indexes on this property
         const available_indexes = self.index_manager.getIndexesForProperty(property) catch return null;
         defer self.allocator.free(available_indexes);
-        
+
         for (available_indexes) |index_info| {
             if (index_info.index_type == .vector_hnsw) {
                 // Check if dimension and metric match
@@ -821,10 +804,10 @@ pub const VectorKNNOptimizer = struct {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     // Check if a vector index matches the query requirements
     fn vectorIndexMatches(
         self: *IndexOptimizer,
@@ -836,12 +819,12 @@ pub const VectorKNNOptimizer = struct {
         _ = index_info;
         _ = vector_dim;
         _ = metric;
-        
+
         // For now, assume all vector indexes match
         // In a full implementation, we'd check index metadata
         return true;
     }
-    
+
     // Estimate cost for vector K-NN search using HNSW
     fn estimateVectorKNNCost(
         self: *IndexOptimizer,
@@ -859,7 +842,7 @@ pub const VectorKNNOptimizer = struct {
                 return base_cost * dimension_factor;
             }
         }
-        
+
         // Fallback heuristic: HNSW is very efficient for K-NN
         // Base cost of 5.0 for K-NN search, scaled by k and dimension
         const base_cost = 5.0;
@@ -867,7 +850,7 @@ pub const VectorKNNOptimizer = struct {
         const dim_factor = @as(f64, @floatFromInt(vector_dim)) / 128.0; // Normalize to 128D
         return base_cost * k_factor * dim_factor;
     }
-    
+
     // Estimate cost for sequential scan with vector distance computation
     fn estimateSequentialVectorScanCost(
         self: *IndexOptimizer,
@@ -879,7 +862,7 @@ pub const VectorKNNOptimizer = struct {
         const vector_computation_overhead = @as(f64, @floatFromInt(vector_dim)) * 0.1;
         return base_sequential_cost * (1.0 + vector_computation_overhead);
     }
-    
+
     // Create EXPLAIN output for vector K-NN scan
     fn createVectorKNNExplain(
         self: *IndexOptimizer,
@@ -890,15 +873,11 @@ pub const VectorKNNOptimizer = struct {
         metric: []const u8,
     ) ?graph_common.ExplainInfo {
         const operation = self.allocator.dupe(u8, "Vector K-NN Search") catch return null;
-        
+
         var details_buf: [512]u8 = undefined;
-        const details = std.fmt.bufPrint(
-            &details_buf,
-            "HNSW index search for {d} nearest neighbors using {s} distance metric",
-            .{ k, metric }
-        ) catch return null;
+        const details = std.fmt.bufPrint(&details_buf, "HNSW index search for {d} nearest neighbors using {s} distance metric", .{ k, metric }) catch return null;
         const details_owned = self.allocator.dupe(u8, details) catch return null;
-        
+
         var cost_components = self.allocator.alloc(graph_common.CostComponent, 2) catch return null;
         cost_components[0] = graph_common.CostComponent{
             .component = self.allocator.dupe(u8, "HNSW Traversal") catch return null,
@@ -910,19 +889,19 @@ pub const VectorKNNOptimizer = struct {
             .cost = cost * 0.2,
             .description = self.allocator.dupe(u8, "Vector distance calculations") catch return null,
         };
-        
+
         const index_usage = self.allocator.create(graph_common.IndexUsageInfo) catch return null;
         index_usage.* = graph_common.IndexUsageInfo{
             .index_name = self.allocator.dupe(u8, index_info.name) catch return null,
             .index_type = self.allocator.dupe(u8, "HNSW Vector") catch return null,
-            .properties = if (index_info.properties.len > 0) 
-                self.allocator.dupe([]const u8, index_info.properties) catch return null 
-            else 
+            .properties = if (index_info.properties.len > 0)
+                self.allocator.dupe([]const u8, index_info.properties) catch return null
+            else
                 &[_][]const u8{},
             .selectivity = @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(rows + k)),
             .reason = self.allocator.dupe(u8, "Efficient K-NN search with HNSW") catch return null,
         };
-        
+
         return graph_common.ExplainInfo{
             .operation = operation,
             .details = details_owned,
@@ -930,7 +909,7 @@ pub const VectorKNNOptimizer = struct {
             .index_usage = index_usage,
         };
     }
-    
+
     // Create EXPLAIN output for sequential vector scan
     fn createSequentialVectorScanExplain(
         self: *IndexOptimizer,
@@ -939,16 +918,13 @@ pub const VectorKNNOptimizer = struct {
         rows: u64,
         k: u32,
     ) ?graph_common.ExplainInfo {
+        _ = rows; // Suppress unused parameter warning
         const operation = self.allocator.dupe(u8, "Sequential Vector Scan") catch return null;
-        
+
         var details_buf: [512]u8 = undefined;
-        const details = std.fmt.bufPrint(
-            &details_buf,
-            "Scanning all nodes with labels {any} and computing vector distances for K-NN (k={d})",
-            .{ labels, k }
-        ) catch return null;
+        const details = std.fmt.bufPrint(&details_buf, "Scanning all nodes with labels {any} and computing vector distances for K-NN (k={d})", .{ labels, k }) catch return null;
         const details_owned = self.allocator.dupe(u8, details) catch return null;
-        
+
         var cost_components = self.allocator.alloc(graph_common.CostComponent, 2) catch return null;
         cost_components[0] = graph_common.CostComponent{
             .component = self.allocator.dupe(u8, "Full Table Scan") catch return null,
@@ -960,7 +936,7 @@ pub const VectorKNNOptimizer = struct {
             .cost = cost * 0.4,
             .description = self.allocator.dupe(u8, "Computing distances for each vector") catch return null,
         };
-        
+
         return graph_common.ExplainInfo{
             .operation = operation,
             .details = details_owned,
@@ -968,7 +944,7 @@ pub const VectorKNNOptimizer = struct {
             .index_usage = null,
         };
     }
-    
+
     // Execute vector K-NN scan using HNSW index
     pub fn executeVectorKNNScan(
         self: *IndexOptimizer,
@@ -979,13 +955,13 @@ pub const VectorKNNOptimizer = struct {
     ) ![]Binding {
         var results = std.ArrayList(Binding).initCapacity(self.allocator, 0) catch unreachable;
         defer results.deinit(self.allocator);
-        
+
         // Get the vector index from index manager
         const vector_index = self.index_manager.getVectorIndex(knn_info.index_name) catch {
             // Fallback to sequential scan
             return self.executeSequentialVectorScan(graph, knn_info, labels, var_name);
         };
-        
+
         // Prepare query vector for the appropriate type
         const query_result = vector_index.searchVectorF32(.{
             .data = knn_info.query_vector,
@@ -995,7 +971,7 @@ pub const VectorKNNOptimizer = struct {
             return self.executeSequentialVectorScan(graph, knn_info, labels, var_name);
         };
         defer query_result.deinit();
-        
+
         // Convert vector search results to graph bindings
         for (query_result.results.items) |match| {
             if (graph.nodes.get(match.id)) |node| {
@@ -1008,15 +984,15 @@ pub const VectorKNNOptimizer = struct {
                     try binding.vars.put(var_name orelse "n", .{ .Node = node });
                     // Add similarity score as a special property
                     try binding.vars.put("_similarity_score", .{ .Float = match.score });
-                    
+
                     try results.append(self.allocator, binding);
                 }
             }
         }
-        
+
         return results.toOwnedSlice();
     }
-    
+
     // Fallback sequential vector scan implementation
     fn executeSequentialVectorScan(
         self: *IndexOptimizer,
@@ -1029,15 +1005,15 @@ pub const VectorKNNOptimizer = struct {
         // for all nodes and select the top-k results
         var candidates = std.ArrayList(struct { node: graph_common.Node, distance: f64 }).initCapacity(self.allocator, 0) catch unreachable;
         defer candidates.deinit(self.allocator);
-        
+
         // Scan all nodes
         var node_iter = graph.getAllNodes();
         while (node_iter.next()) |entry| {
             const node = entry.value_ptr.*;
-            
+
             // Check label matching
             if (!self.nodeMatchesLabels(node, labels)) continue;
-            
+
             // Extract vector property
             if (node.properties.get(knn_info.property)) |prop_value| {
                 if (prop_value == .VectorF32) {
@@ -1050,24 +1026,24 @@ pub const VectorKNNOptimizer = struct {
                             distance += diff * diff;
                         }
                         distance = @sqrt(distance);
-                        
+
                         try candidates.append(self.allocator, .{ .node = node, .distance = distance });
                     }
                 }
             }
         }
-        
+
         // Sort by distance and take top-k
         std.sort.insertion(@TypeOf(candidates.items[0]), candidates.items, {}, struct {
             fn lessThan(_: void, a: @TypeOf(candidates.items[0]), b: @TypeOf(candidates.items[0])) bool {
                 return a.distance < b.distance;
             }
         }.lessThan);
-        
+
         // Convert to bindings
         var results = std.ArrayList(Binding).initCapacity(self.allocator, 0) catch unreachable;
         defer results.deinit(self.allocator);
-        
+
         const k = @min(knn_info.k, candidates.items.len);
         for (candidates.items[0..k]) |candidate| {
             var binding = Binding.init(self.allocator);
@@ -1075,19 +1051,19 @@ pub const VectorKNNOptimizer = struct {
             binding.value = .{ .Node = candidate.node };
             try binding.vars.put(var_name orelse "n", .{ .Node = candidate.node });
             try binding.vars.put("_similarity_score", .{ .Float = candidate.distance });
-            
+
             try results.append(self.allocator, binding);
         }
-        
+
         return results.toOwnedSlice();
     }
-    
+
     // Helper method to check if node matches labels
     fn nodeMatchesLabels(self: *IndexOptimizer, node: graph_common.Node, labels: []const []const u8) bool {
         _ = self;
-        
+
         if (labels.len == 0) return true;
-        
+
         for (labels) |label| {
             var has_label = false;
             for (node.labels.items) |node_label| {
@@ -1098,7 +1074,7 @@ pub const VectorKNNOptimizer = struct {
             }
             if (!has_label) return false;
         }
-        
+
         return true;
     }
 };
@@ -1115,16 +1091,16 @@ pub const FullTextOptimizer = struct {
     ) ScanPlan {
         // Look for available full-text indexes on this property
         const best_ft_index = self.findBestFullTextIndex(property, query_terms);
-        
+
         if (best_ft_index) |index_info| {
             const index_cost = self.estimateFullTextIndexCost(
                 index_info,
                 query_terms,
                 options.max_results,
             );
-            
+
             const sequential_cost = self.estimateSequentialFullTextScanCost(labels, query_terms);
-            
+
             if (index_cost < sequential_cost) {
                 const ft_info = graph_common.FullTextInfo{
                     .index_name = index_info.name,
@@ -1133,7 +1109,7 @@ pub const FullTextOptimizer = struct {
                     .analyzer = options.analyzer,
                     .max_results = options.max_results,
                 };
-                
+
                 return ScanPlan{
                     .type = .{ .fulltext_search = ft_info },
                     .estimated_cost = index_cost,
@@ -1148,11 +1124,11 @@ pub const FullTextOptimizer = struct {
                 };
             }
         }
-        
+
         // Fallback to sequential scan with full-text processing
         const sequential_cost = self.estimateSequentialFullTextScanCost(labels, query_terms);
         const estimated_rows = @min(options.max_results, self.estimateRowsFromLabels(labels));
-        
+
         return ScanPlan{
             .type = .sequential,
             .estimated_cost = sequential_cost,
@@ -1165,7 +1141,7 @@ pub const FullTextOptimizer = struct {
             ),
         };
     }
-    
+
     // Find the best full-text index for the given property and query terms
     fn findBestFullTextIndex(
         self: *IndexOptimizer,
@@ -1174,24 +1150,24 @@ pub const FullTextOptimizer = struct {
     ) ?IndexInfo {
         var best_index: ?IndexInfo = null;
         var best_score: f64 = 0;
-        
+
         for (self.available_indexes.items) |index| {
             if (index.index_type != .fulltext) continue;
             if (!std.mem.eql(u8, index.property, property)) continue;
-            
+
             // Score based on term coverage and selectivity
             const term_coverage = self.estimateTermCoverage(index, query_terms);
             const score = index.selectivity * term_coverage;
-            
+
             if (score > best_score) {
                 best_score = score;
                 best_index = index;
             }
         }
-        
+
         return best_index;
     }
-    
+
     // Estimate how well the index covers the query terms
     fn estimateTermCoverage(
         self: *IndexOptimizer,
@@ -1200,13 +1176,13 @@ pub const FullTextOptimizer = struct {
     ) f64 {
         _ = self;
         _ = index;
-        
+
         // For now, assume good coverage for all terms
         // In production, this would check the inverted index
         const covered_terms = query_terms.len;
         return @as(f64, @floatFromInt(covered_terms)) / @as(f64, @floatFromInt(query_terms.len));
     }
-    
+
     // Estimate cost for full-text index search
     fn estimateFullTextIndexCost(
         self: *IndexOptimizer,
@@ -1224,14 +1200,14 @@ pub const FullTextOptimizer = struct {
                 return log_size + term_cost + ranking_cost;
             }
         }
-        
+
         // Fallback heuristic: Full-text search is efficient with proper indexing
         const base_cost = 15.0; // Base cost for full-text operations
         const term_factor = @as(f64, @floatFromInt(query_terms.len)) * 2.0;
         const result_factor = @as(f64, @floatFromInt(max_results)) * 0.1;
         return base_cost + term_factor + result_factor;
     }
-    
+
     // Estimate cost for sequential scan with full-text processing
     fn estimateSequentialFullTextScanCost(
         self: *IndexOptimizer,
@@ -1243,7 +1219,7 @@ pub const FullTextOptimizer = struct {
         const text_processing_overhead = @as(f64, @floatFromInt(query_terms.len)) * 5.0;
         return base_sequential_cost + text_processing_overhead;
     }
-    
+
     // Create EXPLAIN output for full-text index scan
     fn createFullTextIndexExplain(
         self: *IndexOptimizer,
@@ -1253,16 +1229,13 @@ pub const FullTextOptimizer = struct {
         query_terms: []const []const u8,
         analyzer: []const u8,
     ) ?graph_common.ExplainInfo {
+        _ = rows; // Suppress unused parameter warning
         const operation = self.allocator.dupe(u8, "Full-Text Index Search") catch return null;
-        
+
         var details_buf: [512]u8 = undefined;
-        const details = std.fmt.bufPrint(
-            &details_buf,
-            "BM25 scoring on {d} terms using {s} analyzer with inverted index",
-            .{ query_terms.len, analyzer }
-        ) catch return null;
+        const details = std.fmt.bufPrint(&details_buf, "BM25 scoring on {d} terms using {s} analyzer with inverted index", .{ query_terms.len, analyzer }) catch return null;
         const details_owned = self.allocator.dupe(u8, details) catch return null;
-        
+
         var cost_components = self.allocator.alloc(graph_common.CostComponent, 3) catch return null;
         cost_components[0] = graph_common.CostComponent{
             .component = self.allocator.dupe(u8, "Term Lookup") catch return null,
@@ -1279,15 +1252,11 @@ pub const FullTextOptimizer = struct {
             .cost = cost * 0.2,
             .description = self.allocator.dupe(u8, "Sort by relevance score") catch return null,
         };
-        
+
         // Index usage info
         var reason_buf: [256]u8 = undefined;
-        const reason = std.fmt.bufPrint(
-            &reason_buf,
-            "Chosen for full-text search with {d} query terms and selectivity {d:.4}",
-            .{ query_terms.len, index_info.selectivity }
-        ) catch return null;
-        
+        const reason = std.fmt.bufPrint(&reason_buf, "Chosen for full-text search with {d} query terms and selectivity {d:.4}", .{ query_terms.len, index_info.selectivity }) catch return null;
+
         const index_usage = graph_common.IndexUsageInfo{
             .index_name = index_info.name,
             .index_type = self.allocator.dupe(u8, @tagName(index_info.index_type)) catch return null,
@@ -1295,7 +1264,7 @@ pub const FullTextOptimizer = struct {
             .selectivity = index_info.selectivity,
             .reason = self.allocator.dupe(u8, reason) catch return null,
         };
-        
+
         return graph_common.ExplainInfo{
             .operation = operation,
             .details = details_owned,
@@ -1303,7 +1272,7 @@ pub const FullTextOptimizer = struct {
             .index_usage = index_usage,
         };
     }
-    
+
     // Create EXPLAIN output for sequential full-text scan
     fn createSequentialFullTextScanExplain(
         self: *IndexOptimizer,
@@ -1312,16 +1281,13 @@ pub const FullTextOptimizer = struct {
         rows: u64,
         query_terms: []const []const u8,
     ) ?graph_common.ExplainInfo {
+        _ = rows; // Suppress unused parameter warning
         const operation = self.allocator.dupe(u8, "Sequential Full-Text Scan") catch return null;
-        
+
         var details_buf: [512]u8 = undefined;
-        const details = std.fmt.bufPrint(
-            &details_buf,
-            "Scanning all nodes with labels {any} and performing full-text matching on {d} terms",
-            .{ labels, query_terms.len }
-        ) catch return null;
+        const details = std.fmt.bufPrint(&details_buf, "Scanning all nodes with labels {any} and performing full-text matching on {d} terms", .{ labels, query_terms.len }) catch return null;
         const details_owned = self.allocator.dupe(u8, details) catch return null;
-        
+
         var cost_components = self.allocator.alloc(graph_common.CostComponent, 3) catch return null;
         cost_components[0] = graph_common.CostComponent{
             .component = self.allocator.dupe(u8, "Full Table Scan") catch return null,
@@ -1338,7 +1304,7 @@ pub const FullTextOptimizer = struct {
             .cost = cost * 0.2,
             .description = self.allocator.dupe(u8, "Relevance score computation") catch return null,
         };
-        
+
         return graph_common.ExplainInfo{
             .operation = operation,
             .details = details_owned,
@@ -1346,7 +1312,7 @@ pub const FullTextOptimizer = struct {
             .index_usage = null,
         };
     }
-    
+
     pub const FullTextSearchOptions = struct {
         max_results: u32 = 10,
         analyzer: []const u8 = "standard",

@@ -161,6 +161,10 @@ fn tagName(st: ast.Statement) []const u8 {
         .DropIndex => "DropIndex",
         .Backup => "Backup",
         .Restore => "Restore",
+        .CreateSchema => "CreateSchema",
+        .DropSchema => "DropSchema",
+        .CreateGraph => "CreateGraph",
+        .DropGraph => "DropGraph",
         .UseGraph => "UseGraph",
     };
 }

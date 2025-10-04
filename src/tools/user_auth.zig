@@ -2,6 +2,8 @@ const std = @import("std");
 const auth = @import("auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
+const user_storage = @import("user_storage");
+const storage_interface = @import("interface");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -54,11 +56,38 @@ pub fn main() !void {
         },
     };
 
+    // Create a mock page manager for user storage
+    // Note: This is a temporary mock implementation for CLI tool
+    var mock_page_mgr = struct {
+        const MockPageManager = @This();
+
+        pub fn allocatePage(self: *MockPageManager) !u32 {
+            _ = self;
+            return 1;
+        }
+
+        pub fn getPage(self: *MockPageManager, page_id: u32) ![]u8 {
+            _ = self;
+            _ = page_id;
+            return &[_]u8{};
+        }
+
+        pub fn flushPage(self: *MockPageManager, page_id: u32) !void {
+            _ = self;
+            _ = page_id;
+        }
+    }{};
+
+    // Create user storage backend
+    var user_storage_backend = try user_storage.UserStorageBackend.init(allocator, @ptrCast(@alignCast(&mock_page_mgr)));
+    defer user_storage_backend.deinit();
+
     var mgr = try user_manager.UserManager.init(
         allocator,
         &security_manager,
         &rls_engine,
         storage_backend,
+        &user_storage_backend,
     );
     defer mgr.deinit();
 

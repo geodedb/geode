@@ -102,24 +102,24 @@ echo
 
 run_test "Basic count(n)" \
     "MATCH (n) RETURN count(n)" \
-    '"col":[0-9]'
+    '"count(n)":\s*[0-9]'
 
 run_test "Count returns number not null" \
     "MATCH (n) RETURN count(n)" \
-    '"col":null' \
+    '"count(n)":\s*null' \
     "negative"
 
 run_test "Count with label filter" \
     "MATCH (n:Person) RETURN count(n)" \
-    '"col":[0-9]'
+    '"count(n)":\s*[0-9]'
 
 run_test "Count edges" \
     "MATCH (a)-[r]->(b) RETURN count(r)" \
-    '"col":[0-9]'
+    '"count(r)":\s*[0-9]'
 
 run_test "Count with WHERE clause" \
     "MATCH (n) WHERE n.id > 0 RETURN count(n)" \
-    '"col":[0-9]'
+    '"count(n)":\s*[0-9]'
 
 run_test "Mixed aggregation columns" \
     "MATCH (n) RETURN n.id, count(n)" \
@@ -127,7 +127,7 @@ run_test "Mixed aggregation columns" \
 
 run_test "Count returns single row" \
     "MATCH (n) RETURN count(n)" \
-    '"rows":\[{.*}\]'
+    '"rows":\[\[.*\]\]'
 
 echo
 echo "=== REGRESSION TEST 3: Node Creation Safety ==="

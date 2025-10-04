@@ -110,7 +110,7 @@ test "IndexOptimizer: executeOptimizedScan sequential" {
 
     const labels = [_][]const u8{"Person"};
     const prop_val = graph_common.PropertyValue{ .String = "Alice" };
-    
+
     const plan = graph_common.ScanPlan{
         .type = .sequential,
         .estimated_cost = 100.0,
@@ -148,7 +148,7 @@ test "IndexOptimizer: executeOptimizedScan index" {
 
     const labels = [_][]const u8{"Person"};
     const prop_val = graph_common.PropertyValue{ .String = "Alice" };
-    
+
     const index_info = graph_common.IndexInfo{
         .name = "Person_name_idx",
         .label = "Person",
@@ -182,7 +182,7 @@ test "IndexOptimizer: cost estimation comparison" {
     var optimizer = IndexOptimizer.init(allocator, &mock_index_manager);
 
     const labels = [_][]const u8{"Person"};
-    
+
     // Test sequential scan cost
     const seq_cost = optimizer.estimateSequentialScanCost(&labels);
     try testing.expect(seq_cost == 100.0);
@@ -197,7 +197,7 @@ test "IndexOptimizer: cost estimation comparison" {
     };
     const prop_val = graph_common.PropertyValue{ .String = "test" };
     const index_cost = optimizer.estimateIndexScanCost(index_info, prop_val);
-    
+
     try testing.expect(index_cost < seq_cost); // Index should be cheaper
     try testing.expect(index_cost == 1.0); // 10.0 * 0.1 selectivity
 }
@@ -216,7 +216,7 @@ test "IndexOptimizer: property value comparison" {
     const str1 = graph_common.PropertyValue{ .String = "Alice" };
     const str2 = graph_common.PropertyValue{ .String = "Alice" };
     const str3 = graph_common.PropertyValue{ .String = "Bob" };
-    
+
     try testing.expect(optimizer.propertyValuesEqual(str1, str2));
     try testing.expect(!optimizer.propertyValuesEqual(str1, str3));
 
@@ -224,14 +224,14 @@ test "IndexOptimizer: property value comparison" {
     const int1 = graph_common.PropertyValue{ .Int = 42 };
     const int2 = graph_common.PropertyValue{ .Int = 42 };
     const int3 = graph_common.PropertyValue{ .Int = 24 };
-    
+
     try testing.expect(optimizer.propertyValuesEqual(int1, int2));
     try testing.expect(!optimizer.propertyValuesEqual(int1, int3));
 
     // Test null comparison
     const null1 = graph_common.PropertyValue.Null;
     const null2 = graph_common.PropertyValue.Null;
-    
+
     try testing.expect(optimizer.propertyValuesEqual(null1, null2));
     try testing.expect(!optimizer.propertyValuesEqual(null1, str1));
 }

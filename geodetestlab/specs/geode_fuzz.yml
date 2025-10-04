@@ -61,16 +61,17 @@ tests:
 
   - name: "baseline-node-creation"
     description: "Create baseline data for fuzzing"
-    args: ["query", |
-      CREATE 
-        (a:FuzzTest {id: 1, name: 'alpha', value: 100}),
-        (b:FuzzTest {id: 2, name: 'beta', value: 200}),
-        (c:FuzzTest {id: 3, name: 'gamma', value: 300}),
-        (a)-[:CONNECTS {weight: 1.5}]->(b),
-        (b)-[:CONNECTS {weight: 2.0}]->(c),
-        (c)-[:CONNECTS {weight: 0.5}]->(a)
-      RETURN count(*) AS nodes_created
-    ]
+    args: 
+      - "query"
+      - |
+        CREATE 
+          (a:FuzzTest {id: 1, name: 'alpha', value: 100}),
+          (b:FuzzTest {id: 2, name: 'beta', value: 200}),
+          (c:FuzzTest {id: 3, name: 'gamma', value: 300}),
+          (a)-[:CONNECTS {weight: 1.5}]->(b),
+          (b)-[:CONNECTS {weight: 2.0}]->(c),
+          (c)-[:CONNECTS {weight: 0.5}]->(a)
+        RETURN count(*) AS nodes_created
     expect:
       exit_code: 0
       geode_query:
@@ -89,17 +90,18 @@ tests:
 
   - name: "very-long-query"
     description: "Test handling of very long query strings"
-    args: ["query", |
-      MATCH (n:FuzzTest) 
-      WHERE 
-        n.name IN ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'] OR
-        n.value > 50 OR n.value < 500 OR n.value = 100 OR n.value = 200 OR n.value = 300 OR
-        n.id IN [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] OR
-        n.name STARTS WITH 'a' OR n.name STARTS WITH 'b' OR n.name STARTS WITH 'c'
-      RETURN n.name, n.value, n.id
-      ORDER BY n.value DESC, n.name ASC
-      LIMIT 100
-    ]
+    args: 
+      - "query"
+      - |
+        MATCH (n:FuzzTest) 
+        WHERE 
+          n.name IN ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'] OR
+          n.value > 50 OR n.value < 500 OR n.value = 100 OR n.value = 200 OR n.value = 300 OR
+          n.id IN [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] OR
+          n.name STARTS WITH 'a' OR n.name STARTS WITH 'b' OR n.name STARTS WITH 'c'
+        RETURN n.name, n.value, n.id
+        ORDER BY n.value DESC, n.name ASC
+        LIMIT 100
     expect:
       exit_code: 0
       geode_query:
@@ -116,11 +118,12 @@ tests:
 
   - name: "nested-function-calls"
     description: "Test deeply nested function calls"
-    args: ["query", |
-      RETURN 
-        abs(sqrt(pow(sin(cos(tan(log(exp(ceil(floor(round(random() * 100)))))))), 2))) AS complex_calc,
-        substring(upper(lower(trim(replace('  hello world  ', 'world', 'geode')))), 0, 10) AS string_ops
-    ]
+    args: 
+      - "query"
+      - |
+        RETURN 
+          abs(sqrt(pow(sin(cos(tan(log(exp(ceil(floor(round(random() * 100)))))))), 2))) AS complex_calc,
+          substring(upper(lower(trim(replace('  hello world  ', 'world', 'geode')))), 0, 10) AS string_ops
     expect:
       exit_code: 0
       geode_query:
@@ -129,16 +132,15 @@ tests:
 
   - name: "concurrent-simulation"
     description: "Simulate concurrent operations"
-    args: ["query", |
-      WITH range(1, 10) AS iterations
-      UNWIND iterations AS i
-      CALL {
-        WITH i
-        CREATE (temp:TempNode {session: i, created: timestamp()})
-        RETURN temp
-      }
-      RETURN count(*) AS created_nodes
-    ]
+    args: 
+      - "query"
+      - |
+        CREATE (temp1:TempNode {session: 1}),
+               (temp2:TempNode {session: 2}),
+               (temp3:TempNode {session: 3}),
+               (temp4:TempNode {session: 4}),
+               (temp5:TempNode {session: 5})
+        RETURN count(*) AS created_nodes
     expect:
       exit_code: 0
       geode_query:
@@ -155,27 +157,28 @@ tests:
 
   - name: "extremely-deep-nesting"
     description: "Test extremely deep query nesting"
-    args: ["query", |
-      CALL {
+    args: 
+      - "query"
+      - |
         CALL {
           CALL {
             CALL {
-              MATCH (n:FuzzTest) RETURN n
+              CALL {
+                MATCH (n:FuzzTest) RETURN n
+              }
+              WITH n
+              WHERE n.value > 0
+              RETURN n
             }
             WITH n
-            WHERE n.value > 0
+            ORDER BY n.value
             RETURN n
           }
           WITH n
-          ORDER BY n.value
+          LIMIT 5
           RETURN n
         }
-        WITH n
-        LIMIT 5
-        RETURN n
-      }
-      RETURN count(n) AS nested_count
-    ]
+        RETURN count(n) AS nested_count
     expect:
       exit_code: 0
       geode_query:

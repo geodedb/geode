@@ -303,31 +303,31 @@ pub fn executeWith(
 ) ![]Binding {
     _ = where_clause; // TODO: implement WHERE filtering on WITH results
     _ = graph;
-    
+
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
-    
+
     // Process each input binding and transform according to WITH items
     for (input_bindings) |input_binding| {
         var new_binding = Binding.init(allocator);
-        
+
         // Process each WITH item to create new variable bindings
         for (with_clause.items) |item| {
             const alias = item.alias orelse getExpressionName(item.expr);
-            
+
             // Evaluate the expression in the context of the current binding
             const value = try evaluateExpressionInBinding(allocator, item.expr, &input_binding);
             try new_binding.vars.put(alias, value);
-            
+
             // Set the main binding value to the first WITH item for compatibility
             if (new_binding.value == .Null) {
                 new_binding.name = alias;
                 new_binding.value = value;
             }
         }
-        
+
         try results.append(allocator, new_binding);
     }
-    
+
     return results.toOwnedSlice(allocator);
 }
 
@@ -335,7 +335,15 @@ pub fn executeWith(
 fn getExpressionName(expr: ast.Expr) []const u8 {
     return switch (expr) {
         .Ident => |ident| ident.orig,
-        .PropertyAccess => |prop| prop.property,
+        .PropertyAccess => |prop| blk: {
+            // Return full property access like "n.name" instead of just "name"
+            // Note: This creates a string that should be valid for the duration of the query
+            // In practice, this will work since both object and property are from the AST
+            // which lives for the query duration
+            const allocator = std.heap.page_allocator; // Use page allocator for simplicity
+            const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{prop.object, prop.property}) catch "prop";
+            break :blk combined;
+        },
         .Member => |member| member.field,
         .Call => |call| switch (call.callee.*) {
             .Ident => |ident| ident.orig,
@@ -352,7 +360,7 @@ fn evaluateExpressionInBinding(
     binding: *const Binding,
 ) !BindingValue {
     _ = allocator;
-    
+
     return switch (expr) {
         .Ident => |ident| binding.vars.get(ident.orig) orelse .Null,
         .PropertyAccess => |prop| blk: {
@@ -385,9 +393,7 @@ fn evaluateExpressionInBinding(
 
 // Convert bindings to JSON format
 pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, ret_items: []const ast.ReturnItem, graph: *const GraphStorage) ![]u8 {
-    _ = graph;
-    _ = ret_items;
-
+    _ = graph; // Graph parameter not needed for current implementation
     var result = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
     defer result.deinit(allocator);
 
@@ -397,63 +403,77 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
         if (i > 0) try result.appendSlice(allocator, ", ");
 
         try result.append(allocator, '{');
-        try result.appendSlice(allocator, "\"");
-        try result.appendSlice(allocator, binding.name);
-        try result.appendSlice(allocator, "\": ");
-
-        // Simple JSON representation of the binding value
-        switch (binding.value) {
-            .Node => |node| {
-                try result.append(allocator, '{');
-                try result.appendSlice(allocator, "\"id\": ");
-                try result.writer(allocator).print("{d}", .{node.id});
-                try result.appendSlice(allocator, ", \"labels\": [");
-                for (node.labels, 0..) |label, j| {
-                    if (j > 0) try result.appendSlice(allocator, ", ");
-                    try result.append(allocator, '"');
-                    try result.appendSlice(allocator, label);
-                    try result.append(allocator, '"');
-                }
-                try result.appendSlice(allocator, "]}");
-            },
-            .Edge => |edge| {
-                try result.append(allocator, '{');
-                try result.appendSlice(allocator, "\"id\": ");
-                try result.writer(allocator).print("{d}", .{edge.id});
-                try result.appendSlice(allocator, ", \"source\": ");
-                try result.writer(allocator).print("{d}", .{edge.source});
-                try result.appendSlice(allocator, ", \"target\": ");
-                try result.writer(allocator).print("{d}", .{edge.target});
-                try result.append(allocator, '}');
-            },
-            .Property => |prop| {
-                switch (prop) {
-                    .String => |s| {
+        
+        // Process each return item to get the correct property values
+        for (ret_items, 0..) |ret_item, j| {
+            if (j > 0) try result.appendSlice(allocator, ", ");
+            
+            // Get the column name (alias or expression name)
+            const alias = ret_item.alias orelse getExpressionName(ret_item.expr);
+            
+            try result.append(allocator, '"');
+            try result.appendSlice(allocator, alias);
+            try result.appendSlice(allocator, "\": ");
+            
+            // Evaluate the return expression in the binding context
+            const value = try evaluateExpressionInBinding(allocator, ret_item.expr, &binding);
+            
+            // Serialize the evaluated value
+            switch (value) {
+                .Property => |prop| {
+                    switch (prop) {
+                        .String => |s| {
+                            try result.append(allocator, '"');
+                            try result.appendSlice(allocator, s);
+                            try result.append(allocator, '"');
+                        },
+                        .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                        .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
+                        .Null => try result.appendSlice(allocator, "null"),
+                        .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                    }
+                },
+                .Value => |prop| {
+                    switch (prop) {
+                        .String => |s| {
+                            try result.append(allocator, '"');
+                            try result.appendSlice(allocator, s);
+                            try result.append(allocator, '"');
+                        },
+                        .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                        .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
+                        .Null => try result.appendSlice(allocator, "null"),
+                        .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                    }
+                },
+                .Node => |node| {
+                    // For nodes that weren't converted to properties, show basic info
+                    try result.append(allocator, '{');
+                    try result.appendSlice(allocator, "\"id\": ");
+                    try result.writer(allocator).print("{d}", .{node.id});
+                    try result.appendSlice(allocator, ", \"labels\": [");
+                    for (node.labels, 0..) |label, k| {
+                        if (k > 0) try result.appendSlice(allocator, ", ");
                         try result.append(allocator, '"');
-                        try result.appendSlice(allocator, s);
+                        try result.appendSlice(allocator, label);
                         try result.append(allocator, '"');
-                    },
-                    .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                    .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                    .Null => try result.appendSlice(allocator, "null"),
-                    .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                }
-            },
-            .Value => |prop| {
-                switch (prop) {
-                    .String => |s| {
-                        try result.append(allocator, '"');
-                        try result.appendSlice(allocator, s);
-                        try result.append(allocator, '"');
-                    },
-                    .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                    .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                    .Null => try result.appendSlice(allocator, "null"),
-                    .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                }
-            },
-            .Null => try result.appendSlice(allocator, "null"),
-            .Path => try result.appendSlice(allocator, "[]"),
+                    }
+                    try result.appendSlice(allocator, "]}");
+                },
+                .Edge => |edge| {
+                    // For edges that weren't converted to properties, show basic info
+                    try result.append(allocator, '{');
+                    try result.appendSlice(allocator, "\"id\": ");
+                    try result.writer(allocator).print("{d}", .{edge.id});
+                    try result.appendSlice(allocator, ", \"source\": ");
+                    try result.writer(allocator).print("{d}", .{edge.source});
+                    try result.appendSlice(allocator, ", \"target\": ");
+                    try result.writer(allocator).print("{d}", .{edge.target});
+                    try result.append(allocator, '}');
+                },
+                .Null => try result.appendSlice(allocator, "null"),
+                .Path => try result.appendSlice(allocator, "[]"),
+            }
         }
 
         try result.append(allocator, '}');

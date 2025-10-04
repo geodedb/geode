@@ -39,20 +39,20 @@ const BenchmarkIndexManager = struct {
 // Create a test graph with many nodes
 fn createBenchmarkGraph(allocator: std.mem.Allocator, node_count: usize) !graph_common.GraphStorage {
     var graph = graph_common.GraphStorage.init(allocator);
-    
+
     // Add nodes with varying properties
     var i: usize = 0;
     while (i < node_count) : (i += 1) {
         try graph.addNode(allocator, i, &[_][]const u8{"Person"});
-        
+
         // Add name property with pattern
         const name = if (i % 10 == 0) "Alice" else "Other";
         try graph.setNodeProperty(i, "name", .{ .String = name });
-        
+
         // Add age property
         try graph.setNodeProperty(i, "age", .{ .Int = @intCast(20 + (i % 50)) });
     }
-    
+
     return graph;
 }
 
@@ -130,7 +130,7 @@ test "BenchmarkCANARY_REQ_GQL_016_IndexOptimizerPerformance" {
     // Index optimization should make correct decisions
     try testing.expect(plan_seq.type == .sequential);
     try testing.expect(plan_idx.type == .index);
-    
+
     // Index should have lower estimated cost
     try testing.expect(plan_idx.estimated_cost < plan_seq.estimated_cost);
 }
@@ -141,16 +141,16 @@ test "BenchmarkCANARY_REQ_GQL_016_IndexOptimizerScalability" {
     const allocator = arena.allocator();
 
     const test_sizes = [_]usize{ 100, 500, 1000, 2000 };
-    
+
     std.debug.print("\nIndexOptimizer Scalability Test:\n");
-    
+
     for (test_sizes) |size| {
         var graph = try createBenchmarkGraph(allocator, size);
         defer graph.deinit();
 
         var index_manager = BenchmarkIndexManager.init(allocator);
         defer index_manager.deinit();
-        
+
         var optimizer = IndexOptimizer.init(allocator, &index_manager);
 
         const labels = [_][]const u8{"Person"};
@@ -160,15 +160,15 @@ test "BenchmarkCANARY_REQ_GQL_016_IndexOptimizerScalability" {
         const start = std.time.nanoTimestamp();
         const plan = optimizer.optimizeNodeScan(&labels, "n", "name", prop_val);
         const end = std.time.nanoTimestamp();
-        
+
         const optimization_time = end - start;
-        
+
         std.debug.print("  {d} nodes: optimization took {d} ns\n", .{ size, optimization_time });
-        
+
         // Verify optimization remains consistent
         try testing.expect(plan.type == .sequential);
         try testing.expect(plan.estimated_cost > 0);
-        
+
         // Optimization time should remain reasonable (< 1ms even for large graphs)
         try testing.expect(optimization_time < 1_000_000); // 1ms in nanoseconds
     }
@@ -185,7 +185,7 @@ test "BenchmarkCANARY_REQ_GQL_016_IndexOptimizerCostAccuracy" {
     var index_manager = BenchmarkIndexManager.init(allocator);
     defer index_manager.deinit();
     try index_manager.property_indexes.put("Person_name_idx", {});
-    
+
     var optimizer = IndexOptimizer.init(allocator, &index_manager);
 
     const labels = [_][]const u8{"Person"};
@@ -204,11 +204,11 @@ test "BenchmarkCANARY_REQ_GQL_016_IndexOptimizerCostAccuracy" {
     // Verify cost model sanity
     try testing.expect(plan_idx.estimated_cost < plan_seq.estimated_cost);
     try testing.expect(plan_idx.estimated_rows < plan_seq.estimated_rows);
-    
+
     // Cost should be proportional to estimated rows
     const seq_cost_per_row = plan_seq.estimated_cost / @as(f64, @floatFromInt(plan_seq.estimated_rows));
     const idx_cost_per_row = plan_idx.estimated_cost / @as(f64, @floatFromInt(plan_idx.estimated_rows));
-    
+
     // Index should have lower cost per row due to efficiency
     try testing.expect(idx_cost_per_row <= seq_cost_per_row);
 }

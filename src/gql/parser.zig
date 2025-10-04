@@ -1815,6 +1815,19 @@ pub const Parser = struct {
             return self.parseCreateIndex();
         }
 
+        // Check if this is CREATE SCHEMA
+        if (self.cur.kind == .SCHEMA) {
+            return self.parseCreateSchema();
+        }
+
+        // Check if this is CREATE GRAPH or CREATE PROPERTY GRAPH
+        if (self.cur.kind == .GRAPH or 
+            self.cur.kind == .PROPERTY or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
+        {
+            return self.parseCreateGraph();
+        }
+
         // Otherwise, parse the pattern to create
         const pattern = try self.parseGraphPattern();
 
@@ -2153,7 +2166,7 @@ pub const Parser = struct {
         } };
     }
 
-    // Parse DROP statement (DROP INDEX or future DROP types)
+    // Parse DROP statement (DROP INDEX, DROP SCHEMA, DROP GRAPH, etc.)
     fn parseDropStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.DROP);
 
@@ -2162,6 +2175,19 @@ pub const Parser = struct {
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")))
         {
             return self.parseDropIndex();
+        }
+
+        // Check if this is DROP SCHEMA
+        if (self.cur.kind == .SCHEMA) {
+            return self.parseDropSchema();
+        }
+
+        // Check if this is DROP GRAPH or DROP PROPERTY GRAPH
+        if (self.cur.kind == .GRAPH or
+            self.cur.kind == .PROPERTY or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
+        {
+            return self.parseDropGraph();
         }
 
         // Future: handle DROP CONSTRAINT, DROP DATABASE, etc.
@@ -2199,6 +2225,150 @@ pub const Parser = struct {
         return .{ .DropIndex = .{
             .name = name,
             .if_exists = if_exists,
+        } };
+    }
+
+    // Parse CREATE SCHEMA statement
+    fn parseCreateSchema(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.SCHEMA);
+
+        // Optional IF NOT EXISTS
+        var if_not_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .NOT) {
+                self.advance();
+                if (self.cur.kind == .EXISTS) {
+                    self.advance();
+                    if_not_exists = true;
+                } else {
+                    return error.UnexpectedToken;
+                }
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Schema name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        return .{ .CreateSchema = .{
+            .name = name,
+            .if_not_exists = if_not_exists,
+        } };
+    }
+
+    // Parse CREATE GRAPH statement
+    fn parseCreateGraph(self: *Parser) ParserError!ast.Statement {
+        var property_graph = true;
+        const or_replace = false;
+
+        // Check for PROPERTY keyword
+        if (self.cur.kind == .PROPERTY or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+            self.advance();
+            property_graph = true;
+        }
+
+        // Expect GRAPH keyword
+        if (self.cur.kind != .GRAPH) return error.UnexpectedToken;
+        self.advance();
+
+        // Optional IF NOT EXISTS
+        var if_not_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .NOT) {
+                self.advance();
+                if (self.cur.kind == .EXISTS) {
+                    self.advance();
+                    if_not_exists = true;
+                } else {
+                    return error.UnexpectedToken;
+                }
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Graph name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        return .{ .CreateGraph = .{
+            .name = name,
+            .if_not_exists = if_not_exists,
+            .or_replace = or_replace,
+            .property_graph = property_graph,
+        } };
+    }
+
+    // Parse DROP SCHEMA statement
+    fn parseDropSchema(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.SCHEMA);
+
+        // Optional IF EXISTS
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .EXISTS) {
+                self.advance();
+                if_exists = true;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Schema name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        return .{ .DropSchema = .{
+            .name = name,
+            .if_exists = if_exists,
+        } };
+    }
+
+    // Parse DROP GRAPH statement
+    fn parseDropGraph(self: *Parser) ParserError!ast.Statement {
+        var property_graph = true;
+
+        // Check for PROPERTY keyword
+        if (self.cur.kind == .PROPERTY or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+            self.advance();
+            property_graph = true;
+        }
+
+        // Expect GRAPH keyword
+        if (self.cur.kind != .GRAPH) return error.UnexpectedToken;
+        self.advance();
+
+        // Optional IF EXISTS
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .EXISTS) {
+                self.advance();
+                if_exists = true;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Graph name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        return .{ .DropGraph = .{
+            .name = name,
+            .if_exists = if_exists,
+            .property_graph = property_graph,
         } };
     }
 

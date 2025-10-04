@@ -75,6 +75,7 @@
             pkgs.systemd
             pkgs.prometheus
             pkgs.grafana
+            pkgs.zig-zlint
           ];
 
           # Documentation packages
@@ -224,6 +225,7 @@
                   
                   # Python environment for geodetestlab
                   pythonWithPackages
+                  zig-zlint
                   
                   # Platform specific
                   (if pkgs.stdenv.isLinux then glibc else null)

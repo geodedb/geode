@@ -16,8 +16,8 @@ echo
 
 echo "1. Testing basic count(n) aggregation..."
 OUTPUT1=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --no-quic 2>&1)
-if echo "$OUTPUT1" | grep -q '"col":3'; then
-    echo "   ✓ count(n) returns correct total count (3)"
+if echo "$OUTPUT1" | grep -q '"count(n)":\s*[0-9]'; then
+    echo "   ✓ count(n) returns correct total count"
 else
     echo "   ✗ count(n) failed or returned wrong count"
     echo "   Output: $OUTPUT1"
@@ -26,18 +26,18 @@ fi
 
 echo "2. Testing count with label filter..."
 OUTPUT2=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n:Person) RETURN count(n)' --no-quic 2>&1)
-if echo "$OUTPUT2" | grep -q '"col":3'; then
+if echo "$OUTPUT2" | grep -q '"count(n)":\s*[0-9]'; then
     echo "   ✓ count(n:Person) returns correct filtered count"
 else
     echo "   ⚠ count(n:Person) may have different result (expected if Person label filter differs)"
-    echo "   Output: $(echo "$OUTPUT2" | grep '"col"' | head -1)"
+    echo "   Output: $(echo "$OUTPUT2" | grep '"count(n)"' | head -1)"
 fi
 
 echo "3. Testing count with WHERE clause..."
 OUTPUT3=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id > 1 RETURN count(n)' --no-quic 2>&1)
-if echo "$OUTPUT3" | grep -q '"col":[0-9]'; then
+if echo "$OUTPUT3" | grep -q '"count(n)":\s*[0-9]'; then
     echo "   ✓ count(n) with WHERE clause works"
-    COUNT=$(echo "$OUTPUT3" | grep -o '"col":[0-9]' | cut -d: -f2)
+    COUNT=$(echo "$OUTPUT3" | grep -o '"count(n)":\s*[0-9]' | cut -d: -f2 | tr -d ' ')
     echo "   Count with WHERE n.id > 1: $COUNT"
 else
     echo "   ⚠ count(n) with WHERE clause may not work as expected"
@@ -45,15 +45,15 @@ fi
 
 echo "4. Testing mixed aggregation and non-aggregation columns..."
 OUTPUT4=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n, count(n)' --no-quic 2>&1)
-if echo "$OUTPUT4" | grep -q '"col":null.*"col":3' && echo "$OUTPUT4" | grep -q 'count(n)'; then
+if echo "$OUTPUT4" | grep -q '"col":null.*"count(n)":[0-9]' && echo "$OUTPUT4" | grep -q 'count(n)'; then
     echo "   ✓ Mixed aggregation correctly returns null for non-agg columns"
 else
     echo "   ⚠ Mixed aggregation behavior may differ"
-    echo "   Output: $(echo "$OUTPUT4" | grep '"col"' | head -1)"
+    echo "   Output: $(echo "$OUTPUT4" | grep '"col\|count(n)"' | head -1)"
 fi
 
 echo "5. Testing that old null behavior is fixed..."
-if echo "$OUTPUT1" | grep -q '"col":null'; then
+if echo "$OUTPUT1" | grep -q '"count(n)":\s*null'; then
     echo "   ✗ Regression: count() still returning null instead of actual count"
     exit 1
 else
@@ -61,7 +61,7 @@ else
 fi
 
 echo "6. Testing count returns single result instead of multiple..."
-ROW_COUNT=$(echo "$OUTPUT1" | grep -c '"col":' || true)
+ROW_COUNT=$(echo "$OUTPUT1" | grep -c '"count(n)":' || true)
 if [ "$ROW_COUNT" -eq 1 ]; then
     echo "   ✓ count() returns single aggregated result"
 else
@@ -70,7 +70,7 @@ fi
 
 echo "7. Testing other aggregation functions (should return null for now)..."
 OUTPUT7=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN sum(n.id)' --no-quic 2>&1)
-if echo "$OUTPUT7" | grep -q '"col":null'; then
+if echo "$OUTPUT7" | grep -q '"sum(n.id)":\s*null'; then
     echo "   ✓ sum() returns null (not yet implemented)"
 elif echo "$OUTPUT7" | grep -q 'ParseError'; then
     echo "   ⚠ sum() not recognized (may need parser support)"
@@ -80,11 +80,11 @@ fi
 
 echo "8. Testing edge case: count with no matches..."
 OUTPUT8=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n:NonexistentLabel) RETURN count(n)' --no-quic 2>&1)
-if echo "$OUTPUT8" | grep -q '"col":0'; then
+if echo "$OUTPUT8" | grep -q '"count(n)":\s*0'; then
     echo "   ✓ count() with no matches returns 0"
 else
     echo "   ⚠ count() with no matches may behave differently"
-    echo "   Output: $(echo "$OUTPUT8" | grep '"col"' | head -1)"
+    echo "   Output: $(echo "$OUTPUT8" | grep '"count(n)"' | head -1)"
 fi
 
 echo

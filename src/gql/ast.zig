@@ -32,6 +32,11 @@ pub const Statement = union(enum) {
     // Backup operations
     Backup: BackupStatement,
     Restore: RestoreStatement,
+    // Catalog operations
+    CreateSchema: CreateSchemaStatement,
+    DropSchema: DropSchemaStatement,
+    CreateGraph: CreateGraphStatement,
+    DropGraph: DropGraphStatement,
 };
 
 pub const Query = struct {
@@ -282,4 +287,28 @@ pub const RestoreStatement = struct {
     path: []const u8,
     timestamp: ?[]const u8 = null,
     verify_only: bool = false,
+};
+
+// Catalog operation statements
+pub const CreateSchemaStatement = struct {
+    name: []const u8,
+    if_not_exists: bool = false,
+};
+
+pub const DropSchemaStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+};
+
+pub const CreateGraphStatement = struct {
+    name: []const u8,
+    if_not_exists: bool = false,
+    or_replace: bool = false,
+    property_graph: bool = true, // GQL property graphs are default
+};
+
+pub const DropGraphStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+    property_graph: bool = true, // GQL property graphs are default
 };

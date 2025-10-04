@@ -3,9 +3,9 @@ const Allocator = std.mem.Allocator;
 const auth = @import("auth");
 const rls = @import("rls");
 const storage = @import("interface");
-const user_storage = @import("../storage/user_storage.zig");
+const user_storage = @import("user_storage");
 
-// User Management CLI and API  
+// User Management CLI and API
 pub const UserManager = struct {
     allocator: Allocator,
     security_manager: *auth.SecurityManager,
@@ -521,7 +521,7 @@ pub const UserManager = struct {
             user.username,
             user.email,
             user.password_hash,
-            user.salt orelse "",
+            "", // Salt is included in Argon2id hash
         );
     }
 
@@ -551,7 +551,7 @@ pub const UserManager = struct {
             .delete => 2,
             .admin => 3,
         };
-        
+
         try self.user_storage.persistPermission(
             permission.id,
             permission.name,
@@ -563,22 +563,24 @@ pub const UserManager = struct {
 
     fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy) !void {
         const operation_byte: u8 = switch (policy.operation) {
-            .SELECT => 0,
-            .INSERT => 1,
-            .UPDATE => 2,
-            .DELETE => 3,
-            .ALL => 4,
+            .select => 0,
+            .insert => 1,
+            .update => 2,
+            .delete => 3,
+            .all => 4,
         };
-        
+
         const audit_level_byte: u8 = switch (policy.audit_level) {
             .none => 0,
-            .denials => 1,
-            .all => 2,
+            .errors_only => 1,
+            .denials => 2,
+            .all_access => 3,
+            .detailed => 4,
         };
-        
+
         const using_clause = if (policy.using_expr) |expr| expr.raw else null;
         const check_clause = if (policy.check_expr) |expr| expr.raw else null;
-        
+
         try self.user_storage.persistPolicy(
             policy.id,
             policy.name,

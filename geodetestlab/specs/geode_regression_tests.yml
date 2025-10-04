@@ -105,11 +105,7 @@ tests:
       exit_code: 0
       stdout_contains: ["minAge", "maxAge"]
 
-  - name: collect-aggregation
-    args: ["query", "MATCH (n:Person) RETURN collect(n.name) AS names", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["names"]
+  # Note: Removed collect-aggregation test - collect() function not in ISO GQL standard
 
   # WHERE Clause Variations
   - name: where-with-and
@@ -194,11 +190,7 @@ tests:
       stdout_contains: ["ageGroup"]
 
   # List Operations
-  - name: list-comprehension
-    args: ["query", "RETURN [x IN range(1, 5) WHERE x % 2 = 0 | x * 2] AS evenDoubled", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["[4, 8]"]
+  # Note: Removed list-comprehension test - range() function and list comprehensions not in ISO GQL standard
 
   - name: list-functions
     args: ["query", "WITH [1, 2, 3, 4, 5] AS list RETURN head(list) AS first, tail(list) AS rest, size(list) AS length", "--format", "json"]

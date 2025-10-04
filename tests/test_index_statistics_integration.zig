@@ -51,7 +51,7 @@ test "TestCANARY_REQ_GQL_016_IndexStatisticsIntegration" {
 
     // Create an index and its corresponding statistics
     try index_manager.addIndex("User", "email", .hash);
-    
+
     // Create statistics for the index
     const properties = [_][]const u8{"email"};
     try stats_manager.createIndexStatistics("User_email_hash_idx", .hash, "User", &properties);
@@ -84,7 +84,7 @@ test "TestCANARY_REQ_GQL_016_IndexStatisticsIntegration" {
     if (plan.explain_info) |explain_info| {
         if (explain_info.index_usage) |usage| {
             try testing.expect(usage.selectivity == 1.0); // Perfect selectivity from statistics
-            
+
             std.debug.print("\nUsing statistics-based selectivity: {d:.3}\n", .{usage.selectivity});
             std.debug.print("Index chosen: {s}\n", .{usage.index_name});
         }
@@ -94,9 +94,9 @@ test "TestCANARY_REQ_GQL_016_IndexStatisticsIntegration" {
     const expected_base_cost = 5.0; // Hash index base cost
     const stats = stats_manager.getIndexStatistics("User_email_hash_idx").?;
     const expected_cost_factor = stats.getEstimatedCostFactor();
-    
+
     std.debug.print("Estimated cost factor from statistics: {d:.3}\n", .{expected_cost_factor});
-    
+
     // Cost should be base_cost * selectivity * cost_factor
     const expected_cost = expected_base_cost * 1.0 * expected_cost_factor;
     try testing.expect(std.math.approxEqAbs(f64, plan.estimated_cost, expected_cost, 0.1));
@@ -113,12 +113,12 @@ test "index statistics collection workflow" {
     // Create statistics for different index types
     const email_props = [_][]const u8{"email"};
     const name_props = [_][]const u8{"name"};
-    
+
     try stats_manager.createIndexStatistics("user_email_hash", .hash, "User", &email_props);
     try stats_manager.createIndexStatistics("user_name_btree", .btree, "User", &name_props);
 
     // Simulate different access patterns
-    
+
     // Hash index: High selectivity, good hit ratio
     stats_manager.recordIndexEntry("user_email_hash", "unique1@example.com", true);
     stats_manager.recordIndexEntry("user_email_hash", "unique2@example.com", true);
@@ -162,10 +162,10 @@ test "index statistics usage analysis" {
 
     // Create indexes with different usage patterns
     const props = [_][]const u8{"test_prop"};
-    
+
     // Unused index
     try stats_manager.createIndexStatistics("unused_index", .btree, "Test", &props);
-    
+
     // Inefficient index
     try stats_manager.createIndexStatistics("inefficient_index", .hash, "Test", &props);
     for (0..10) |i| {

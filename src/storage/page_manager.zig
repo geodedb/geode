@@ -1,5 +1,5 @@
 const std = @import("std");
-const iface = @import("interface.zig");
+const iface = @import("interface");
 // Access TDE functions via lazy import to avoid module duplication when page_manager is also imported through root module.
 const have_tde = true; // placeholder (TDE accessed via higher layer)
 // We can't reference tde symbol directly if not present; functions wrapped below.

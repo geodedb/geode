@@ -61,7 +61,7 @@ test "TestCANARY_REQ_GQL_016_MultiIndexTypeSelection" {
     const plan = optimizer.optimizeNodeScan(&labels, "n", "name", prop_val);
 
     try testing.expect(plan.type == .index);
-    
+
     // Hash index should be preferred for exact matches (lower cost)
     if (plan.type == .index) {
         try testing.expect(plan.type.index.index_type == .hash);
@@ -89,7 +89,7 @@ test "IndexOptimizer: spatial index selection" {
     const plan = optimizer.optimizeNodeScan(&labels, "n", "location", prop_val);
 
     try testing.expect(plan.type == .index);
-    
+
     // Should prefer spatial index for location data
     if (plan.type == .index) {
         // Check that we have better selectivity for spatial data
@@ -124,7 +124,7 @@ test "IndexOptimizer: fulltext index selection" {
     if (plan_desc.type == .index and plan_title.type == .index) {
         try testing.expect(plan_desc.type.index.index_type == .fulltext);
         try testing.expect(plan_title.type.index.index_type == .fulltext);
-        
+
         // Title should have better selectivity than description
         try testing.expect(plan_title.type.index.selectivity < plan_desc.type.index.selectivity);
     }
@@ -243,7 +243,7 @@ test "IndexOptimizer: multiple competing indexes" {
     const plan = optimizer.optimizeNodeScan(&labels, "n", "status", prop_val);
 
     try testing.expect(plan.type == .index);
-    
+
     // Should prefer hash index for exact match on enumerated values
     if (plan.type == .index) {
         try testing.expect(plan.type.index.index_type == .hash);
