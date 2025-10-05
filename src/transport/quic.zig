@@ -248,6 +248,12 @@ pub const QuicTransport = struct {
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"no endpoint available for accept\"}}\n", .{});
         return QuicError.ConnectionFailed;
     }
+    
+    pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
+        if (self.endpoint) |ep| {
+            try quic_lib.poll(ep, timeout_ms);
+        }
+    }
 };
 
 pub const QuicConnection = struct {
@@ -281,7 +287,9 @@ pub const QuicConnection = struct {
         errdefer self.allocator.destroy(stream);
 
         if (self.quic_connection == null) return QuicError.StreamFailed;
-        // Accept a QUIC stream
+        
+        // Accept a QUIC stream - this will check for existing streams first
+        // then fall back to waiting for new ones
         const stream_id = try quic_lib.acceptStream(self.quic_connection.?);
 
         stream.* = QuicStream{
@@ -613,8 +621,8 @@ pub const QuicClient = struct {
         }
 
         // Wait for handshake to complete with timeout
-        const total_timeout_ms = 5000; // 5 second total timeout (reduced from 30s)
-        const poll_timeout_ms = 50; // 50ms per poll (reduced from 200ms)
+        const total_timeout_ms = 2000; // 2 second total timeout (reduced for faster failure)
+        const poll_timeout_ms = 50; // 50ms per poll
         const start_time = std.time.milliTimestamp();
 
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"waitForHandshake: starting handshake wait\",\"timeout_ms\":{}}}\n", .{total_timeout_ms});
@@ -628,16 +636,28 @@ pub const QuicClient = struct {
                 // Continue polling even if individual poll fails
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"poll error\",\"error\":\"{}\"}}\n", .{err});
             };
+            
+            // Try to flush the endpoint to ensure packets are sent
+            quic_lib.flush(self.endpoint.?, 1);
 
-            // Check if handshake is complete
-            if (quic_lib.handshakeComplete(self.quic_connection.?)) {
+            // Check if handshake is complete - try multiple checks
+            const handshake_complete = quic_lib.handshakeComplete(self.quic_connection.?);
+            const handshake_confirmed = quic_lib.isHandshakeConfirmed(self.quic_connection.?);
+            const handshake_done = quic_lib.handshakeDoneSeen(self.quic_connection.?);
+            
+            if (handshake_complete or handshake_confirmed or handshake_done) {
                 const elapsed_ms = std.time.milliTimestamp() - start_time;
-                std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake completed\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
+                std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake completed\",\"elapsed_ms\":{},\"poll_count\":{},\"complete\":{},\"confirmed\":{},\"done\":{}}}\n", .{ elapsed_ms, poll_count, handshake_complete, handshake_confirmed, handshake_done });
                 return;
+            }
+            
+            // Add detailed debugging for first few iterations
+            if (poll_count <= 5) {
+                std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake check\",\"poll_count\":{},\"complete\":{},\"confirmed\":{},\"done\":{}}}\n", .{ poll_count, handshake_complete, handshake_confirmed, handshake_done });
             }
 
             // Log periodic progress
-            if (poll_count % 20 == 0) { // Every ~1 second
+            if (poll_count % 10 == 0) { // Every ~1 second
                 const elapsed_ms = std.time.milliTimestamp() - start_time;
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake in progress\",\"elapsed_ms\":{},\"poll_count\":{}}}\n", .{ elapsed_ms, poll_count });
             }
@@ -655,11 +675,8 @@ pub const QuicClient = struct {
         errdefer self.allocator.destroy(stream);
 
         if (self.is_quic and self.quic_connection != null) {
-            // Wait for handshake to complete before opening stream
-            std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: waiting for handshake\"}}\n", .{});
-            try self.waitForHandshake();
-
-            std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: opening stream\"}}\n", .{});
+            // Don't wait for handshake here since we handle it externally
+            std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: opening stream (assuming handshake complete)\"}}\n", .{});
             const stream_id = try quic_lib.openStream(self.quic_connection.?, true);
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: stream opened\",\"stream_id\":{}}}\n", .{stream_id});
 
@@ -667,6 +684,7 @@ pub const QuicClient = struct {
                 .allocator = self.allocator,
                 .quic_stream_id = stream_id,
                 .quic_connection = self.quic_connection,
+                .client = self,
             };
         } else {
             std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"getStream: no QUIC connection available\"}}\n", .{});
@@ -682,10 +700,25 @@ pub const QuicClientStream = struct {
     allocator: std.mem.Allocator,
     quic_stream_id: ?quic_lib.QuicStreamId,
     quic_connection: ?*quic_lib.QuicConnection,
+    client: ?*QuicClient,
 
     pub fn writeAll(self: *QuicClientStream, data: []const u8) !void {
         if (self.quic_stream_id) |sid| {
-            _ = try quic_lib.writeStream(self.quic_connection.?, sid, data);
+            std.debug.print("DEBUG: QuicClientStream.writeAll called with {} bytes on stream {}\n", .{data.len, sid});
+            const bytes_written = try quic_lib.writeStream(self.quic_connection.?, sid, data);
+            std.debug.print("DEBUG: writeStream returned {} bytes written\n", .{bytes_written});
+            
+            // Poll multiple times to ensure data is sent
+            if (self.client) |c| {
+                if (c.endpoint) |ep| {
+                    var i: usize = 0;
+                    while (i < 5) : (i += 1) {
+                        quic_lib.poll(ep, 10) catch {};
+                        std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                    }
+                }
+            }
+            std.debug.print("DEBUG: writeAll completed after polling\n", .{});
         } else {
             return QuicError.StreamFailed;
         }
@@ -693,9 +726,35 @@ pub const QuicClientStream = struct {
 
     pub fn read(self: *QuicClientStream, buf: []u8) !usize {
         if (self.quic_stream_id) |sid| {
-            return quic_lib.readStream(self.quic_connection.?, sid, buf) catch {
-                return 0;
-            };
+            // Try reading with retries and polling
+            var attempts: usize = 0;
+            while (attempts < 20) : (attempts += 1) {
+                const n = quic_lib.readStream(self.quic_connection.?, sid, buf) catch |err| {
+                    std.debug.print("DEBUG: readStream error: {}\n", .{err});
+                    if (err == error.WouldBlock) {
+                        // Poll the endpoint to process incoming packets
+                        if (self.client) |c| {
+                            if (c.endpoint) |ep| {
+                                // Poll multiple times to ensure we receive data
+                                var poll_i: usize = 0;
+                                while (poll_i < 3) : (poll_i += 1) {
+                                    std.debug.print("DEBUG: read() polling endpoint\n", .{});
+                                    quic_lib.poll(ep, 50) catch {};
+                                    std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                                }
+                            } else {
+                                std.debug.print("DEBUG: read() no endpoint to poll!\n", .{});
+                            }
+                        } else {
+                            std.debug.print("DEBUG: read() no client reference!\n", .{});
+                        }
+                        continue;
+                    }
+                    return 0;
+                };
+                if (n > 0) return n;
+            }
+            return 0;
         } else {
             return QuicError.StreamFailed;
         }

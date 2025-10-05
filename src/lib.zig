@@ -266,74 +266,15 @@ pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, para
     return .{ .names = id_names, .values = id_values };
 }
 
-// Re-export server functionality for CLI integration  
+// Server functionality for CLI integration - will be implemented in CLI module directly
 pub const server = struct {
-    // Simple server function for CLI integration without complex dependencies
     pub fn runServerWithArgs(allocator: std.mem.Allocator, args: [][:0]u8) !void {
-        _ = allocator; // Mark as unused to avoid warning
-        var ai: usize = 1;
-        var listen_quic: ?[]const u8 = null;
-        var data_dir: ?[]const u8 = null;
-        var log_level_arg: ?[]const u8 = null;
-        var test_exit_after_first: bool = false;
-
-        // Parse basic arguments
-        while (ai < args.len) : (ai += 1) {
-            const arg = args[ai];
-            if (std.mem.eql(u8, arg, "--listen-quic") and ai + 1 < args.len) {
-                listen_quic = args[ai + 1];
-                ai += 1;
-            } else if (std.mem.eql(u8, arg, "--data_dir") and ai + 1 < args.len) {
-                data_dir = args[ai + 1];
-                ai += 1;
-            } else if (std.mem.eql(u8, arg, "--log-level") and ai + 1 < args.len) {
-                log_level_arg = args[ai + 1];
-                ai += 1;
-            } else if (std.mem.eql(u8, arg, "--test-exit-after-first")) {
-                test_exit_after_first = true;
-            }
-        }
-
-        std.debug.print("Geode Server v0.16.0\n", .{});
-        std.debug.print("Starting server with unified binary architecture...\n", .{});
-
-        // Basic server startup message
-        if (listen_quic) |addr| {
-            std.debug.print("✅ QUIC listener configured: {s}\n", .{addr});
-        } else {
-            std.debug.print("✅ Running in stdio mode\n", .{});
-        }
-        
-        if (data_dir) |dd| {
-            std.debug.print("✅ Data directory: {s}\n", .{dd});
-            // Create data directory if it doesn't exist
-            std.fs.cwd().makeDir(dd) catch |err| switch (err) {
-                error.PathAlreadyExists => {},
-                else => return err,
-            };
-        } else {
-            std.debug.print("✅ Using default data directory\n", .{});
-        }
-
-        if (log_level_arg) |level| {
-            std.debug.print("✅ Log level: {s}\n", .{level});
-        } else {
-            std.debug.print("✅ Using default log level: info\n", .{});
-        }
-
-        // For now, simulate server running
-        std.debug.print("✅ Server ready (Press Ctrl+C to stop)\n", .{});
-        
-        // Simple server loop - in production this would start the actual QUIC server
-        var counter: u32 = 0;
-        while (true) {
-            std.Thread.sleep(1000000000); // Sleep for 1 second
-            counter += 1;
-            if (counter % 30 == 0) { // Print status every 30 seconds
-                std.debug.print("Server running... (uptime: {}s)\n", .{counter});
-            }
-            if (test_exit_after_first) break; // For testing purposes
-        }
+        // This is a placeholder - the real implementation is in CLI module
+        // which has access to the transport/quic module
+        _ = allocator;
+        _ = args;
+        std.debug.print("Error: Server implementation should be called from CLI module\n", .{});
+        return error.NotImplemented;
     }
 };
 

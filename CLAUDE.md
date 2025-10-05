@@ -107,7 +107,7 @@ make build && make verify-fast
 make build
 
 # Start server (QUIC+TLS only)
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443
+./zig-out/bin/geode serve --listen 0.0.0.0:8443
 
 # Interactive shell
 ./zig-out/bin/geode shell

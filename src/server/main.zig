@@ -12,12 +12,23 @@ const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
-// const quic_transport = @import("transport/quic.zig");
+const quic_transport = @import("transport/quic.zig");
+const quic_lib = @import("../vendor/quic/src/quic/api.zig");
+const conn_mod = @import("../vendor/quic/src/quic/conn.zig");
 // const cert_gen = @import("tools/cert_gen.zig");
 // Note: Some imports commented out to avoid missing dependency issues for CLI integration
 // const mvcc = @import("server/txn/mvcc.zig");
-// const logger = @import("log/logger.zig");
+// const logger = @import("log/logger.zig"); 
 // const query_plan_cache = @import("query_plan_cache.zig");
+
+// Basic logger stub for CLI integration
+const logger = struct {
+    pub fn initGlobalLogger(allocator: std.mem.Allocator, level: []const u8) !void {
+        _ = allocator;
+        _ = level;
+    }
+    pub fn deinitGlobalLogger() void {}
+};
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -2689,6 +2700,7 @@ fn evaluateBinarySet(
 
 fn handleQuicConnection(
     gpa: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
     conn: *quic_transport.QuicConnection,
     result_format_txt: bool,
     disable_estimates: bool,
@@ -2707,8 +2719,34 @@ fn handleQuicConnection(
     _ = _force_serialization_failure_unused;
     defer conn.close();
 
+    // Poll the endpoint to process incoming STREAM frames before accepting
+    // This ensures that the client's initial stream creation is processed
+    if (transport.endpoint) |ep| {
+        // Give the endpoint a chance to process incoming packets
+        var poll_attempts: usize = 0;
+        while (poll_attempts < 10) : (poll_attempts += 1) {
+            std.debug.print("DEBUG: Polling endpoint, attempt {}\n", .{poll_attempts});
+            quic_lib.poll(ep, 10) catch {};
+            // Check if we have incoming streams now
+            if (conn.quic_connection) |qc| {
+                const c: *conn_mod.Connection = @ptrCast(@alignCast(qc));
+                if (c.hasIncomingStreams()) {
+                    std.debug.print("DEBUG: Found incoming streams after {} polls\n", .{poll_attempts + 1});
+                    break;
+                }
+                // Also check for stream 0 directly
+                if (c.getFirstStream()) |sid| {
+                    std.debug.print("DEBUG: Found stream {} after {} polls\n", .{ sid, poll_attempts + 1 });
+                    break;
+                }
+            }
+        }
+    }
+
     // Accept a stream for the protocol communication
+    std.debug.print("DEBUG: Attempting to accept stream\n", .{});
     const stream = try conn.acceptStream();
+    std.debug.print("DEBUG: Stream accepted successfully\n", .{});
     defer stream.close();
 
     // Initialize WAL
@@ -3366,6 +3404,7 @@ pub fn main() !void {
             ai += 1;
         } else if (std.mem.eql(u8, args[ai], "--test-exit-after-first-request")) {
             test_exit_after_first = true;
+            std.debug.print("DEBUG: test_exit_after_first set to true\n", .{});
         } else if (std.mem.eql(u8, args[ai], "--no-tls")) {
             force_no_tls = true;
         } else if (std.mem.eql(u8, args[ai], "--log-level") and ai + 1 < args.len) {
@@ -3552,17 +3591,54 @@ pub fn main() !void {
         try transport.listen();
         std.debug.print("QUIC server listening on {s}:{d} with TLS 1.3\n", .{ address_str, port });
 
-        while (true) {
+        if (test_exit_after_first) {
+            // For testing: handle a single connection without blocking on second accept
+            std.debug.print("DEBUG: Test mode enabled - calling transport.accept() ONCE\n", .{});
             const conn = transport.accept() catch |err| {
                 std.debug.print("Failed to accept QUIC connection: {}\n", .{err});
-                continue;
+                return;
             };
 
-            handleQuicConnection(gpa, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
+            // Poll to ensure STREAM frames are processed
+            std.debug.print("DEBUG: Test mode - connection accepted, polling endpoint\n", .{});
+            if (transport.endpoint) |ep| {
+                // Poll multiple times to ensure all packets are processed
+                var i: usize = 0;
+                while (i < 10) : (i += 1) {
+                    std.debug.print("DEBUG: Test mode poll {}\n", .{i});
+                    quic_lib.poll(ep, 50) catch {};
+                }
+            }
+            std.debug.print("DEBUG: Test mode - calling handleQuicConnection\n", .{});
+
+            handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
                 std.debug.print("Error handling QUIC connection: {}\n", .{err});
             };
+        } else {
+            // Production mode: accept connections in a loop
+            while (true) {
+                const conn = transport.accept() catch |err| {
+                    std.debug.print("Failed to accept QUIC connection: {}\n", .{err});
+                    continue;
+                };
 
-            if (test_exit_after_first) break;
+                // For now, handle connections synchronously but poll the endpoint first
+                // to ensure the STREAM frames are processed
+                std.debug.print("DEBUG: Main loop - connection accepted, polling endpoint\n", .{});
+                if (transport.endpoint) |ep| {
+                    // Poll multiple times to ensure all packets are processed
+                    var i: usize = 0;
+                    while (i < 5) : (i += 1) {
+                        std.debug.print("DEBUG: Main loop poll {}\n", .{i});
+                        quic_lib.poll(ep, 10) catch {};
+                    }
+                }
+                std.debug.print("DEBUG: Main loop - calling handleQuicConnection\n", .{});
+
+                handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
+                    std.debug.print("Error handling QUIC connection: {}\n", .{err});
+                };
+            }
         }
         return;
     }
