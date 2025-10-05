@@ -1163,6 +1163,160 @@ SESSION SET SCHEMA tenant_xyz_schema
 
 The enhanced session management system provides enterprise-grade session control with complete ISO GQL compliance, making Geode suitable for complex multi-tenant applications requiring sophisticated session state management.
 
+## REPL QUIC Integration Implementation (October 2025)
+
+### Architecture Overview
+
+The REPL has been successfully integrated with real QUIC transport, resolving module conflicts through a clean abstraction layer design. The implementation provides production-ready QUIC connectivity for the interactive shell.
+
+### Key Implementation Details
+
+#### 1. Transport Abstraction Layer
+**File**: `/home/benji/src/spyder/geode/src/client/repl/repl_dispatch.zig`
+
+The transport abstraction uses dependency injection to decouple the REPL from specific transport implementations:
+
+```zig
+pub const Transport = struct {
+    connectFn: *const fn (allocator: std.mem.Allocator, addr: []const u8) anyerror!*TransportConnection,
+    
+    pub fn connect(self: *const Transport, allocator: std.mem.Allocator, addr: []const u8) !*TransportConnection {
+        return self.connectFn(allocator, addr);
+    }
+};
+
+pub const TransportConnection = struct {
+    writeAllFn: *const fn (self: *TransportConnection, data: []const u8) anyerror!void,
+    readLineFn: *const fn (self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) anyerror![]u8,
+    deinitFn: *const fn (self: *TransportConnection) void,
+    // Additional methods for protocol operations
+};
+```
+
+#### 2. QUIC Transport Implementation
+**File**: `/home/benji/src/spyder/geode/src/cli/main.zig`
+
+The real QUIC transport is implemented in the CLI module to avoid module ownership conflicts:
+
+```zig
+const QuicTransportConnection = struct {
+    allocator: std.mem.Allocator,
+    quic_client: *quic.QuicClient,
+    quic_stream: ?*quic.QuicClientStream = null,
+    interface: geode.repl.repl_dispatch.TransportConnection,
+    
+    pub fn writeAll(self: *geode.repl.repl_dispatch.TransportConnection, data: []const u8) !void {
+        const quic_conn = @as(*QuicTransportConnection, @fieldParentPtr("interface", self));
+        if (quic_conn.quic_stream) |stream| {
+            try stream.writeAll(data);
+        } else {
+            return error.NotConnected;
+        }
+    }
+    // Additional protocol method implementations
+};
+```
+
+#### 3. ClientSession Integration
+**File**: `/home/benji/src/spyder/geode/src/client/repl/repl_dispatch.zig`
+
+The ClientSession now uses dependency injection for transport:
+
+```zig
+pub const ClientSession = struct {
+    allocator: std.mem.Allocator,
+    server_addr: []const u8,
+    transport: *const Transport,
+    connection: ?*TransportConnection = null,
+    connected: bool = false,
+    last_response: ?[]u8 = null,
+
+    pub fn init(allocator: std.mem.Allocator, server_addr: []const u8, transport: *const Transport) !ClientSession {
+        return ClientSession{
+            .allocator = allocator,
+            .server_addr = try allocator.dupe(u8, server_addr),
+            .transport = transport,
+        };
+    }
+};
+```
+
+#### 4. Protocol Implementation
+The ClientSession implements the full Geode protocol over QUIC:
+
+- **HELLO**: Handshake with client name and version
+- **RUN_GQL**: Execute GQL queries with JSON escaping
+- **BEGIN/COMMIT/ROLLBACK**: Transaction control
+- **PULL**: Result pagination
+
+### Comprehensive Testing
+
+#### Unit Tests
+**File**: `/home/benji/src/spyder/geode/tests/test_quic_transport.zig`
+
+- Transport interface validation
+- Mock transport connectivity
+- Address parsing functionality
+- JSON escaping for protocol messages
+
+#### Integration Tests  
+**File**: `/home/benji/src/spyder/geode/tests/test_repl_integration.zig`
+
+- Client session lifecycle testing
+- Meta command parsing
+- Protocol message validation
+- Error handling scenarios
+
+### Production Readiness
+
+✅ **Module System Compatibility**: Resolved circular dependency issues through abstraction layer
+✅ **Zig 0.15 Compatibility**: Updated all ArrayList APIs and @fieldParentPtr syntax
+✅ **Error Handling**: Comprehensive error handling with proper cleanup
+✅ **Memory Management**: Proper allocation/deallocation throughout the lifecycle
+✅ **Protocol Compliance**: Full Geode QUIC protocol implementation
+✅ **Test Coverage**: Unit and integration tests included in build system
+
+### Usage Examples
+
+```bash
+# Start QUIC server
+./zig-out/bin/geoded --listen-quic 127.0.0.1:8443
+
+# Connect with REPL using QUIC transport
+./zig-out/bin/geode shell --server 127.0.0.1:8443
+
+# REPL automatically uses QUIC transport for all operations
+geode> RETURN 'Hello QUIC!' AS message
+geode> \timing on
+geode> CREATE (person:Person {name: 'Alice'})
+```
+
+The QUIC integration provides enterprise-grade connectivity with TLS 1.3 security, automatic reconnection handling, and full protocol support for interactive database operations.
+
+### Implementation Changes Summary
+
+#### Key Fixes Applied:
+
+1. **Zig 0.15 Compatibility Updates**
+   - Updated `@fieldParentPtr` syntax with explicit type casting
+   - Fixed ArrayList API calls to include allocator parameter
+   - Corrected QuicClient method names (`getStream` vs `openStream`)
+
+2. **Module System Resolution**
+   - Solved circular dependency through transport abstraction layer
+   - Implemented dependency injection pattern for clean separation
+   - Avoided module ownership conflicts between CLI and REPL modules
+
+3. **Protocol Implementation**
+   - Complete Geode protocol support over QUIC
+   - JSON message escaping and proper error handling
+   - Transaction support (BEGIN/COMMIT/ROLLBACK)
+
+4. **Error Handling Enhancement**
+   - Comprehensive error propagation throughout the stack
+   - Proper cleanup patterns with errdefer
+   - Connection state management and validation
+
 ## Development Commands
 
 ### Build Commands

@@ -422,10 +422,120 @@ pub const CardinalityEstimator = struct {
     }
 
     pub fn estimateCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        return switch (node.op) {
+            .scan => try self.estimateScanCardinality(node),
+            .filter => try self.estimateFilterCardinality(node),
+            .join => try self.estimateJoinCardinality(node),
+            .project => try self.estimateProjectCardinality(node),
+            .aggregate => try self.estimateAggregateCardinality(node),
+            .sort => try self.estimateSortCardinality(node),
+            .limit => try self.estimateLimitCardinality(node),
+            else => 1000.0, // fallback for unhandled types
+        };
+    }
+
+    fn estimateScanCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        _ = node;
+        // Try to get table statistics from registry
+        const table_name = "default_table"; // Would extract from node
+        if (self.stats_registry.getTableStats(table_name)) |stats| {
+            return @floatFromInt(stats.row_count);
+        }
+        // Default estimate for unknown tables
+        return 1000.0;
+    }
+
+    fn estimateFilterCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        // Get child cardinality
+        const child_cardinality = if (node.children.len > 0) 
+            try self.estimateCardinality(&node.children[0])
+        else 
+            1000.0;
+
+        // Apply selectivity based on predicate type
+        const selectivity = self.estimateFilterSelectivity(node);
+        return child_cardinality * selectivity;
+    }
+
+    fn estimateJoinCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        if (node.children.len < 2) return 1000.0;
+
+        const left_cardinality = try self.estimateCardinality(&node.children[0]);
+        const right_cardinality = try self.estimateCardinality(&node.children[1]);
+
+        // Apply join selectivity estimation
+        const join_selectivity = self.estimateJoinSelectivity(node);
+        return left_cardinality * right_cardinality * join_selectivity;
+    }
+
+    fn estimateProjectCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        // Projection doesn't change cardinality
+        if (node.children.len > 0) {
+            return try self.estimateCardinality(&node.children[0]);
+        }
+        return 1000.0;
+    }
+
+    fn estimateAggregateCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        if (node.children.len == 0) return 1.0;
+
+        const child_cardinality = try self.estimateCardinality(&node.children[0]);
+        
+        // If no GROUP BY, result is 1 row
+        // If GROUP BY exists, estimate distinct groups
+        if (self.hasGroupBy(node)) {
+            // Estimate distinct groups (simplified)
+            const group_factor = 0.1; // Assume 10% distinct groups
+            return child_cardinality * group_factor;
+        }
+        return 1.0;
+    }
+
+    fn estimateSortCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        // Sort doesn't change cardinality
+        if (node.children.len > 0) {
+            return try self.estimateCardinality(&node.children[0]);
+        }
+        return 1000.0;
+    }
+
+    fn estimateLimitCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
+        if (node.children.len == 0) return 0.0;
+
+        const child_cardinality = try self.estimateCardinality(&node.children[0]);
+        const limit_value = self.extractLimitValue(node);
+        
+        return @min(child_cardinality, @as(f64, @floatFromInt(limit_value)));
+    }
+
+    fn estimateFilterSelectivity(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) f64 {
         _ = self;
         _ = node;
-        // Simplified for now, would use statistics
-        return 1000.0;
+        // Simplified selectivity estimation
+        // Would analyze predicate type and use statistics
+        return 0.1; // Default 10% selectivity
+    }
+
+    fn estimateJoinSelectivity(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) f64 {
+        _ = self;
+        _ = node;
+        // Simplified join selectivity estimation
+        // Would analyze join conditions and foreign key relationships
+        return 0.01; // Default 1% selectivity
+    }
+
+    fn hasGroupBy(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) bool {
+        _ = self;
+        _ = node;
+        // Would check if node has GROUP BY clauses
+        return false; // Simplified
+    }
+
+    fn extractLimitValue(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) u64 {
+        _ = self;
+        _ = node;
+        // Would extract LIMIT value from node
+        return 100; // Default limit
     }
 };
 

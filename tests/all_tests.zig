@@ -116,6 +116,17 @@ const _test_fulltext_bm25 = @import("test_fulltext_bm25.zig");
 const _test_leiden_community = @import("test_leiden_community.zig");
 const _test_wcoj = @import("test_wcoj.zig");
 
+// REPL QUIC Integration tests
+const _test_quic_transport = @import("test_quic_transport.zig");
+const _test_repl_integration = @import("test_repl_integration.zig");
+const _test_repl_e2e = @import("test_repl_e2e.zig");
+
+// Query Optimizer tests
+const _test_cardinality_estimator = @import("test_cardinality_estimator.zig");
+
+// S3 Backup tests
+const _test_s3_backup = @import("test_s3_backup.zig");
+
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 
