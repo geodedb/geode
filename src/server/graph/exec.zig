@@ -92,7 +92,7 @@ pub fn nodeScan(
 
     var iter = graph.nodes.iterator();
     while (iter.next()) |entry| {
-        const node = entry.value_ptr.*;
+        const node = entry.value_ptr;
 
         // Check if node matches any of the required labels
         if (labels.len > 0) {
@@ -163,7 +163,7 @@ pub fn expand(
     for (bindings) |binding| {
         // Extract source node from binding
         const source_node = switch (binding.value) {
-            .Node => |node| node,
+            .Node => |node| node.*,
             else => continue,
         };
 
@@ -173,10 +173,12 @@ pub fn expand(
             if (graph.csr) |c| {
                 if (c.getNeighbors(source_node.id)) |ns| {
                     for (ns.neighbors) |entry| {
+                        // Get target node from graph storage
+                        const target_node = graph.nodes.getPtr(entry.target_node) orelse continue;
+
                         // Create new binding for target
                         var new_binding = Binding.init(allocator);
                         new_binding.name = target_var orelse "target";
-                        const target_node = Node{ .id = entry.target_node, .labels = &[_][]const u8{}, .properties = std.StringHashMap(PropertyValue).init(allocator) };
                         new_binding.value = .{ .Node = target_node };
                         try new_binding.vars.put(target_var orelse "target", .{ .Node = target_node });
                         try results.append(allocator, new_binding);
@@ -222,7 +224,7 @@ pub fn expand(
                 };
 
                 // Get target node
-                const target_node = graph.nodes.get(target_id) orelse continue;
+                const target_node = graph.nodes.getPtr(target_id) orelse continue;
 
                 // Create binding for target
                 var new_binding = Binding.init(allocator);
@@ -286,11 +288,11 @@ pub fn sortBindingsDeterministic(allocator: std.mem.Allocator, bindings: []Bindi
 fn compareBindings(_: void, a: Binding, b: Binding) bool {
     // Compare by the first variable's value if it's a node
     const a_node_id = switch (a.value) {
-        .Node => |node| node.id,
+        .Node => |node| node.*.id,
         else => 0,
     };
     const b_node_id = switch (b.value) {
-        .Node => |node| node.id,
+        .Node => |node| node.*.id,
         else => 0,
     };
     return a_node_id < b_node_id;
@@ -481,9 +483,9 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                     // For nodes that weren't converted to properties, show basic info including properties
                     try result.append(allocator, '{');
                     try result.appendSlice(allocator, "\"id\": ");
-                    try result.writer(allocator).print("{d}", .{node.id});
+                    try result.writer(allocator).print("{d}", .{node.*.id});
                     try result.appendSlice(allocator, ", \"labels\": [");
-                    for (node.labels, 0..) |label, k| {
+                    for (node.*.labels, 0..) |label, k| {
                         if (k > 0) try result.appendSlice(allocator, ", ");
                         try result.append(allocator, '"');
                         try result.appendSlice(allocator, label);
@@ -492,7 +494,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                     try result.appendSlice(allocator, "], \"properties\": {");
 
                     // Add node properties
-                    var prop_iter = node.properties.iterator();
+                    var prop_iter = node.*.properties.iterator();
                     var prop_count: usize = 0;
                     while (prop_iter.next()) |prop_entry| {
                         if (prop_count > 0) try result.appendSlice(allocator, ", ");

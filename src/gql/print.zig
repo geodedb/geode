@@ -245,6 +245,10 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
                     if (pc.where) |we| try walkExpr(ally_inner, dst, we.*);
                     try walkExpr(ally_inner, dst, pc.map.*);
                 },
+                .Exists => |ex| {
+                    // Walk through the EXISTS pattern (note: patterns don't contain expressions directly)
+                    _ = ex; // EXISTS pattern doesn't contain sub-expressions to walk
+                },
                 else => {},
             }
         }
@@ -588,6 +592,11 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try w.print(" | ", .{});
             try printExprWith(w, pc.map.*, 0, opts);
             try w.writeByte(']');
+        },
+        .Exists => |ex| {
+            try w.print("EXISTS {{ ", .{});
+            try printGraphPattern(w, ex.pattern.*, 0);
+            try w.print(" }}", .{});
         },
         .SmallIntLit => |i| try w.print("{d}", .{i}),
         .BigIntLit => |i| try w.print("{d}", .{i}),

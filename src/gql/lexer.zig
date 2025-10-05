@@ -287,13 +287,16 @@ pub const Lexer = struct {
     fn scanNumeric(self: *Lexer) t.Token {
         const loc: t.Location = .{ .line = self.line, .column = self.col };
         const start = self.idx;
+        // Scan integer part
         while (self.idx < self.src.len and t.isDigit(self.src[self.idx])) {
             self.idx += 1;
             self.col += 1;
         }
         var kind: t.TokenKind = .integer_lit;
+
+        // Check for decimal point (not part of .. range operator)
         if (self.idx < self.src.len and self.src[self.idx] == '.' and !(self.idx + 1 < self.src.len and self.src[self.idx + 1] == '.')) {
-            // float
+            // Scan decimal part
             self.idx += 1;
             self.col += 1;
             while (self.idx < self.src.len and t.isDigit(self.src[self.idx])) {
@@ -302,6 +305,36 @@ pub const Lexer = struct {
             }
             kind = .float_lit;
         }
+
+        // Check for scientific notation (e/E followed by optional +/- and digits)
+        // This applies to both integer and decimal numbers
+        if (self.idx < self.src.len and (self.src[self.idx] == 'e' or self.src[self.idx] == 'E')) {
+            const saved_idx = self.idx;
+            const saved_col = self.col;
+
+            self.idx += 1;
+            self.col += 1;
+
+            // Optional +/- sign after e/E
+            if (self.idx < self.src.len and (self.src[self.idx] == '+' or self.src[self.idx] == '-')) {
+                self.idx += 1;
+                self.col += 1;
+            }
+
+            // Must have at least one digit after e/E for valid scientific notation
+            if (self.idx < self.src.len and t.isDigit(self.src[self.idx])) {
+                while (self.idx < self.src.len and t.isDigit(self.src[self.idx])) {
+                    self.idx += 1;
+                    self.col += 1;
+                }
+                kind = .float_lit; // Scientific notation is always a float
+            } else {
+                // No digits after e/E, backtrack to exclude it from the number
+                self.idx = saved_idx;
+                self.col = saved_col;
+            }
+        }
+
         return .{ .kind = kind, .lexeme = self.src[start..self.idx], .loc = loc };
     }
 

@@ -521,13 +521,18 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .Int => |n| .{ .Int = n },
         .Bool => |b| .{ .Bool = b },
         .String => |s| .{ .Str = s },
+        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale } },
         .Ident => |id| env.get(id.orig) orelse Value{ .Null = {} },
         .Param => |pname| env.getParam(pname) orelse Value{ .Null = {} },
         .Unary => |u| blk: {
             const v = try evalExpr(ally, u.expr.*, env);
             switch (u.op) {
                 .Not => break :blk .{ .Bool = !truthy(v) },
-                .Neg => break :blk .{ .Int = -(try expectInt(v)) },
+                .Neg => switch (v) {
+                    .Int => |i| break :blk .{ .Int = -i },
+                    .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
+                    else => return EvalError.TypeMismatch,
+                },
             }
         },
         .Binary => |b| blk2: {

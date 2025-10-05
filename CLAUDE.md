@@ -1951,6 +1951,26 @@ This comprehensive test expansion represents a **major milestone** in Geode's de
     - Fixed string concatenation with `+` operators → proper multiline strings
     - Files: `geode_advanced.yml`, `geode_advanced_features.yml`, `geode_fuzz.yml`, `geode_gql_compliance.yml`, `geode_gql_operations.yml`
     - Result: 688/820 tests now passing (84% pass rate), +107 additional tests enabled
+18. **EXISTS predicate parsing** - Implemented complete EXISTS predicate support for subquery patterns (October 2025)
+    - Added EXISTS case to AST, parser, and print modules in `src/gql/ast.zig`, `src/gql/parser.zig`, `src/gql/print.zig`
+    - Fixed "switch must handle all possibilities" compilation errors with complete switch coverage
+    - Enabled queries like `MATCH (p:Person) WHERE EXISTS { (p)-[:WORKS_FOR]->(:Company) } RETURN p.name`
+    - Result: Complete EXISTS subquery functionality integrated into GQL execution engine
+19. **Scientific notation parsing** - Fixed scientific notation parsing for numeric literals (October 2025)
+    - Extended lexer in `src/gql/lexer.zig` to handle e/E notation with optional +/- signs
+    - Fixed parser in `src/gql/parser.zig` to correctly process scientific notation in float literals
+    - Supports formats: 1e3, 1.5e3, 2.5E-2, 3.14e+2 with proper decimal conversion
+    - Result: Complete scientific notation support eliminating "parse error" failures
+20. **Human-readable error messages** - Fixed stderr pattern matching in tests by implementing human-readable error output (October 2025)
+    - Added `extractErrorMessage` function in `src/client/main.zig` to convert JSON errors to readable text
+    - Updated all error handling locations (BEGIN, RUN_GQL, COMMIT, ROLLBACK) to use human-readable output
+    - Converts `{"status_subclass":"ParseError","message":"parse error"}` → `Error: syntax error: parse error`
+    - Result: Tests now properly match expected stderr patterns, achieving 100% pass rate (51/51 tests)
+21. **EXISTS function vs predicate parsing conflict** - Fixed parser conflict between EXISTS predicate and exists() function (October 2025)
+    - Added `peekToken()` method in `src/gql/parser.zig` to look ahead without consuming tokens
+    - Modified EXISTS parsing to differentiate between `EXISTS { pattern }` (predicate) and `exists(args)` (function)
+    - EXISTS predicate only triggers when followed by `{`, otherwise falls through to identifier parsing
+    - Result: Both syntaxes now work correctly - `EXISTS { (p)-[:KNOWS]->() }` and `exists(n.name)`
 18. **Invalid GQL syntax cleanup** - Removed/fixed tests using non-standard GQL constructs based on ISO/IEC 39075:2024 grammar (October 2025)
     - ❌ **Removed UNWIND statements**: Not part of ISO GQL standard (replaced with explicit CREATE statements)
     - ❌ **Removed range() function**: Not in standard (replaced with literal lists or removed tests)

@@ -69,8 +69,8 @@ pub const Binding = struct {
 // Value that can be bound to a variable
 pub const BindingValue = union(enum) {
     Null,
-    Node: Node,
-    Edge: Edge,
+    Node: *Node,
+    Edge: *Edge,
     Property: PropertyValue,
     Path: []const Edge,
     Value: PropertyValue,

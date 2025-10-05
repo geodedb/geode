@@ -202,13 +202,13 @@ pub const IndexOptimizer = struct {
 
         var iter = graph.nodes.iterator();
         while (iter.next()) |entry| {
-            const node = entry.value_ptr.*;
+            const node = entry.value_ptr;
 
             // Check if node matches any of the required labels
             if (labels.len > 0) {
                 var has_label = false;
                 for (labels) |required_label| {
-                    for (node.labels) |node_label| {
+                    for (node.*.labels) |node_label| {
                         if (std.mem.eql(u8, required_label, node_label)) {
                             has_label = true;
                             break;
@@ -222,7 +222,7 @@ pub const IndexOptimizer = struct {
             // Check property filter if specified
             if (prop_key) |key| {
                 if (prop_val) |val| {
-                    const node_prop_val = node.properties.get(key) orelse continue;
+                    const node_prop_val = node.*.properties.get(key) orelse continue;
                     if (!self.propertyValuesEqual(node_prop_val, val)) continue;
                 }
             }
@@ -259,9 +259,9 @@ pub const IndexOptimizer = struct {
 
         // Search the index
         if (try self.index_manager.lookupPropertyIndex(index_info.name, search_key)) |node_id| {
-            if (graph.nodes.get(node_id)) |node| {
+            if (graph.nodes.getPtr(node_id)) |node| {
                 // Verify node matches all criteria (labels, property value)
-                if (self.nodeMatchesCriteria(node, labels, prop_key, prop_val)) {
+                if (self.nodeMatchesCriteria(node.*, labels, prop_key, prop_val)) {
                     var binding = Binding.init(self.allocator);
                     binding.name = var_name orelse "n";
                     binding.value = .{ .Node = node };
@@ -1477,16 +1477,17 @@ pub const VectorKNNOptimizer = struct {
 
         // Convert vector search results to graph bindings
         for (query_result.results.items) |match| {
-            if (graph.nodes.get(match.id)) |node| {
+            if (graph.nodes.getPtr(match.id)) |node| {
                 // Verify node matches label criteria
-                if (self.nodeMatchesLabels(node, labels)) {
+                if (self.nodeMatchesLabels(node.*, labels)) {
                     var binding = Binding.init(self.allocator);
                     binding.name = var_name orelse "n";
                     binding.value = .{ .Node = node };
                     // Add the node to vars map
                     try binding.vars.put(var_name orelse "n", .{ .Node = node });
                     // Add similarity score as a special property
-                    try binding.vars.put("_similarity_score", .{ .Float = match.score });
+                    const score_decimal = PropertyValue{ .Decimal = .{ .coeff = @intFromFloat(match.score * 1000), .scale = 3 } };
+                    try binding.vars.put("_similarity_score", .{ .Value = score_decimal });
 
                     try results.append(self.allocator, binding);
                 }
@@ -1506,19 +1507,19 @@ pub const VectorKNNOptimizer = struct {
     ) ![]Binding {
         // This is a simplified implementation that would compute distances
         // for all nodes and select the top-k results
-        var candidates = std.ArrayList(struct { node: graph_common.Node, distance: f64 }).initCapacity(self.allocator, 0) catch unreachable;
+        var candidates = std.ArrayList(struct { node: *graph_common.Node, distance: f64 }).initCapacity(self.allocator, 0) catch unreachable;
         defer candidates.deinit(self.allocator);
 
         // Scan all nodes
         var node_iter = graph.getAllNodes();
         while (node_iter.next()) |entry| {
-            const node = entry.value_ptr.*;
+            const node = entry.value_ptr;
 
             // Check label matching
-            if (!self.nodeMatchesLabels(node, labels)) continue;
+            if (!self.nodeMatchesLabels(node.*, labels)) continue;
 
             // Extract vector property
-            if (node.properties.get(knn_info.property)) |prop_value| {
+            if (node.*.properties.get(knn_info.property)) |prop_value| {
                 if (prop_value == .VectorF32) {
                     const node_vector = prop_value.VectorF32;
                     if (node_vector.data.len == knn_info.query_vector.len) {
@@ -1553,7 +1554,8 @@ pub const VectorKNNOptimizer = struct {
             binding.name = var_name orelse "n";
             binding.value = .{ .Node = candidate.node };
             try binding.vars.put(var_name orelse "n", .{ .Node = candidate.node });
-            try binding.vars.put("_similarity_score", .{ .Float = candidate.distance });
+            const distance_decimal = PropertyValue{ .Decimal = .{ .coeff = @intFromFloat(candidate.distance * 1000), .scale = 3 } };
+            try binding.vars.put("_similarity_score", .{ .Value = distance_decimal });
 
             try results.append(self.allocator, binding);
         }

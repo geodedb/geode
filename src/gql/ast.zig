@@ -185,6 +185,8 @@ pub const Expr = union(enum) {
     Param: []const u8,
     Map: []Property,
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
+    // EXISTS predicate with subquery pattern
+    Exists: struct { pattern: *GraphPattern },
 };
 
 pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Concat };

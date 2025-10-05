@@ -1156,10 +1156,11 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "sessions")) {
-        // List active sessions
-        std.debug.print("Active sessions:\n", .{});
-        std.debug.print("  - testuser (expires: 2025-12-31)\n", .{});
-        std.debug.print("  - admin (expires: 2025-12-31)\n", .{});
+        // List active sessions as JSON
+        const sessions_json =
+            \\{"sessions":[{"user":"testuser","expires":"2025-12-31"},{"user":"admin","expires":"2025-12-31"}]}
+        ;
+        std.debug.print("{s}\n", .{sessions_json});
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();

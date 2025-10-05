@@ -35,6 +35,23 @@ pub const Parser = struct {
         self.cur = self.lx.next();
     }
 
+    fn peekToken(self: *Parser) tok.TokenKind {
+        // Save lexer state
+        const saved_idx = self.lx.idx;
+        const saved_line = self.lx.line;
+        const saved_col = self.lx.col;
+        
+        // Get next token
+        const next_token = self.lx.next();
+        
+        // Restore lexer state
+        self.lx.idx = saved_idx;
+        self.lx.line = saved_line;
+        self.lx.col = saved_col;
+        
+        return next_token.kind;
+    }
+
     fn isKeyword(self: *Parser, kind: tok.TokenKind) bool {
         _ = self;
         // Check if the token kind is a keyword (not a delimiter, literal, or identifier)
@@ -201,7 +218,10 @@ pub const Parser = struct {
             self.cur.kind == .COUNT or self.cur.kind == .SUM or self.cur.kind == .AVG or
             self.cur.kind == .MIN or self.cur.kind == .MAX or self.cur.kind == .PATH or
             self.cur.kind == .TYPE or self.cur.kind == .VALUE or self.cur.kind == .EXISTS or
-            self.cur.kind == .LAST or self.cur.kind == .REPLACE or self.cur.kind == .PROPERTY)
+            self.cur.kind == .LAST or self.cur.kind == .REPLACE or self.cur.kind == .PROPERTY or
+            self.cur.kind == .FROM or self.cur.kind == .TO or self.cur.kind == .ORDER or
+            self.cur.kind == .BY or self.cur.kind == .GROUP or self.cur.kind == .ASC or
+            self.cur.kind == .DESC or self.cur.kind == .LIMIT or self.cur.kind == .OFFSET)
         {
             const out = self.cur;
             self.advance();
@@ -1288,6 +1308,17 @@ pub const Parser = struct {
             ep.* = e;
             return .{ .Unary = .{ .op = .Not, .expr = ep } };
         }
+        if (self.cur.kind == .EXISTS and self.peekToken() == .l_brace) {
+            // This is EXISTS { pattern } - EXISTS predicate
+            self.advance(); // consume EXISTS
+            _ = try self.expect(.l_brace);
+            const pattern = try self.parseGraphPattern();
+            _ = try self.expect(.r_brace);
+            const a = self.arena.allocator();
+            const pattern_ptr = try a.create(ast.GraphPattern);
+            pattern_ptr.* = pattern;
+            return .{ .Exists = .{ .pattern = pattern_ptr } };
+        }
         if (self.cur.kind == .minus) {
             self.advance();
             const e = try self.parseUnaryExpr();
@@ -1464,21 +1495,40 @@ pub const Parser = struct {
             .float_lit => blk_f: {
                 const tkn = self.cur;
                 self.advance();
-                // Convert digits '.' digits into coeff and scale
                 const lex = tkn.lexeme;
-                var dot_idx: usize = 0;
-                while (dot_idx < lex.len and lex[dot_idx] != '.') : (dot_idx += 1) {}
-                if (dot_idx >= lex.len) return error.UnexpectedToken;
-                const int_part = lex[0..dot_idx];
-                const frac_part = lex[dot_idx + 1 .. lex.len];
-                const scale: u8 = @intCast(frac_part.len);
-                // coeff = parse int_part ++ frac_part as i128
-                var buf = std.ArrayList(u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                try buf.appendSlice(self.arena.allocator(), int_part);
-                try buf.appendSlice(self.arena.allocator(), frac_part);
-                const coeff = try std.fmt.parseInt(i128, buf.items, 10);
-                // ast.Decimal currently only stores coeff/scale; original literal tracking handled later when converting to eval.Value.
-                break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = scale } };
+
+                // Check if this is scientific notation (contains e/E)
+                var has_exp = false;
+                var exp_idx: usize = 0;
+                for (lex, 0..) |c, i| {
+                    if (c == 'e' or c == 'E') {
+                        has_exp = true;
+                        exp_idx = i;
+                        break;
+                    }
+                }
+
+                if (has_exp) {
+                    // Parse scientific notation: parse as f64 and convert to decimal
+                    const value = try std.fmt.parseFloat(f64, lex);
+                    // Convert to decimal with reasonable precision (6 decimal places)
+                    const coeff = @as(i128, @intFromFloat(value * 1000000));
+                    break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+                } else {
+                    // Standard decimal notation
+                    var dot_idx: usize = 0;
+                    while (dot_idx < lex.len and lex[dot_idx] != '.') : (dot_idx += 1) {}
+                    if (dot_idx >= lex.len) return error.UnexpectedToken;
+                    const int_part = lex[0..dot_idx];
+                    const frac_part = lex[dot_idx + 1 .. lex.len];
+                    const scale: u8 = @intCast(frac_part.len);
+                    // coeff = parse int_part ++ frac_part as i128
+                    var buf = std.ArrayList(u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    try buf.appendSlice(self.arena.allocator(), int_part);
+                    try buf.appendSlice(self.arena.allocator(), frac_part);
+                    const coeff = try std.fmt.parseInt(i128, buf.items, 10);
+                    break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = scale } };
+                }
             },
             .TRUE => {
                 self.advance();

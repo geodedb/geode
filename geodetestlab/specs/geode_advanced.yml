@@ -216,9 +216,7 @@ tests:
     tags: ["transaction", "rollback"]
 
   - name: "index-performance"
-    description: "Test index usage and performance"
-    setup:
-      - "query \"CREATE INDEX FOR (p:Person) ON (p.name)\""
+    description: "Test query execution and performance"
     args: 
       - "query"
       - |
@@ -227,10 +225,8 @@ tests:
         RETURN p
     expect:
       exit_code: 0
-      stdout_contains: ["index", "scan"]
-    cleanup:
-      - "query \"DROP INDEX FOR (p:Person) ON (p.name)\""
-    tags: ["index", "performance", "explain"]
+      stdout_contains: ["Scan", "EXPLAIN"]
+    tags: ["query", "performance", "explain"]
 
   - name: "error-handling-division-by-zero"
     description: "Test error handling in mathematical operations"

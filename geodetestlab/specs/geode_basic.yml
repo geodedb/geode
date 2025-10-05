@@ -118,7 +118,7 @@ tests:
 
   - name: "invalid-gql-syntax"
     description: "Test error handling with invalid GQL"
-    args: ["INVALID GQL SYNTAX HERE", "--no-quic"]
+    args: ["MATCH (n INVALID SYNTAX", "--no-quic"]
     expect:
       exit_code: 1
       stderr_contains: ["syntax", "error"]

@@ -111,6 +111,50 @@ pub fn resolveEnvironmentVariables(allocator: std.mem.Allocator, input: []const 
     return result.toOwnedSlice(allocator);
 }
 
+/// Extract human-readable error message from JSON error response
+fn extractErrorMessage(allocator: std.mem.Allocator, json_response: []const u8) ![]u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_response, .{}) catch return error.InvalidJson;
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidJson;
+    const root = parsed.value.object;
+
+    // Try to get error details from various possible paths
+    var message: []const u8 = "Unknown error";
+    var error_type: []const u8 = "error";
+
+    // Check for status_subclass (more specific error type)
+    if (root.get("status_subclass")) |subclass| {
+        if (subclass == .string) {
+            if (std.mem.eql(u8, subclass.string, "ParseError")) {
+                error_type = "syntax error";
+            } else if (std.mem.indexOf(u8, subclass.string, "Error") != null) {
+                error_type = "error";
+            }
+        }
+    }
+
+    // Check for result.message
+    if (root.get("result")) |result| {
+        if (result == .object) {
+            if (result.object.get("message")) |msg| {
+                if (msg == .string) {
+                    message = msg.string;
+                }
+            }
+            // Also check result.code for error type
+            if (result.object.get("code")) |code| {
+                if (code == .string and std.mem.eql(u8, code.string, "ParseError")) {
+                    error_type = "syntax error";
+                }
+            }
+        }
+    }
+
+    // Create human-readable error message
+    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ error_type, message });
+}
+
 fn getStdOut() std.fs.File {
     return if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
@@ -250,6 +294,21 @@ pub fn main() !void {
             if (i + 2 >= argv.len) break;
             param_name = argv[i + 1];
             param_json = argv[i + 2];
+
+            // Basic validation: check if the JSON parameter looks valid
+            // Simple heuristic: if it doesn't start with a quote, bracket, brace, or digit, it's likely invalid
+            const pj = param_json.?;
+            if (pj.len > 0) {
+                const first_char = pj[0];
+                if (first_char != '"' and first_char != '{' and first_char != '[' and
+                    first_char != 't' and first_char != 'f' and first_char != 'n' and
+                    (first_char < '0' or first_char > '9') and first_char != '-')
+                {
+                    std.debug.print("Error: JSON parameter value appears to be invalid. Expected valid JSON, got: {s}\n", .{pj});
+                    std.process.exit(2);
+                }
+            }
+
             i += 2;
         } else if (std.mem.eql(u8, argv[i], "--page-size")) {
             if (i + 1 >= argv.len) break;
@@ -426,8 +485,17 @@ pub fn main() !void {
                 defer gpa.free(ack);
                 if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
                     const stderr_file = getStdErr();
-                    try stderr_file.writeAll(ack);
-                    try stderr_file.writeAll("\n");
+                    // Try to extract human-readable error message from JSON
+                    if (extractErrorMessage(gpa, ack)) |error_msg| {
+                        defer gpa.free(error_msg);
+                        try stderr_file.writeAll("Error: ");
+                        try stderr_file.writeAll(error_msg);
+                        try stderr_file.writeAll("\n");
+                    } else |_| {
+                        // Fallback to raw JSON if parsing fails
+                        try stderr_file.writeAll(ack);
+                        try stderr_file.writeAll("\n");
+                    }
                     std.process.exit(2);
                 }
             }
@@ -453,8 +521,17 @@ pub fn main() !void {
 
             if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
                 const stderr_file = getStdErr();
-                try stderr_file.writeAll(line1);
-                try stderr_file.writeAll("\n");
+                // Try to extract human-readable error message from JSON
+                if (extractErrorMessage(gpa, line1)) |error_msg| {
+                    defer gpa.free(error_msg);
+                    try stderr_file.writeAll("Error: ");
+                    try stderr_file.writeAll(error_msg);
+                    try stderr_file.writeAll("\n");
+                } else |_| {
+                    // Fallback to raw JSON if parsing fails
+                    try stderr_file.writeAll(line1);
+                    try stderr_file.writeAll("\n");
+                }
 
                 // Check for mathematical and validation errors and return exit code 1
                 if (std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch.DivZero\"") != null or
@@ -648,8 +725,17 @@ pub fn main() !void {
         defer gpa.free(ack);
         if (std.mem.indexOf(u8, ack, "\"type\":\"ERROR\"") != null) {
             const stderr_file = getStdErr();
-            try stderr_file.writeAll(ack);
-            try stderr_file.writeAll("\n");
+            // Try to extract human-readable error message from JSON
+            if (extractErrorMessage(gpa, ack)) |error_msg| {
+                defer gpa.free(error_msg);
+                try stderr_file.writeAll("Error: ");
+                try stderr_file.writeAll(error_msg);
+                try stderr_file.writeAll("\n");
+            } else |_| {
+                // Fallback to raw JSON if parsing fails
+                try stderr_file.writeAll(ack);
+                try stderr_file.writeAll("\n");
+            }
             if (child.stdin) |s| {
                 s.close();
                 child.stdin = null;
@@ -690,8 +776,17 @@ pub fn main() !void {
     defer gpa.free(line1);
     if (std.mem.indexOf(u8, line1, "\"type\":\"ERROR\"") != null) {
         const stderr_file = getStdErr();
-        try stderr_file.writeAll(line1);
-        try stderr_file.writeAll("\n");
+        // Try to extract human-readable error message from JSON
+        if (extractErrorMessage(gpa, line1)) |error_msg| {
+            defer gpa.free(error_msg);
+            try stderr_file.writeAll("Error: ");
+            try stderr_file.writeAll(error_msg);
+            try stderr_file.writeAll("\n");
+        } else |_| {
+            // Fallback to raw JSON if parsing fails
+            try stderr_file.writeAll(line1);
+            try stderr_file.writeAll("\n");
+        }
         if (child.stdin) |s| {
             s.close();
             child.stdin = null;
@@ -912,8 +1007,17 @@ pub fn main() !void {
         defer gpa.free(ackc);
         if (std.mem.indexOf(u8, ackc, "\"type\":\"ERROR\"") != null) {
             const stderr_file = getStdErr();
-            try stderr_file.writeAll(ackc);
-            try stderr_file.writeAll("\n");
+            // Try to extract human-readable error message from JSON
+            if (extractErrorMessage(gpa, ackc)) |error_msg| {
+                defer gpa.free(error_msg);
+                try stderr_file.writeAll("Error: ");
+                try stderr_file.writeAll(error_msg);
+                try stderr_file.writeAll("\n");
+            } else |_| {
+                // Fallback to raw JSON if parsing fails
+                try stderr_file.writeAll(ackc);
+                try stderr_file.writeAll("\n");
+            }
             if (child.stdin) |s| {
                 s.close();
                 child.stdin = null;
@@ -927,8 +1031,17 @@ pub fn main() !void {
         defer gpa.free(ackr);
         if (std.mem.indexOf(u8, ackr, "\"type\":\"ERROR\"") != null) {
             const stderr_file = getStdErr();
-            try stderr_file.writeAll(ackr);
-            try stderr_file.writeAll("\n");
+            // Try to extract human-readable error message from JSON
+            if (extractErrorMessage(gpa, ackr)) |error_msg| {
+                defer gpa.free(error_msg);
+                try stderr_file.writeAll("Error: ");
+                try stderr_file.writeAll(error_msg);
+                try stderr_file.writeAll("\n");
+            } else |_| {
+                // Fallback to raw JSON if parsing fails
+                try stderr_file.writeAll(ackr);
+                try stderr_file.writeAll("\n");
+            }
             if (child.stdin) |s| {
                 s.close();
                 child.stdin = null;
