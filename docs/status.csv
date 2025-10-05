@@ -19,6 +19,11 @@ REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,IMPL,TestCANARY_REQ_AU
 REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation,,security,2025-09-30,src/security/auth.zig
 REQ-AUTH-POLICY-010,CLI Password Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation,,security,2025-09-30,src/cli/main.zig
 REQ-AUTH-POLICY-011,Pre-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation,,security,2025-09-30,src/cli/main.zig
+REQ-CLI-AUTO-001,GQL Query Auto-detection,UserExperience,TESTED,TestCANARY_REQ_CLI_AUTO_001_GqlAutoDetection,,cli,2025-10-04,tests/cli_gql_autodetection_regression_test.sh
+REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,TestCANARY_REQ_CLI_AUTO_002_BasicGqlAutoDetection,,cli,2025-10-04,tests/cli_gql_autodetection_basic_test.sh
+REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,TestCANARY_REQ_CLI_EXIT_001_ExitCodes,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
+REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,TestCANARY_REQ_CLI_ROUTE_001_OptionRouting,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
+REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,TestCANARY_REQ_CLI_WD_001_WorkingDirectory,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,TestCANARY_ClientEnvVar_Integration,,clients,2025-10-04,tests/test_environment_variables_integration.zig
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,VariableResolution,IMPL,TestCANARY_ClientCli_EnvVarResolution,,clients,2025-10-04,src/client/main.zig
 REQ-GQL-###,Name,...,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,...,...,...,YYYY-MM-DD,tools/canaryscan/README.md
@@ -761,6 +766,11 @@ REQ-GQL-AUTH-004,MFA recovery code,TEST,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recov
 "REQ-GQL-BACKUP-RESTORE"" {
     // CANARY: REQ=REQ-GQL-BACKUP-RESTORE",BackupRestore,Core,TESTED,TestCANARY_REQ_GQL_BACKUP_RESTORE,,team,2025-10-02,tests/integration/test_backup_restore.zig
 REQ-GQL-BENCH,Distributed Features Benchmark,Performance,TESTED,BenchmarkCANARY_Distributed,,bench,2025-09-29,benchmarks/benchmark_distributed_features.zig
+REQ-GQL-CATALOG-001,Enhanced Catalog Operations,RegressionTesting,IMPL,TestCatalogOperationsRegression,,parser,2025-10-04,tests/test_catalog_operations_regression.zig
+REQ-GQL-CATALOG-002,Graph Type Operations,FrameworkTesting,IMPL,TestGraphTypeFramework,,parser,2025-10-04,tests/test_catalog_operations_regression.zig
+REQ-GQL-CATALOG-003,End-to-End Catalog Operations,IntegrationTesting,IMPL,TestCatalogE2E,,server,2025-10-04,tests/test_catalog_integration_e2e.zig
+REQ-GQL-CATALOG-004,Error Handling Regression,ErrorTesting,IMPL,TestCatalogErrorHandling,,server,2025-10-04,tests/test_catalog_integration_e2e.zig
+REQ-GQL-CATALOG-005,Catalog Regression Test Suite,TestAutomation,IMPL,CatalogRegressionSuite,,testing,2025-10-04,tests/catalog_regression_test.sh
 REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,e2e_cbo_toggle,,planner,2025-09-25,src/planner/cbo.zig
 REQ-GQL-CDC-SINKS,CDC External Sinks,KafkaWebhook,TESTED,e2e_cdc_sinks,,streaming,2025-09-25,src/cdc/sinks.zig
 REQ-GQL-COMPLIANCE-001,GQL Compliance Regression,Parser,TESTED,TestCANARY_REQ_GQL_COMPLIANCE_001_Parser,,parser,2025-01-03,tests/gql_compliance_regression_test.zig
@@ -789,6 +799,7 @@ REQ-GQL-GEO-TYPES-001,Geographic Types Implementation,Types,IMPL,TestCANARY_REQ_
 "REQ-GQL-GEOGRAPHIC-MAPPING"" {
     // CANARY: REQ=REQ-GQL-GEOGRAPHIC-MAPPING",GeographicMapping,Integration,TESTED,TestCANARY_REQ_GQL_GEOGRAPHIC_MAPPING,,team,2025-10-02,tests/integration/test_geographic_mapping.zig
 REQ-GQL-GRAPH-001,Leiden Community Detection,Graph,IMPL,TestCANARY_Leiden,,graph,2025-09-29,src/graph/leiden.zig
+REQ-GQL-GRAPHTYPE-001,Graph Type Operations,ComprehensiveTesting,IMPL,TestGraphTypeComprehensive,,parser,2025-10-04,tests/test_graph_type_comprehensive.zig
 "REQ-GQL-INDEX-PERFORMANCE"" {
     // CANARY: REQ=REQ-GQL-INDEX-PERFORMANCE",IndexPerformance,Performance,TESTED,TestCANARY_REQ_GQL_INDEX_PERFORMANCE,,team,2025-10-02,tests/integration/test_index_performance.zig
 "REQ-GQL-IOT-NETWORK"" {
@@ -797,6 +808,7 @@ REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,TestCANARY_REQ_GQL_KEYWOR
 "REQ-GQL-LARGE-DATASET"" {
     // CANARY: REQ=REQ-GQL-LARGE-DATASET",LargeDataset,Scalability,TESTED,TestCANARY_REQ_GQL_LARGE_DATASET,,team,2025-10-02,tests/integration/test_large_social_network.zig
 REQ-GQL-LEIDEN-TEST,Leiden Test Suite,Testing,TESTED,TestCANARY_Leiden_Suite,,test,2025-09-29,tests/test_leiden_community.zig
+REQ-GQL-LIKE-001,LIKE Clause Parsing Fix,RegressionTesting,IMPL,TestLikeClauseRegression,,parser,2025-10-04,tests/test_like_clause_regression.zig
 REQ-GQL-MATCH,MATCH Engine,ComplexPatterns,TESTED,e2e_match_complex,,gql,2025-09-25,src/gql/match.zig
 REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,TESTED,tests/unit_mfa_enforcement.zig:1,,security,2025-09-26,tests/unit_mfa_enforcement.zig
 REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole,,security,2025-09-26,src/security/auth.zig
@@ -843,6 +855,7 @@ REQ-GQL-NET-TYPES-100,NetworkTypesIntegration,EndToEndTesting,TESTED,TestCANARY_
 REQ-GQL-NET-TYPES-GEODETESTLAB,Network Types Geodetestlab Tests,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_GEODETESTLAB_All,,testing,2025-01-03,geodetestlab/specs/network_types_validation.yml
 REQ-GQL-NET-TYPES-REGRESSION,Network Types Regression Tests,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_REGRESSION_All,,testing,2025-01-03,tests/network_types_regression_test.zig
 REQ-GQL-NET-TYPES-VALIDATION,Network Types Validation Script,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_VALIDATION_Script,,testing,2025-01-03,validate_current_features.zig
+REQ-GQL-NODE-PROPERTY-ACCESS,Node Property Access,RuntimeStability,IMPL,TestNodePropertyHashMapAccess,,core,2025-10-05,tests/regression_integer_overflow_binding_fix.sh
 REQ-GQL-PARALLEL-001,Parallel Exec,ENGINE,TESTED,tests/e2e_parallel_execution.zig:1,tests/benchmark_parallel_expand_mem_perf.zig:1,engine,2025-09-26,src/execution/parallel.zig
 REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement,,engine,2025-10-04,tests/test_property_persistence_regression.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,e2e_raft_persist_snapshot_membership,,distributed,2025-09-25,src/distributed/raft_persistent.zig
@@ -912,6 +925,7 @@ REQ-GQL-TDE-OVERHEAD-THRESH-001,TDE AEAD overhead threshold,PERF,TESTED,TestCANA
 REQ-GQL-TDE-PAGE-001,PageEncryption,SECURITY,TESTED,TestPageEncryptionRoundTrip,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-PERF-001,TDEOverheadBenchmark,PERFORMANCE,TESTED,Test_tde_aead_overhead_threshold,,perf,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-WAL-001,WalEncryption,SECURITY,TESTED,TestWalEncryptedSegment,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,IMPL,TestCANARY_REQ_GQL_TYPE_CONV_001_TypeConversionFunctions,,eval,2025-01-05,docs/TYPE_CONVERSION_FUNCTIONS.md
 REQ-GQL-TYPES,NetworkTypes,Implementation,TESTED,test_type_extensions.zig,benchmark_patricia_trie.zig,types-team,2025-10-03,src/types/network.zig
 REQ-GQL-UNICODE-002,UnicodeTableGenerator,Tooling,TESTED,TestCANARY_REQ_GQL_UNICODE_002_GeneratorDryRun,,unicode,2025-09-27,tools/gen_unicode_tables.zig
 REQ-GQL-UNICODE-003,UnicodeGeneratedTables,Decomposition,IMPL,TestCANARY_REQ_GQL_UNICODE_003_DecompLookup,,unicode,2025-09-27,src/unicode/generated/README.md
@@ -1000,4 +1014,21 @@ REQ-PERF-JSON-001,OptimizedJSON,Testing,TESTED,TestCANARY_OptimizedJSON,,perform
 "REQ-PERF-JSON-001"" {
     // CANARY: REQ=REQ-PERF-JSON-001",OptimizedJSON,Integration,TESTED,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04,src/performance/test_json_optimization.zig
 REQ-PERF-MMAP-001,MemoryMappedIO,Performance,IMPL,TestCANARY_MemoryMappedIO,,performance,2025-10-04,src/performance/memory_mapped_io.zig
+REQ-PLANNER-CARD-001,Cardinality Estimator,RealImplementation,IMPL,test_cardinality_scan_estimation,,planner,2025-10-05,tests/test_cardinality_estimator.zig
+REQ-REPL-COMPREHENSIVE-001,REPL Comprehensive Testing,GeodeTestLab,IMPL,geode_repl_comprehensive,,repl,2025-10-05,geodetestlab/specs/geode_repl_comprehensive.yml
+REQ-REPL-FORMAT-001,REPL Output Formatting,RegressionTesting,TESTED,repl_formatting_regression_test,,repl,2025-10-05,tests/repl_formatting_regression_test.sh
+REQ-REPL-HISTORY-001,REPL Persistent History,UnitTesting,IMPL,test_repl_history,,repl,2025-10-05,tests/test_repl_history.zig
+REQ-REPL-HISTORY-002,REPL Persistent History,IntegrationTesting,IMPL,test_repl_history_integration,,repl,2025-10-05,tests/test_repl_history_integration.zig
+REQ-REPL-HISTORY-003,REPL Persistent History,RegressionTesting,TESTED,repl_history_regression_test,,repl,2025-10-05,tests/repl_history_regression_test.sh
+REQ-REPL-QUIC-001,REPL QUIC Integration,ClientSession,IMPL,test_quic_integration,,repl,2025-10-05,src/client/repl/repl_dispatch.zig
+REQ-REPL-QUIC-001,REPL QUIC Integration,IntegrationTesting,IMPL,test_repl_quic_integration_e2e,,repl,2025-10-05,tests/test_repl_quic_integration_e2e.zig
+REQ-REPL-QUIC-001,REPL QUIC Integration,RegressionTesting,IMPL,repl_quic_integration_regression_test,,repl,2025-10-05,tests/repl_quic_integration_regression_test.sh
+REQ-REPL-QUIC-001,REPL QUIC Integration,UnitTesting,IMPL,test_repl_quic_integration,,repl,2025-10-05,tests/test_repl_quic_integration.zig
+REQ-REPL-QUIC-002,REPL QUIC Transport,QuicTransportAdapter,IMPL,test_quic_transport,,repl,2025-10-05,src/cli/main.zig
+REQ-REPL-QUIC-003,REPL QUIC Transport Tests,UnitTests,IMPL,test_transport_interface,,repl,2025-10-05,tests/test_quic_transport.zig
+REQ-REPL-QUIC-004,REPL Integration Tests,EndToEndTests,IMPL,test_repl_loop_options,,repl,2025-10-05,tests/test_repl_integration.zig
+REQ-REPL-QUIC-005,REPL E2E Tests,EndToEndIntegration,IMPL,test_repl_server_handshake,,repl,2025-10-05,tests/test_repl_e2e.zig
+REQ-REPL-TIMING-001,REPL Timing,RegressionTesting,TESTED,repl_timing_regression_test,,repl,2025-10-05,tests/repl_timing_regression_test.sh
+REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,IMPL,test_s3_backup_mock,,storage,2025-10-05,tests/test_s3_backup.zig
+REQ-TEST-SUITE-001,Comprehensive Regression Test Suite,QualityAssurance,TESTED,TestCANARY_REQ_TEST_SUITE_001_AllRegressionTests,,testing,2025-10-04,run_all_regression_tests.sh
 identifier,name,component,IMPL,test_name,bench_name,team,2025-09-29,docs/GROUND_TRUTH.md
