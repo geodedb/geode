@@ -364,7 +364,6 @@ fn evaluateExpressionInBinding(
     expr: ast.Expr,
     binding: *const Binding,
 ) !BindingValue {
-    _ = allocator;
 
     // Expression evaluation - removed debug logging
 
@@ -418,8 +417,176 @@ fn evaluateExpressionInBinding(
         .Int => |i| .{ .Value = .{ .Int = i } },
         .Bool => |b| .{ .Value = .{ .Bool = b } },
         .Null => .Null,
-        // For complex expressions, return null for now
-        // TODO: implement full expression evaluation
+        .Call => |call| blk_call: {
+            // Handle function calls in binding context
+            // This enables toString(n.name), type(n.property), etc.
+            
+            if (call.callee.* != .Ident) break :blk_call .Null;
+            const function_name = call.callee.Ident.orig;
+            
+            // Try to use the extended function registry (like eval.zig does)
+            const eval_ext = geode.eval_ext;
+            
+            // Initialize function registry
+            var registry = eval_ext.initFunctionRegistry(allocator) catch break :blk_call .Null;
+            defer registry.deinit();
+            
+            // Convert function name to lowercase for lookup
+            var lowercase_name = allocator.alloc(u8, function_name.len) catch break :blk_call .Null;
+            defer allocator.free(lowercase_name);
+            
+            for (function_name, 0..) |c, i| {
+                lowercase_name[i] = std.ascii.toLower(c);
+            }
+            
+            // Look up function in extended registry
+            if (registry.get(lowercase_name)) |func| {
+                // Convert arguments from binding context to ExtValue
+                var args = allocator.alloc(eval_ext.ExtValue, call.args.len) catch break :blk_call .Null;
+                defer allocator.free(args);
+                
+                for (call.args, 0..) |arg, i| {
+                    const arg_result = evaluateExpressionInBinding(allocator, arg.*, binding) catch break :blk_call .Null;
+                    
+                    // Convert BindingValue to ExtValue
+                    args[i] = switch (arg_result) {
+                        .Value => |v| switch (v) {
+                            .String => |s| eval_ext.ExtValue{ .Str = s },
+                            .Int => |int_val| eval_ext.ExtValue{ .Int = int_val },
+                            .Bool => |b| eval_ext.ExtValue{ .Bool = b },
+                            .Null => eval_ext.ExtValue{ .Null = {} },
+                            .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                        },
+                        .Property => |p| switch (p) {
+                            .String => |s| eval_ext.ExtValue{ .Str = s },
+                            .Int => |int_val| eval_ext.ExtValue{ .Int = int_val },
+                            .Bool => |b| eval_ext.ExtValue{ .Bool = b },
+                            .Null => eval_ext.ExtValue{ .Null = {} },
+                            .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                        },
+                        .Node => eval_ext.ExtValue{ .Null = {} }, // Can't convert node to function arg
+                        .Edge => eval_ext.ExtValue{ .Null = {} }, // Can't convert edge to function arg  
+                        .Path => eval_ext.ExtValue{ .Null = {} }, // Can't convert path to function arg
+                        .Null => eval_ext.ExtValue{ .Null = {} },
+                    };
+                }
+                
+                // Call the extended function
+                if (func(allocator, args)) |result| {
+                    // Convert ExtValue result back to PropertyValue for BindingValue
+                    const property_value = switch (result) {
+                        .Str => |s| PropertyValue{ .String = s },
+                        .Int => |int_val| PropertyValue{ .Int = int_val },
+                        .Bool => |b| PropertyValue{ .Bool = b },
+                        .Null => PropertyValue{ .Null = {} },
+                        .Decimal => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                        else => PropertyValue{ .Null = {} }, // For advanced types, return null for now
+                    };
+                    break :blk_call .{ .Value = property_value };
+                } else |_| {
+                    // Function call failed, return null
+                    break :blk_call .Null;
+                }
+            } else {
+                // Try basic function fallback (like toString, toInteger from evaluator_functions.zig)
+                const eval_functions = geode.types.evaluator_functions;
+                
+                // Convert arguments to eval.Value format for basic functions
+                var eval_args = allocator.alloc(geode.eval.Value, call.args.len) catch break :blk_call .Null;
+                defer allocator.free(eval_args);
+                
+                for (call.args, 0..) |arg, i| {
+                    const arg_result = evaluateExpressionInBinding(allocator, arg.*, binding) catch break :blk_call .Null;
+                    
+                    eval_args[i] = switch (arg_result) {
+                        .Value => |v| switch (v) {
+                            .String => |s| geode.eval.Value{ .Str = s },
+                            .Int => |int_val| geode.eval.Value{ .Int = int_val },
+                            .Bool => |b| geode.eval.Value{ .Bool = b },
+                            .Null => geode.eval.Value{ .Null = {} },
+                            .Decimal => |dec| geode.eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                        },
+                        .Property => |p| switch (p) {
+                            .String => |s| geode.eval.Value{ .Str = s },
+                            .Int => |int_val| geode.eval.Value{ .Int = int_val },
+                            .Bool => |b| geode.eval.Value{ .Bool = b },
+                            .Null => geode.eval.Value{ .Null = {} },
+                            .Decimal => |dec| geode.eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                        },
+                        .Node => geode.eval.Value{ .Null = {} },
+                        .Edge => geode.eval.Value{ .Null = {} },
+                        .Path => geode.eval.Value{ .Null = {} },
+                        .Null => geode.eval.Value{ .Null = {} },
+                    };
+                }
+                
+                // Convert eval.Value to heap.Value for function calls
+                const convertEvalToHeap = struct {
+                    fn convert(val: eval.Value) geode.storage.heap.Value {
+                        return switch (val) {
+                            .Null => geode.storage.heap.Value{ .Null = {} },
+                            .Bool => |b| geode.storage.heap.Value{ .Bool = b },
+                            .Int => |i| geode.storage.heap.Value{ .Int = i },
+                            .Str => |s| geode.storage.heap.Value{ .Str = s },
+                            .Decimal => |dec| geode.storage.heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                        };
+                    }
+                }.convert;
+
+                // Try basic function calls
+                if (std.ascii.eqlIgnoreCase(function_name, "toString") and eval_args.len == 1) {
+                    const heap_arg = convertEvalToHeap(eval_args[0]);
+                    if (eval_functions.toString_val(allocator, heap_arg)) |result| {
+                        // Convert heap.Value to PropertyValue
+                        const property_value = switch (result) {
+                            .Text => |s| PropertyValue{ .String = s },
+                            .Str => |s| PropertyValue{ .String = s },
+                            .Int => |int_val| PropertyValue{ .Int = int_val },
+                            .Bool => |b| PropertyValue{ .Bool = b },
+                            .Null => PropertyValue{ .Null = {} },
+                            .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            else => PropertyValue{ .Null = {} }, // Fallback for other types
+                        };
+                        break :blk_call .{ .Value = property_value };
+                    } else |_| {}
+                } else if (std.ascii.eqlIgnoreCase(function_name, "toInteger") and eval_args.len == 1) {
+                    const heap_arg = convertEvalToHeap(eval_args[0]);
+                    if (eval_functions.toInteger_val(heap_arg)) |result| {
+                        // Convert heap.Value to PropertyValue
+                        const property_value = switch (result) {
+                            .Text => |s| PropertyValue{ .String = s },
+                            .Str => |s| PropertyValue{ .String = s },
+                            .Int => |int_val| PropertyValue{ .Int = int_val },
+                            .Bool => |b| PropertyValue{ .Bool = b },
+                            .Null => PropertyValue{ .Null = {} },
+                            .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            else => PropertyValue{ .Null = {} }, // Fallback for other types
+                        };
+                        break :blk_call .{ .Value = property_value };
+                    } else |_| {}
+                } else if (std.ascii.eqlIgnoreCase(function_name, "type") and eval_args.len == 1) {
+                    const heap_arg = convertEvalToHeap(eval_args[0]);
+                    if (eval_functions.type_val(heap_arg)) |result| {
+                        // Convert heap.Value to PropertyValue
+                        const property_value = switch (result) {
+                            .Text => |s| PropertyValue{ .String = s },
+                            .Str => |s| PropertyValue{ .String = s },
+                            .Int => |int_val| PropertyValue{ .Int = int_val },
+                            .Bool => |b| PropertyValue{ .Bool = b },
+                            .Null => PropertyValue{ .Null = {} },
+                            .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            else => PropertyValue{ .Null = {} }, // Fallback for other types
+                        };
+                        break :blk_call .{ .Value = property_value };
+                    } else |_| {}
+                }
+                
+                // Function not found or failed
+                break :blk_call .Null;
+            }
+        },
+        // For other complex expressions, return null for now
+        // TODO: implement more expression types as needed
         else => .Null,
     };
 }

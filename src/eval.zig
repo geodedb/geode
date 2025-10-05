@@ -774,6 +774,8 @@ fn heapValueToEvalValue(value: heap.Value) Value {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Text => |s| .{ .Str = s },
+        .Real => |f| .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } }, // Convert f32 to decimal with 6 decimal places
+        .Double => |d| .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } }, // Convert f64 to decimal with 6 decimal places
         .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
         else => .{ .Null = {} }, // Convert unknown types to null
     };
@@ -813,6 +815,18 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "floor")) {
         const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "type")) {
+        const result = evaluator_functions.type_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "tostring")) {
+        const result = evaluator_functions.toString_val(ally, heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "tointeger")) {
+        const result = evaluator_functions.toInteger_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "toreal")) {
+        const result = evaluator_functions.toReal_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
     }
 

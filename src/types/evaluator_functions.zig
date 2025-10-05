@@ -942,3 +942,143 @@ pub fn floor_val(val: Value) EvaluatorError!Value {
         else => EvaluatorError.TypeMismatch,
     };
 }
+
+// Type inspection and conversion functions
+pub fn type_val(val: Value) EvaluatorError!Value {
+    const type_name = switch (val) {
+        .Null => "NULL",
+        .Bool => "BOOLEAN", 
+        .Int => "INTEGER",
+        .SmallInt => "INTEGER",
+        .BigInt => "INTEGER",
+        .Real => "REAL",
+        .Double => "DOUBLE",
+        .Char => "CHARACTER",
+        .Varchar => "VARCHAR",
+        .Str => "STRING",
+        .Text => "STRING",
+        .Decimal128 => "DECIMAL",
+        .Date => "DATE",
+        .Time => "TIME",
+        .TimeTZ => "TIME WITH TIME ZONE",
+        .Timestamp => "TIMESTAMP",
+        .TimestampTZ => "TIMESTAMP WITH TIME ZONE",
+        .Bytea => "BINARY",
+        .VarBit => "VARBINARY", 
+        .Jsonb => "JSON",
+        .Xml => "XML",
+        .Url => "URL",
+        .UUID => "UUID",
+        .Array => "ARRAY",
+        .BitString => "BIT STRING",
+        .IntRange => "RANGE",
+        .IpAddr => "IP_ADDRESS",
+        .Subnet => "SUBNET",
+        .Mac => "MAC_ADDRESS",
+        .VectorF32 => "VECTOR_F32",
+        .LatLon => "LAT_LON",
+        .LatLonAlt => "LAT_LON_ALT",
+        .Hash => "HASH",
+        .Currency => "CURRENCY",
+        .LanguageTag => "LANGUAGE_TAG",
+        .Temperature => "TEMPERATURE",
+        .Pressure => "PRESSURE",
+        else => "UNKNOWN",
+    };
+    return Value{ .Text = type_name };
+}
+
+pub fn toString_val(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
+    const str = switch (val) {
+        .Null => "null",
+        .Bool => |b| if (b) "true" else "false",
+        .Int => |i| blk: {
+            const result = std.fmt.allocPrint(allocator, "{d}", .{i}) catch return EvaluatorError.OutOfMemory;
+            break :blk result;
+        },
+        .SmallInt => |i| blk: {
+            const result = std.fmt.allocPrint(allocator, "{d}", .{i}) catch return EvaluatorError.OutOfMemory;
+            break :blk result;
+        },
+        .BigInt => |i| blk: {
+            const result = std.fmt.allocPrint(allocator, "{d}", .{i}) catch return EvaluatorError.OutOfMemory;
+            break :blk result;
+        },
+        .Real => |f| blk: {
+            const result = std.fmt.allocPrint(allocator, "{d}", .{f}) catch return EvaluatorError.OutOfMemory;
+            break :blk result;
+        },
+        .Double => |d| blk: {
+            const result = std.fmt.allocPrint(allocator, "{d}", .{d}) catch return EvaluatorError.OutOfMemory;
+            break :blk result;
+        },
+        .Decimal128 => |dec| blk: {
+            // Convert Decimal128 to string representation
+            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
+            const result = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return EvaluatorError.OutOfMemory;
+            break :blk result;
+        },
+        .Str => |s| s,
+        .Text => |s| s,
+        .Char => |c| c.data,
+        .Varchar => |v| v.data,
+        else => return EvaluatorError.TypeMismatch,
+    };
+    return Value{ .Text = str };
+}
+
+pub fn toInteger_val(val: Value) EvaluatorError!Value {
+    return switch (val) {
+        .Int => val,
+        .SmallInt => |i| Value{ .Int = i },
+        .BigInt => |i| {
+            if (i > std.math.maxInt(i64) or i < std.math.minInt(i64)) return EvaluatorError.Overflow;
+            return Value{ .Int = @intCast(i) };
+        },
+        .Real => |f| {
+            if (f > 9.223372e18 or f < -9.223372e18) return EvaluatorError.Overflow;
+            return Value{ .Int = @intFromFloat(f) };
+        },
+        .Double => |d| {
+            if (d > 9.223372036854775807e18 or d < -9.223372036854775808e18) return EvaluatorError.Overflow;
+            return Value{ .Int = @intFromFloat(d) };
+        },
+        .Decimal128 => |dec| blk: {
+            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
+            if (float_val > 9.223372036854775807e18 or float_val < -9.223372036854775808e18) return EvaluatorError.Overflow;
+            break :blk Value{ .Int = @intFromFloat(float_val) };
+        },
+        .Bool => |b| Value{ .Int = if (b) 1 else 0 },
+        .Str => |s| blk: {
+            const result = std.fmt.parseInt(i64, s, 10) catch return EvaluatorError.InvalidFormat;
+            break :blk Value{ .Int = result };
+        },
+        .Text => |s| blk: {
+            const result = std.fmt.parseInt(i64, s, 10) catch return EvaluatorError.InvalidFormat;
+            break :blk Value{ .Int = result };
+        },
+        else => EvaluatorError.TypeMismatch,
+    };
+}
+
+pub fn toReal_val(val: Value) EvaluatorError!Value {
+    return switch (val) {
+        .Real => val,
+        .Double => |d| {
+            if (d > std.math.floatMax(f32) or d < -std.math.floatMax(f32)) return EvaluatorError.Overflow;
+            return Value{ .Real = @floatCast(d) };
+        },
+        .Int => |i| Value{ .Real = @floatFromInt(i) },
+        .SmallInt => |i| Value{ .Real = @floatFromInt(i) },
+        .BigInt => |i| Value{ .Real = @floatFromInt(i) },
+        .Str => |s| blk: {
+            const result = std.fmt.parseFloat(f32, s) catch return EvaluatorError.InvalidFormat;
+            break :blk Value{ .Real = result };
+        },
+        .Text => |s| blk: {
+            const result = std.fmt.parseFloat(f32, s) catch return EvaluatorError.InvalidFormat;
+            break :blk Value{ .Real = result };
+        },
+        else => EvaluatorError.TypeMismatch,
+    };
+}

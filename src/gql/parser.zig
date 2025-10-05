@@ -1726,16 +1726,19 @@ pub const Parser = struct {
             return n == 1 and (args[0] == .Ident or args[0] == .Member);
         }
         if (std.ascii.eqlIgnoreCase(name, "type")) {
-            return n == 1 and (args[0] == .Ident or args[0] == .Member);
+            // Accept any single expression for type() function
+            return n == 1;
         }
         if (std.ascii.eqlIgnoreCase(name, "coalesce")) {
             return n >= 1;
         }
         if (std.ascii.eqlIgnoreCase(name, "toInteger")) {
-            return n == 1 and (argIsNumericLike(args[0]) or argIsStringLike(args[0]));
+            // Accept any single expression for toInteger() function
+            return n == 1;
         }
         if (std.ascii.eqlIgnoreCase(name, "toString")) {
-            return n == 1 and (argIsStringLike(args[0]) or argIsNumericLike(args[0]));
+            // Accept any single expression for toString() function
+            return n == 1;
         }
         if (std.ascii.eqlIgnoreCase(name, "abs")) {
             return n == 1 and argIsNumericLike(args[0]);
