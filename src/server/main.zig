@@ -17,6 +17,7 @@ const cert_gen = @import("tools/cert_gen.zig");
 const mvcc = @import("server/txn/mvcc.zig");
 const logger = @import("log/logger.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
+// Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
 // Backup system integration - using build system module paths
@@ -446,6 +447,9 @@ const ServerState = struct {
         node_count: u64,
         edge_count: u64,
     } = null,
+
+    // Distributed query planner for federation-aware optimization
+    distributed_query_planner: ?*anyopaque = null,
 
     // Query plan cache and optimizer for performance optimization
     query_optimizer: ?*query_plan_cache.QueryOptimizer = null,
