@@ -4,7 +4,7 @@ description: "Comprehensive tests for UNION operations with property access func
 
 # Test configuration
 config:
-  executable: "./zig-out/bin/geodec"
+  executable: "./zig-out/bin/geode", "query"
   default_args: ["--no-quic", "--format", "json"]
   timeout: 30
 

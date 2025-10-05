@@ -119,7 +119,7 @@ test "exit codes are defined correctly" {
 test "legacy binary name detection" {
     // Test basename extraction for legacy compatibility
     try testing.expectEqualStrings("geoded", std.fs.path.basename("/usr/local/bin/geoded"));
-    try testing.expectEqualStrings("geodec", std.fs.path.basename("./zig-out/bin/geodec"));
+    try testing.expectEqualStrings("geodec", std.fs.path.basename("./zig-out/bin/geode"));
     try testing.expectEqualStrings("geode-auth", std.fs.path.basename("geode-auth"));
     try testing.expectEqualStrings("geode", std.fs.path.basename("/path/to/geode"));
 

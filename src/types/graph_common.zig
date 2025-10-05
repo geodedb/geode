@@ -14,6 +14,13 @@ pub const PropertyValue = union(enum) {
     Int: i64,
     String: []const u8,
     Decimal: struct { coeff: i128, scale: u8 },
+    VectorF32: VectorF32,
+};
+
+// Vector type for PropertyValue
+pub const VectorF32 = struct {
+    dim: u16,
+    data: []const f32,
 };
 
 // Node in the property graph

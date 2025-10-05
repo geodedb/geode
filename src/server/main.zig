@@ -868,6 +868,7 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
                 .Int => |iv| std.fmt.format(nodes_content.writer(ally), "{d}", .{iv}) catch {},
                 .String => |s| std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{s}) catch {},
                 .Decimal => nodes_content.appendSlice(ally, "null") catch {},
+                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(ally), "\"[vector:{d}x{d}]\"", .{vec.dim, vec.data.len}) catch {},
             }
         }
         nodes_content.appendSlice(ally, "}}\n") catch {};
@@ -1802,6 +1803,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     .Int => |i| eval.Value{ .Int = i },
                     .String => |s| eval.Value{ .Str = s },
                     .Decimal => |d| eval.Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                    .VectorF32 => eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
                 };
             }
         };
@@ -5927,6 +5929,7 @@ fn propertyValueToIndexKey(allocator: std.mem.Allocator, value: graph_exec.Prope
         .Bool => |b| return allocator.dupe(u8, if (b) "true" else "false"),
         .Null => return allocator.dupe(u8, "null"),
         .Decimal => |d| return std.fmt.allocPrint(allocator, "{d}", .{d.coeff}),
+        .VectorF32 => |v| return std.fmt.allocPrint(allocator, "vector:{d}x{d}", .{ v.dim, v.data.len }),
     }
 }
 
@@ -6049,8 +6052,20 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                             // Skip for now as they require specific coordinate format
                         },
                         .vector, .vector_f32 => {
-                            // Vector indexes would need vector data parsing
-                            // Skip for now as they require specific vector format
+                            // Handle vector index population for VectorF32 properties
+                            switch (prop_value) {
+                                .VectorF32 => |vector| {
+                                    // Create vector index key using the vector data
+                                    const vector_key = try std.fmt.allocPrint(allocator, "vector_{d}x{d}", .{ vector.dim, vector.data.len });
+                                    defer allocator.free(vector_key);
+                                    _ = index_manager.insertIntoPropertyIndex(stmt.name, vector_key, node_id) catch {};
+                                    population_count += 1;
+                                    std.log.info("Added VectorF32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                                },
+                                else => {
+                                    // Property is not a vector type, skip
+                                },
+                            }
                         },
                         else => {
                             // Advanced indexes would need specialized population logic

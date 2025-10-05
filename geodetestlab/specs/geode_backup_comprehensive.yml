@@ -22,7 +22,7 @@ tests:
     description: "Test creation of full backup"
     steps:
       - description: "Start embedded Geode instance and create initial data"
-        command: ["./zig-out/bin/geodec", "--process", "./zig-out/bin/geoded", "--no-quic", "--data-dir", "./test_data", "CREATE (n:TestNode {id: 1, name: 'backup_test'})", "--format", "json"]
+        command: ["./zig-out/bin/geode", "query", "--no-quic", "--data-dir", "./test_data", "CREATE (n:TestNode {id: 1, name: 'backup_test'})", "--format", "json"]
         expected_output:
           contains: ["TestNode"]
       
@@ -42,7 +42,7 @@ tests:
     depends_on: ["create_full_backup"]
     steps:
       - description: "Add more data for incremental backup"
-        command: ["./zig-out/bin/geodec", "--process", "./zig-out/bin/geoded", "--no-quic", "--data-dir", "./test_data", "CREATE (n:TestNode {id: 2, name: 'incremental_test'})", "--format", "json"]
+        command: ["./zig-out/bin/geode", "query", "--no-quic", "--data-dir", "./test_data", "CREATE (n:TestNode {id: 2, name: 'incremental_test'})", "--format", "json"]
         expected_output:
           contains: ["TestNode"]
       
@@ -96,7 +96,7 @@ tests:
     depends_on: ["verify_backup_integrity"]
     steps:
       - description: "Create test data with timestamps"
-        command: ["./zig-out/bin/geodec", "--process", "./zig-out/bin/geoded", "--no-quic", "--data-dir", "./test_data", "CREATE (n:TimestampNode {id: 3, created: datetime('2025-10-04T10:00:00')})", "--format", "json"]
+        command: ["./zig-out/bin/geode", "query", "--no-quic", "--data-dir", "./test_data", "CREATE (n:TimestampNode {id: 3, created: datetime('2025-10-04T10:00:00')})", "--format", "json"]
         expected_output:
           contains: ["TimestampNode"]
       
@@ -112,7 +112,7 @@ tests:
           status_code: 0
       
       - description: "Verify restored data"
-        command: ["./zig-out/bin/geodec", "--process", "./zig-out/bin/geoded", "--no-quic", "--data-dir", "./test_data_restored", "MATCH (n:TestNode) RETURN count(n) AS node_count", "--format", "json"]
+        command: ["./zig-out/bin/geode", "query", "--no-quic", "--data-dir", "./test_data_restored", "MATCH (n:TestNode) RETURN count(n) AS node_count", "--format", "json"]
         expected_output:
           contains: ["node_count", "2"] # Should have 2 nodes from before the timestamp
 
@@ -202,7 +202,7 @@ tests:
     timeout: 600
     steps:
       - description: "Create large dataset for performance testing"
-        command: ["./zig-out/bin/geodec", "--process", "./zig-out/bin/geoded", "--no-quic", "--data-dir", "./test_data", "UNWIND range(1, 1000) AS i CREATE (n:PerfNode {id: i, data: 'performance_test_' + toString(i)})", "--format", "json"]
+        command: ["./zig-out/bin/geode", "query", "--no-quic", "--data-dir", "./test_data", "UNWIND range(1, 1000) AS i CREATE (n:PerfNode {id: i, data: 'performance_test_' + toString(i)})", "--format", "json"]
         expected_output:
           contains: ["PerfNode"]
       

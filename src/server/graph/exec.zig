@@ -75,6 +75,7 @@ fn propertyValuesEqual(a: PropertyValue, b: PropertyValue) bool {
         .Int => |ai| b == .Int and b.Int == ai,
         .String => |as| b == .String and std.mem.eql(u8, as, b.String),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
+        .VectorF32 => |av| b == .VectorF32 and av.dim == b.VectorF32.dim and std.mem.eql(f32, av.data, b.VectorF32.data),
     };
 }
 
@@ -456,6 +457,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| eval_ext.ExtValue{ .Bool = b },
                             .Null => eval_ext.ExtValue{ .Null = {} },
                             .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                            .VectorF32 => |vec| eval_ext.ExtValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
                         },
                         .Property => |p| switch (p) {
                             .String => |s| eval_ext.ExtValue{ .Str = s },
@@ -463,6 +465,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| eval_ext.ExtValue{ .Bool = b },
                             .Null => eval_ext.ExtValue{ .Null = {} },
                             .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                            .VectorF32 => |vec| eval_ext.ExtValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
                         },
                         .Node => eval_ext.ExtValue{ .Null = {} }, // Can't convert node to function arg
                         .Edge => eval_ext.ExtValue{ .Null = {} }, // Can't convert edge to function arg  
@@ -505,6 +508,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| geode.eval.Value{ .Bool = b },
                             .Null => geode.eval.Value{ .Null = {} },
                             .Decimal => |dec| geode.eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                            .VectorF32 => geode.eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
                         },
                         .Property => |p| switch (p) {
                             .String => |s| geode.eval.Value{ .Str = s },
@@ -512,6 +516,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| geode.eval.Value{ .Bool = b },
                             .Null => geode.eval.Value{ .Null = {} },
                             .Decimal => |dec| geode.eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                            .VectorF32 => geode.eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
                         },
                         .Node => geode.eval.Value{ .Null = {} },
                         .Edge => geode.eval.Value{ .Null = {} },
@@ -545,6 +550,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| PropertyValue{ .Bool = b },
                             .Null => PropertyValue{ .Null = {} },
                             .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            .VectorF32 => |vec| PropertyValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
                             else => PropertyValue{ .Null = {} }, // Fallback for other types
                         };
                         break :blk_call .{ .Value = property_value };
@@ -560,6 +566,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| PropertyValue{ .Bool = b },
                             .Null => PropertyValue{ .Null = {} },
                             .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            .VectorF32 => |vec| PropertyValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
                             else => PropertyValue{ .Null = {} }, // Fallback for other types
                         };
                         break :blk_call .{ .Value = property_value };
@@ -575,6 +582,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| PropertyValue{ .Bool = b },
                             .Null => PropertyValue{ .Null = {} },
                             .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            .VectorF32 => |vec| PropertyValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
                             else => PropertyValue{ .Null = {} }, // Fallback for other types
                         };
                         break :blk_call .{ .Value = property_value };
@@ -631,6 +639,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                         .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
                         .Null => try result.appendSlice(allocator, "null"),
                         .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                        .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
                     }
                 },
                 .Value => |prop| {
@@ -644,6 +653,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                         .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
                         .Null => try result.appendSlice(allocator, "null"),
                         .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                        .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
                     }
                 },
                 .Node => |node| {
@@ -680,6 +690,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                             .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
                             .Null => try result.appendSlice(allocator, "null"),
                             .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                            .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
                         }
                         prop_count += 1;
                     }

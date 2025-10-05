@@ -383,10 +383,23 @@ pub const IndexOptimizer = struct {
     }
 
     fn estimateIndexScanCost(self: *IndexOptimizer, index_info: IndexInfo, prop_val: PropertyValue) f64 {
-        _ = self;
-        _ = prop_val;
-        // Index scan cost is typically much lower than sequential scan
-        return 10.0 * index_info.selectivity; // Simplified cost model
+        // Enhanced cost estimation with BM25 integration for fulltext indexes
+        switch (index_info.index_type) {
+            .fulltext => {
+                // Use BM25-enhanced cost estimation for fulltext searches
+                const use_bm25 = true; // Enable BM25 scoring by default
+                return self.estimateEnhancedFulltextCost(
+                    index_info.properties[0], // Primary property for fulltext index
+                    prop_val,
+                    index_info.name,
+                    use_bm25,
+                );
+            },
+            else => {
+                // Standard cost estimation for other index types
+                return 10.0 * index_info.selectivity;
+            },
+        }
     }
 
     fn estimateIndexScanRows(self: *IndexOptimizer, index_info: IndexInfo, prop_val: PropertyValue) u64 {
@@ -404,6 +417,7 @@ pub const IndexOptimizer = struct {
             .Bool => |b| self.allocator.dupe(u8, if (b) "true" else "false"),
             .Null => self.allocator.dupe(u8, "null"),
             .Decimal => |d| std.fmt.allocPrint(self.allocator, "{d}", .{d.coeff}),
+            .VectorF32 => |v| std.fmt.allocPrint(self.allocator, "vector_{d}x{d}", .{ v.dim, v.data.len }),
         };
     }
 
@@ -590,6 +604,124 @@ pub const IndexOptimizer = struct {
 
         // Cost scales with selectivity - more selective indexes are cheaper to process results
         return base_cost * selectivity * cost_factor;
+    }
+
+    // BM25-enhanced cost estimation for fulltext search queries
+    // Implements BM25 scoring cost estimation using the mathematical model:
+    // score = IDF * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (|d| / avgdl))))
+    fn estimateBM25FulltextCost(
+        self: *IndexOptimizer,
+        query_terms: []const []const u8,
+        index_name: []const u8,
+        corpus_size: u64,
+    ) f64 {
+        // BM25 parameters (commonly used defaults)
+        const k1: f64 = 1.2; // Term frequency saturation parameter
+        const b: f64 = 0.75;  // Length normalization parameter
+        
+        // Base BM25 computational cost (higher than regular fulltext due to scoring)
+        var base_cost: f64 = 25.0;
+
+        // Cost scales with query complexity (number of terms)
+        const query_complexity_factor = 1.0 + (@as(f64, @floatFromInt(query_terms.len)) - 1.0) * 0.3;
+        base_cost *= query_complexity_factor;
+
+        // Cost scales with corpus size (logarithmically for IDF computation)
+        if (corpus_size > 0) {
+            const corpus_factor = 1.0 + @log(@as(f64, @floatFromInt(corpus_size))) / 10.0;
+            base_cost *= corpus_factor;
+        }
+
+        // Enhanced BM25 cost estimation using available statistics
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                var bm25_cost_factor: f64 = 1.0;
+                
+                if (stats.fts_total_documents > 0) {
+                    // Factor in vocabulary complexity for IDF computation cost
+                    const vocab_size = @as(f64, @floatFromInt(stats.fts_vocabulary_size));
+                    const doc_count = @as(f64, @floatFromInt(stats.fts_total_documents));
+                    const vocab_density = vocab_size / doc_count;
+                    
+                    // More complex vocabulary requires more IDF computations
+                    if (vocab_density > 100.0) {
+                        bm25_cost_factor *= 1.2; // Complex vocabulary = higher IDF cost
+                    } else if (vocab_density < 20.0) {
+                        bm25_cost_factor *= 0.9; // Simple vocabulary = lower IDF cost  
+                    }
+
+                    // Factor in document length variance for normalization cost
+                    // BM25 normalization: k1 * (1 - b + b * (|d| / avgdl))
+                    const avg_doc_len = stats.fts_avg_document_length;
+                    if (avg_doc_len > 0) {
+                        // Longer documents require more normalization computation
+                        const length_norm_cost = 1.0 + (avg_doc_len - 200.0) / 1000.0;
+                        bm25_cost_factor *= @max(0.8, @min(1.5, length_norm_cost));
+                        
+                        // Additional cost for b parameter length normalization
+                        const b_factor_cost = 1.0 + (b * 0.2); // b=0.75 adds ~15% cost
+                        bm25_cost_factor *= b_factor_cost;
+                    }
+
+                    // Factor in term frequency processing (k1 parameter impact)
+                    // Higher k1 values require more tf normalization computation  
+                    const k1_factor_cost = 1.0 + (k1 - 1.0) * 0.1; // k1=1.2 adds ~2% cost
+                    bm25_cost_factor *= k1_factor_cost;
+
+                    base_cost *= bm25_cost_factor;
+                }
+
+                // Apply historical BM25 performance data
+                if (stats.fts_search_queries > 5) {
+                    // BM25 scoring efficiency based on hit ratios
+                    const bm25_efficiency = stats.hit_ratio * 0.4 + 0.6; // Between 0.6-1.0
+                    base_cost *= bm25_efficiency;
+                }
+            }
+        }
+
+        return base_cost;
+    }
+
+    // Enhanced fulltext search with BM25 scoring integration
+    fn estimateEnhancedFulltextCost(
+        self: *IndexOptimizer,
+        property: []const u8,
+        search_value: PropertyValue,
+        index_name: []const u8,
+        use_bm25: bool,
+    ) f64 {
+        // Extract search terms from query
+        var query_terms: []const []const u8 = &[_][]const u8{};
+        var corpus_size: u64 = 1000; // Default estimate
+
+        // Parse search terms from PropertyValue
+        switch (search_value) {
+            .String => |search_text| {
+                // For this implementation, treat the entire search as one term
+                // In a real implementation, this would be tokenized
+                query_terms = &[_][]const u8{search_text};
+            },
+            else => {
+                // Non-string values fallback to basic cost
+                return self.estimateIndexTypeCost(.fulltext, 0.3);
+            },
+        }
+
+        // Get corpus size from statistics if available
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                corpus_size = stats.fts_total_documents;
+            }
+        }
+
+        if (use_bm25) {
+            return self.estimateBM25FulltextCost(query_terms, index_name, corpus_size);
+        } else {
+            // Standard fulltext cost estimation
+            const selectivity = self.estimatePropertySelectivity(.fulltext, property);
+            return self.estimateIndexTypeCost(.fulltext, selectivity);
+        }
     }
 
     // Determine if an index type is suitable for a given query pattern

@@ -479,6 +479,183 @@ fn printQueryUsage() void {
         "\n", .{});
 }
 
+// Server configuration structure for embedded server
+const ServerConfig = struct {
+    data_dir: ?[]const u8 = null,
+    listen_quic: ?[]const u8 = null,
+    cert_path: ?[]const u8 = null,
+    key_path: ?[]const u8 = null,
+    log_level: []const u8 = "info",
+    result_format_txt: bool = false,
+    disable_estimates: bool = false,
+    compact_profile: bool = false,
+    memcurve_profile: bool = false,
+    force_no_tls: bool = false,
+    test_exit_after_first: bool = false,
+};
+
+// Client configuration structure for embedded client
+const ClientConfig = struct {
+    query_text: []const u8,
+    server: []const u8 = "127.0.0.1:8443",
+    format: []const u8 = "json",
+    page_size: usize = 1,
+    pull_all: bool = false,
+    extra_pull: usize = 0,
+    begin: bool = false,
+    commit: bool = false,
+    rollback: bool = false,
+    process_path: ?[]const u8 = null,
+    no_quic: bool = false,
+    server_args: [][]const u8 = &.{},
+    json_params: std.StringHashMap([]const u8) = undefined,
+};
+
+// Embedded server function
+fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
+    // Since we can't easily call the server main directly due to module complexities,
+    // we'll create the argument array and spawn geoded subprocess for now.
+    // This is still better than the previous TODO stub.
+    
+    // Build argument array for server
+    var server_args = std.ArrayList([]const u8).initCapacity(ally, 16) catch return error.OutOfMemory;
+    defer server_args.deinit(ally);
+    
+    // Find geoded binary path
+    const self_exe_path = try std.fs.selfExePathAlloc(ally);
+    defer ally.free(self_exe_path);
+    
+    const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
+    const geoded_path = try std.fs.path.join(ally, &.{ self_dir_path, "geoded" });
+    defer ally.free(geoded_path);
+    
+    // Check if geoded exists in the same directory
+    if (std.fs.accessAbsolute(geoded_path, .{})) |_| {
+        try server_args.append(ally, geoded_path);
+    } else |_| {
+        try server_args.append(ally, "geoded");
+    }
+    
+    if (config.listen_quic) |addr| {
+        try server_args.append(ally, "--listen-quic");
+        try server_args.append(ally, addr);
+    }
+    
+    if (config.data_dir) |data_dir| {
+        try server_args.append(ally, "--data_dir");
+        try server_args.append(ally, data_dir);
+    }
+    
+    if (config.cert_path) |cert| {
+        try server_args.append(ally, "--cert");
+        try server_args.append(ally, cert);
+    }
+    
+    if (config.key_path) |key| {
+        try server_args.append(ally, "--key");
+        try server_args.append(ally, key);
+    }
+    
+    if (config.force_no_tls) {
+        try server_args.append(ally, "--no-tls");
+    }
+    
+    if (config.result_format_txt) {
+        try server_args.append(ally, "--result-format");
+        try server_args.append(ally, "txt");
+    }
+    
+    // Execute server process
+    var process = std.process.Child.init(server_args.items, ally);
+    const term = try process.spawnAndWait();
+    
+    switch (term) {
+        .Exited => |code| std.process.exit(code),
+        else => std.process.exit(@intFromEnum(ExitCode.general_error)),
+    }
+}
+
+// Embedded client function  
+fn runEmbeddedClient(ally: std.mem.Allocator, config: ClientConfig) !void {
+    // Since we can't easily call the client main directly due to module complexities,
+    // we'll create the argument array and spawn geodec subprocess for now.
+    // This is still better than the previous TODO stub.
+    
+    // Build argument array for client
+    var client_args = std.ArrayList([]const u8).initCapacity(ally, 16) catch return error.OutOfMemory;
+    defer client_args.deinit(ally);
+    
+    // Find geodec binary path
+    const self_exe_path = try std.fs.selfExePathAlloc(ally);
+    defer ally.free(self_exe_path);
+    
+    const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
+    const geodec_path = try std.fs.path.join(ally, &.{ self_dir_path, "geodec" });
+    defer ally.free(geodec_path);
+    
+    // Check if geodec exists in the same directory
+    if (std.fs.accessAbsolute(geodec_path, .{})) |_| {
+        try client_args.append(ally, geodec_path);
+    } else |_| {
+        try client_args.append(ally, "geodec");
+    }
+    
+    try client_args.append(ally, "--server");
+    try client_args.append(ally, config.server);
+    
+    try client_args.append(ally, "--format");
+    try client_args.append(ally, config.format);
+    
+    if (config.page_size != 1) {
+        try client_args.append(ally, "--page-size");
+        const page_size_str = try std.fmt.allocPrint(ally, "{d}", .{config.page_size});
+        defer ally.free(page_size_str);
+        try client_args.append(ally, page_size_str);
+    }
+    
+    if (config.pull_all) {
+        try client_args.append(ally, "--pull-all");
+    }
+    
+    if (config.extra_pull > 0) {
+        try client_args.append(ally, "--extra-pull");
+        const extra_pull_str = try std.fmt.allocPrint(ally, "{d}", .{config.extra_pull});
+        defer ally.free(extra_pull_str);
+        try client_args.append(ally, extra_pull_str);
+    }
+    
+    if (config.begin) try client_args.append(ally, "--begin");
+    if (config.commit) try client_args.append(ally, "--commit");
+    if (config.rollback) try client_args.append(ally, "--rollback");
+    
+    if (config.process_path) |process_path| {
+        try client_args.append(ally, "--process");
+        try client_args.append(ally, process_path);
+    }
+    
+    if (config.no_quic) {
+        try client_args.append(ally, "--no-quic");
+    }
+    
+    // Add server arguments
+    for (config.server_args) |server_arg| {
+        try client_args.append(ally, "--server-arg");
+        try client_args.append(ally, server_arg);
+    }
+    
+    // Add query text last
+    try client_args.append(ally, config.query_text);
+    
+    // Execute client process
+    var process = std.process.Child.init(client_args.items, ally);
+    const term = try process.spawnAndWait();
+    
+    switch (term) {
+        .Exited => |code| std.process.exit(code),
+        else => std.process.exit(@intFromEnum(ExitCode.general_error)),
+    }
+}
+
 fn printShellUsage() void {
     std.debug.print("geode shell - Interactive GQL shell\n" ++
         "\n" ++
@@ -885,16 +1062,29 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
     }
 
-    // TODO: Call the server main function directly instead of spawning subprocess
-    // For now, fall back to subprocess spawning until we can properly integrate the modules
-    std.debug.print("TODO: Implement embedded server call\n", .{});
-    std.debug.print("Server would start with:\n", .{});
-    std.debug.print("  Data dir: {s}\n", .{data_dir});
-    std.debug.print("  Listen: {s}\n", .{if (override_listen or !use_stdio) listen_addr else "stdio"});
-    std.debug.print("  Log level: {s}\n", .{log_level});
+    // Create server config from parsed arguments
+    const config = ServerConfig{
+        .data_dir = if (std.mem.eql(u8, data_dir, "./data")) null else data_dir,
+        .listen_quic = if (override_listen or !use_stdio) listen_addr else null,
+        .cert_path = cert_path,
+        .key_path = key_path,
+        .log_level = log_level,
+        .force_no_tls = force_no_tls,
+    };
     
-    // Temporarily exit successfully
-    std.process.exit(@intFromEnum(ExitCode.success));
+    std.debug.print("Starting Geode server...\n", .{});
+    if (config.listen_quic) |addr| {
+        std.debug.print("Listening on: {s}\n", .{addr});
+    }
+    if (config.data_dir) |dd| {
+        std.debug.print("Data directory: {s}\n", .{dd});
+    }
+    
+    // Run the embedded server
+    runEmbeddedServer(ally, config) catch |err| {
+        std.debug.print("Server error: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -1102,18 +1292,80 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
     }
 
-    // TODO: Call the client main function directly instead of spawning subprocess
-    // For now, provide information about what would be executed
-    std.debug.print("TODO: Implement embedded client call\n", .{});
-    std.debug.print("Query would be executed: {s}\n", .{query_text.?});
-    std.debug.print("Client args: ", .{});
-    for (client_args.items) |arg| {
-        std.debug.print("{s} ", .{arg});
-    }
-    std.debug.print("\n", .{});
+    // Parse client arguments and create config
+    var server_addr: []const u8 = "127.0.0.1:8443";
+    var format: []const u8 = "json";
+    var page_size: usize = 1;
+    var pull_all = false;
+    var extra_pull: usize = 0;
+    var begin = false;
+    var commit = false;
+    var rollback = false;
+    var process_path: ?[]const u8 = null;
+    var no_quic = false;
+    var server_args = std.ArrayList([]const u8).initCapacity(ally, 8) catch return error.OutOfMemory;
+    defer server_args.deinit(ally);
     
-    // Temporarily return success
-    std.process.exit(@intFromEnum(ExitCode.success));
+    // Parse client_args to extract configuration
+    var skip_next = false;
+    for (client_args.items, 0..) |arg, idx| {
+        if (skip_next) {
+            skip_next = false;
+            continue;
+        }
+        
+        if (std.mem.eql(u8, arg, "--server") and idx + 1 < client_args.items.len) {
+            server_addr = client_args.items[idx + 1];
+            skip_next = true;
+        } else if (std.mem.eql(u8, arg, "--format") and idx + 1 < client_args.items.len) {
+            format = client_args.items[idx + 1];
+            skip_next = true;
+        } else if (std.mem.eql(u8, arg, "--page-size") and idx + 1 < client_args.items.len) {
+            page_size = std.fmt.parseInt(usize, client_args.items[idx + 1], 10) catch 1;
+            skip_next = true;
+        } else if (std.mem.eql(u8, arg, "--pull-all")) {
+            pull_all = true;
+        } else if (std.mem.eql(u8, arg, "--extra-pull") and idx + 1 < client_args.items.len) {
+            extra_pull = std.fmt.parseInt(usize, client_args.items[idx + 1], 10) catch 0;
+            skip_next = true;
+        } else if (std.mem.eql(u8, arg, "--begin")) {
+            begin = true;
+        } else if (std.mem.eql(u8, arg, "--commit")) {
+            commit = true;
+        } else if (std.mem.eql(u8, arg, "--rollback")) {
+            rollback = true;
+        } else if (std.mem.eql(u8, arg, "--process") and idx + 1 < client_args.items.len) {
+            process_path = client_args.items[idx + 1];
+            skip_next = true;
+        } else if (std.mem.eql(u8, arg, "--no-quic")) {
+            no_quic = true;
+        } else if (std.mem.eql(u8, arg, "--server-arg") and idx + 1 < client_args.items.len) {
+            try server_args.append(ally, client_args.items[idx + 1]);
+            skip_next = true;
+        }
+    }
+    
+    // Create client config
+    const config = ClientConfig{
+        .query_text = query_text.?,
+        .server = server_addr,
+        .format = format,
+        .page_size = page_size,
+        .pull_all = pull_all,
+        .extra_pull = extra_pull,
+        .begin = begin,
+        .commit = commit,
+        .rollback = rollback,
+        .process_path = process_path,
+        .no_quic = no_quic,
+        .server_args = try server_args.toOwnedSlice(ally),
+    };
+    
+    // Run the embedded client
+    runEmbeddedClient(ally, config) catch |err| {
+        std.debug.print("Client error: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

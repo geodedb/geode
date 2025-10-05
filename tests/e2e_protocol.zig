@@ -19,8 +19,8 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 }
 
 test "protocol: Valid ORDER/LIMIT" {
-    const exe = "./zig-out/bin/geodec";
-    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1" });
+    const exe = "./zig-out/bin/geode";
+    const res = try run(&.{ exe, "query", "RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
