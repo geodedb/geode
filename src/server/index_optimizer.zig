@@ -2138,3 +2138,276 @@ pub const IndexRecommendation = struct {
     estimated_benefit: f64,
     reason: []const u8,
 };
+
+// Enhanced HNSW Vector Index Selection and Performance Monitoring Implementation (October 2025)
+
+    // Enhanced dynamic index selection for vector queries with performance monitoring
+    pub fn selectOptimalVectorIndex(
+        self: *IndexOptimizer,
+        property: []const u8,
+        query_vector: []const f32,
+        options: VectorQueryOptions,
+        labels: []const []const u8,
+    ) VectorIndexSelectionResult {
+        // Get all available vector indexes for this property
+        const available_indexes = self.index_manager.getIndexesForProperty(property) catch {
+            return VectorIndexSelectionResult{
+                .selection_strategy = .sequential_fallback,
+                .selected_index = null,
+                .estimated_cost = self.estimateSequentialAdvancedVectorScanCost(labels, query_vector.len, options),
+                .confidence_score = 0.0,
+                .performance_metrics = null,
+            };
+        };
+        defer self.allocator.free(available_indexes);
+
+        var best_selection = VectorIndexSelectionResult{
+            .selection_strategy = .sequential_fallback,
+            .selected_index = null,
+            .estimated_cost = std.math.inf(f64),
+            .confidence_score = 0.0,
+            .performance_metrics = null,
+        };
+
+        // Evaluate each available vector index
+        for (available_indexes) |index_info| {
+            if (index_info.index_type == .vector_hnsw or index_info.index_type == .vector_f32) {
+                const selection = self.evaluateVectorIndexForQuery(index_info, query_vector, options);
+                
+                // Update best selection if this index is better
+                if (selection.estimated_cost < best_selection.estimated_cost and 
+                    selection.confidence_score > best_selection.confidence_score) {
+                    best_selection = selection;
+                    best_selection.selected_index = index_info;
+                }
+            }
+        }
+
+        // Compare with sequential scan and choose optimal strategy
+        const sequential_cost = self.estimateSequentialAdvancedVectorScanCost(labels, query_vector.len, options);
+        if (sequential_cost < best_selection.estimated_cost) {
+            return VectorIndexSelectionResult{
+                .selection_strategy = .sequential_fallback,
+                .selected_index = null,
+                .estimated_cost = sequential_cost,
+                .confidence_score = 1.0, // High confidence in sequential scan cost
+                .performance_metrics = null,
+            };
+        }
+
+        return best_selection;
+    }
+
+    // Evaluate a specific vector index for a query with performance analysis
+    fn evaluateVectorIndexForQuery(
+        self: *IndexOptimizer,
+        index_info: IndexInfo,
+        query_vector: []const f32,
+        options: VectorQueryOptions,
+    ) VectorIndexSelectionResult {
+        // Check index compatibility
+        if (!self.vectorIndexSupportsQuery(index_info, query_vector.len, options)) {
+            return VectorIndexSelectionResult{
+                .selection_strategy = .index_incompatible,
+                .selected_index = null,
+                .estimated_cost = std.math.inf(f64),
+                .confidence_score = 0.0,
+                .performance_metrics = null,
+            };
+        }
+
+        // Get performance metrics from statistics if available
+        var performance_metrics: ?VectorIndexPerformanceMetrics = null;
+        var confidence_score: f64 = 0.5; // Default moderate confidence
+
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_info.name)) |stats| {
+                performance_metrics = VectorIndexPerformanceMetrics{
+                    .average_search_time_ns = stats.getAverageSearchTime(),
+                    .hit_ratio = stats.getHitRatio(),
+                    .selectivity_estimation = stats.getSelectivityEstimation(),
+                    .dimension_count = @intCast(query_vector.len),
+                    .total_vectors_indexed = stats.total_entries,
+                    .last_updated_timestamp = std.time.timestamp(),
+                };
+                
+                // Higher confidence if we have recent performance data
+                const age_hours = (@as(f64, @floatFromInt(std.time.timestamp())) - @as(f64, @floatFromInt(stats.last_access_time))) / 3600.0;
+                confidence_score = if (age_hours < 1.0) 0.95 else if (age_hours < 24.0) 0.8 else 0.6;
+            }
+        }
+
+        // Enhanced cost estimation with performance history
+        const base_cost = self.estimateAdvancedVectorCost(index_info, options, query_vector.len);
+        var adjusted_cost = base_cost;
+
+        // Adjust cost based on performance metrics
+        if (performance_metrics) |metrics| {
+            // Adjust based on hit ratio (higher hit ratio = lower effective cost)
+            const hit_ratio_factor = 0.5 + (metrics.hit_ratio * 0.5);
+            adjusted_cost *= hit_ratio_factor;
+
+            // Adjust based on recent performance if search time data is available
+            if (metrics.average_search_time_ns > 0) {
+                const expected_time_ns = base_cost * 1000.0; // Convert to nanoseconds estimate
+                const performance_factor = @as(f64, @floatFromInt(metrics.average_search_time_ns)) / expected_time_ns;
+                adjusted_cost *= @min(performance_factor, 2.0); // Cap adjustment to 2x
+            }
+        }
+
+        // Determine selection strategy
+        const strategy = if (options.query_type == .knn) 
+            VectorIndexSelectionStrategy.hnsw_optimal
+        else if (options.query_type == .approximate_knn)
+            VectorIndexSelectionStrategy.hnsw_approximate
+        else
+            VectorIndexSelectionStrategy.hnsw_adaptive;
+
+        return VectorIndexSelectionResult{
+            .selection_strategy = strategy,
+            .selected_index = index_info,
+            .estimated_cost = adjusted_cost,
+            .confidence_score = confidence_score,
+            .performance_metrics = performance_metrics,
+        };
+    }
+
+    // Optimize HNSW parameters based on query characteristics and performance history
+    pub fn optimizeHnswParameters(
+        self: *IndexOptimizer,
+        index_name: []const u8,
+        query_vector: []const f32,
+        options: VectorQueryOptions,
+        historical_performance: ?VectorIndexMonitoringData,
+    ) HnswQueryOptimizationParams {
+        var params = HnswQueryOptimizationParams{
+            .ef_search = 64, // Default ef_search value
+            .use_simd = true,
+            .batch_size = 32,
+            .cache_query_vectors = false,
+            .adaptive_ef = true,
+        };
+
+        // Adjust ef_search based on query type and k value
+        params.ef_search = switch (options.query_type) {
+            .knn => @max(options.k * 2, 16), // At least 2x k, minimum 16
+            .approximate_knn => @max(options.k, 8), // Lower ef for approximate
+            .similarity_threshold => @min(options.k * 4, 256), // Higher ef for threshold queries
+            .distance_range => @min(options.k * 6, 512), // Highest ef for range queries
+        };
+
+        // Enable SIMD for larger dimensions
+        params.use_simd = query_vector.len >= 8;
+
+        // Adjust batch size based on k value
+        params.batch_size = if (options.k <= 10) 16 else if (options.k <= 50) 32 else 64;
+
+        // Enable query vector caching for frequent queries
+        if (historical_performance) |perf| {
+            if (perf.query_count > 1000) {
+                params.cache_query_vectors = true;
+            }
+            
+            // Adaptive ef based on performance history
+            if (params.adaptive_ef) {
+                const avg_time_ms = @as(f64, @floatFromInt(perf.average_query_time_ns)) / 1000000.0;
+                if (avg_time_ms > 100.0) {
+                    // If queries are slow, reduce ef_search for speed
+                    params.ef_search = @max(params.ef_search / 2, 8);
+                } else if (avg_time_ms < 10.0 and perf.cache_hits > perf.cache_misses) {
+                    // If queries are fast and cache is effective, increase ef_search for accuracy
+                    params.ef_search = @min(params.ef_search * 2, 512);
+                }
+            }
+        }
+
+        // Record optimization decisions for monitoring
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                stats.recordOptimizationDecision(params.ef_search, @intFromEnum(params.use_simd));
+            }
+        }
+
+        return params;
+    }
+
+    // Monitor and analyze vector index performance for continuous optimization
+    pub fn analyzeVectorIndexPerformance(
+        self: *IndexOptimizer,
+        index_name: []const u8,
+        query_results: []const f64, // Query execution times
+        cache_stats: struct { hits: u64, misses: u64 },
+    ) VectorIndexMonitoringData {
+        var monitoring_data = VectorIndexMonitoringData{
+            .query_count = query_results.len,
+            .cache_hits = cache_stats.hits,
+            .cache_misses = cache_stats.misses,
+            .average_query_time_ns = 0,
+            .memory_usage_bytes = 0,
+            .last_optimization_timestamp = std.time.timestamp(),
+        };
+
+        // Calculate average query time
+        if (query_results.len > 0) {
+            var total_time: f64 = 0;
+            for (query_results) |time| {
+                total_time += time;
+            }
+            monitoring_data.average_query_time_ns = @intFromFloat(total_time / @as(f64, @floatFromInt(query_results.len)));
+        }
+
+        // Estimate memory usage based on index statistics
+        if (self.stats_manager) |stats_mgr| {
+            if (stats_mgr.getIndexStatistics(index_name)) |stats| {
+                // Estimate memory usage based on number of vectors and dimension
+                const estimated_memory = stats.total_entries * 4 * 256; // Assuming 256D vectors
+                monitoring_data.memory_usage_bytes = estimated_memory;
+            }
+        }
+
+        return monitoring_data;
+    }
+
+// Enhanced HNSW Vector Index Selection and Performance Monitoring (October 2025)
+
+pub const VectorIndexSelectionStrategy = enum {
+    hnsw_optimal,        // Use HNSW for optimal K-NN performance
+    hnsw_approximate,    // Use HNSW with approximate search for speed
+    hnsw_adaptive,       // Dynamically adapt HNSW parameters based on query
+    sequential_fallback, // Fallback to sequential scan
+    index_incompatible,  // Index doesn't support the query
+};
+
+pub const VectorIndexPerformanceMetrics = struct {
+    average_search_time_ns: u64,   // Average search time in nanoseconds
+    hit_ratio: f64,                // Ratio of successful index hits
+    selectivity_estimation: f64,   // Estimated query selectivity
+    dimension_count: u32,          // Vector dimension count
+    total_vectors_indexed: u64,    // Total number of vectors in index
+    last_updated_timestamp: i64,   // When metrics were last updated
+};
+
+pub const VectorIndexSelectionResult = struct {
+    selection_strategy: VectorIndexSelectionStrategy,
+    selected_index: ?IndexInfo,
+    estimated_cost: f64,
+    confidence_score: f64,         // Confidence in cost estimation (0.0-1.0)
+    performance_metrics: ?VectorIndexPerformanceMetrics,
+};
+
+pub const HnswQueryOptimizationParams = struct {
+    ef_search: u16,              // Search parameter for HNSW
+    use_simd: bool,              // Enable SIMD acceleration
+    batch_size: u32,             // Batch size for bulk operations
+    cache_query_vectors: bool,   // Cache frequent query vectors
+    adaptive_ef: bool,           // Adapt ef based on query characteristics
+};
+
+pub const VectorIndexMonitoringData = struct {
+    query_count: u64,            // Total queries executed
+    cache_hits: u64,             // Cache hit count
+    cache_misses: u64,           // Cache miss count
+    average_query_time_ns: u64,  // Average query execution time
+    memory_usage_bytes: u64,     // Current memory usage
+    last_optimization_timestamp: i64, // When parameters were last optimized
+};
