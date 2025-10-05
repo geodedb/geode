@@ -107,6 +107,11 @@ pub const materialized_views = @import("query/materialized_views.zig");
 pub const ml = struct {
     pub const graph_embeddings = @import("ml/graph_embeddings.zig");
 };
+
+// Real-time Analytics and Streaming
+pub const analytics = struct {
+    pub const real_time = @import("analytics/real_time.zig");
+};
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

@@ -625,9 +625,8 @@ fn aggregateNeighborFeatures(
     const sample_size = @min(neighbors.len, config.neighbor_samples);
     
     // Aggregate neighbor embeddings (mean aggregation)
-    var aggregated_buffer = try manager.allocator.alloc(f32, config.dimensions);
-    defer manager.allocator.free(aggregated_buffer);
-    var aggregated = aggregated_buffer;
+    const aggregated = try manager.allocator.alloc(f32, config.dimensions);
+    defer manager.allocator.free(aggregated);
     
     // Initialize aggregation array (this mutation justifies var usage)
     for (aggregated) |*val| {
