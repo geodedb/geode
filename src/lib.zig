@@ -100,6 +100,8 @@ pub const types = struct {
 
 // Re-export server graph common types
 pub const graph_common = @import("types/graph_common.zig");
+// Re-export materialized views
+pub const materialized_views = @import("query/materialized_views.zig");
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

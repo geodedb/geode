@@ -131,6 +131,20 @@ const _test_s3_backup = @import("test_s3_backup.zig");
 const _test_vector_index_population = @import("test_vector_index_population.zig");
 const _test_vector_index_population_integration = @import("test_vector_index_population_integration.zig");
 
+// Vector Documentation Validation tests
+const _test_vector_documentation_validation = @import("test_vector_documentation_validation.zig");
+const _test_vector_documentation_integration = @import("test_vector_documentation_integration.zig");
+
+// Phantom Read Prevention tests (imported from within src/server/txn)
+// const _test_phantom_read_prevention = @import("../src/server/txn/phantom_read_prevention.zig");
+
+// Enhanced Query Transport Integration tests
+const _test_enhanced_query_transport = @import("test_enhanced_query_transport.zig");
+
+// Materialized Views tests
+const _test_materialized_views = @import("test_materialized_views.zig");
+const _test_materialized_views_integration = @import("test_materialized_views_integration.zig");
+
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 
