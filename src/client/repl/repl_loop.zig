@@ -21,7 +21,9 @@ pub const ReplLoop = struct {
         keymap: Keymap,
         history_enabled: bool,
         verbose: bool,
+        show_timing: bool,
         allocator: std.mem.Allocator,
+        transport: *const repl_dispatch.Transport,
     };
 
     pub fn run(opts: Options) !void {
@@ -53,9 +55,10 @@ pub const ReplLoop = struct {
             try history.load();
         }
 
-        var session = try repl_dispatch.ClientSession.connect(opts.allocator, opts.server);
+        // Use dependency injection for transport - will be provided by CLI layer
+        var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
-
+        try session.connect();
         try session.hello();
 
         var state = ReplState{
@@ -68,6 +71,7 @@ pub const ReplLoop = struct {
             .vi_mode = .insert,
             .format = opts.format,
             .verbose = opts.verbose,
+            .show_timing = opts.show_timing,
             .session = &session,
             .in_txn = false,
             .quit_requested = false,
@@ -76,6 +80,8 @@ pub const ReplLoop = struct {
             .search_buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
             .searching = false,
             .completion_ctx = repl_complete.CompletionContext.init(opts.allocator),
+            .multi_line_buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
+            .is_continuation = false,
         };
         defer state.deinit();
 
@@ -100,6 +106,7 @@ pub const ReplState = struct {
     vi_mode: keymap_vi.ViMode,
     format: ReplLoop.Format,
     verbose: bool,
+    show_timing: bool,
     session: *repl_dispatch.ClientSession,
     in_txn: bool,
     quit_requested: bool,
@@ -109,11 +116,14 @@ pub const ReplState = struct {
     searching: bool,
     completion_ctx: repl_complete.CompletionContext,
     pending_operator: ?u8 = null,
+    multi_line_buffer: std.ArrayList(u8),
+    is_continuation: bool,
 
     pub fn deinit(self: *ReplState) void {
         self.buffer.deinit(self.allocator);
         self.kill_ring.deinit(self.allocator);
         self.search_buffer.deinit(self.allocator);
+        self.multi_line_buffer.deinit(self.allocator);
         self.completion_ctx.deinit();
     }
 };
@@ -156,7 +166,11 @@ fn renderPrompt(state: *ReplState) !void {
     // Clear line
     try stdout_file.writeAll("\r\x1b[K");
 
-    const prompt = if (state.in_txn) "geode(txn)> " else "geode> ";
+    // Choose prompt based on state
+    const prompt = if (state.is_continuation)
+        if (state.in_txn) "geode(txn)-> " else "geode-> "
+    else if (state.in_txn) "geode(txn)> " else "geode> ";
+    
     try stdout_file.writeAll(prompt);
     try stdout_file.writeAll(state.buffer.items);
 
@@ -192,26 +206,54 @@ fn processInput(state: *ReplState) !void {
         if (action == .execute) {
             const input = state.buffer.items;
             if (input.len > 0) {
-                // Check for meta-command
+                // Check for meta-command (always single line)
                 if (input[0] == '\\') {
                     try repl_dispatch.handleMetaCommand(state, input);
                     state.buffer.clearRetainingCapacity();
                     state.cursor = 0;
-                } else if (repl_parse.isComplete(input)) {
-                    // Save to history if not starting with space
-                    if (input.len > 0 and input[0] != ' ' and state.history.enabled) {
-                        state.history.append(input) catch {};
+                    state.is_continuation = false;
+                    state.multi_line_buffer.clearRetainingCapacity();
+                } else {
+                    // Build complete multi-line input
+                    if (state.is_continuation) {
+                        // Add current line to multi-line buffer
+                        try state.multi_line_buffer.append(state.allocator, '\n');
+                        try state.multi_line_buffer.appendSlice(state.allocator, input);
+                    } else {
+                        // First line - start new multi-line buffer
+                        state.multi_line_buffer.clearRetainingCapacity();
+                        try state.multi_line_buffer.appendSlice(state.allocator, input);
                     }
+                    
+                    // Check if the complete multi-line input is ready to execute
+                    const complete_input = state.multi_line_buffer.items;
+                    if (repl_parse.isComplete(complete_input)) {
+                        // Save to history if not starting with space
+                        if (complete_input.len > 0 and complete_input[0] != ' ' and state.history.enabled) {
+                            state.history.append(complete_input) catch {};
+                        }
 
-                    // Execute GQL
-                    repl_dispatch.executeGql(state, input) catch |err| {
-                        const stderr = platform.getStderrHandle();
-                        stderr.writeAll("REPL error: ") catch {};
-                        stderr.writeAll(@errorName(err)) catch {};
-                        stderr.writeAll("\n") catch {};
-                    };
-                    state.buffer.clearRetainingCapacity();
-                    state.cursor = 0;
+                        // Execute GQL
+                        repl_dispatch.executeGql(state, complete_input) catch |err| {
+                            const stderr = platform.getStderrHandle();
+                            stderr.writeAll("REPL error: ") catch {};
+                            stderr.writeAll(@errorName(err)) catch {};
+                            stderr.writeAll("\n") catch {};
+                        };
+                        
+                        // Reset for next input
+                        state.buffer.clearRetainingCapacity();
+                        state.cursor = 0;
+                        state.is_continuation = false;
+                        state.multi_line_buffer.clearRetainingCapacity();
+                    } else {
+                        // Statement is not complete - enter continuation mode
+                        state.is_continuation = true;
+                        state.buffer.clearRetainingCapacity();
+                        state.cursor = 0;
+                        const stdout = platform.getStdoutHandle();
+                        try stdout.writeAll("\n");
+                    }
                 }
             }
             break; // Exit input loop for new prompt
@@ -219,8 +261,18 @@ fn processInput(state: *ReplState) !void {
 
         if (action == .cancel) {
             if (state.buffer.items.len == 0) {
-                // Ctrl+C on empty buffer - continue
+                // Ctrl+C on empty buffer
+                if (state.is_continuation) {
+                    // Cancel multi-line input
+                    state.is_continuation = false;
+                    state.multi_line_buffer.clearRetainingCapacity();
+                    const stdout = platform.getStdoutHandle();
+                    try stdout.writeAll("\n^C\n");
+                } else {
+                    // Single line - continue
+                }
             } else {
+                // Clear current line buffer
                 state.buffer.clearRetainingCapacity();
                 state.cursor = 0;
             }

@@ -2,12 +2,18 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
-    // Check GEODE_HISTORY environment variable
+    // Check GEODE_HISTORY environment variable first
     if (std.process.getEnvVarOwned(allocator, "GEODE_HISTORY")) |path| {
         return path;
     } else |_| {}
 
-    // Use XDG_DATA_HOME / macOS / Windows conventions
+    // Primary: Try ~/.geode_history as the default preference
+    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        return std.fs.path.join(allocator, &[_][]const u8{ home, ".geode_history" });
+    } else |_| {}
+
+    // Secondary: Use platform-specific conventions as fallback
     if (builtin.os.tag == .windows) {
         if (std.process.getEnvVarOwned(allocator, "APPDATA")) |appdata| {
             defer allocator.free(appdata);
@@ -19,7 +25,7 @@ pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
             return std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "Application Support", "geode", "history" });
         } else |_| {}
     } else {
-        // Linux/Unix - use XDG
+        // Linux/Unix - use XDG as secondary fallback
         if (std.process.getEnvVarOwned(allocator, "XDG_DATA_HOME")) |xdg| {
             defer allocator.free(xdg);
             return std.fs.path.join(allocator, &[_][]const u8{ xdg, "geode", "history" });
@@ -31,7 +37,7 @@ pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
         }
     }
 
-    // Fallback
+    // Final fallback
     return allocator.dupe(u8, ".geode_history");
 }
 

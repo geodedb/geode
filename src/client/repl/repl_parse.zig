@@ -6,7 +6,12 @@ pub fn isComplete(input: []const u8) bool {
         return true;
     }
 
-    // Check if balanced
+    // If it's not terminated with semicolon, check if it's an incomplete GQL statement
+    if (isIncompleteGqlStatement(input) or needsContinuation(input)) {
+        return false;
+    }
+
+    // Check if balanced (for cases like standalone expressions)
     return isBalanced(input);
 }
 
@@ -104,18 +109,77 @@ pub fn isBalanced(input: []const u8) bool {
 pub fn needsContinuation(input: []const u8) bool {
     if (input.len == 0) return false;
 
+    // Check for obvious incomplete GQL statements first
+    if (isIncompleteGqlStatement(input)) return true;
+
     // Check if last non-whitespace character suggests continuation
     var i = input.len;
     while (i > 0) : (i -= 1) {
         const c = input[i - 1];
         if (!std.ascii.isWhitespace(c)) {
             return switch (c) {
-                ',', '+', '-', '*', '/', '=', '<', '>', '(' => true,
+                ',', '+', '-', '*', '/', '=', '<', '>', '(', '[', '{' => true,
                 else => false,
             };
         }
     }
 
+    return false;
+}
+
+pub fn isIncompleteGqlStatement(input: []const u8) bool {
+    // Convert to uppercase for case-insensitive matching
+    var upper_input: [1024]u8 = undefined;
+    if (input.len >= upper_input.len) return false;
+    
+    for (input, 0..) |c, i| {
+        upper_input[i] = std.ascii.toUpper(c);
+    }
+    const upper_slice = upper_input[0..input.len];
+    
+    // Common GQL statement patterns that need continuation
+    const incomplete_patterns = [_][]const u8{
+        "MATCH",
+        "CREATE", 
+        "DELETE",
+        "SET",
+        "REMOVE",
+        "WITH",
+        "WHERE",
+        "RETURN",
+        "ORDER BY",
+        "OPTIONAL",
+        "MERGE",
+        "CALL",
+        "USE",
+        "DROP",
+        "SHOW",
+        "ALTER",
+        "START",
+    };
+    
+    // Check if input ends with an incomplete GQL keyword
+    for (incomplete_patterns) |pattern| {
+        if (std.mem.endsWith(u8, upper_slice, pattern)) {
+            return true;
+        }
+        
+        // Also check for keyword followed by whitespace but no semicolon
+        var pattern_with_space: [64]u8 = undefined;
+        const pattern_space = std.fmt.bufPrint(&pattern_with_space, "{s} ", .{pattern}) catch continue;
+        if (std.mem.indexOf(u8, upper_slice, pattern_space) != null and 
+            std.mem.indexOf(u8, input, ";") == null) {
+            // Check if there's meaningful content after the keyword
+            const keyword_end = std.mem.indexOf(u8, upper_slice, pattern_space).? + pattern_space.len;
+            const remaining = std.mem.trim(u8, input[keyword_end..], " \t\n\r");
+            
+            // If there's some content but no semicolon, likely needs continuation
+            if (remaining.len > 0 and remaining.len < 20) {
+                return true;
+            }
+        }
+    }
+    
     return false;
 }
 
@@ -126,4 +190,30 @@ test "parser balance" {
     try std.testing.expect(isBalanced("MATCH (n) WHERE n.prop = \"closed string\""));
     try std.testing.expect(!isBalanced("MATCH /* unclosed comment"));
     try std.testing.expect(isBalanced("MATCH /* closed comment */"));
+}
+
+test "multi-line parsing" {
+    const testing = std.testing;
+    
+    // Test continuation detection
+    try testing.expect(needsContinuation("MATCH"));
+    try testing.expect(needsContinuation("MATCH (n)"));
+    try testing.expect(needsContinuation("MATCH (n) WHERE"));
+    try testing.expect(needsContinuation("CREATE ("));
+    try testing.expect(!needsContinuation("RETURN 1;"));
+    try testing.expect(!needsContinuation(""));
+    
+    // Test incomplete statement detection
+    try testing.expect(isIncompleteGqlStatement("MATCH"));
+    try testing.expect(isIncompleteGqlStatement("CREATE"));
+    try testing.expect(isIncompleteGqlStatement("MATCH (n)"));
+    try testing.expect(isIncompleteGqlStatement("MATCH (n) WHERE n.age"));
+    try testing.expect(!isIncompleteGqlStatement("RETURN 1;"));
+    try testing.expect(!isIncompleteGqlStatement("SELECT * FROM table;"));
+    
+    // Test complete multi-line statements
+    try testing.expect(isComplete("MATCH (n)\nRETURN n;"));
+    try testing.expect(isComplete("MATCH (n)\nWHERE n.age > 25\nRETURN n.name;"));
+    try testing.expect(!isComplete("MATCH (n)"));
+    try testing.expect(!isComplete("MATCH (n)\nWHERE n.age > 25"));
 }

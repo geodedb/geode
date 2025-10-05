@@ -713,6 +713,10 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(geodec_exe);
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("audit_cli", audit_mod);
+    
+    // Add QUIC transport modules for REPL integration
+    geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
+    geode_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
