@@ -40,13 +40,20 @@ pub fn build(b: *std.Build) void {
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
 
-    // Main unified CLI binary
+    // Main unified CLI binary with server and client capabilities
     const geode_exe = b.addExecutable(.{
         .name = "geode",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/main.zig"), .target = target, .optimize = optimize }),
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
+    
+    // Add essential modules for server and client functionality  
+    // Note: transport_quic_mod is defined later after vendor_quic_mod is available
+    
+    const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("protocol", protocol_mod);
+    
     if (target.result.os.tag == .windows) {
         geode_exe.linkLibC();
     }
@@ -513,41 +520,23 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_quic_tls_tests.step);
     test_step.dependOn(&zig_client_quic_test.step);
 
-    const geoded_exe = b.addExecutable(.{
-        .name = "geoded",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/server/main.zig"), .target = target, .optimize = optimize }),
-    });
-    // Link libc on Windows for socket operations in QUIC
-    if (target.result.os.tag == .windows) {
-        geoded_exe.linkLibC();
-    }
-    geoded_exe.root_module.addImport("geode", root_mod);
-    // GQL is accessed through geode module now
-    // Planner cost model modules (enumeration seed, explain) with distinct aliases
-    // cost_explain is now exposed through geode root (lib.zig) to avoid duplicate module inclusion.
-    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("sentinel", sentinel_mod);
-    geoded_exe.root_module.addOptions("build_options", build_opts);
+    // Legacy geoded binary removed - functionality now in unified geode binary
+    // Shared modules needed by various executables
+//    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
 
-    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("storage_mem", storage_mem_mod);
-    geoded_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
+//    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
 
     const storage_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
     storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    geoded_exe.root_module.addImport("storage_catalog", storage_catalog_mod);
 
     const storage_csr_mod = b.createModule(.{ .root_source_file = b.path("src/storage/csr_adjacency.zig"), .target = target, .optimize = optimize });
     storage_csr_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    geoded_exe.root_module.addImport("storage/csr_adjacency.zig", storage_csr_mod);
 
     const mvcc_adv_mod = b.createModule(.{ .root_source_file = b.path("src/txn/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/txn/manager.zig"), .target = target, .optimize = optimize });
     txn_mod.addImport("mvcc_adv", mvcc_adv_mod);
     const range_tracker_mod = b.createModule(.{ .root_source_file = b.path("src/txn/range_tracker.zig"), .target = target, .optimize = optimize });
     txn_mod.addImport("range_tracker", range_tracker_mod);
-    geoded_exe.root_module.addImport("txn", txn_mod);
-    geoded_exe.root_module.addImport("mvcc_adv", mvcc_adv_mod);
     root_mod.addImport("mvcc_adv", mvcc_adv_mod);
     const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     // Security TDE hierarchy module
@@ -559,24 +548,14 @@ pub fn build(b: *std.Build) void {
     wal_mod.addImport("key_provider", key_provider_mod);
     wal_mod.addImport("fs_fsync", fs_fsync_mod);
     wal_mod.addImport("commit_coordinator", commit_coord_mod);
-    geoded_exe.root_module.addImport("wal", wal_mod);
-    geoded_exe.root_module.addImport("tde_hierarchy", tde_hierarchy_mod);
-    geoded_exe.root_module.addImport("key_provider", key_provider_mod);
-    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("distributed", distributed_mod);
-    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("federation_flag", federation_flag_mod);
+//    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
+//    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
 
-    const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("tracking_alloc", util_tracking_mod);
-    const util_memory_gov_mod = b.createModule(.{ .root_source_file = b.path("src/util/memory_governor.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("memory_governor", util_memory_gov_mod);
-    const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("index_selectivity", index_selectivity_mod);
-    const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("text_formatter", util_text_formatter_mod);
-    const server_txn_mvcc_mod = b.createModule(.{ .root_source_file = b.path("src/server/txn/mvcc.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("server/txn/mvcc.zig", server_txn_mvcc_mod);
+//    const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
+//    const util_memory_gov_mod = b.createModule(.{ .root_source_file = b.path("src/util/memory_governor.zig"), .target = target, .optimize = optimize });
+//    const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
+//    const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
+//    const server_txn_mvcc_mod = b.createModule(.{ .root_source_file = b.path("src/server/txn/mvcc.zig"), .target = target, .optimize = optimize });
 
     const vendor_quic_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
     // Wire vendored QUIC named imports to match its build.zig so api.zig can @import("quic_*") symbols
@@ -646,12 +625,18 @@ pub fn build(b: *std.Build) void {
     vendor_quic_mod.addImport("sig", vq_sig_mod);
     vendor_quic_mod.addImport("x509", vq_x509_mod);
     // No longer need ed25519 import - using std.crypto.sign.Ed25519
-
+    
+    // Create transport QUIC module for unified binary and tests
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("vendor_quic", vendor_quic_mod);
-    geoded_exe.root_module.addImport("transport/quic.zig", transport_quic_mod);
-    geoded_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
-    geoded_exe.root_module.addImport("log/logger.zig", logging_mod);
+    
+    // Add transport modules to unified geode binary
+    geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
+    geode_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
+    
+    // Add audit CLI module for verification functionality
+    const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("audit_cli", audit_mod);
 
     // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
     const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });
@@ -690,33 +675,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_remote_kms_concurrency_bench.step);
 
     // CDC enhanced streaming module (diagnostics, malformed WAL tracking)
-    const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("cdc_enhanced", cdc_enhanced_mod);
+//    const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
 
-    const tools_cert_gen_mod = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize });
-    geoded_exe.root_module.addImport("tools/cert_gen.zig", tools_cert_gen_mod);
-    b.installArtifact(geoded_exe);
-
-    const geodec_exe = b.addExecutable(.{
-        .name = "geodec",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/client/main.zig"), .target = target, .optimize = optimize }),
-    });
-    geodec_exe.root_module.addImport("sentinel", sentinel_mod);
-    geodec_exe.root_module.addImport("geode", root_mod);
-    geodec_exe.root_module.addOptions("build_options", build_opts);
-    geodec_exe.root_module.addImport("transport/quic", transport_quic_mod);
-    geodec_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
-    geodec_exe.root_module.addImport("log/logger.zig", logging_mod);
-    if (target.result.os.tag == .windows) {
-        geodec_exe.linkLibC();
-    }
-    b.installArtifact(geodec_exe);
-    const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
-    geode_exe.root_module.addImport("audit_cli", audit_mod);
-    
-    // Add QUIC transport modules for REPL integration
-    geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
-    geode_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
+    // Legacy geodec binary removed - functionality now in unified geode binary
+    // All client functionality accessible through main geode executable
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",

@@ -10,7 +10,7 @@ const heap = @import("storage/heap.zig");
 // Set true locally when investigating length arithmetic or corruption.
 const PROTOCOL_DEBUG = false;
 
-pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING, CDC_DIAGNOSTICS, CDC_CONTROL };
+pub const MessageType = enum { HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK_TO, PING, CDC_DIAGNOSTICS, CDC_CONTROL, BACKUP, RESTORE, UPLOAD_BACKUP };
 
 pub const Hello = struct {
     client_name: []const u8,
@@ -28,6 +28,22 @@ pub const Pull = struct {
     page_size: usize = 1000,
 };
 
+pub const Backup = struct {
+    backup_type: []const u8, // "full" or "incremental"
+    parent_id: ?[]const u8 = null, // Required for incremental backups
+    compress: bool = false,
+};
+
+pub const Restore = struct {
+    target_time: ?[]const u8 = null, // Optional timestamp for point-in-time recovery
+    confirm: bool = false, // Restore confirmation flag
+};
+
+pub const UploadBackup = struct {
+    size_bytes: u64, // Size of backup file being uploaded
+    checksum: []const u8, // CRC32 checksum for validation
+};
+
 pub const ClientMessage = union(MessageType) {
     HELLO: Hello,
     RUN_GQL: RunGql,
@@ -40,6 +56,9 @@ pub const ClientMessage = union(MessageType) {
     PING: void,
     CDC_DIAGNOSTICS: void,
     CDC_CONTROL: struct { action: []const u8 },
+    BACKUP: Backup,
+    RESTORE: Restore,
+    UPLOAD_BACKUP: UploadBackup,
 };
 
 pub const ResultType = enum { SCHEMA, BINDINGS, ERROR, EXPLAIN, PROFILE };
@@ -491,6 +510,43 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
             const empty = try ally.dupe(u8, "");
             return .{ .CDC_CONTROL = .{ .action = empty } };
         }
+    } else if (std.mem.eql(u8, typ, "BACKUP")) {
+        const btv = obj.get("backup_type") orelse return error.Invalid;
+        if (btv != .string) return error.Invalid;
+        const backup_type = try ally.dupe(u8, btv.string);
+        
+        const parent_id = if (obj.get("parent_id")) |pv| blk: {
+            if (pv != .string) return error.Invalid;
+            break :blk try ally.dupe(u8, pv.string);
+        } else null;
+        
+        const compress = if (obj.get("compress")) |cv|
+            cv == .bool and cv.bool
+        else
+            false;
+            
+        return .{ .BACKUP = .{ .backup_type = backup_type, .parent_id = parent_id, .compress = compress } };
+    } else if (std.mem.eql(u8, typ, "RESTORE")) {
+        const target_time = if (obj.get("target_time")) |tv| blk: {
+            if (tv != .string) return error.Invalid;
+            break :blk try ally.dupe(u8, tv.string);
+        } else null;
+        
+        const confirm = if (obj.get("confirm")) |cv|
+            cv == .bool and cv.bool
+        else
+            false;
+            
+        return .{ .RESTORE = .{ .target_time = target_time, .confirm = confirm } };
+    } else if (std.mem.eql(u8, typ, "UPLOAD_BACKUP")) {
+        const sbv = obj.get("size_bytes") orelse return error.Invalid;
+        const csv = obj.get("checksum") orelse return error.Invalid;
+        if (sbv != .integer or csv != .string) return error.Invalid;
+        
+        const size_bytes = @as(u64, @intCast(sbv.integer));
+        const checksum = try ally.dupe(u8, csv.string);
+        
+        return .{ .UPLOAD_BACKUP = .{ .size_bytes = size_bytes, .checksum = checksum } };
     }
     return error.Invalid;
 }
