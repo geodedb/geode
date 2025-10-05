@@ -470,7 +470,7 @@ test "error handling and retry logic" {
     defer allocator.free(error_result.data);
     defer allocator.free(error_result.error_message.?);
     
-    try testing.expect(error_result.status == .error);
+    try testing.expect(error_result.status == .failed);
     try testing.expect(error_result.error_message != null);
     try testing.expect(std.mem.eql(u8, error_result.error_message.?, "Connection timeout"));
     try testing.expect(error_result.rows_returned == 0);

@@ -6066,6 +6066,46 @@ test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
     try expect(paginationStreamScaffold(11, 10));
 }
 
+/// Detect vector dimension from existing data in the graph
+fn detectVectorDimension(allocator: std.mem.Allocator, label: []const u8, property_name: []const u8) !u16 {
+    const graph = getOrCreateGraphStorage(allocator);
+    
+    // Scan existing nodes to find vector properties and detect dimension
+    var node_iterator = graph.nodes.iterator();
+    while (node_iterator.next()) |entry| {
+        const node = entry.value_ptr;
+        
+        // Check if node has the required label
+        var has_label = false;
+        for (node.labels) |node_label| {
+            if (std.mem.eql(u8, node_label, label)) {
+                has_label = true;
+                break;
+            }
+        }
+        
+        if (has_label) {
+            // Check if node has the vector property
+            if (node.properties.get(property_name)) |prop_value| {
+                switch (prop_value) {
+                    .VectorF32 => |vector| {
+                        std.log.info("Detected VectorF32 dimension: {d} from existing data", .{vector.dim});
+                        return vector.dim;
+                    },
+                    .VectorI32 => |vector| {
+                        std.log.info("Detected VectorI32 dimension: {d} from existing data", .{vector.dim});
+                        return vector.dim;
+                    },
+                    else => continue,
+                }
+            }
+        }
+    }
+    
+    // No vector data found - return error to use default
+    return error.NoVectorDataFound;
+}
+
 /// Convert a property value to a string key suitable for indexing
 fn propertyValueToIndexKey(allocator: std.mem.Allocator, value: graph_exec.PropertyValue) ![]u8 {
     switch (value) {
@@ -6120,8 +6160,10 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
     // Create the index based on type and number of properties
     switch (index_type) {
         .vector_f32 => {
-            // Vector indexes require dimension parameter (default 128 for now)
-            try index_manager.createAdvancedVectorIndex(stmt.name, 128, .l2);
+            // Vector indexes require dimension parameter - detect from existing data
+            const dimension = detectVectorDimension(allocator, stmt.label, stmt.properties[0]) catch 128; // Default to 128 if detection fails
+            std.log.info("Creating vector index with detected dimension: {d}", .{dimension});
+            try index_manager.createAdvancedVectorIndex(stmt.name, dimension, .l2);
         },
         .spatial_geographic => {
             // Geographic spatial indexes

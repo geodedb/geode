@@ -22,6 +22,9 @@ pub const MatchOptions = graph_common.MatchOptions;
 pub const ScanType = graph_common.ScanType;
 pub const ScanPlan = graph_common.ScanPlan;
 pub const IndexInfo = graph_common.IndexInfo;
+
+// Column definition from graph_common to avoid circular dependencies
+pub const Column = graph_common.Column;
 pub const IndexType = graph_common.IndexType;
 
 // IndexOptimizer interface - can be injected from outside

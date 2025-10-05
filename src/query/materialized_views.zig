@@ -3,7 +3,6 @@ const mvcc = @import("../server/txn/mvcc.zig");
 // const query_coordinator = @import("../distributed/query_coordinator.zig");
 // const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");
 const ast = @import("../gql/ast.zig");
-const exec = @import("../server/graph/exec.zig");
 const graph_storage = @import("../types/graph_common.zig");
 
 // CANARY: REQ=REQ-MATERIALIZED-VIEWS-001; FEATURE="Materialized View Management"; ASPECT=QueryOptimization; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-10-05
@@ -99,7 +98,7 @@ pub const ViewStatistics = struct {
 pub const MaterializedViewData = struct {
     allocator: Allocator,
     rows: ArrayList(graph_storage.Binding),
-    schema: ArrayList(exec.Column),
+    schema: ArrayList(graph_storage.Column),
     creation_timestamp: i64,
     refresh_timestamp: i64,
     
@@ -107,7 +106,7 @@ pub const MaterializedViewData = struct {
         return .{
             .allocator = allocator,
             .rows = ArrayList(graph_storage.Binding).init(allocator),
-            .schema = ArrayList(exec.Column).init(allocator),
+            .schema = ArrayList(graph_storage.Column).init(allocator),
             .creation_timestamp = std.time.milliTimestamp(),
             .refresh_timestamp = std.time.milliTimestamp(),
         };
@@ -452,7 +451,7 @@ pub const MaterializedViewManager = struct {
         
         return QueryResult{
             .rows = try result_rows.toOwnedSlice(),
-            .schema = try self.allocator.dupe(exec.Column, data_ptr.schema.items),
+            .schema = try self.allocator.dupe(graph_storage.Column, data_ptr.schema.items),
             .execution_time_ms = 1, // Materialized view queries are fast
             .row_count = result_rows.items.len,
         };
@@ -521,7 +520,7 @@ pub const MaterializedViewManager = struct {
         // Fallback to mock result for now
         return QueryResult{
             .rows = try self.allocator.alloc(graph_storage.Binding, 0),
-            .schema = try self.allocator.alloc(exec.Column, 0),
+            .schema = try self.allocator.alloc(graph_storage.Column, 0),
             .execution_time_ms = 100,
             .row_count = 0,
         };
@@ -573,7 +572,7 @@ pub const MaterializedViewManager = struct {
 /// Query result structure
 pub const QueryResult = struct {
     rows: []graph_storage.Binding,
-    schema: []exec.Column,
+    schema: []graph_storage.Column,
     execution_time_ms: u64,
     row_count: usize,
 };

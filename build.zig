@@ -152,9 +152,7 @@ pub fn build(b: *std.Build) void {
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
     gql_conformance_tests.root_module.addImport("test_harness", b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize }));
-    // Provide server graph exec module for guard tests referencing MATCH executor internals
-    const server_graph_exec_mod = b.createModule(.{ .root_source_file = b.path("src/server/graph/exec.zig"), .target = target, .optimize = optimize });
-    custom_tests.root_module.addImport("server_graph_exec", server_graph_exec_mod);
+    // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("migration", migration_mod);

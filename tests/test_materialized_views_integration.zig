@@ -2,13 +2,16 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const materialized_views = geode.materialized_views;
-const query_coordinator = @import("../src/distributed/query_coordinator.zig");
-const enhanced_query_transport = @import("../src/distributed/enhanced_query_transport.zig");
-const mvcc = @import("../src/server/txn/mvcc.zig");
+// Note: Imports removed - using mock structures instead of external modules
 const graph_storage = geode.graph_common;
-const exec = @import("server_graph_exec");
 
 // CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="Materialized View Integration"; ASPECT=DistributedQueries; STATUS=TESTED; TEST=test_materialized_views_integration; OWNER=query; UPDATED=2025-10-05
+
+// Mock structures for testing
+const Column = struct {
+    name: []const u8,
+    type: []const u8,
+};
 
 // Mock query coordinator for testing
 const MockQueryCoordinator = struct {
@@ -56,7 +59,7 @@ const MockQueryCoordinator = struct {
         };
         try rows.append(person_binding);
         
-        var schema = std.ArrayList(exec.Column).init(self.allocator);
+        var schema = std.ArrayList(Column).init(self.allocator);
         try schema.append(.{ .name = "name", .type = "STRING" });
         try schema.append(.{ .name = "age", .type = "INT" });
         
@@ -82,7 +85,7 @@ const MockQueryCoordinator = struct {
         };
         try rows.append(product_binding);
         
-        var schema = std.ArrayList(exec.Column).init(self.allocator);
+        var schema = std.ArrayList(Column).init(self.allocator);
         try schema.append(.{ .name = "name", .type = "STRING" });
         try schema.append(.{ .name = "price", .type = "DECIMAL" });
         
@@ -97,7 +100,7 @@ const MockQueryCoordinator = struct {
     fn createEmptyQueryResult(self: *MockQueryCoordinator) !materialized_views.QueryResult {
         return materialized_views.QueryResult{
             .rows = try self.allocator.alloc(graph_storage.Binding, 0),
-            .schema = try self.allocator.alloc(exec.Column, 0),
+            .schema = try self.allocator.alloc(Column, 0),
             .execution_time_ms = 10,
             .row_count = 0,
         };

@@ -3,7 +3,6 @@ const testing = std.testing;
 const geode = @import("geode");
 const materialized_views = geode.materialized_views;
 const graph_storage = geode.graph_common;
-const exec = @import("server_graph_exec");
 
 // CANARY: REQ=REQ-MATERIALIZED-VIEWS-001; FEATURE="Materialized View Management"; ASPECT=Testing; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-10-05
 

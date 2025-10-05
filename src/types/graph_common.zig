@@ -325,3 +325,9 @@ pub const MatchOptions = struct {
     min_hops: ?u32 = null,
     timeout_ms: ?u32 = null,
 };
+
+// Column definition for query results and materialized views
+pub const Column = struct {
+    name: []const u8,
+    type: []const u8,
+};

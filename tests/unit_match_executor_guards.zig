@@ -1,11 +1,10 @@
 const std = @import("std");
 const geode = @import("geode");
-const graph_exec = @import("server_graph_exec");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=FrontierAndResultGuardTrips; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-24
 
-fn buildSmallGraph(ally: std.mem.Allocator, fanout: usize) graph_exec.GraphStorage {
-    var g = graph_exec.GraphStorage.init(ally);
+fn buildSmallGraph(ally: std.mem.Allocator, fanout: usize) geode.graph_common.GraphStorage {
+    var g = geode.graph_common.GraphStorage.init(ally);
     // Create star graph: 1 connected to 2..fanout+1
     const center: u64 = 1;
     try g.addNode(ally, center, &.{});
@@ -31,8 +30,8 @@ test "TestCANARY_REQ_GQL_017_MatchGuardTrips frontier" {
     defer parsed.deinit();
     const query = parsed.program.statements[0].Query;
     var diag: geode.diagnostics.Code = .None;
-    const opts = graph_exec.MatchOptions{ .max_frontier = 2, .max_results = 100, .max_hops_limit = 4 };
-    const res = graph_exec.executeMatch(ally, &g, query.match, query.where_clause, opts, &diag) catch {};
+    const opts = geode.graph_common.MatchOptions{ .max_frontier = 2, .max_results = 100, .max_hops_limit = 4 };
+    const res = geode.graph_common.executeMatch(ally, &g, query.match, query.where_clause, opts, &diag) catch {};
     // We expect a guard trip diagnostic
     try std.testing.expect(diag == .ExecutionGuardTrip);
     // Even if partial results produced, ensure not exceeding frontier bound massively
@@ -54,8 +53,8 @@ test "TestCANARY_REQ_GQL_017_MatchGuardTrips results" {
     defer parsed.deinit();
     const query = parsed.program.statements[0].Query;
     var diag: geode.diagnostics.Code = .None;
-    const opts = graph_exec.MatchOptions{ .max_frontier = 1_000, .max_results = 3, .max_hops_limit = 4 };
-    const res = graph_exec.executeMatch(ally, &g, query.match, query.where_clause, opts, &diag) catch {};
+    const opts = geode.graph_common.MatchOptions{ .max_frontier = 1_000, .max_results = 3, .max_hops_limit = 4 };
+    const res = geode.graph_common.executeMatch(ally, &g, query.match, query.where_clause, opts, &diag) catch {};
     try std.testing.expect(diag == .ExecutionGuardTrip);
     try std.testing.expect(res.len <= 3);
 }
