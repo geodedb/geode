@@ -51,7 +51,7 @@ pub const QueryCoordinator = struct {
         defer plan.deinit();
 
         // Scatter phase - send fragments to shards
-        var shard_results = try self.scatterQuery(plan, params);
+        const shard_results = try self.scatterQuery(plan, params);
         defer {
             for (shard_results) |*result| result.deinit(self.allocator);
             self.allocator.free(shard_results);
@@ -117,7 +117,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// Execute query fragment on local shard
-    fn executeLocalFragment(self: *Self, query: []const u8, params: []const protocol.Value) !federation.QueryResults {
+    fn executeLocalFragment(self: *Self, _: []const u8, params: []const protocol.Value) !federation.QueryResults {
         _ = self;
         _ = params;
 

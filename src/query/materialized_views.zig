@@ -1,7 +1,7 @@
 const std = @import("std");
 const mvcc = @import("../server/txn/mvcc.zig");
-const query_coordinator = @import("../distributed/query_coordinator.zig");
-const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");
+// const query_coordinator = @import("../distributed/query_coordinator.zig");
+// const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");
 const ast = @import("../gql/ast.zig");
 const exec = @import("../server/graph/exec.zig");
 const graph_storage = @import("../types/graph_common.zig");
@@ -214,8 +214,8 @@ pub const MaterializedViewManager = struct {
     view_data: AutoHashMap([]const u8, MaterializedViewData),
     refresh_scheduler: RefreshScheduler,
     dependency_tracker: DependencyTracker,
-    query_coordinator: ?*query_coordinator.QueryCoordinator,
-    enhanced_transport: ?*enhanced_query_transport.EnhancedQueryTransport,
+    // query_coordinator: ?*query_coordinator.QueryCoordinator,
+    // enhanced_transport: ?*enhanced_query_transport.EnhancedQueryTransport,
     mvcc_manager: ?*mvcc.MVCCManager,
     config: ViewManagerConfig,
     statistics: ManagerStatistics,
@@ -247,8 +247,8 @@ pub const MaterializedViewManager = struct {
             .view_data = AutoHashMap([]const u8, MaterializedViewData).init(allocator),
             .refresh_scheduler = RefreshScheduler.init(allocator),
             .dependency_tracker = DependencyTracker.init(allocator),
-            .query_coordinator = null,
-            .enhanced_transport = null,
+            // .query_coordinator = null,
+            // .enhanced_transport = null,
             .mvcc_manager = null,
             .config = config,
             .statistics = .{},
@@ -293,7 +293,7 @@ pub const MaterializedViewManager = struct {
         const owned_name = try self.allocator.dupe(u8, view_name);
         const owned_query = try self.allocator.dupe(u8, source_query);
         
-        var metadata = MaterializedViewMetadata{
+        const metadata = MaterializedViewMetadata{
             .view_name = owned_name,
             .source_query = owned_query,
             .refresh_strategy = refresh_strategy,
@@ -320,7 +320,7 @@ pub const MaterializedViewManager = struct {
         
         try self.views.put(owned_name, metadata);
         
-        var view_data = MaterializedViewData.init(self.allocator);
+        const view_data = MaterializedViewData.init(self.allocator);
         try self.view_data.put(try self.allocator.dupe(u8, owned_name), view_data);
         
         // Schedule initial refresh

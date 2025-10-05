@@ -689,7 +689,7 @@ pub const MVCCManager = struct {
                 // Validate that no phantom reads occurred
                 if (!try phantom_prev.validateReadSet(txn.id, writes_since_snapshot.items)) {
                     // Phantom read detected
-                    const conflict = mvcc.ConflictInfo{
+                    const conflict = ConflictInfo{
                         .conflicting_txn = 0, // Unknown conflicting transaction
                         .resource_id = 0,     // Predicate-based conflict
                         .conflict_type = .PhantomRead,

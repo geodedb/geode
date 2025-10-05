@@ -5,6 +5,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const network_transport = @import("network_transport.zig");
+const NetworkTransport = network_transport.NetworkTransport;
+const ClusterMessage = network_transport.ClusterMessage;
 const query_coordinator = @import("query_coordinator.zig");
 const raft_consensus = @import("raft_consensus.zig");
 const txn_coordinator = @import("txn_coordinator.zig");
@@ -48,7 +50,7 @@ pub const QueryMessage = struct {
 /// Enhanced query transport with network integration
 pub const EnhancedQueryTransport = struct {
     allocator: Allocator,
-    network_transport: *network_transport.NetworkTransport,
+    network_transport: *NetworkTransport,
     query_coordinator: *query_coordinator.QueryCoordinator,
     shard_registry: ShardRegistry,
     connection_pool: ConnectionPool,
@@ -88,13 +90,13 @@ pub const EnhancedQueryTransport = struct {
     
     pub fn init(
         allocator: Allocator, 
-        network_transport: *network_transport.NetworkTransport,
-        query_coordinator: *query_coordinator.QueryCoordinator,
+        net_transport: *NetworkTransport,
+        coordinator: *query_coordinator.QueryCoordinator,
     ) !EnhancedQueryTransport {
         var transport = EnhancedQueryTransport{
             .allocator = allocator,
-            .network_transport = network_transport,
-            .query_coordinator = query_coordinator,
+            .network_transport = net_transport,
+            .query_coordinator = coordinator,
             .shard_registry = try ShardRegistry.init(allocator),
             .connection_pool = try ConnectionPool.init(allocator, 50),
             .message_handlers = MessageHandlers.init(),
@@ -149,7 +151,7 @@ pub const EnhancedQueryTransport = struct {
         completion_callback: QueryCompletionCallback,
     ) !u64 {
         const query_id = self.generateQueryId();
-        const start_time = std.time.milliTimestamp();
+        _ = std.time.milliTimestamp(); // Query start time for logging
         
         log.info("Executing distributed query {} across {} shards", .{ query_id, target_shards.len });
         
@@ -246,7 +248,7 @@ pub const EnhancedQueryTransport = struct {
     }
     
     /// Send message with retry logic and error handling
-    fn sendWithRetry(self: *EnhancedQueryTransport, node_id: u32, message: network_transport.ClusterMessage) !void {
+    fn sendWithRetry(self: *EnhancedQueryTransport, node_id: u32, message: ClusterMessage) !void {
         var attempts: u32 = 0;
         const max_attempts = self.config.retry_attempts;
         
@@ -458,7 +460,6 @@ pub const EnhancedQueryTransport = struct {
     
     // Helper functions for message handling and type conversion
     fn serializeFragment(self: *EnhancedQueryTransport, fragment: QueryFragment) ![]u8 {
-        _ = self;
         _ = fragment;
         // Placeholder - would serialize fragment to JSON
         return try self.allocator.dupe(u8, "{}");
@@ -468,10 +469,10 @@ pub const EnhancedQueryTransport = struct {
         self: *EnhancedQueryTransport, 
         query_msg: QueryMessage, 
         dest_node: u32
-    ) !network_transport.ClusterMessage {
+    ) !ClusterMessage {
         const payload = try std.json.stringifyAlloc(self.allocator, query_msg, .{});
         
-        return network_transport.ClusterMessage{
+        return ClusterMessage{
             .msg_type = .client_request, // Reuse existing cluster message type
             .source_node = self.network_transport.node_id,
             .dest_node = dest_node,
@@ -673,7 +674,7 @@ const MessageHandlers = struct {
 };
 
 // Message handler implementations (placeholders)
-fn handleNetworkMessage(transport: *network_transport.NetworkTransport, message: *const network_transport.ClusterMessage) void {
+fn handleNetworkMessage(transport: *NetworkTransport, message: *const ClusterMessage) void {
     _ = transport;
     _ = message;
     // Implementation would route to enhanced query transport

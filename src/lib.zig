@@ -102,6 +102,11 @@ pub const types = struct {
 pub const graph_common = @import("types/graph_common.zig");
 // Re-export materialized views
 pub const materialized_views = @import("query/materialized_views.zig");
+
+// Machine Learning and Analytics
+pub const ml = struct {
+    pub const graph_embeddings = @import("ml/graph_embeddings.zig");
+};
 // Re-export server graph executor for tests needing internal MATCH primitives
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
