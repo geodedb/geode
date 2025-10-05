@@ -12,6 +12,7 @@ __pycache__/
 **/__pycache__/
 
 test_io
+test_compile
 test_formatter
 test_writer
 test_arraylist

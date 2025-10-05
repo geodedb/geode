@@ -188,6 +188,8 @@ pub const graph = struct {
     pub const closeness = @import("graph/centrality_closeness.zig");
     pub const bridge_leverage = @import("graph/centrality_bridge_leverage.zig");
     pub const grey_cardinal = @import("graph/centrality_grey_cardinal.zig");
+    // Performance-optimized algorithms
+    pub const optimized = @import("graph/centrality_optimized.zig");
     pub const dfs_iterative = @import("graph/traversal_dfs_iterative.zig");
     pub const iddfs = @import("graph/traversal_iddfs.zig");
     pub const topo_kahn = @import("graph/topological_sort_kahn.zig");
