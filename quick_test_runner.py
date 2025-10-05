@@ -53,7 +53,7 @@ class QuickTestRunner:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=self.binary.parent.parent,  # Run from geode root
+                cwd=self.binary.parent.parent.parent,  # Run from geode root
                 env=env
             )
             

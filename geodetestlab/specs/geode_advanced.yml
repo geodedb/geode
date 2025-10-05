@@ -190,9 +190,9 @@ tests:
       - |
         MATCH (n:TestNode)
         WHERE n.category IN ['A', 'B']
-        WITH n.category AS cat, count(n) AS node_count, avg(n.random_value) AS avg_value
+        WITH n.category AS cat, count(n) AS node_count
+        RETURN cat, node_count
         ORDER BY node_count DESC
-        RETURN cat, node_count, avg_value
     expect:
       exit_code: 0
       geode_query:

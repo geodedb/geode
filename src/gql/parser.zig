@@ -2269,7 +2269,15 @@ pub const Parser = struct {
             }
         }
 
-        // Graph name
+        // Check for TYPE (graph type creation) immediately after GRAPH (and optional IF NOT EXISTS)
+        if (self.cur.kind == .TYPE or 
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+            // This is CREATE [PROPERTY] GRAPH TYPE
+            // TYPE is already detected, don't consume it here - let parseCreateGraphType handle it
+            return self.parseCreateGraphType(or_replace, property_graph);
+        }
+
+        // Graph name (for regular CREATE GRAPH statements)
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         const name = self.cur.lexeme;
         self.advance();
@@ -2279,13 +2287,8 @@ pub const Parser = struct {
         var like_source: ?[]const u8 = null;
         var copy_source: ?[]const u8 = null;
 
-        // Check for TYPE (graph type creation) or TYPED clause
-        if (self.cur.kind == .TYPE or 
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
-            // This is CREATE [PROPERTY] GRAPH TYPE
-            // TYPE is already detected, don't consume it here - let parseCreateGraphType handle it
-            return self.parseCreateGraphType(or_replace, property_graph);
-        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPED")) {
+        // Check for TYPED clause
+        if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPED")) {
             self.advance(); // Skip TYPED
             // Expect type specification
             if (self.cur.kind == .identifier) {

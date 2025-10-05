@@ -220,7 +220,7 @@ tests:
 
   - name: "unauthorized-access"
     description: "Test unauthorized access prevention"
-    args: ["query", "--user", "unauthorized", "MATCH (n) RETURN count(n)"]
+    args: ["query", "--user", "unauthorized", "--no-quic", "MATCH (n) RETURN count(n)"]
     expect:
       exit_code: 3  # Authentication error
       stderr_contains: ["unauthorized", "access", "denied"]
@@ -243,7 +243,7 @@ tests:
 
   - name: "token-based-auth"
     description: "Test API token authentication"
-    args: ["query", "--token", "${secret:api_token}", "RETURN current_user() AS user"]
+    args: ["query", "--token", "${secret:api_token}", "--no-quic", "RETURN current_user() AS user"]
     expect:
       exit_code: 0
       stdout_json_assert:

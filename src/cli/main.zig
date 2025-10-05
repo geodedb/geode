@@ -337,6 +337,7 @@ fn printQueryUsage() void {
         "  --begin                Start transaction\n" ++
         "  --commit               Commit transaction\n" ++
         "  --rollback             Rollback transaction\n" ++
+        "  --no-quic              Disable QUIC, use embedded server\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -757,7 +758,11 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
     };
     std.process.exit(switch (term) {
-        .Exited => |code| code,
+        .Exited => |code| switch (code) {
+            0 => 0, // success
+            2 => @intFromEnum(ExitCode.general_error), // Map parse errors (2) to general_error (1)
+            else => code, // Pass through other exit codes
+        },
         else => @intFromEnum(ExitCode.general_error),
     });
 }
@@ -871,6 +876,8 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             try client_args.append(ally, "--commit");
         } else if (std.mem.eql(u8, arg, "--rollback")) {
             try client_args.append(ally, "--rollback");
+        } else if (std.mem.eql(u8, arg, "--no-quic")) {
+            try client_args.append(ally, "--no-quic");
         } else if ((std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "-U")) and i + 1 < argv.len) {
             // Pass through user authentication
             try client_args.append(ally, arg);
@@ -987,7 +994,11 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     };
 
     std.process.exit(switch (term) {
-        .Exited => |code| code,
+        .Exited => |code| switch (code) {
+            0 => 0, // success
+            2 => @intFromEnum(ExitCode.general_error), // Map parse errors (2) to general_error (1)
+            else => code, // Pass through other exit codes
+        },
         else => @intFromEnum(ExitCode.general_error),
     });
 }
@@ -2337,8 +2348,20 @@ pub fn main() !void {
         try audit_cli.verifyFile(path, algo, 100, require_digest, pubkey);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else {
-        // Check if it looks like an option (starts with --)
-        if (std.mem.startsWith(u8, subcommand, "--")) {
+        // Check if this is an option that should be handled by query command
+        if (std.mem.startsWith(u8, subcommand, "--format") or 
+            std.mem.startsWith(u8, subcommand, "--json-param") or
+            std.mem.startsWith(u8, subcommand, "--page-size") or
+            std.mem.startsWith(u8, subcommand, "--server")) {
+            // These are query command options, auto-route to query command
+            logAuditEvent("command", "query", "started");
+            try cmdQueryImplicit(ally, argv, subcommand_start);
+        } else if (looksLikeGqlQuery(subcommand)) {
+            // Check if this looks like a GQL query and auto-route to query command
+            logAuditEvent("command", "query", "started");
+            try cmdQueryImplicit(ally, argv, subcommand_start);
+        } else if (std.mem.startsWith(u8, subcommand, "--")) {
+            // Check if it looks like an option (starts with --)
             std.debug.print("Error: unknown option '{s}'\n", .{subcommand});
             std.debug.print("Run 'geode --help' to see available options\n\n", .{});
             printMainUsage();
@@ -2350,6 +2373,59 @@ pub fn main() !void {
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
+}
+
+// Helper function to detect if a string looks like a GQL query
+fn looksLikeGqlQuery(str: []const u8) bool {
+    // Convert to uppercase for case-insensitive matching
+    var buf: [256]u8 = undefined;
+    if (str.len > buf.len) return false;
+    
+    const upper_str = std.ascii.upperString(buf[0..str.len], str);
+    
+    // GQL query keywords (most common ones that start queries)
+    const gql_keywords = [_][]const u8{
+        "MATCH", "CREATE", "DELETE", "SET", "REMOVE", "RETURN", "WITH", "UNWIND",
+        "MERGE", "CALL", "OPTIONAL", "FOREACH", "LOAD", "USING", "START",
+        "WHERE", "ORDER", "SKIP", "LIMIT", "UNION", "EXPLAIN", "PROFILE",
+        "DETACH", "ON", "CASE", "WHEN", "ELSE", "END", "EXISTS", "UNIQUE",
+        "INDEX", "CONSTRAINT", "DROP", "SHOW", "DESCRIBE", "USE", "INVALID"
+    };
+    
+    for (gql_keywords) |keyword| {
+        if (std.mem.startsWith(u8, upper_str, keyword)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Implicit query handler for when GQL query is provided without 'query' subcommand
+fn cmdQueryImplicit(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Reconstruct argv as if 'query' subcommand was used
+    // We need to create a new argv with 'query' inserted at start_idx
+    var new_argv = try ally.alloc([:0]u8, argv.len + 1);
+    defer ally.free(new_argv);
+    
+    // Copy elements before the query
+    var i: usize = 0;
+    while (i < start_idx) : (i += 1) {
+        new_argv[i] = argv[i];
+    }
+    
+    // Insert 'query' subcommand
+    new_argv[start_idx] = try ally.dupeZ(u8, "query");
+    defer ally.free(new_argv[start_idx]);
+    
+    // Copy the rest of the elements (including the query string and flags)
+    i = start_idx;
+    while (i < argv.len) : (i += 1) {
+        new_argv[i + 1] = argv[i];
+    }
+    
+    // Call the regular query command handler
+    try cmdQuery(ally, new_argv, start_idx);
 }
 
 // ---- Credential Storage & Authentication ----

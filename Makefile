@@ -739,7 +739,7 @@ cross-macos-arm64:
 # Cross-compile for Windows ARM64
 cross-windows-arm64:
 	@echo "Cross-compiling for Windows ARM64..."
-	$(ZIG) build -Dtarget=aarch64-windows-msvc -p zig-out/windows-arm64 $(ZIG_FLAGS)
+	$(ZIG) build -Dtarget=aarch64-windows-gnu -p zig-out/windows-arm64 $(ZIG_FLAGS)
 	@echo "✓ Windows ARM64 build successful"
 
 # Test cross-platform stdio functionality
@@ -751,11 +751,11 @@ cross-test:
 		echo "Testing Windows cross-compilation with Wine ($(WINE_CMD)) using standalone smoke program..."; \
 		echo "Building (gnu static) windows_stdio_smoke.exe..."; \
 		$(ZIG) build-exe tests/windows_stdio_smoke.zig -target x86_64-windows-gnu -static -O ReleaseSmall -femit-bin=windows_stdio_smoke.exe $(ZIG_FLAGS) 2> build_windows_smoke.log || true; \
-		if [ ! -f windows_stdio_smoke.exe ]; then echo "First build failed, attempting MSVC variant..."; fi; \
+		if [ ! -f windows_stdio_smoke.exe ]; then echo "First build failed, attempting GNU variant..."; fi; \
 		if [ ! -f windows_stdio_smoke.exe ]; then \
-			$(ZIG) build-exe tests/windows_stdio_smoke.zig -target x86_64-windows-msvc -O ReleaseSmall -femit-bin=windows_stdio_smoke_msvc.exe $(ZIG_FLAGS) 2>> build_windows_smoke.log || true; \
+			$(ZIG) build-exe tests/windows_stdio_smoke.zig -target x86_64-windows-gnu -O ReleaseSmall -femit-bin=windows_stdio_smoke_gnu.exe $(ZIG_FLAGS) 2>> build_windows_smoke.log || true; \
 		fi; \
-		TEST_EXE=$$( [ -f windows_stdio_smoke.exe ] && echo windows_stdio_smoke.exe || ( [ -f windows_stdio_smoke_msvc.exe ] && echo windows_stdio_smoke_msvc.exe || echo "" ) ); \
+		TEST_EXE=$$( [ -f windows_stdio_smoke.exe ] && echo windows_stdio_smoke.exe || ( [ -f windows_stdio_smoke_gnu.exe ] && echo windows_stdio_smoke_gnu.exe || echo "" ) ); \
 		if [ -z "$$TEST_EXE" ]; then echo "Failed to build any Windows smoke executable"; cat build_windows_smoke.log; exit 1; fi; \
 		echo "Running smoke program ($$TEST_EXE) under Wine..."; \
 		OUTPUT=$$(WINEDEBUG=-all $(WINE_CMD) ./$$TEST_EXE 2>&1 || true); \

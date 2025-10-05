@@ -62,7 +62,7 @@ tests:
 
   - name: "simple-query"
     description: "Execute a simple RETURN query"
-    args: ["query", "RETURN 1 AS result"]
+    args: ["RETURN 1 AS result", "--no-quic"]
     expect:
       exit_code: 0
       stdout_json_assert:
@@ -75,7 +75,7 @@ tests:
 
   - name: "node-count-query"
     description: "Count all nodes in the database"
-    args: ["query", "MATCH (n) RETURN count(n) AS node_count"]
+    args: ["MATCH (n) RETURN count(n) AS node_count", "--no-quic"]
     expect:
       exit_code: 0
       stdout_json_assert:
@@ -88,7 +88,7 @@ tests:
 
   - name: "create-test-node"
     description: "Create a test node"
-    args: ["query", "CREATE (n:TestNode {name: 'geodetestlab', created_at: timestamp()}) RETURN n"]
+    args: ["CREATE (n:TestNode {name: 'geodetestlab', created_at: timestamp()}) RETURN n", "--no-quic"]
     expect:
       exit_code: 0
       geode_query:
@@ -99,7 +99,7 @@ tests:
 
   - name: "query-test-nodes"
     description: "Query for test nodes"
-    args: ["query", "MATCH (n:TestNode) WHERE n.name = 'geodetestlab' RETURN n"]
+    args: ["MATCH (n:TestNode) WHERE n.name = 'geodetestlab' RETURN n", "--no-quic"]
     expect:
       exit_code: 0
       geode_query:
@@ -110,7 +110,7 @@ tests:
 
   - name: "query-with-format"
     description: "Test different output formats"
-    args: ["query", "--format", "table", "RETURN 1 AS num, 'hello' AS text"]
+    args: ["--format", "table", "RETURN 1 AS num, 'hello' AS text", "--no-quic"]
     expect:
       exit_code: 0
       stdout_contains: ["num", "text", "hello"]
@@ -118,7 +118,7 @@ tests:
 
   - name: "invalid-gql-syntax"
     description: "Test error handling with invalid GQL"
-    args: ["query", "INVALID GQL SYNTAX HERE"]
+    args: ["INVALID GQL SYNTAX HERE", "--no-quic"]
     expect:
       exit_code: 1
       stderr_contains: ["syntax", "error"]

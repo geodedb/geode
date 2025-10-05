@@ -33,10 +33,10 @@ tests:
 
   # Error handling tests
   - name: "invalid-command"
-    description: "Test that invalid commands still show help (exit code 0)"
+    description: "Test that invalid commands return usage error (exit code 2)"
     args: ["nonexistent-command"]
     expect:
-      exit_code: 0
+      exit_code: 2
 
   - name: "invalid-option"
     description: "Test that invalid options are handled"
