@@ -33,6 +33,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 - **[KMS Provider System](docs/KMS_PROVIDER_SYSTEM.md)** - Enterprise key management with HashiCorp Vault
 - **[TDE & KMS Design](docs/DESIGN_TDE_KMS.md)** - Transparent data encryption architecture
 - **[Security Progress](docs/SECURITY_PROGRESS.md)** - Security implementation status
+- **[Advanced Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS with policy evaluation, expression compilation, and optimization
 
 ### Advanced Features
 - **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, and DeepWalk algorithms
@@ -56,6 +57,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 9. **Distributed Query Coordination** - Federation-aware optimization with load balancing
 10. **Materialized View Refresh** - Complete refresh strategies with dependency tracking
 11. **CLI Subprocess Elimination** - Unified binary architecture eliminating subprocess spawning
+12. **Advanced Security Features** - Enhanced RLS with policy evaluation, expression compilation, and optimization
 
 ### 🔧 Current High-Priority Work
 Based on [TODO.md](docs/TODO.md):

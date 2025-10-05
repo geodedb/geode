@@ -236,6 +236,12 @@ pub const audit = struct {
 // Runtime-flag gated scaffold stub re-exports for acceptance tests
 pub const tde_stub = @import("security/tde.zig");
 pub const mfa_stub = @import("security/mfa.zig");
+
+// Security modules for enhanced RLS and compliance features  
+pub const security = struct {
+    pub const rls_enhanced = @import("security/rls_enhanced.zig");
+    pub const auth = @import("security/auth.zig");
+};
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
 pub const cbo_api_stub = @import("planner/cbo.zig");
