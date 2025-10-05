@@ -9,9 +9,9 @@ pub const OptimizedJsonProcessor = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
     buffer: std.ArrayList(u8),
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: Allocator) Self {
         return .{
             .allocator = allocator,
@@ -19,47 +19,47 @@ pub const OptimizedJsonProcessor = struct {
             .buffer = std.ArrayList(u8).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.buffer.deinit();
         self.arena.deinit();
     }
-    
+
     /// Reset for reuse (arena pattern for zero-allocation subsequent uses)
     pub fn reset(self: *Self) void {
         self.buffer.clearRetainingCapacity();
         _ = self.arena.reset(.retain_capacity);
     }
-    
+
     /// Pre-allocate buffer for expected JSON size (eliminates reallocations)
     pub fn reserveCapacity(self: *Self, capacity: usize) !void {
         try self.buffer.ensureTotalCapacity(capacity);
     }
-    
+
     /// Streaming JSON writer for large result sets
     pub const StreamingWriter = struct {
         buffer: *std.ArrayList(u8),
         allocator: Allocator,
         arena_allocator: Allocator,
         first_item: bool = true,
-        
+
         pub fn writeObjectStart(self: *StreamingWriter) !void {
             try self.buffer.append('{');
         }
-        
+
         pub fn writeObjectEnd(self: *StreamingWriter) !void {
             try self.buffer.append('}');
         }
-        
+
         pub fn writeArrayStart(self: *StreamingWriter) !void {
             try self.buffer.append('[');
             self.first_item = true;
         }
-        
+
         pub fn writeArrayEnd(self: *StreamingWriter) !void {
             try self.buffer.append(']');
         }
-        
+
         pub fn writeFieldName(self: *StreamingWriter, name: []const u8) !void {
             if (!self.first_item) {
                 try self.buffer.append(',');
@@ -69,7 +69,7 @@ pub const OptimizedJsonProcessor = struct {
             try self.buffer.appendSlice("\":");
             self.first_item = false;
         }
-        
+
         pub fn writeString(self: *StreamingWriter, value: []const u8) !void {
             if (!self.first_item) {
                 try self.buffer.append(',');
@@ -79,7 +79,7 @@ pub const OptimizedJsonProcessor = struct {
             try self.buffer.append('"');
             self.first_item = false;
         }
-        
+
         pub fn writeNumber(self: *StreamingWriter, value: anytype) !void {
             if (!self.first_item) {
                 try self.buffer.append(',');
@@ -88,7 +88,7 @@ pub const OptimizedJsonProcessor = struct {
             try self.buffer.appendSlice(formatted);
             self.first_item = false;
         }
-        
+
         pub fn writeBool(self: *StreamingWriter, value: bool) !void {
             if (!self.first_item) {
                 try self.buffer.append(',');
@@ -96,7 +96,7 @@ pub const OptimizedJsonProcessor = struct {
             try self.buffer.appendSlice(if (value) "true" else "false");
             self.first_item = false;
         }
-        
+
         pub fn writeNull(self: *StreamingWriter) !void {
             if (!self.first_item) {
                 try self.buffer.append(',');
@@ -104,7 +104,7 @@ pub const OptimizedJsonProcessor = struct {
             try self.buffer.appendSlice("null");
             self.first_item = false;
         }
-        
+
         fn writeEscapedString(self: *StreamingWriter, input: []const u8) !void {
             for (input) |c| {
                 switch (c) {
@@ -118,7 +118,7 @@ pub const OptimizedJsonProcessor = struct {
             }
         }
     };
-    
+
     /// Get streaming writer for incremental JSON building
     pub fn getStreamingWriter(self: *Self) StreamingWriter {
         return .{
@@ -127,22 +127,22 @@ pub const OptimizedJsonProcessor = struct {
             .arena_allocator = self.arena.allocator(),
         };
     }
-    
+
     /// Optimized JSON parsing with arena allocation (returns parsed wrapper)
     pub fn parseJsonValue(self: *Self, json_text: []const u8) !std.json.Parsed(std.json.Value) {
         return std.json.parseFromSlice(std.json.Value, self.arena.allocator(), json_text, .{});
     }
-    
+
     /// Fast JSON result serialization for common query response patterns
     pub fn serializeQueryResult(self: *Self, schema: []const SchemaColumn, rows: []const []const u8) ![]const u8 {
         // Pre-allocate based on estimated size
         const estimated_size = schema.len * 50 + rows.len * 100; // Heuristic
         try self.reserveCapacity(estimated_size);
-        
+
         var writer = self.getStreamingWriter();
-        
+
         try writer.writeObjectStart();
-        
+
         // Write schema
         try writer.writeFieldName("schema");
         try writer.writeArrayStart();
@@ -155,7 +155,7 @@ pub const OptimizedJsonProcessor = struct {
             try writer.writeObjectEnd();
         }
         try writer.writeArrayEnd();
-        
+
         // Write rows
         try writer.writeFieldName("rows");
         try writer.writeArrayStart();
@@ -166,12 +166,12 @@ pub const OptimizedJsonProcessor = struct {
             try self.writeJsonValue(&writer, parsed.value);
         }
         try writer.writeArrayEnd();
-        
+
         try writer.writeObjectEnd();
-        
+
         return self.buffer.items;
     }
-    
+
     /// Recursive JSON value writing
     fn writeJsonValue(self: *Self, writer: *StreamingWriter, value: std.json.Value) !void {
         switch (value) {
@@ -198,7 +198,7 @@ pub const OptimizedJsonProcessor = struct {
             },
         }
     }
-    
+
     /// Get the serialized JSON as string
     pub fn getResult(self: *Self) []const u8 {
         return self.buffer.items;
@@ -216,25 +216,25 @@ pub const JsonProcessorPool = struct {
     processors: std.ArrayList(*OptimizedJsonProcessor),
     allocator: Allocator,
     mutex: std.Thread.Mutex = .{},
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: Allocator, pool_size: usize) !Self {
         var processors = std.ArrayList(*OptimizedJsonProcessor).init(allocator);
         try processors.ensureTotalCapacity(pool_size);
-        
+
         for (0..pool_size) |_| {
             const processor = try allocator.create(OptimizedJsonProcessor);
             processor.* = OptimizedJsonProcessor.init(allocator);
             try processors.append(processor);
         }
-        
+
         return .{
             .processors = processors,
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         for (self.processors.items) |processor| {
             processor.deinit();
@@ -242,12 +242,12 @@ pub const JsonProcessorPool = struct {
         }
         self.processors.deinit();
     }
-    
+
     /// Get a processor from the pool (thread-safe)
     pub fn acquire(self: *Self) ?*OptimizedJsonProcessor {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         if (self.processors.items.len > 0) {
             const processor = self.processors.pop();
             processor.reset(); // Reset for reuse
@@ -255,12 +255,12 @@ pub const JsonProcessorPool = struct {
         }
         return null;
     }
-    
+
     /// Return processor to pool (thread-safe)
     pub fn release(self: *Self, processor: *OptimizedJsonProcessor) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         processor.reset(); // Clean state for next use
         self.processors.append(processor) catch {
             // Pool full, just reset and continue
@@ -286,18 +286,18 @@ pub fn escapeJsonStringOptimized(allocator: Allocator, input: []const u8) ![]u8 
             else => {},
         }
     }
-    
+
     // No escaping needed - just duplicate
     if (!needs_escape) {
         return allocator.dupe(u8, input);
     }
-    
+
     // Escaping needed - use optimized buffer growth
     var result = std.ArrayList(u8).init(allocator);
     defer result.deinit();
-    
+
     try result.ensureTotalCapacity(input.len + (input.len / 4)); // Heuristic: 25% escape overhead
-    
+
     for (input) |c| {
         switch (c) {
             '"' => try result.appendSlice("\\\""),
@@ -313,19 +313,19 @@ pub fn escapeJsonStringOptimized(allocator: Allocator, input: []const u8) ![]u8 
             else => try result.append(c),
         }
     }
-    
+
     return result.toOwnedSlice();
 }
 
 /// Performance benchmarking function for JSON operations
 pub fn benchmarkJsonProcessing(allocator: Allocator, iterations: usize) !struct { parse_ns: u64, serialize_ns: u64 } {
-    const test_json = 
+    const test_json =
         \\{"name":"John Doe","age":30,"city":"New York","skills":["programming","design","management"],"active":true}
     ;
-    
+
     var processor = OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
-    
+
     // Benchmark parsing
     var timer = try std.time.Timer.start();
     for (0..iterations) |_| {
@@ -334,7 +334,7 @@ pub fn benchmarkJsonProcessing(allocator: Allocator, iterations: usize) !struct 
         processor.reset();
     }
     const parse_time = timer.read();
-    
+
     // Benchmark serialization
     const schema = [_]SchemaColumn{
         .{ .name = "name", .type = "STRING" },
@@ -342,14 +342,14 @@ pub fn benchmarkJsonProcessing(allocator: Allocator, iterations: usize) !struct 
         .{ .name = "active", .type = "BOOL" },
     };
     const rows = [_][]const u8{test_json};
-    
+
     timer.reset();
     for (0..iterations) |_| {
         _ = try processor.serializeQueryResult(&schema, &rows);
         processor.reset();
     }
     const serialize_time = timer.read();
-    
+
     return .{
         .parse_ns = parse_time / iterations,
         .serialize_ns = serialize_time / iterations,

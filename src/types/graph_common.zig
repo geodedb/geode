@@ -116,13 +116,13 @@ pub const GraphStorage = struct {
     // Add a node to the graph
     pub fn addNode(self: *GraphStorage, allocator: std.mem.Allocator, id: NodeId, labels: []const []const u8) !void {
         const props = std.StringHashMap(PropertyValue).init(allocator);
-        
+
         // Deep copy labels to ensure they remain valid after AST is freed
         var owned_labels = try allocator.alloc([]const u8, labels.len);
         for (labels, 0..) |label, i| {
             owned_labels[i] = try allocator.dupe(u8, label);
         }
-        
+
         try self.nodes.put(id, .{
             .id = id,
             .labels = owned_labels,
@@ -134,10 +134,10 @@ pub const GraphStorage = struct {
     pub fn addEdge(self: *GraphStorage, allocator: std.mem.Allocator, source: NodeId, target: NodeId, edge_type: []const u8) !EdgeId {
         const edge_id = self.edges.items.len;
         const props = std.StringHashMap(PropertyValue).init(allocator);
-        
+
         // Deep copy edge_type to ensure it remains valid after AST is freed
         const owned_edge_type = try allocator.dupe(u8, edge_type);
-        
+
         try self.edges.append(allocator, .{
             .id = edge_id,
             .source = source,

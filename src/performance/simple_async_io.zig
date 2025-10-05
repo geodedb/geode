@@ -5,7 +5,6 @@ const Allocator = std.mem.Allocator;
 
 /// Simplified asynchronous I/O system with completion tracking
 /// Enables non-blocking database operations for improved throughput
-
 /// I/O operation types
 pub const IOOperation = union(enum) {
     read: struct {
@@ -69,9 +68,9 @@ pub const SimpleAsyncIOManager = struct {
     pending_operations: std.ArrayList(AsyncOperation),
     next_operation_id: u64,
     mutex: std.Thread.Mutex,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: Allocator) Self {
         return Self{
             .allocator = allocator,
@@ -84,11 +83,11 @@ pub const SimpleAsyncIOManager = struct {
             .mutex = .{},
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.pending_operations.deinit(self.allocator);
     }
-    
+
     /// Submit asynchronous I/O operation
     pub fn submitIO(
         self: *Self,
@@ -98,10 +97,10 @@ pub const SimpleAsyncIOManager = struct {
     ) !u64 {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         const operation_id = self.next_operation_id;
         self.next_operation_id += 1;
-        
+
         const async_operation = AsyncOperation{
             .id = operation_id,
             .operation = operation,
@@ -111,33 +110,33 @@ pub const SimpleAsyncIOManager = struct {
             .result = null,
             .timestamp = std.time.milliTimestamp(),
         };
-        
+
         try self.pending_operations.append(self.allocator, async_operation);
-        
+
         // Execute operation in background (simplified - would use thread pool in production)
         self.executeOperationAsync(self.pending_operations.items.len - 1);
-        
+
         return operation_id;
     }
-    
+
     /// Process completed operations and execute callbacks
     pub fn processCompletions(self: *Self, max_completions: ?usize) u32 {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         var processed: u32 = 0;
         const limit = max_completions orelse std.math.maxInt(u32);
-        
+
         var i: usize = 0;
         while (i < self.pending_operations.items.len and processed < limit) {
             const operation = &self.pending_operations.items[i];
-            
+
             if (operation.completed) {
                 // Execute callback
                 if (operation.result) |result| {
                     operation.callback(operation.id, result, operation.user_data);
                 }
-                
+
                 // Remove completed operation
                 _ = self.pending_operations.orderedRemove(i);
                 processed += 1;
@@ -145,15 +144,15 @@ pub const SimpleAsyncIOManager = struct {
                 i += 1;
             }
         }
-        
+
         return processed;
     }
-    
+
     /// Cancel pending operation
     pub fn cancelOperation(self: *Self, operation_id: u64) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         for (self.pending_operations.items, 0..) |*operation, _| {
             if (operation.id == operation_id and !operation.completed) {
                 operation.completed = true;
@@ -165,35 +164,35 @@ pub const SimpleAsyncIOManager = struct {
                 return true;
             }
         }
-        
+
         return false;
     }
-    
+
     /// Get statistics about pending operations
     pub fn getStatistics(self: *Self) IOStatistics {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         var pending: u32 = 0;
         var completed: u32 = 0;
         var read_ops: u32 = 0;
         var write_ops: u32 = 0;
         var sync_ops: u32 = 0;
-        
+
         for (self.pending_operations.items) |operation| {
             if (operation.completed) {
                 completed += 1;
             } else {
                 pending += 1;
             }
-            
+
             switch (operation.operation) {
                 .read => read_ops += 1,
                 .write => write_ops += 1,
                 .sync => sync_ops += 1,
             }
         }
-        
+
         return IOStatistics{
             .pending_operations = pending,
             .completed_operations = completed,
@@ -202,24 +201,24 @@ pub const SimpleAsyncIOManager = struct {
             .sync_operations = sync_ops,
         };
     }
-    
+
     /// Execute operation asynchronously (simplified synchronous execution for testing)
     fn executeOperationAsync(self: *Self, _: usize) void {
         _ = self; // Suppress unused parameter
-        
+
         // In a real implementation, this would spawn a thread or use an event loop
         // For testing purposes, we'll mark it as completed immediately with mock results
-        
+
         // This would be called by worker threads in production:
         // const result = executeIOOperation(operation);
         // self.completeOperation(index, result);
     }
-    
+
     /// Complete an operation (called by worker threads)
     pub fn completeOperation(self: *Self, operation_id: u64, result: IOResult) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         for (self.pending_operations.items) |*operation| {
             if (operation.id == operation_id) {
                 operation.completed = true;
@@ -247,7 +246,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
             const status: IOStatus = blk: {
                 const file = std.fs.cwd().openFile(read_op.file_path, .{}) catch break :blk .error_file_not_found;
                 defer file.close();
-                
+
                 file.seekTo(read_op.offset) catch break :blk .error_io_error;
                 bytes_read = file.readAll(read_op.buffer) catch break :blk .error_io_error;
                 break :blk .success;
@@ -259,7 +258,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
             const status: IOStatus = blk: {
                 const file = std.fs.cwd().openFile(write_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
                 defer file.close();
-                
+
                 file.seekTo(write_op.offset) catch break :blk .error_io_error;
                 bytes_written = file.writeAll(write_op.data) catch break :blk .error_io_error;
                 break :blk .success;
@@ -270,7 +269,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
             const status: IOStatus = blk: {
                 const file = std.fs.cwd().openFile(sync_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
                 defer file.close();
-                
+
                 file.sync() catch break :blk .error_io_error;
                 break :blk .success;
             };
@@ -284,9 +283,9 @@ pub const AsyncFile = struct {
     file_path: []const u8,
     io_manager: *SimpleAsyncIOManager,
     allocator: Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(io_manager: *SimpleAsyncIOManager, file_path: []const u8, allocator: Allocator) Self {
         return Self{
             .file_path = file_path,
@@ -294,7 +293,7 @@ pub const AsyncFile = struct {
             .allocator = allocator,
         };
     }
-    
+
     /// Asynchronous read operation
     pub fn readAsync(
         self: *Self,
@@ -310,10 +309,10 @@ pub const AsyncFile = struct {
                 .offset = offset,
             },
         };
-        
+
         return self.io_manager.submitIO(operation, callback, user_data);
     }
-    
+
     /// Asynchronous write operation
     pub fn writeAsync(
         self: *Self,
@@ -329,25 +328,25 @@ pub const AsyncFile = struct {
                 .offset = offset,
             },
         };
-        
+
         return self.io_manager.submitIO(operation, callback, user_data);
     }
-    
+
     /// Promise-based asynchronous read (blocks until completion)
     pub fn readSync(self: *Self, buffer: []u8, offset: u64) !IOResult {
         var result: ?IOResult = null;
         var completed = false;
-        
+
         const Context = struct {
             result_ptr: *?IOResult,
             completed_ptr: *bool,
         };
-        
+
         var context = Context{
             .result_ptr = &result,
             .completed_ptr = &completed,
         };
-        
+
         const callback = struct {
             fn cb(operation_id: u64, io_result: IOResult, user_data: ?*anyopaque) void {
                 _ = operation_id;
@@ -356,9 +355,9 @@ pub const AsyncFile = struct {
                 ctx.completed_ptr.* = true;
             }
         }.cb;
-        
+
         const operation_id = try self.readAsync(buffer, offset, callback, &context);
-        
+
         // Simulate completion for testing
         const sync_result = executeIOOperation(IOOperation{
             .read = .{
@@ -368,7 +367,7 @@ pub const AsyncFile = struct {
             },
         });
         self.io_manager.completeOperation(operation_id, sync_result);
-        
+
         // Process completions
         while (!completed) {
             _ = self.io_manager.processCompletions(10);
@@ -376,7 +375,7 @@ pub const AsyncFile = struct {
                 std.time.sleep(std.time.ns_per_ms); // 1ms sleep
             }
         }
-        
+
         return result.?;
     }
 };
@@ -386,40 +385,36 @@ pub fn benchmarkSimpleAsyncIO(
     allocator: Allocator,
     file_size: u64,
     iterations: u32,
-) !struct { 
-    async_latency_ns: u64, 
-    sync_latency_ns: u64,
-    async_advantage: f64 
-} {
+) !struct { async_latency_ns: u64, sync_latency_ns: u64, async_advantage: f64 } {
     const test_file = "benchmark_simple_async_test.dat";
     defer std.fs.cwd().deleteFile(test_file) catch {};
-    
+
     // Create test file
     {
         const file = try std.fs.cwd().createFile(test_file, .{});
         defer file.close();
-        
+
         const test_data = try allocator.alloc(u8, file_size);
         defer allocator.free(test_data);
-        
+
         for (test_data, 0..) |*byte, i| {
             byte.* = @intCast(i % 256);
         }
-        
+
         _ = try file.writeAll(test_data);
         try file.sync();
     }
-    
+
     // Benchmark async I/O
     var async_io_manager = SimpleAsyncIOManager.init(allocator);
     defer async_io_manager.deinit();
-    
+
     var async_file = AsyncFile.init(&async_io_manager, test_file, allocator);
-    
+
     var timer = try std.time.Timer.start();
     const buffer = try allocator.alloc(u8, file_size);
     defer allocator.free(buffer);
-    
+
     // Async benchmark
     timer.reset();
     for (0..iterations) |_| {
@@ -429,7 +424,7 @@ pub fn benchmarkSimpleAsyncIO(
         }
     }
     const async_time = timer.read();
-    
+
     // Sync benchmark
     timer.reset();
     for (0..iterations) |_| {
@@ -439,12 +434,12 @@ pub fn benchmarkSimpleAsyncIO(
         _ = try file.readAll(buffer);
     }
     const sync_time = timer.read();
-    
+
     const async_latency = async_time / iterations;
     const sync_latency = sync_time / iterations;
-    
+
     const advantage = @as(f64, @floatFromInt(sync_latency)) / @as(f64, @floatFromInt(async_latency));
-    
+
     return .{
         .async_latency_ns = async_latency,
         .sync_latency_ns = sync_latency,
@@ -457,15 +452,15 @@ const testing = std.testing;
 
 test "Simple asynchronous I/O basic operations" {
     const allocator = testing.allocator;
-    
+
     var io_manager = SimpleAsyncIOManager.init(allocator);
     defer io_manager.deinit();
-    
+
     const test_file = "test_simple_async.dat";
     defer std.fs.cwd().deleteFile(test_file) catch {};
-    
+
     const test_data = "Hello, simple async world!";
-    
+
     // Create test file
     {
         const file = try std.fs.cwd().createFile(test_file, .{});
@@ -473,13 +468,13 @@ test "Simple asynchronous I/O basic operations" {
         _ = try file.writeAll(test_data);
         try file.sync();
     }
-    
+
     // Test async read
     var async_file = AsyncFile.init(&io_manager, test_file, allocator);
-    
+
     var buffer: [32]u8 = undefined;
     const result = try async_file.readSync(buffer[0..test_data.len], 0);
-    
+
     try testing.expect(result.read.status == .success);
     try testing.expectEqual(test_data.len, result.read.bytes_read);
     try testing.expectEqualStrings(test_data, buffer[0..test_data.len]);
@@ -487,12 +482,12 @@ test "Simple asynchronous I/O basic operations" {
 
 test "Async I/O statistics collection" {
     const allocator = testing.allocator;
-    
+
     var io_manager = SimpleAsyncIOManager.init(allocator);
     defer io_manager.deinit();
-    
+
     const stats = io_manager.getStatistics();
-    
+
     // Basic validation
     try testing.expectEqual(@as(u32, 0), stats.pending_operations);
     try testing.expectEqual(@as(u32, 0), stats.completed_operations);
@@ -500,15 +495,15 @@ test "Async I/O statistics collection" {
 
 test "CANARY: REQ=REQ-PERF-ASYNC-001 - Simple asynchronous I/O integration" {
     const allocator = testing.allocator;
-    
+
     var io_manager = SimpleAsyncIOManager.init(allocator);
     defer io_manager.deinit();
-    
+
     const test_file = "canary_simple_async_test.dat";
     defer std.fs.cwd().deleteFile(test_file) catch {};
-    
+
     const test_data = "CANARY: Simple async I/O validation for REQ=REQ-PERF-ASYNC-001";
-    
+
     // Create test file
     {
         const file = try std.fs.cwd().createFile(test_file, .{});
@@ -516,13 +511,13 @@ test "CANARY: REQ=REQ-PERF-ASYNC-001 - Simple asynchronous I/O integration" {
         _ = try file.writeAll(test_data);
         try file.sync();
     }
-    
+
     // Test async operations
     var async_file = AsyncFile.init(&io_manager, test_file, allocator);
-    
+
     var buffer: [128]u8 = undefined;
     const result = try async_file.readSync(buffer[0..test_data.len], 0);
-    
+
     try testing.expect(result.read.status == .success);
     try testing.expectEqual(test_data.len, result.read.bytes_read);
     try testing.expectEqualStrings(test_data, buffer[0..test_data.len]);

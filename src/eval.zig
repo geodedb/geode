@@ -659,7 +659,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             // This implementation is for basic expression evaluation context.
             // For graph queries, property access is handled in the server context
             // via EvalInBinding.evalRet() which has access to the graph storage.
-            
+
             // First, get the object from the environment
             const _object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
             _ = _object; // Suppress unused variable warning

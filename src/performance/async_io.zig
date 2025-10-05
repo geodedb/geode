@@ -5,7 +5,6 @@ const Allocator = std.mem.Allocator;
 
 /// High-performance asynchronous I/O system with completion queues
 /// Enables non-blocking database operations for maximum throughput
-
 /// Asynchronous I/O operation types
 pub const IOOperation = union(enum) {
     read: struct {
@@ -78,9 +77,9 @@ pub const AsyncIOManager = struct {
     next_operation_id: std.atomic.Value(u64),
     running: std.atomic.Value(bool),
     mutex: std.Thread.Mutex,
-    
+
     const Self = @This();
-    
+
     /// Thread pool for asynchronous operations
     const ThreadPool = struct {
         threads: []std.Thread,
@@ -89,16 +88,16 @@ pub const AsyncIOManager = struct {
         mutex: std.Thread.Mutex,
         condition: std.Thread.Condition,
         allocator: Allocator,
-        
+
         const WorkItem = struct {
             operation_entry: *CompletionEntry,
             manager: *AsyncIOManager,
         };
-        
+
         fn init(allocator: Allocator, thread_count: usize) !ThreadPool {
             const threads = try allocator.alloc(std.Thread, thread_count);
             errdefer allocator.free(threads);
-            
+
             var pool = ThreadPool{
                 .threads = threads,
                 .work_queue = std.ArrayList(WorkItem).init(allocator),
@@ -107,73 +106,73 @@ pub const AsyncIOManager = struct {
                 .condition = .{},
                 .allocator = allocator,
             };
-            
+
             // Start worker threads
             for (threads, 0..) |*thread, i| {
                 thread.* = try std.Thread.spawn(.{}, workerThread, .{ &pool, i });
             }
-            
+
             return pool;
         }
-        
+
         fn deinit(self: *ThreadPool) void {
             // Signal shutdown
             self.shutdown.store(true, .release);
-            
+
             // Wake all worker threads
             self.mutex.lock();
             self.condition.broadcast();
             self.mutex.unlock();
-            
+
             // Wait for threads to finish
             for (self.threads) |thread| {
                 thread.join();
             }
-            
+
             self.allocator.free(self.threads);
             self.work_queue.deinit();
         }
-        
+
         fn submit(self: *ThreadPool, work_item: WorkItem) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            
+
             try self.work_queue.append(work_item);
             self.condition.signal();
         }
-        
+
         fn workerThread(pool: *ThreadPool, worker_id: usize) void {
             _ = worker_id; // Suppress unused parameter warning
-            
+
             while (!pool.shutdown.load(.acquire)) {
                 pool.mutex.lock();
-                
+
                 while (pool.work_queue.items.len > 0) {
                     const work_item = pool.work_queue.orderedRemove(0);
                     pool.mutex.unlock();
-                    
+
                     // Execute the I/O operation
                     const result = executeIOOperation(work_item.operation_entry.operation);
-                    
+
                     // Update completion entry
                     work_item.operation_entry.result = result;
-                    
+
                     // Notify manager of completion
                     work_item.manager.notifyCompletion(work_item.operation_entry.*) catch {};
-                    
+
                     pool.mutex.lock();
                 }
-                
+
                 // Wait for more work
                 if (!pool.shutdown.load(.acquire)) {
                     pool.condition.wait(&pool.mutex);
                 }
-                
+
                 pool.mutex.unlock();
             }
         }
     };
-    
+
     pub fn init(allocator: Allocator, thread_count: usize) !Self {
         return Self{
             .allocator = allocator,
@@ -185,15 +184,15 @@ pub const AsyncIOManager = struct {
             .mutex = .{},
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.running.store(false, .release);
-        
+
         // Cancel pending operations
         {
             self.mutex.lock();
             defer self.mutex.unlock();
-            
+
             var it = self.pending_operations.iterator();
             while (it.next()) |entry| {
                 const completion_entry = entry.value_ptr.*;
@@ -207,12 +206,12 @@ pub const AsyncIOManager = struct {
             }
             self.pending_operations.clearAndFree();
         }
-        
+
         self.thread_pool.deinit();
         self.completion_queue.deinit();
         self.pending_operations.deinit();
     }
-    
+
     /// Submit asynchronous I/O operation
     pub fn submitIO(
         self: *Self,
@@ -222,7 +221,7 @@ pub const AsyncIOManager = struct {
         timeout_ms: ?u32,
     ) !u64 {
         const operation_id = self.next_operation_id.fetchAdd(1, .acq_rel);
-        
+
         const completion_entry = try self.allocator.create(CompletionEntry);
         completion_entry.* = CompletionEntry{
             .operation_id = operation_id,
@@ -233,28 +232,28 @@ pub const AsyncIOManager = struct {
             .timestamp = std.time.milliTimestamp(),
             .timeout_ms = timeout_ms,
         };
-        
+
         // Register pending operation
         {
             self.mutex.lock();
             defer self.mutex.unlock();
             try self.pending_operations.put(operation_id, completion_entry);
         }
-        
+
         // Submit to thread pool
         try self.thread_pool.submit(.{
             .operation_entry = completion_entry,
             .manager = self,
         });
-        
+
         return operation_id;
     }
-    
+
     /// Cancel pending operation
     pub fn cancelOperation(self: *Self, operation_id: u64) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         if (self.pending_operations.fetchRemove(operation_id)) |removed| {
             const completion_entry = removed.value;
             completion_entry.result = switch (completion_entry.operation) {
@@ -263,48 +262,48 @@ pub const AsyncIOManager = struct {
                 .sync => IOResult{ .sync = .{ .status = .error_cancelled } },
                 .close => IOResult{ .close = .{ .status = .error_cancelled } },
             };
-            
+
             // Add to completion queue for callback execution
             self.completion_queue.append(completion_entry.*) catch {};
             self.allocator.destroy(completion_entry);
             return true;
         }
-        
+
         return false;
     }
-    
+
     /// Process completed operations and execute callbacks
     pub fn processCompletions(self: *Self, max_completions: ?usize) u32 {
         var processed: u32 = 0;
         const limit = max_completions orelse std.math.maxInt(u32);
-        
+
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         while (processed < limit and self.completion_queue.items.len > 0) {
             const completion = self.completion_queue.orderedRemove(0);
-            
+
             // Execute callback
             if (completion.result) |result| {
                 completion.callback(completion.operation_id, result, completion.user_data);
             }
-            
+
             processed += 1;
         }
-        
+
         return processed;
     }
-    
+
     /// Get statistics about pending operations
     pub fn getStatistics(self: *Self) IOStatistics {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         var read_ops: u32 = 0;
         var write_ops: u32 = 0;
         var sync_ops: u32 = 0;
         var close_ops: u32 = 0;
-        
+
         var it = self.pending_operations.iterator();
         while (it.next()) |entry| {
             switch (entry.value_ptr.*.operation) {
@@ -314,7 +313,7 @@ pub const AsyncIOManager = struct {
                 .close => close_ops += 1,
             }
         }
-        
+
         return IOStatistics{
             .pending_operations = @intCast(self.pending_operations.count()),
             .queued_completions = @intCast(self.completion_queue.items.len),
@@ -324,17 +323,17 @@ pub const AsyncIOManager = struct {
             .close_operations = close_ops,
         };
     }
-    
+
     /// Internal: Notify completion of I/O operation
     fn notifyCompletion(self: *Self, completion: CompletionEntry) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         // Remove from pending operations
         if (self.pending_operations.fetchRemove(completion.operation_id)) |removed| {
             self.allocator.destroy(removed.value);
         }
-        
+
         // Add to completion queue
         try self.completion_queue.append(completion);
     }
@@ -393,9 +392,9 @@ pub const AsyncFile = struct {
     file: std.fs.File,
     io_manager: *AsyncIOManager,
     allocator: Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(io_manager: *AsyncIOManager, file: std.fs.File, allocator: Allocator) Self {
         return Self{
             .file = file,
@@ -403,7 +402,7 @@ pub const AsyncFile = struct {
             .allocator = allocator,
         };
     }
-    
+
     /// Asynchronous read operation
     pub fn readAsync(
         self: *Self,
@@ -420,10 +419,10 @@ pub const AsyncFile = struct {
                 .offset = offset,
             },
         };
-        
+
         return self.io_manager.submitIO(operation, callback, user_data, timeout_ms);
     }
-    
+
     /// Asynchronous write operation
     pub fn writeAsync(
         self: *Self,
@@ -440,10 +439,10 @@ pub const AsyncFile = struct {
                 .offset = offset,
             },
         };
-        
+
         return self.io_manager.submitIO(operation, callback, user_data, timeout_ms);
     }
-    
+
     /// Asynchronous sync operation
     pub fn syncAsync(
         self: *Self,
@@ -456,25 +455,25 @@ pub const AsyncFile = struct {
                 .file = self.file,
             },
         };
-        
+
         return self.io_manager.submitIO(operation, callback, user_data, timeout_ms);
     }
-    
+
     /// Promise-based asynchronous read (blocks until completion)
     pub fn readSync(self: *Self, buffer: []u8, offset: u64, timeout_ms: ?u32) !IOResult {
         var result: ?IOResult = null;
         var completed = false;
-        
+
         const Context = struct {
             result_ptr: *?IOResult,
             completed_ptr: *bool,
         };
-        
+
         var context = Context{
             .result_ptr = &result,
             .completed_ptr = &completed,
         };
-        
+
         const callback = struct {
             fn cb(operation_id: u64, io_result: IOResult, user_data: ?*anyopaque) void {
                 _ = operation_id;
@@ -483,33 +482,33 @@ pub const AsyncFile = struct {
                 ctx.completed_ptr.* = true;
             }
         }.cb;
-        
+
         _ = try self.readAsync(buffer, offset, callback, &context, timeout_ms);
-        
+
         // Busy wait for completion (in production, use proper synchronization)
         while (!completed) {
             _ = self.io_manager.processCompletions(10);
             std.time.sleep(std.time.ns_per_ms); // 1ms sleep
         }
-        
+
         return result.?;
     }
-    
+
     /// Promise-based asynchronous write (blocks until completion)
     pub fn writeSync(self: *Self, data: []const u8, offset: u64, timeout_ms: ?u32) !IOResult {
         var result: ?IOResult = null;
         var completed = false;
-        
+
         const Context = struct {
             result_ptr: *?IOResult,
             completed_ptr: *bool,
         };
-        
+
         var context = Context{
             .result_ptr = &result,
             .completed_ptr = &completed,
         };
-        
+
         const callback = struct {
             fn cb(operation_id: u64, io_result: IOResult, user_data: ?*anyopaque) void {
                 _ = operation_id;
@@ -518,15 +517,15 @@ pub const AsyncFile = struct {
                 ctx.completed_ptr.* = true;
             }
         }.cb;
-        
+
         _ = try self.writeAsync(data, offset, callback, &context, timeout_ms);
-        
+
         // Busy wait for completion
         while (!completed) {
             _ = self.io_manager.processCompletions(10);
             std.time.sleep(std.time.ns_per_ms);
         }
-        
+
         return result.?;
     }
 };
@@ -538,9 +537,9 @@ pub const BatchAsyncIO = struct {
     callbacks: std.ArrayList(CompletionCallback),
     user_data: std.ArrayList(?*anyopaque),
     allocator: Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(io_manager: *AsyncIOManager, allocator: Allocator) Self {
         return Self{
             .io_manager = io_manager,
@@ -550,13 +549,13 @@ pub const BatchAsyncIO = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.operations.deinit();
         self.callbacks.deinit();
         self.user_data.deinit();
     }
-    
+
     /// Add operation to batch
     pub fn addOperation(
         self: *Self,
@@ -568,21 +567,21 @@ pub const BatchAsyncIO = struct {
         try self.callbacks.append(callback);
         try self.user_data.append(user_data);
     }
-    
+
     /// Submit all batched operations
     pub fn submitBatch(self: *Self, timeout_ms: ?u32) ![]u64 {
         const operation_ids = try self.allocator.alloc(u64, self.operations.items.len);
         errdefer self.allocator.free(operation_ids);
-        
+
         for (self.operations.items, self.callbacks.items, self.user_data.items, 0..) |operation, callback, data, i| {
             operation_ids[i] = try self.io_manager.submitIO(operation, callback, data, timeout_ms);
         }
-        
+
         // Clear batch for reuse
         self.operations.clearRetainingCapacity();
         self.callbacks.clearRetainingCapacity();
         self.user_data.clearRetainingCapacity();
-        
+
         return operation_ids;
     }
 };
@@ -593,46 +592,40 @@ pub fn benchmarkAsyncIO(
     file_size: u64,
     concurrent_operations: u32,
     iterations: u32,
-) !struct { 
-    async_throughput_mbps: f64, 
-    sync_throughput_mbps: f64, 
-    async_latency_ns: u64, 
-    sync_latency_ns: u64,
-    async_advantage: f64 
-} {
+) !struct { async_throughput_mbps: f64, sync_throughput_mbps: f64, async_latency_ns: u64, sync_latency_ns: u64, async_advantage: f64 } {
     _ = concurrent_operations; // Suppress unused parameter warning
     const test_file = "benchmark_async_test.dat";
     defer std.fs.cwd().deleteFile(test_file) catch {};
-    
+
     // Create test file
     {
         const file = try std.fs.cwd().createFile(test_file, .{});
         defer file.close();
-        
+
         const test_data = try allocator.alloc(u8, file_size);
         defer allocator.free(test_data);
-        
+
         for (test_data, 0..) |*byte, i| {
             byte.* = @intCast(i % 256);
         }
-        
+
         _ = try file.writeAll(test_data);
         try file.sync();
     }
-    
+
     // Benchmark async I/O
     var async_io_manager = try AsyncIOManager.init(allocator, 4);
     defer async_io_manager.deinit();
-    
+
     const file = try std.fs.cwd().openFile(test_file, .{});
     defer file.close();
-    
+
     var async_file = AsyncFile.init(&async_io_manager, file, allocator);
-    
+
     var timer = try std.time.Timer.start();
     const buffer = try allocator.alloc(u8, file_size);
     defer allocator.free(buffer);
-    
+
     // Async benchmark
     timer.reset();
     for (0..iterations) |_| {
@@ -642,7 +635,7 @@ pub fn benchmarkAsyncIO(
         }
     }
     const async_time = timer.read();
-    
+
     // Sync benchmark
     timer.reset();
     for (0..iterations) |_| {
@@ -650,15 +643,15 @@ pub fn benchmarkAsyncIO(
         _ = try file.readAll(buffer);
     }
     const sync_time = timer.read();
-    
+
     const async_latency = async_time / iterations;
     const sync_latency = sync_time / iterations;
-    
+
     const async_throughput = (@as(f64, @floatFromInt(file_size * iterations)) / @as(f64, @floatFromInt(async_time))) * 1e9 / (1024 * 1024);
     const sync_throughput = (@as(f64, @floatFromInt(file_size * iterations)) / @as(f64, @floatFromInt(sync_time))) * 1e9 / (1024 * 1024);
-    
+
     const advantage = sync_throughput / async_throughput; // Note: sync might be faster for simple cases
-    
+
     return .{
         .async_throughput_mbps = async_throughput,
         .sync_throughput_mbps = sync_throughput,
@@ -673,15 +666,15 @@ const testing = std.testing;
 
 test "Asynchronous I/O basic operations" {
     const allocator = testing.allocator;
-    
+
     var io_manager = try AsyncIOManager.init(allocator, 2);
     defer io_manager.deinit();
-    
+
     const test_file = "test_async.dat";
     defer std.fs.cwd().deleteFile(test_file) catch {};
-    
+
     const test_data = "Hello, async world!";
-    
+
     // Create test file
     {
         const file = try std.fs.cwd().createFile(test_file, .{});
@@ -689,16 +682,16 @@ test "Asynchronous I/O basic operations" {
         _ = try file.writeAll(test_data);
         try file.sync();
     }
-    
+
     // Test async read
     const file = try std.fs.cwd().openFile(test_file, .{});
     defer file.close();
-    
+
     var async_file = AsyncFile.init(&io_manager, file, allocator);
-    
+
     var buffer: [32]u8 = undefined;
     const result = try async_file.readSync(buffer[0..test_data.len], 0, 1000);
-    
+
     try testing.expect(result.read.status == .success);
     try testing.expectEqual(test_data.len, result.read.bytes_read);
     try testing.expectEqualStrings(test_data, buffer[0..test_data.len]);
@@ -706,13 +699,13 @@ test "Asynchronous I/O basic operations" {
 
 test "Batched asynchronous operations" {
     const allocator = testing.allocator;
-    
+
     var io_manager = try AsyncIOManager.init(allocator, 2);
     defer io_manager.deinit();
-    
+
     var batch = BatchAsyncIO.init(&io_manager, allocator);
     defer batch.deinit();
-    
+
     // Add some mock operations
     const CompletionCallbackType = struct {
         fn callback(operation_id: u64, result: IOResult, user_data: ?*anyopaque) void {
@@ -721,25 +714,25 @@ test "Batched asynchronous operations" {
             _ = user_data;
         }
     };
-    
+
     try batch.addOperation(
         IOOperation{ .sync = .{ .file = std.fs.File{ .handle = 0 } } },
         CompletionCallbackType.callback,
         null,
     );
-    
+
     // Just test that batch operations can be managed
     try testing.expectEqual(@as(usize, 1), batch.operations.items.len);
 }
 
 test "I/O statistics collection" {
     const allocator = testing.allocator;
-    
+
     var io_manager = try AsyncIOManager.init(allocator, 2);
     defer io_manager.deinit();
-    
+
     const stats = io_manager.getStatistics();
-    
+
     // Basic validation
     try testing.expectEqual(@as(u32, 0), stats.pending_operations);
     try testing.expectEqual(@as(u32, 0), stats.queued_completions);

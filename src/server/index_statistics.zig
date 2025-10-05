@@ -107,11 +107,11 @@ pub const IndexStatistics = struct {
         if (self.vector_dimension == null) return; // Not a vector index
 
         self.vector_knn_queries += 1;
-        
+
         // Update average K value
         const new_k = @as(f64, @floatFromInt(k_value));
         self.vector_avg_k_value = (self.vector_avg_k_value * @as(f64, @floatFromInt(self.vector_knn_queries - 1)) + new_k) / @as(f64, @floatFromInt(self.vector_knn_queries));
-        
+
         // Update average distance
         self.vector_avg_distance = (self.vector_avg_distance * @as(f64, @floatFromInt(self.vector_knn_queries - 1)) + avg_distance) / @as(f64, @floatFromInt(self.vector_knn_queries));
     }
@@ -129,7 +129,7 @@ pub const IndexStatistics = struct {
         const log_n = @log(@as(f64, @floatFromInt(collection_size)));
         const k_factor = @as(f64, @floatFromInt(k_value));
         const dimension_factor = if (self.vector_dimension) |dim| @as(f64, @floatFromInt(dim)) / 128.0 else 1.0;
-        
+
         var base_cost = 5.0 * log_n * k_factor * dimension_factor;
 
         // Adjust based on historical query patterns
@@ -164,10 +164,10 @@ pub const IndexStatistics = struct {
         if (self.index_type != .fulltext) return; // Not a full-text index
 
         self.fts_search_queries += 1;
-        
+
         // Update average score
         self.fts_avg_score = (self.fts_avg_score * @as(f64, @floatFromInt(self.fts_search_queries - 1)) + score) / @as(f64, @floatFromInt(self.fts_search_queries));
-        
+
         // Track query types
         switch (query_type) {
             .phrase => self.fts_phrase_queries += 1,
@@ -187,14 +187,14 @@ pub const IndexStatistics = struct {
         if (self.index_type != .fulltext) return; // Not a full-text index
 
         self.fts_total_documents += 1;
-        
+
         // Update average document length
         const new_length = @as(f64, @floatFromInt(document_length));
         self.fts_avg_document_length = (self.fts_avg_document_length * @as(f64, @floatFromInt(self.fts_total_documents - 1)) + new_length) / @as(f64, @floatFromInt(self.fts_total_documents));
-        
+
         // Update vocabulary size (approximate)
         self.fts_vocabulary_size += unique_terms;
-        
+
         // Update average term frequency
         if (self.fts_total_documents > 0) {
             self.fts_avg_term_frequency = @as(f64, @floatFromInt(self.fts_vocabulary_size)) / @as(f64, @floatFromInt(self.fts_total_documents));
@@ -209,7 +209,7 @@ pub const IndexStatistics = struct {
         const log_docs = if (self.fts_total_documents > 1) @log(@as(f64, @floatFromInt(self.fts_total_documents))) else 1.0;
         const vocab_factor = if (self.fts_vocabulary_size > 0) @log(@as(f64, @floatFromInt(self.fts_vocabulary_size))) else 1.0;
         const terms_factor = @as(f64, @floatFromInt(query_terms));
-        
+
         var base_cost = 20.0 * vocab_factor * log_docs * terms_factor;
 
         // Adjust based on query type complexity

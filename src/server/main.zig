@@ -230,27 +230,27 @@ const CatalogGraph = struct {
 const SessionConfiguration = struct {
     // Schema settings
     current_schema: ?[]const u8 = null,
-    
+
     // Graph settings
     current_graph: ?[]const u8 = null,
     property_graph_default: bool = true,
-    
+
     // Time zone settings
     time_zone: ?[]const u8 = null,
-    
+
     // Session parameters (key-value pairs)
     parameters: std.StringHashMap(SessionParameterValue),
-    
+
     // Allocator for parameter storage
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) SessionConfiguration {
         return .{
             .parameters = std.StringHashMap(SessionParameterValue).init(allocator),
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *SessionConfiguration) void {
         // Free all parameter keys and values
         var iterator = self.parameters.iterator();
@@ -264,7 +264,7 @@ const SessionConfiguration = struct {
             }
         }
         self.parameters.deinit();
-        
+
         // Free schema and graph names if allocated
         if (self.current_schema) |schema| {
             self.allocator.free(schema);
@@ -276,16 +276,16 @@ const SessionConfiguration = struct {
             self.allocator.free(tz);
         }
     }
-    
+
     pub fn setParameter(self: *SessionConfiguration, name: []const u8, value: SessionParameterValue) !void {
         const owned_name = try self.allocator.dupe(u8, name);
         try self.parameters.put(owned_name, value);
     }
-    
+
     pub fn getParameter(self: *SessionConfiguration, name: []const u8) ?SessionParameterValue {
         return self.parameters.get(name);
     }
-    
+
     pub fn removeParameter(self: *SessionConfiguration, name: []const u8) void {
         if (self.parameters.fetchRemove(name)) |kv| {
             self.allocator.free(kv.key);
@@ -297,7 +297,7 @@ const SessionConfiguration = struct {
             }
         }
     }
-    
+
     pub fn reset(self: *SessionConfiguration, reset_type: SessionResetType) void {
         switch (reset_type) {
             .AllParameters => {
@@ -672,7 +672,7 @@ fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
         std.log.err("DEBUG: Returning existing graph with {} nodes", .{graph.nodes.count()});
         return graph;
     }
-    
+
     // Try to load from persistent data first if data directory is available
     if (g_data_dir) |data_dir| {
         if (tryLoadGraphFromDir(ally, data_dir)) |loaded_graph| {
@@ -686,7 +686,7 @@ fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
     } else {
         std.log.err("DEBUG: No data directory available for persistence", .{});
     }
-    
+
     // Create new graph and initialize with sample data if no persistent data
     const graph = ally.create(graph_exec.GraphStorage) catch unreachable;
     graph.* = graph_exec.GraphStorage.init(ally);
@@ -830,20 +830,20 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
     while (it.next()) |entry| {
         node_count += 1;
         const node = entry.value_ptr.*;
-        
+
         // Validate node structure before processing
         if (node_count > 10000) {
             std.log.warn("Too many nodes, stopping save at {}", .{node_count});
             break;
         }
-        
+
         std.fmt.format(nodes_content.writer(ally), "{{\"id\":{d},\"labels\":[", .{node.id}) catch continue;
-        
+
         // Safe label processing with validation
         if (node.labels.len > 0 and node.labels.len < 100) { // Reasonable label count limit
             for (node.labels, 0..) |label, li| {
                 if (li > 0) nodes_content.appendSlice(ally, ",") catch continue;
-                
+
                 // Validate label string
                 if (label.len > 0 and label.len < 256) { // Reasonable label length
                     std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{label}) catch {
@@ -2111,7 +2111,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 if (eval_diag) |ed| {
                     if (diagnostics.mapEvalError(e)) |c| ed.* = c;
                 }
-                
+
                 // Check for critical errors that should fail the query
                 if (e == eval.EvalError.DivisionByZero) {
                     return error.DivisionByZero;
@@ -2119,7 +2119,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 if (e == eval.EvalError.DecimalDivZero) {
                     return error.DecimalDivZero;
                 }
-                
+
                 break :blk_evalerr eval.Value{ .Null = {} };
             };
             if (r == 0) cols[j] = .{ .name = alias, .type = valueTypeName(val) };
@@ -2713,7 +2713,7 @@ fn handleQuicConnection(
     }
 
     // Initialize state
-    var state = ServerState{ 
+    var state = ServerState{
         .allocator = gpa,
         .session_config = SessionConfiguration.init(gpa),
     };
@@ -3443,7 +3443,7 @@ pub fn main() !void {
         return;
     }
 
-    var state = ServerState{ 
+    var state = ServerState{
         .allocator = gpa,
         .session_config = SessionConfiguration.init(gpa),
     };
@@ -5315,7 +5315,7 @@ pub fn main() !void {
                                     }
                                     continue;
                                 }
-                                
+
                                 // Start a new transaction
                                 state.active_txn = .{ .id = state.global_commit_ts + 1, .start_ts = state.global_commit_ts };
                                 state.in_txn = true;
@@ -6292,7 +6292,7 @@ fn checkPermission(allocator: std.mem.Allocator, state: *ServerState, resource: 
     _ = state; // Not used in simplified version
     _ = resource; // Not used in simplified version
     _ = action; // Not used in simplified version
-    
+
     // TODO: Integrate with actual security manager when ready
     // For now, allow all operations (development mode)
     return true;
@@ -6563,7 +6563,7 @@ fn executeSessionSetStatement(allocator: std.mem.Allocator, state: *ServerState,
             }
             session_config.current_graph = try allocator.dupe(u8, graph_clause.expression);
             session_config.property_graph_default = graph_clause.property_graph;
-            
+
             const graph_type = if (graph_clause.property_graph) "property graph" else "graph";
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} set to '{s}'\"}}\n", .{ graph_type, graph_clause.expression });
         },
@@ -6636,9 +6636,9 @@ fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *Ses
     switch (param_clause) {
         .ValueParam => |value_param| {
             const param_name = value_param.parameter_name.specification;
-            const value = if (value_param.initializer) |init| 
+            const value = if (value_param.initializer) |init|
                 SessionParameterValue{ .Value = try allocator.dupe(u8, init) }
-            else 
+            else
                 SessionParameterValue{ .Value = try allocator.dupe(u8, "") };
 
             try session_config.setParameter(param_name, value);
@@ -6646,9 +6646,9 @@ fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *Ses
         },
         .GraphParam => |graph_param| {
             const param_name = graph_param.parameter_name.specification;
-            const value = if (graph_param.initializer) |init| 
+            const value = if (graph_param.initializer) |init|
                 SessionParameterValue{ .Graph = try allocator.dupe(u8, init) }
-            else 
+            else
                 SessionParameterValue{ .Graph = try allocator.dupe(u8, "") };
 
             try session_config.setParameter(param_name, value);
@@ -6657,9 +6657,9 @@ fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *Ses
         },
         .BindingTableParam => |binding_param| {
             const param_name = binding_param.parameter_name.specification;
-            const value = if (binding_param.initializer) |init| 
+            const value = if (binding_param.initializer) |init|
                 SessionParameterValue{ .BindingTable = try allocator.dupe(u8, init) }
-            else 
+            else
                 SessionParameterValue{ .BindingTable = try allocator.dupe(u8, "") };
 
             try session_config.setParameter(param_name, value);

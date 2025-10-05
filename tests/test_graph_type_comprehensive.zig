@@ -5,7 +5,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-GRAPHTYPE-001; FEATURE="Graph Type Operations"; ASPECT=ComprehensiveTesting; STATUS=IMPL; TEST=TestGraphTypeComprehensive; OWNER=parser; UPDATED=2025-10-04
 
 test "graph type parsing comprehensive tests" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -15,17 +15,17 @@ test "graph type parsing comprehensive tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             // Expected to work once parsing is fixed
             std.log.warn("CREATE GRAPH TYPE parsing not yet working: {}", .{err});
             return; // Skip for now
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraphType);
-        
+
         const create_type = program.statements[0].CreateGraphType;
         try testing.expectEqualStrings("basic_type", create_type.name);
         try testing.expectEqualStrings("{ }", create_type.type_definition);
@@ -39,16 +39,16 @@ test "graph type parsing comprehensive tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.warn("CREATE PROPERTY GRAPH TYPE parsing not yet working: {}", .{err});
             return; // Skip for now
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraphType);
-        
+
         const create_type = program.statements[0].CreateGraphType;
         try testing.expectEqualStrings("prop_type", create_type.name);
         try testing.expect(create_type.property_graph);
@@ -60,23 +60,23 @@ test "graph type parsing comprehensive tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.warn("CREATE OR REPLACE GRAPH TYPE parsing not yet working: {}", .{err});
             return; // Skip for now
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraphType);
-        
+
         const create_type = program.statements[0].CreateGraphType;
         try testing.expect(create_type.or_replace);
     }
 }
 
 test "graph type drop operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -86,16 +86,16 @@ test "graph type drop operations" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.warn("DROP GRAPH TYPE parsing not yet working: {}", .{err});
             return; // Skip for now
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .DropGraphType);
-        
+
         const drop_type = program.statements[0].DropGraphType;
         try testing.expectEqualStrings("test_type", drop_type.name);
         try testing.expect(!drop_type.if_exists);
@@ -107,16 +107,16 @@ test "graph type drop operations" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.warn("DROP GRAPH TYPE IF EXISTS parsing not yet working: {}", .{err});
             return; // Skip for now
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .DropGraphType);
-        
+
         const drop_type = program.statements[0].DropGraphType;
         try testing.expectEqualStrings("conditional_type", drop_type.name);
         try testing.expect(drop_type.if_exists);
@@ -124,7 +124,7 @@ test "graph type drop operations" {
 }
 
 test "graph type server execution" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

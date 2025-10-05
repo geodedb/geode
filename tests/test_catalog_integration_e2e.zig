@@ -7,7 +7,7 @@ const geode = @import("geode");
 test "catalog operations end-to-end integration" {
     // This test validates that the enhanced catalog operations work end-to-end
     // through the server execution pipeline
-    
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -32,7 +32,7 @@ test "catalog operations end-to-end integration" {
             std.log.err("Failed to execute TYPED graph creation: {}", .{err});
             return err;
         };
-        
+
         // Verify successful creation
         try testing.expect(std.mem.indexOf(u8, response, "property graph typed_integration_test created successfully") != null);
     }
@@ -52,7 +52,7 @@ test "catalog operations end-to-end integration" {
             std.log.err("Failed to execute AS COPY OF graph creation: {}", .{err});
             return err;
         };
-        
+
         // Verify successful creation
         try testing.expect(std.mem.indexOf(u8, response, "property graph copy_target_test created successfully") != null);
     }
@@ -72,7 +72,7 @@ test "catalog operations end-to-end integration" {
             std.log.err("Failed to execute OR REPLACE graph creation: {}", .{err});
             return err;
         };
-        
+
         // Verify successful replacement
         try testing.expect(std.mem.indexOf(u8, response, "property graph replace_test_graph replaced successfully") != null);
     }
@@ -84,7 +84,7 @@ test "catalog operations end-to-end integration" {
             std.log.err("Failed to execute PROPERTY GRAPH with TYPED: {}", .{err});
             return err;
         };
-        
+
         // Verify successful creation
         try testing.expect(std.mem.indexOf(u8, response, "property graph property_typed_test created successfully") != null);
     }
@@ -96,7 +96,7 @@ test "catalog operations end-to-end integration" {
             std.log.err("Failed to execute backward compatible graph creation: {}", .{err});
             return err;
         };
-        
+
         // Verify successful creation
         try testing.expect(std.mem.indexOf(u8, response, "property graph backward_compat_test created successfully") != null);
     }
@@ -129,7 +129,7 @@ test "catalog operations error handling regression" {
             try testing.expect(err == geode.server.QueryError.ParseError);
             return; // Test passed
         };
-        
+
         // If we get here, the query unexpectedly succeeded
         std.log.err("Expected parse error for invalid TYPED syntax, but got: {s}", .{response});
         try testing.expect(false);
@@ -143,7 +143,7 @@ test "catalog operations error handling regression" {
             try testing.expect(err == geode.server.QueryError.ParseError);
             return; // Test passed
         };
-        
+
         // If we get here, the query unexpectedly succeeded
         std.log.err("Expected parse error for invalid AS COPY OF syntax, but got: {s}", .{response});
         try testing.expect(false);
@@ -157,7 +157,7 @@ test "catalog operations error handling regression" {
             try testing.expect(err == geode.server.QueryError.ParseError);
             return; // Test passed
         };
-        
+
         // If we get here, the query unexpectedly succeeded
         std.log.err("Expected parse error for missing graph name, but got: {s}", .{response});
         try testing.expect(false);

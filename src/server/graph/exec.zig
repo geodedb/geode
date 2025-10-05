@@ -123,7 +123,7 @@ pub fn nodeScan(
         binding.value = .{ .Node = node };
         // Add the node to the vars map
         try binding.vars.put(var_name orelse "n", .{ .Node = node });
-        
+
         // Debug: log node properties
         // Node properties are available for binding access
 
@@ -344,7 +344,7 @@ fn getExpressionName(expr: ast.Expr) []const u8 {
             // In practice, this will work since both object and property are from the AST
             // which lives for the query duration
             const allocator = std.heap.page_allocator; // Use page allocator for simplicity
-            const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{prop.object, prop.property}) catch "prop";
+            const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prop.object, prop.property }) catch "prop";
             break :blk combined;
         },
         .Member => |member| member.field,
@@ -372,7 +372,7 @@ fn evaluateExpressionInBinding(
             // Handle member access like n.name
             if (member.target.* == .Ident) {
                 const target_name = member.target.Ident.orig;
-                
+
                 if (binding.vars.get(target_name)) |obj| {
                     switch (obj) {
                         .Node => |node| {
@@ -434,21 +434,21 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
         if (i > 0) try result.appendSlice(allocator, ", ");
 
         try result.append(allocator, '{');
-        
+
         // Process each return item to get the correct property values
         for (ret_items, 0..) |ret_item, j| {
             if (j > 0) try result.appendSlice(allocator, ", ");
-            
+
             // Get the column name (alias or expression name)
             const alias = ret_item.alias orelse getExpressionName(ret_item.expr);
-            
+
             try result.append(allocator, '"');
             try result.appendSlice(allocator, alias);
             try result.appendSlice(allocator, "\": ");
-            
+
             // Evaluate the return expression in the binding context
             const value = try evaluateExpressionInBinding(allocator, ret_item.expr, &binding);
-            
+
             // Serialize the evaluated value
             switch (value) {
                 .Property => |prop| {
@@ -490,7 +490,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                         try result.append(allocator, '"');
                     }
                     try result.appendSlice(allocator, "], \"properties\": {");
-                    
+
                     // Add node properties
                     var prop_iter = node.properties.iterator();
                     var prop_count: usize = 0;
@@ -499,7 +499,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                         try result.append(allocator, '"');
                         try result.appendSlice(allocator, prop_entry.key_ptr.*);
                         try result.appendSlice(allocator, "\": ");
-                        
+
                         // Serialize property value
                         switch (prop_entry.value_ptr.*) {
                             .String => |s| {
@@ -514,7 +514,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                         }
                         prop_count += 1;
                     }
-                    
+
                     try result.appendSlice(allocator, "}}");
                 },
                 .Edge => |edge| {

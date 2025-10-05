@@ -57,7 +57,7 @@ pub const IndexOptimizer = struct {
         if (self.stats_manager) |stats_mgr| {
             // Create statistics for the vector index
             try stats_mgr.createIndexStatistics(index_name, index_type, label, &[_][]const u8{property});
-            
+
             // Set vector-specific parameters
             if (stats_mgr.getIndexStatistics(index_name)) |stats| {
                 stats.setVectorParameters(dimension);
@@ -498,16 +498,16 @@ pub const IndexOptimizer = struct {
             .fulltext => blk: {
                 // Full-text indexes for text search with BM25 scoring
                 // CANARY: REQ=REQ-GQL-FTS-004; FEATURE="FTS IndexOptimizer"; ASPECT=CostEstimation; STATUS=IMPL; TEST=TestCANARY_FTSIndexOptimizer; OWNER=fts; UPDATED=2025-10-04
-                
+
                 // Try to get advanced FTS statistics first
                 if (self.stats_manager) |stats_mgr| {
                     var index_name_buf: [256]u8 = undefined;
                     const index_name = std.fmt.bufPrint(&index_name_buf, "_{s}_fulltext_idx", .{property}) catch "";
-                    
+
                     if (stats_mgr.getIndexStatistics(index_name)) |stats| {
                         // Use sophisticated FTS selectivity based on corpus characteristics
                         var selectivity = stats.getEstimatedSelectivity();
-                        
+
                         // Adjust based on FTS-specific factors
                         if (stats.fts_total_documents > 0) {
                             // Factor in vocabulary density
@@ -517,17 +517,17 @@ pub const IndexOptimizer = struct {
                             } else if (vocab_density < 20.0) {
                                 selectivity *= 1.2; // Sparse vocabulary = less selective
                             }
-                            
+
                             // Factor in document length variance
                             if (stats.fts_avg_document_length > 500.0) {
                                 selectivity *= 0.9; // Long documents = more selective matches
                             }
                         }
-                        
+
                         break :blk selectivity;
                     }
                 }
-                
+
                 // Fallback to heuristic-based estimates for common text fields
                 if (std.mem.eql(u8, property, "description")) break :blk 0.15;
                 if (std.mem.eql(u8, property, "content")) break :blk 0.2;
@@ -561,19 +561,19 @@ pub const IndexOptimizer = struct {
                 if (stats.index_type == index_type) {
                     // Use the cost factor from statistics
                     cost_factor = stats.getEstimatedCostFactor();
-                    
+
                     // For FTS indexes, apply additional cost factors based on corpus characteristics
                     if (index_type == .fulltext and stats.fts_total_documents > 0) {
                         // Adjust cost based on average document length
                         const doc_length_factor = 1.0 + (stats.fts_avg_document_length - 100.0) / 500.0;
                         cost_factor *= @max(0.5, @min(2.0, doc_length_factor));
-                        
+
                         // Adjust based on vocabulary complexity
                         const vocab_complexity = @as(f64, @floatFromInt(stats.fts_vocabulary_size)) / @as(f64, @floatFromInt(stats.fts_total_documents));
                         if (vocab_complexity > 50.0) {
                             cost_factor *= 1.1; // Complex vocabulary = higher processing cost
                         }
-                        
+
                         // Adjust based on search efficiency (hit ratio)
                         if (stats.fts_search_queries > 10) {
                             if (stats.hit_ratio > 0.7) {
@@ -832,7 +832,7 @@ pub const IndexOptimizer = struct {
         // Fallback to heuristic-based cost estimation
         const base_cost: f64 = 20.0; // Base full-text search cost
         const terms_factor = @as(f64, @floatFromInt(query_terms.len));
-        
+
         const query_complexity_factor: f64 = switch (query_type) {
             .simple => 1.0,
             .phrase => 1.5,
@@ -842,7 +842,7 @@ pub const IndexOptimizer = struct {
         // Estimate based on typical text corpus characteristics
         const estimated_docs: f64 = 1000.0; // Default document count
         const log_docs = @log(estimated_docs);
-        
+
         return base_cost * terms_factor * query_complexity_factor * log_docs;
     }
 
@@ -854,7 +854,7 @@ pub const IndexOptimizer = struct {
         query_type: @import("index_statistics.zig").IndexStatistics.FtsQueryType,
     ) u64 {
         _ = query_type;
-        
+
         // Use statistics if available
         if (self.stats_manager) |stats_mgr| {
             if (stats_mgr.getIndexStatistics(index_info.name)) |stats| {
@@ -862,11 +862,11 @@ pub const IndexOptimizer = struct {
                 const base_docs = stats.fts_total_documents;
                 if (base_docs > 0) {
                     var selectivity = stats.hit_ratio;
-                    
+
                     // Adjust based on query complexity
                     const terms_factor = 1.0 / @as(f64, @floatFromInt(query_terms.len + 1));
                     selectivity *= terms_factor;
-                    
+
                     return @intFromFloat(@max(1.0, @as(f64, @floatFromInt(base_docs)) * selectivity));
                 }
             }
@@ -888,7 +888,7 @@ pub const IndexOptimizer = struct {
         query_type: @import("index_statistics.zig").IndexStatistics.FtsQueryType,
     ) ?graph_common.ExplainInfo {
         const operation = self.allocator.dupe(u8, "Full-Text Index Scan") catch return null;
-        
+
         // Create detailed description
         var desc_buf: [512]u8 = undefined;
         const query_type_str = switch (query_type) {
@@ -896,30 +896,27 @@ pub const IndexOptimizer = struct {
             .phrase => "phrase",
             .proximity => "proximity",
         };
-        
-        const description = std.fmt.bufPrint(&desc_buf, 
-            "Full-text search using BM25 scoring on index '{s}' for {s} query with {} terms. " ++
-            "Cost: {d:.2}, Estimated rows: {}", 
-            .{ index_info.name, query_type_str, query_terms.len, cost, rows }
-        ) catch return null;
-        
+
+        const description = std.fmt.bufPrint(&desc_buf, "Full-text search using BM25 scoring on index '{s}' for {s} query with {} terms. " ++
+            "Cost: {d:.2}, Estimated rows: {}", .{ index_info.name, query_type_str, query_terms.len, cost, rows }) catch return null;
+
         const details_owned = self.allocator.dupe(u8, description) catch return null;
 
         // Create cost breakdown
         var cost_components = std.ArrayList(graph_common.CostComponent).initCapacity(self.allocator, 0) catch return null;
-        
+
         cost_components.append(self.allocator, .{
             .operation = self.allocator.dupe(u8, "BM25 Scoring") catch return null,
             .cost = cost * 0.6,
             .description = self.allocator.dupe(u8, "Document scoring and ranking") catch return null,
         }) catch {};
-        
+
         cost_components.append(self.allocator, .{
             .operation = self.allocator.dupe(u8, "Term Processing") catch return null,
             .cost = cost * 0.3,
             .description = self.allocator.dupe(u8, "Query tokenization and normalization") catch return null,
         }) catch {};
-        
+
         cost_components.append(self.allocator, .{
             .operation = self.allocator.dupe(u8, "Result Assembly") catch return null,
             .cost = cost * 0.1,
@@ -1000,21 +997,21 @@ pub const VectorDistanceMetric = enum {
     l2, // Euclidean distance
     cosine, // Cosine similarity (1 - cosine_distance)
     dot, // Dot product
-    manhattan, // Manhattan (L1) distance  
+    manhattan, // Manhattan (L1) distance
     hamming, // Hamming distance (for binary vectors)
     jaccard, // Jaccard similarity
-    
+
     pub fn toString(self: VectorDistanceMetric) []const u8 {
         return switch (self) {
             .l2 => "l2",
-            .cosine => "cosine", 
+            .cosine => "cosine",
             .dot => "dot",
             .manhattan => "manhattan",
             .hamming => "hamming",
             .jaccard => "jaccard",
         };
     }
-    
+
     pub fn fromString(str: []const u8) ?VectorDistanceMetric {
         if (std.mem.eql(u8, str, "l2")) return .l2;
         if (std.mem.eql(u8, str, "cosine")) return .cosine;
@@ -1263,7 +1260,7 @@ pub const VectorKNNOptimizer = struct {
         options: VectorQueryOptions,
     ) f64 {
         const base_cost = self.estimateSequentialVectorScanCost(labels, vector_dim);
-        
+
         // Advanced query types add processing overhead
         const query_overhead = switch (options.query_type) {
             .knn => 1.0, // Baseline
@@ -1466,11 +1463,11 @@ pub const VectorKNNOptimizer = struct {
             for (query_result.results.items) |match| {
                 total_distance += match.score;
             }
-            const avg_distance = if (query_result.results.items.len > 0) 
+            const avg_distance = if (query_result.results.items.len > 0)
                 total_distance / @as(f64, @floatFromInt(query_result.results.items.len))
-            else 
+            else
                 0.0;
-            
+
             // Record the K-NN query for statistics
             stats_mgr.recordIndexAccess(knn_info.index_name, query_result.results.items.len, 1);
             if (stats_mgr.getIndexStatistics(knn_info.index_name)) |stats| {

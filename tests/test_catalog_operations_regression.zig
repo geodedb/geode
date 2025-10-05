@@ -15,16 +15,16 @@ test "catalog operations regression tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.err("Failed to parse TYPED clause: {}", .{err});
             return err;
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraph);
-        
+
         const create_graph = program.statements[0].CreateGraph;
         try testing.expectEqualStrings("typed_test", create_graph.name);
         try testing.expect(create_graph.typed_spec != null);
@@ -37,16 +37,16 @@ test "catalog operations regression tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.err("Failed to parse AS COPY OF clause: {}", .{err});
             return err;
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraph);
-        
+
         const create_graph = program.statements[0].CreateGraph;
         try testing.expectEqualStrings("copy_test", create_graph.name);
         try testing.expect(create_graph.copy_source != null);
@@ -59,16 +59,16 @@ test "catalog operations regression tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.err("Failed to parse OR REPLACE with TYPED: {}", .{err});
             return err;
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraph);
-        
+
         const create_graph = program.statements[0].CreateGraph;
         try testing.expectEqualStrings("replace_test", create_graph.name);
         try testing.expect(create_graph.or_replace);
@@ -82,16 +82,16 @@ test "catalog operations regression tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.err("Failed to parse PROPERTY GRAPH with TYPED: {}", .{err});
             return err;
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraph);
-        
+
         const create_graph = program.statements[0].CreateGraph;
         try testing.expectEqualStrings("prop_test", create_graph.name);
         try testing.expect(create_graph.property_graph);
@@ -105,16 +105,16 @@ test "catalog operations regression tests" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const program = parser.parseProgram() catch |err| {
             std.log.err("Failed to parse traditional CREATE GRAPH: {}", .{err});
             return err;
         };
-        
+
         try testing.expect(program.statements.len == 1);
         try testing.expect(program.statements[0] == .CreateGraph);
-        
+
         const create_graph = program.statements[0].CreateGraph;
         try testing.expectEqualStrings("simple_test", create_graph.name);
         try testing.expect(create_graph.typed_spec == null);
@@ -134,7 +134,7 @@ test "catalog operations error cases" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const result = parser.parseProgram();
         try testing.expectError(geode.gql.ParserError.UnexpectedToken, result);
@@ -146,7 +146,7 @@ test "catalog operations error cases" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         const result = parser.parseProgram();
         try testing.expectError(geode.gql.ParserError.UnexpectedToken, result);
@@ -167,7 +167,7 @@ test "graph type operations framework" {
         var lexer = geode.gql.Lexer.init(query);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        
+
         var parser = geode.gql.Parser.init(&lexer, &arena);
         // Should return UnexpectedToken since feature is disabled
         const result = parser.parseProgram();
@@ -185,7 +185,7 @@ test "graph type operations framework" {
             .like_source = null,
             .copy_source = null,
         };
-        
+
         try testing.expectEqualStrings("test_type", create_graph_type.name);
         try testing.expectEqualStrings("{ }", create_graph_type.type_definition);
     }

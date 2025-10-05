@@ -1872,7 +1872,7 @@ fn cmdBackupCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !v
 
 fn cmdBackupList(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     // Parse arguments for help
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -2133,7 +2133,7 @@ fn cmdMigrateStatus(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 
 fn cmdMigrateRun(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    _ = argv; 
+    _ = argv;
     _ = start_idx;
 
     // For now, simulate running migrations
@@ -2145,9 +2145,9 @@ fn cmdMigrateRun(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
 fn cmdMigrateCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     var migration_name: ?[]const u8 = null;
-    
+
     // Parse arguments
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -2349,10 +2349,11 @@ pub fn main() !void {
         std.process.exit(@intFromEnum(ExitCode.success));
     } else {
         // Check if this is an option that should be handled by query command
-        if (std.mem.startsWith(u8, subcommand, "--format") or 
+        if (std.mem.startsWith(u8, subcommand, "--format") or
             std.mem.startsWith(u8, subcommand, "--json-param") or
             std.mem.startsWith(u8, subcommand, "--page-size") or
-            std.mem.startsWith(u8, subcommand, "--server")) {
+            std.mem.startsWith(u8, subcommand, "--server"))
+        {
             // These are query command options, auto-route to query command
             logAuditEvent("command", "query", "started");
             try cmdQueryImplicit(ally, argv, subcommand_start);
@@ -2380,24 +2381,18 @@ fn looksLikeGqlQuery(str: []const u8) bool {
     // Convert to uppercase for case-insensitive matching
     var buf: [256]u8 = undefined;
     if (str.len > buf.len) return false;
-    
+
     const upper_str = std.ascii.upperString(buf[0..str.len], str);
-    
+
     // GQL query keywords (most common ones that start queries)
-    const gql_keywords = [_][]const u8{
-        "MATCH", "CREATE", "DELETE", "SET", "REMOVE", "RETURN", "WITH", "UNWIND",
-        "MERGE", "CALL", "OPTIONAL", "FOREACH", "LOAD", "USING", "START",
-        "WHERE", "ORDER", "SKIP", "LIMIT", "UNION", "EXPLAIN", "PROFILE",
-        "DETACH", "ON", "CASE", "WHEN", "ELSE", "END", "EXISTS", "UNIQUE",
-        "INDEX", "CONSTRAINT", "DROP", "SHOW", "DESCRIBE", "USE", "INVALID"
-    };
-    
+    const gql_keywords = [_][]const u8{ "MATCH", "CREATE", "DELETE", "SET", "REMOVE", "RETURN", "WITH", "UNWIND", "MERGE", "CALL", "OPTIONAL", "FOREACH", "LOAD", "USING", "START", "WHERE", "ORDER", "SKIP", "LIMIT", "UNION", "EXPLAIN", "PROFILE", "DETACH", "ON", "CASE", "WHEN", "ELSE", "END", "EXISTS", "UNIQUE", "INDEX", "CONSTRAINT", "DROP", "SHOW", "DESCRIBE", "USE" };
+
     for (gql_keywords) |keyword| {
         if (std.mem.startsWith(u8, upper_str, keyword)) {
             return true;
         }
     }
-    
+
     return false;
 }
 
@@ -2407,23 +2402,23 @@ fn cmdQueryImplicit(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     // We need to create a new argv with 'query' inserted at start_idx
     var new_argv = try ally.alloc([:0]u8, argv.len + 1);
     defer ally.free(new_argv);
-    
+
     // Copy elements before the query
     var i: usize = 0;
     while (i < start_idx) : (i += 1) {
         new_argv[i] = argv[i];
     }
-    
+
     // Insert 'query' subcommand
     new_argv[start_idx] = try ally.dupeZ(u8, "query");
     defer ally.free(new_argv[start_idx]);
-    
+
     // Copy the rest of the elements (including the query string and flags)
     i = start_idx;
     while (i < argv.len) : (i += 1) {
         new_argv[i + 1] = argv[i];
     }
-    
+
     // Call the regular query command handler
     try cmdQuery(ally, new_argv, start_idx);
 }

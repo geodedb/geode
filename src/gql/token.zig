@@ -360,7 +360,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
     if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
     if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit;
-    
+
     // Regular TIME keyword for TIME ZONE statements (after temporal literal check)
     // Note: This won't be reached for TIME"..." because lexer handles temporal literals first
     return .identifier;

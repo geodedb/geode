@@ -1065,7 +1065,7 @@ fn constructDecimal(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const dec = decimal128.Decimal128.fromStr(value_str) catch return error.InvalidFormat;
     const final_scale = @as(i16, @intCast(scale_val));
     const rounded = dec.roundHalfEven(final_scale) catch return error.DecimalOverflow;
-    
+
     return .{ .Decimal = .{ .coeff = rounded.coeff, .scale = @intCast(rounded.scale) } };
 }
 

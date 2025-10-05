@@ -66,7 +66,7 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 pub fn resolveEnvironmentVariables(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var result = std.ArrayList(u8).initCapacity(allocator, input.len) catch return error.OutOfMemory;
     defer result.deinit(allocator);
-    
+
     var i: usize = 0;
     while (i < input.len) {
         if (i + 1 < input.len and input[i] == '$' and input[i + 1] == '{') {
@@ -75,26 +75,26 @@ pub fn resolveEnvironmentVariables(allocator: std.mem.Allocator, input: []const 
             while (j < input.len and input[j] != '}') {
                 j += 1;
             }
-            
+
             if (j < input.len) { // Found closing brace
-                const var_expr = input[i + 2..j];
-                
+                const var_expr = input[i + 2 .. j];
+
                 // Check for default value syntax (VAR_NAME:default_value)
                 var var_name: []const u8 = undefined;
                 var default_value: ?[]const u8 = null;
-                
+
                 if (std.mem.indexOf(u8, var_expr, ":")) |colon_pos| {
                     var_name = var_expr[0..colon_pos];
-                    default_value = var_expr[colon_pos + 1..];
+                    default_value = var_expr[colon_pos + 1 ..];
                 } else {
                     var_name = var_expr;
                 }
-                
+
                 // Get environment variable value
                 const env_value = std.process.getEnvVarOwned(allocator, var_name) catch null;
                 defer if (env_value) |ev| allocator.free(ev);
                 const replacement = env_value orelse default_value orelse "";
-                
+
                 try result.appendSlice(allocator, replacement);
                 i = j + 1; // Skip past the closing brace
             } else {
@@ -107,7 +107,7 @@ pub fn resolveEnvironmentVariables(allocator: std.mem.Allocator, input: []const 
             i += 1;
         }
     }
-    
+
     return result.toOwnedSlice(allocator);
 }
 
@@ -357,7 +357,7 @@ pub fn main() !void {
             processed_text = f;
         }
     }
-    
+
     // CANARY: REQ=REQ-CLIENT-ENV-001; FEATURE="ClientEnvironmentVariables"; ASPECT=VariableResolution; STATUS=IMPL; TEST=TestCANARY_ClientCli_EnvVarResolution; OWNER=clients; UPDATED=2025-10-04
     // Client-side environment variable resolution (security: client-only, never server-side)
     if (std.mem.indexOf(u8, processed_text, "${") != null) {
@@ -369,7 +369,7 @@ pub fn main() !void {
         owned_text = env_resolved;
         processed_text = env_resolved;
     }
-    
+
     // CANARY: REQ=REQ-GQL-UNICODE-004; FEATURE="UnicodeCore"; ASPECT=CliNormalizationFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_NormalizeNfc; OWNER=clients; UPDATED=2025-09-27
     // CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CliFoldCaseFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_FoldCase; OWNER=clients; UPDATED=2025-09-27
     // CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UnicodeUtf16"; ASPECT=CliUtf16HexInputFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_Utf16Input; OWNER=clients; UPDATED=2025-09-27
@@ -455,10 +455,11 @@ pub fn main() !void {
                 const stderr_file = getStdErr();
                 try stderr_file.writeAll(line1);
                 try stderr_file.writeAll("\n");
-                
+
                 // Check for mathematical and validation errors and return exit code 1
                 if (std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch.DivZero\"") != null or
-                    std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch\"") != null) {
+                    std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch\"") != null)
+                {
                     std.process.exit(1);
                 }
                 std.process.exit(2);
@@ -604,7 +605,7 @@ pub fn main() !void {
         try server_args.append(gpa, "--test-wal-skip-ratio");
         try server_args.append(gpa, val);
     }
-    
+
     // Add default data directory for embedded server persistence
     // Check if data directory is already specified in server_extra_args
     var has_data_dir = false;
@@ -614,13 +615,13 @@ pub fn main() !void {
             break;
         }
     }
-    
+
     // Add default persistent data directory if not specified
     if (!has_data_dir) {
         try server_args.append(gpa, "--data_dir");
         try server_args.append(gpa, ".geode_embedded");
     }
-    
+
     // Append any passthrough server args after binary path
     var sai: usize = 0;
     while (sai < server_extra_args.items.len) : (sai += 1) {
@@ -696,10 +697,11 @@ pub fn main() !void {
             child.stdin = null;
         }
         _ = try child.wait();
-        
+
         // Check for mathematical and validation errors and return exit code 1
         if (std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch.DivZero\"") != null or
-            std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch\"") != null) {
+            std.mem.indexOf(u8, line1, "\"status_subclass\":\"TypeMismatch\"") != null)
+        {
             std.process.exit(1);
         }
         std.process.exit(2);

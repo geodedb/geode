@@ -1796,7 +1796,7 @@ pub const Parser = struct {
         }
 
         // Check if this is CREATE GRAPH or CREATE PROPERTY GRAPH
-        if (self.cur.kind == .GRAPH or 
+        if (self.cur.kind == .GRAPH or
             self.cur.kind == .PROPERTY or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
         {
@@ -2242,8 +2242,9 @@ pub const Parser = struct {
         var property_graph = true;
 
         // Check for PROPERTY keyword
-        if (self.cur.kind == .PROPERTY or 
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+        if (self.cur.kind == .PROPERTY or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
+        {
             self.advance();
             property_graph = true;
         }
@@ -2270,8 +2271,9 @@ pub const Parser = struct {
         }
 
         // Check for TYPE (graph type creation) immediately after GRAPH (and optional IF NOT EXISTS)
-        if (self.cur.kind == .TYPE or 
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+        if (self.cur.kind == .TYPE or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE")))
+        {
             // This is CREATE [PROPERTY] GRAPH TYPE
             // TYPE is already detected, don't consume it here - let parseCreateGraphType handle it
             return self.parseCreateGraphType(or_replace, property_graph);
@@ -2301,8 +2303,9 @@ pub const Parser = struct {
                 return error.UnexpectedToken;
             }
             // Optional PROPERTY GRAPH after type spec
-            if (self.cur.kind == .PROPERTY or 
-                (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+            if (self.cur.kind == .PROPERTY or
+                (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
+            {
                 self.advance();
                 if (self.cur.kind == .GRAPH) {
                     self.advance();
@@ -2313,8 +2316,9 @@ pub const Parser = struct {
         else if (self.cur.kind == .ANY) {
             self.advance();
             // Optional PROPERTY GRAPH keywords after ANY
-            if (self.cur.kind == .PROPERTY or 
-                (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+            if (self.cur.kind == .PROPERTY or
+                (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
+            {
                 self.advance();
                 if (self.cur.kind == .GRAPH) {
                     self.advance();
@@ -2339,8 +2343,9 @@ pub const Parser = struct {
             self.advance(); // Skip AS
             if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "COPY")) {
                 self.advance(); // Skip COPY
-                if (self.cur.kind == .OF or 
-                    (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OF"))) {
+                if (self.cur.kind == .OF or
+                    (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OF")))
+                {
                     self.advance(); // Skip OF
                     if (self.cur.kind == .identifier) {
                         copy_source = self.cur.lexeme;
@@ -2375,8 +2380,9 @@ pub const Parser = struct {
     // Parse CREATE GRAPH TYPE statement
     fn parseCreateGraphType(self: *Parser, or_replace: bool, property_graph: bool) ParserError!ast.Statement {
         // Expect TYPE keyword
-        if (self.cur.kind != .TYPE and 
-            !(self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+        if (self.cur.kind != .TYPE and
+            !(self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE")))
+        {
             return error.UnexpectedToken;
         }
         self.advance();
@@ -2411,12 +2417,13 @@ pub const Parser = struct {
         // Check for AS keyword (COPY OF or type definition)
         if (self.cur.kind == .AS) {
             self.advance(); // Skip AS
-            
+
             // Check for COPY OF
             if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "COPY")) {
                 self.advance(); // Skip COPY
-                if (self.cur.kind == .OF or 
-                    (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OF"))) {
+                if (self.cur.kind == .OF or
+                    (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OF")))
+                {
                     self.advance(); // Skip OF
                     if (self.cur.kind == .identifier) {
                         copy_source = self.cur.lexeme;
@@ -2434,7 +2441,7 @@ pub const Parser = struct {
                     // TODO: Implement proper type definition parsing
                     type_definition = "{ }";
                     self.advance(); // Skip opening brace
-                    
+
                     // Skip until matching closing brace
                     var brace_count: i32 = 1;
                     while (brace_count > 0 and self.cur.kind != .eof) {
@@ -2445,7 +2452,7 @@ pub const Parser = struct {
                         }
                         self.advance();
                     }
-                    
+
                     if (brace_count != 0) {
                         return error.UnexpectedToken;
                     }
@@ -2508,8 +2515,9 @@ pub const Parser = struct {
         var property_graph = true;
 
         // Check for PROPERTY keyword
-        if (self.cur.kind == .PROPERTY or 
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY"))) {
+        if (self.cur.kind == .PROPERTY or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PROPERTY")))
+        {
             self.advance();
             property_graph = true;
         }
@@ -2519,8 +2527,9 @@ pub const Parser = struct {
         self.advance();
 
         // Check for TYPE keyword (DROP GRAPH TYPE)
-        if (self.cur.kind == .TYPE or 
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+        if (self.cur.kind == .TYPE or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE")))
+        {
             return self.parseDropGraphType(property_graph);
         }
 
@@ -2551,8 +2560,9 @@ pub const Parser = struct {
     // Parse DROP GRAPH TYPE statement (disabled for now)
     fn parseDropGraphType(self: *Parser, property_graph: bool) ParserError!ast.Statement {
         // Expect TYPE keyword
-        if (self.cur.kind != .TYPE and 
-            !(self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE"))) {
+        if (self.cur.kind != .TYPE and
+            !(self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TYPE")))
+        {
             return error.UnexpectedToken;
         }
         self.advance();
@@ -2741,10 +2751,11 @@ pub const Parser = struct {
             return .{ .SessionSet = .{
                 .clause_type = .{ .TimeZone = .{ .value = tz_value } },
             } };
-        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or 
-                   (self.cur.kind == .identifier and 
-                    (std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE") or 
-                     std.ascii.eqlIgnoreCase(self.cur.lexeme, "VALUE")))) {
+        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or
+            (self.cur.kind == .identifier and
+                (std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE") or
+                    std.ascii.eqlIgnoreCase(self.cur.lexeme, "VALUE"))))
+        {
             // Parse parameter clauses
             return .{ .SessionSet = .{
                 .clause_type = .{ .Parameter = try self.parseSessionParameterClause() },
@@ -2847,8 +2858,9 @@ pub const Parser = struct {
                 .parameter_name = param_name,
                 .initializer = initializer,
             } };
-        } else if (self.cur.kind == .BINDING or 
-                   (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE"))) {
+        } else if (self.cur.kind == .BINDING or
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE")))
+        {
             // [BINDING] TABLE
             if (self.cur.kind == .BINDING) {
                 self.advance();
