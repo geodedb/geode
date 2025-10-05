@@ -12,11 +12,12 @@ const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
-const quic_transport = @import("transport/quic.zig");
-const cert_gen = @import("tools/cert_gen.zig");
-const mvcc = @import("server/txn/mvcc.zig");
-const logger = @import("log/logger.zig");
-const query_plan_cache = @import("query_plan_cache.zig");
+// const quic_transport = @import("transport/quic.zig");
+// const cert_gen = @import("tools/cert_gen.zig");
+// Note: Some imports commented out to avoid missing dependency issues for CLI integration
+// const mvcc = @import("server/txn/mvcc.zig");
+// const logger = @import("log/logger.zig");
+// const query_plan_cache = @import("query_plan_cache.zig");
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -3309,7 +3310,7 @@ pub fn main() !void {
             std.debug.print("Geode Server v0.16.0\n\n", .{});
             std.debug.print("Usage: geoded [OPTIONS]\n\n", .{});
             std.debug.print("Options:\n", .{});
-            std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:7567)\n", .{});
+            std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:8443)\n", .{});
             std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
             std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
             std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});

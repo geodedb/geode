@@ -70,11 +70,11 @@ USER geode
 WORKDIR /home/geode
 
 # Expose ports (QUIC-only + metrics)
-EXPOSE 7567/udp 9090/tcp
+EXPOSE 8443/udp 9090/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443"]
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]

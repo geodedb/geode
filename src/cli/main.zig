@@ -551,92 +551,10 @@ const ClientConfig = struct {
     json_params: std.StringHashMap([]const u8) = undefined,
 };
 
-// Server startup function adapted from server/main.zig
-fn startServer(_: std.mem.Allocator, args: [][:0]u8) !void {
-    // Parse server CLI args for optional result format and QUIC listener.
-    var result_format_txt = false;
-    var disable_estimates = false;
-    var compact_profile = false;
-    var memcurve_profile = false;
-    var ai: usize = 1;
-    var log_level_arg: ?[]const u8 = null;
-    var listen_quic: ?[]const u8 = null;
-    var cert_path: ?[]const u8 = null;
-    var key_path: ?[]const u8 = null;
-    var data_dir: ?[]const u8 = null;
-    var test_exit_after_first: bool = false;
-    var force_no_tls: bool = false;
-    
-    // Variables will be used in argument parsing below
-
-    while (ai < args.len) : (ai += 1) {
-        if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
-            const f = args[ai + 1];
-            if (std.mem.eql(u8, f, "txt") or std.mem.eql(u8, f, "text")) result_format_txt = true;
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--no-estimates")) {
-            disable_estimates = true;
-        } else if (std.mem.eql(u8, args[ai], "--profile-compact")) {
-            compact_profile = true;
-        } else if (std.mem.eql(u8, args[ai], "--profile-memcurve")) {
-            memcurve_profile = true;
-        } else if (std.mem.eql(u8, args[ai], "--listen-quic") and ai + 1 < args.len) {
-            listen_quic = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--cert") and ai + 1 < args.len) {
-            cert_path = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--key") and ai + 1 < args.len) {
-            key_path = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--data_dir") and ai + 1 < args.len) {
-            data_dir = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--log-level") and ai + 1 < args.len) {
-            log_level_arg = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--no-tls")) {
-            force_no_tls = true;
-        } else if (std.mem.eql(u8, args[ai], "--test-exit-after-first")) {
-            test_exit_after_first = true;
-        }
-    }
-
-    // Set up default data directory if not provided
-    if (data_dir == null) {
-        data_dir = "./geode_data";
-    }
-
-    // Create data directory if it doesn't exist
-    if (data_dir) |dd| {
-        std.fs.cwd().makeDir(dd) catch |err| switch (err) {
-            error.PathAlreadyExists => {}, // Directory already exists, that's fine
-            else => return err,
-        };
-    }
-
-    std.debug.print("✅ Geode server initialized\n", .{});
-    if (listen_quic) |addr| {
-        std.debug.print("✅ QUIC listener configured: {s}\n", .{addr});
-    }
-    if (data_dir) |dd| {
-        std.debug.print("✅ Data directory: {s}\n", .{dd});
-    }
-
-    // For now, create a basic server loop that can be interrupted
-    // In a full implementation, this would start the actual QUIC server
-    std.debug.print("✅ Server ready (Press Ctrl+C to stop)\n", .{});
-    
-    // Simple server loop - in production this would be replaced with actual QUIC server
-    var counter: u32 = 0;
-    while (true) {
-        std.Thread.sleep(1000000000); // Sleep for 1 second
-        counter += 1;
-        if (counter % 30 == 0) { // Print status every 30 seconds
-            std.debug.print("Server running... (uptime: {}s)\n", .{counter});
-        }
-        if (test_exit_after_first) break; // For testing purposes
-    }
+// Server startup function - direct call to actual server main
+fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
+    // Call the actual server main function with the provided arguments
+    try geode.server.runServerWithArgs(allocator, args);
 }
 
 // Direct server function (eliminates subprocess spawning)
@@ -1124,7 +1042,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     var data_dir: []const u8 = "./data";
-    var listen_addr: []const u8 = "0.0.0.0:7567";
+    var listen_addr: []const u8 = "0.0.0.0:8443";
     var log_level: []const u8 = "info";
     var use_stdio = false;
     var override_listen = false;

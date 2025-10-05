@@ -83,7 +83,7 @@ func parseDSN(dsn string) (*dsnConfig, error) {
 		rest := parts[1]
 		var q string
 		if i := strings.Index(rest, "?"); i >= 0 { cfg.Addr = rest[:i]; q = rest[i+1:] } else { cfg.Addr = rest }
-		if cfg.Addr == "" { cfg.Addr = "127.0.0.1:7567" }
+		if cfg.Addr == "" { cfg.Addr = "127.0.0.1:8443" }
 		if q != "" { applyQuery(q, cfg) }
 		return cfg, nil
 	}

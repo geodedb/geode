@@ -887,7 +887,7 @@ docker-test-singleton:
 		./scripts/docker/test.sh singleton || ($(MAKE) docker-down && exit 1); \
 	else \
 		echo "Test script not found, running basic test..."; \
-		docker exec geode-singleton geodec "RETURN 1 AS x" --server 127.0.0.1:7567 || \
+		docker exec geode-singleton geodec "RETURN 1 AS x" --server 127.0.0.1:8443 || \
 			(echo "Basic test failed" && $(MAKE) docker-down && exit 1); \
 	fi
 	@echo "Singleton tests passed"
@@ -904,7 +904,7 @@ docker-test-distributed:
 		./scripts/docker/test.sh distributed || ($(MAKE) docker-down && exit 1); \
 	else \
 		echo "Test script not found, running basic test..."; \
-		docker exec geode-leader geodec "RETURN 1 AS x" --server 127.0.0.1:7567 || \
+		docker exec geode-leader geodec "RETURN 1 AS x" --server 127.0.0.1:8443 || \
 			(echo "Basic test failed" && $(MAKE) docker-down && exit 1); \
 	fi
 	@echo "Distributed tests passed"
