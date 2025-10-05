@@ -1957,4 +1957,184 @@ pub const FullTextOptimizer = struct {
         fuzzy_distance: ?u32 = null,
         highlight: bool = true,
     };
+
+    // Distributed Query Planning Cost Estimation Integration
+    // CANARY: REQ=REQ-DISTRIBUTED-INDEX-OPTIMIZER-001; FEATURE="Distributed IndexOptimizer"; ASPECT=FederationAwareCostEstimation; STATUS=IMPL; TEST=TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001; OWNER=distributed; UPDATED=2025-10-05
+
+    /// Distributed query planning cost estimation for federation-aware optimization
+    pub fn estimateDistributedQueryCost(
+        self: *IndexOptimizer,
+        labels: []const []const u8,
+        prop_key: ?[]const u8,
+        prop_val: ?PropertyValue,
+        shard_count: u32,
+        is_federated: bool,
+    ) DistributedCostEstimate {
+        // Get local optimization cost as baseline
+        const local_plan = self.optimizeNodeScan(labels, prop_key, prop_val);
+        
+        if (!is_federated or shard_count <= 1) {
+            // Non-distributed scenario
+            return DistributedCostEstimate{
+                .total_cost = local_plan.estimated_cost,
+                .local_cost = local_plan.estimated_cost,
+                .coordination_cost = 0.0,
+                .network_cost = 0.0,
+                .parallelism_factor = 1.0,
+                .shard_distribution = &[_]ShardCostBreakdown{},
+                .optimization_strategy = .single_shard,
+            };
+        }
+
+        // Distributed scenario cost estimation
+        const network_latency = 5.0; // 5ms baseline latency
+        const bandwidth_factor = 1000.0; // 1Gbps bandwidth
+        const coordination_overhead = 25.0; // Coordinator overhead
+        
+        // Calculate per-shard cost with load distribution
+        const load_distribution_factor = 1.0 / @as(f64, @floatFromInt(shard_count));
+        const per_shard_cost = local_plan.estimated_cost * load_distribution_factor;
+        
+        // Network cost estimation based on data transfer
+        const estimated_transfer_size = @as(f64, @floatFromInt(local_plan.estimated_rows)) * 0.1; // 0.1KB per row estimate
+        const network_cost = (estimated_transfer_size / bandwidth_factor) * 1000.0 + network_latency;
+        
+        // Parallelism benefit calculation
+        const parallelism_factor = @min(8.0, @as(f64, @floatFromInt(shard_count))) / @as(f64, @floatFromInt(shard_count));
+        
+        // Total distributed cost with coordination
+        const total_distributed_cost = (per_shard_cost * parallelism_factor) + coordination_overhead + network_cost;
+        
+        // Determine optimization strategy based on cost comparison
+        const optimization_strategy = blk: {
+            if (total_distributed_cost < local_plan.estimated_cost * 0.7) {
+                break :blk DistributedOptimizationStrategy.full_distribution;
+            } else if (shard_count >= 4 and local_plan.estimated_rows > 10000) {
+                break :blk DistributedOptimizationStrategy.selective_distribution;
+            } else {
+                break :blk DistributedOptimizationStrategy.coordinator_only;
+            }
+        };
+
+        return DistributedCostEstimate{
+            .total_cost = total_distributed_cost,
+            .local_cost = per_shard_cost,
+            .coordination_cost = coordination_overhead,
+            .network_cost = network_cost,
+            .parallelism_factor = parallelism_factor,
+            .shard_distribution = &[_]ShardCostBreakdown{}, // TODO: Implement detailed per-shard breakdown
+            .optimization_strategy = optimization_strategy,
+        };
+    }
+
+    /// Estimate cost for cross-shard index operations
+    pub fn estimateCrossShardIndexCost(
+        self: *IndexOptimizer,
+        operation_type: CrossShardOperation,
+        index_types: []const IndexType,
+        shard_count: u32,
+        data_locality: f64, // 0.0 = fully distributed, 1.0 = co-located
+    ) f64 {
+        var base_cost: f64 = 0;
+        
+        // Calculate base cost for each index operation
+        for (index_types) |index_type| {
+            base_cost += self.estimateIndexTypeCost(index_type, 0.5); // Average selectivity
+        }
+        
+        // Apply operation-specific multipliers
+        const operation_multiplier = switch (operation_type) {
+            .distributed_join => 2.5, // High coordination cost
+            .distributed_aggregation => 2.0, // Medium coordination cost
+            .distributed_union => 1.5, // Lower coordination cost
+            .cross_shard_lookup => 1.8, // Network lookup cost
+        };
+        
+        // Apply locality factor - better locality = lower cost
+        const locality_multiplier = 1.0 + (1.0 - data_locality) * 0.5;
+        
+        // Apply shard count scaling - logarithmic scaling for coordination complexity
+        const shard_scaling = 1.0 + @log(@as(f64, @floatFromInt(shard_count))) / 10.0;
+        
+        return base_cost * operation_multiplier * locality_multiplier * shard_scaling;
+    }
+
+    /// Get federation-aware index recommendations
+    pub fn getFederationIndexRecommendations(
+        self: *IndexOptimizer,
+        query_patterns: []const QueryPattern,
+        shard_topology: ShardTopology,
+    ) []IndexRecommendation {
+        _ = self;
+        _ = query_patterns;
+        _ = shard_topology;
+        
+        // TODO: Implement detailed federation-aware index recommendations
+        // This would analyze query patterns across shards and recommend optimal index placement
+        return &[_]IndexRecommendation{};
+    }
+};
+
+// Supporting types for distributed query planning cost estimation
+
+pub const DistributedCostEstimate = struct {
+    total_cost: f64,
+    local_cost: f64,
+    coordination_cost: f64,
+    network_cost: f64,
+    parallelism_factor: f64,
+    shard_distribution: []const ShardCostBreakdown,
+    optimization_strategy: DistributedOptimizationStrategy,
+};
+
+pub const ShardCostBreakdown = struct {
+    shard_id: u32,
+    local_cost: f64,
+    data_transfer_cost: f64,
+    estimated_rows: u64,
+    index_utilization: f64,
+};
+
+pub const DistributedOptimizationStrategy = enum {
+    single_shard,           // Execute on single shard
+    coordinator_only,       // Coordinator handles most work
+    selective_distribution, // Distribute only beneficial parts
+    full_distribution,      // Full distributed execution
+};
+
+pub const CrossShardOperation = enum {
+    distributed_join,
+    distributed_aggregation,
+    distributed_union,
+    cross_shard_lookup,
+};
+
+pub const QueryPattern = struct {
+    labels: []const []const u8,
+    properties: []const []const u8,
+    frequency: f64,
+    selectivity: f64,
+};
+
+pub const ShardTopology = struct {
+    shard_count: u32,
+    replication_factor: u32,
+    data_distribution: DataDistributionStrategy,
+    network_latency_matrix: []const []const f64,
+};
+
+pub const DataDistributionStrategy = enum {
+    hash_based,
+    range_based,
+    geographic,
+    custom,
+};
+
+pub const IndexRecommendation = struct {
+    index_type: IndexType,
+    properties: []const []const u8,
+    target_shards: []const u32,
+    priority: f64,
+    estimated_benefit: f64,
+    reason: []const u8,
 };
