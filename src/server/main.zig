@@ -6200,12 +6200,48 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                             // Handle vector index population for VectorF32 properties
                             switch (prop_value) {
                                 .VectorF32 => |vector| {
-                                    // Create vector index key using the vector data
-                                    const vector_key = try std.fmt.allocPrint(allocator, "vector_{d}x{d}", .{ vector.dim, vector.data.len });
-                                    defer allocator.free(vector_key);
-                                    _ = index_manager.insertIntoPropertyIndex(stmt.name, vector_key, node_id) catch {};
+                                    // Populate the HNSW vector index with the actual vector data
+                                    if (index_type == .vector_f32) {
+                                        // Use advanced vector index for vector_f32 type
+                                        _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, vector, node_id) catch |err| {
+                                            std.log.warn("Failed to insert vector into advanced index {s}: {}", .{ stmt.name, err });
+                                        };
+                                    } else {
+                                        // Use regular vector index for backward compatibility
+                                        _ = index_manager.insertIntoVectorIndex(stmt.name, vector.data, node_id) catch |err| {
+                                            std.log.warn("Failed to insert vector into index {s}: {}", .{ stmt.name, err });
+                                        };
+                                    }
                                     population_count += 1;
                                     std.log.info("Added VectorF32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                                },
+                                .VectorI32 => |vector| {
+                                    // Convert VectorI32 to VectorF32 for HNSW indexing
+                                    const vector_types = @import("../types/vector.zig");
+                                    const f32_data = allocator.alloc(f32, vector.dim) catch |err| {
+                                        std.log.warn("Failed to allocate memory for VectorI32 conversion: {}", .{err});
+                                        continue;
+                                    };
+                                    defer allocator.free(f32_data);
+                                    
+                                    for (0..vector.dim) |i| {
+                                        f32_data[i] = @floatFromInt(vector.data[i]);
+                                    }
+                                    
+                                    if (index_type == .vector_f32) {
+                                        // Convert to VectorF32 for advanced vector index
+                                        const f32_vector = vector_types.VectorF32.fromSlice(f32_data);
+                                        _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, f32_vector, node_id) catch |err| {
+                                            std.log.warn("Failed to insert converted VectorI32 into advanced index {s}: {}", .{ stmt.name, err });
+                                        };
+                                    } else {
+                                        // Use regular vector index for backward compatibility
+                                        _ = index_manager.insertIntoVectorIndex(stmt.name, f32_data, node_id) catch |err| {
+                                            std.log.warn("Failed to insert converted VectorI32 into index {s}: {}", .{ stmt.name, err });
+                                        };
+                                    }
+                                    population_count += 1;
+                                    std.log.info("Added VectorI32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
                                 },
                                 else => {
                                     // Property is not a vector type, skip

@@ -127,6 +127,10 @@ const _test_cardinality_estimator = @import("test_cardinality_estimator.zig");
 // S3 Backup tests
 const _test_s3_backup = @import("test_s3_backup.zig");
 
+// Vector Index Population tests
+const _test_vector_index_population = @import("test_vector_index_population.zig");
+const _test_vector_index_population_integration = @import("test_vector_index_population_integration.zig");
+
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 

@@ -8,7 +8,7 @@ const geode = @import("geode");
 
 test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_001_Basic" {
     // Test that VectorF32 properties can be handled in PropertyValue switches
-    const allocator = testing.allocator;
+    _ = testing.allocator;
     
     // Create a sample VectorF32
     const vector_data = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
