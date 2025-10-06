@@ -611,6 +611,12 @@ fn valueToBinding(v: eval.Value) BindingValue {
         .Bool => |b| BindingValue{ .Bool = b },
         .Decimal => |d| BindingValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .Str => |s| BindingValue{ .Str = s },
+        .List => |l| blk: {
+            // For now, cannot convert nested lists without allocator
+            // Return null for lists until proper conversion is implemented
+            _ = l;
+            break :blk BindingValue{ .Null = {} };
+        },
     };
 }
 
@@ -1586,6 +1592,7 @@ pub const BindingValue = union(enum) {
     Decimal: struct { coeff: i128, scale: u8 },
     Str: []const u8,
     Bool: bool,
+    List: []BindingValue,
 };
 
 pub const BindingRow = struct {
@@ -1604,6 +1611,7 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
                 .Int => 2,
                 .Decimal => 3,
                 .Str => 4,
+                .List => 5,
             };
         }
     };
@@ -1655,6 +1663,11 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
             break :blk3 if (lc < rc) .lt else .gt;
         },
         .Str => |as| std.mem.order(u8, as, b.Str),
+        .List => |_| blk_list: {
+            // For now, lists compare equal
+            // TODO: implement proper list comparison
+            break :blk_list .eq;
+        },
     };
 }
 
@@ -1750,6 +1763,15 @@ fn valueEq(a: BindingValue, b: BindingValue) bool {
         .Decimal => |ad| return b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
         .Str => |as| return b == .Str and std.mem.eql(u8, as, b.Str),
         .Bool => |ab| return b == .Bool and ab == b.Bool,
+        .List => |al| {
+            if (b != .List) return false;
+            const bl = b.List;
+            if (al.len != bl.len) return false;
+            for (al, bl) |av, bv| {
+                if (!valueEq(av, bv)) return false;
+            }
+            return true;
+        },
     }
 }
 
@@ -1781,6 +1803,13 @@ fn encodeValueKey(ally: std.mem.Allocator, buf: *std.ArrayList(u8), v: BindingVa
             try buf.writer(ally).print("{d}:", .{s.len});
             try buf.appendSlice(ally, s);
         },
+        .List => |l| {
+            try buf.append(ally, 'L');
+            try buf.writer(ally).print("{d}:", .{l.len});
+            for (l) |item| {
+                try encodeValueKey(ally, buf, item);
+            }
+        },
     }
 }
 
@@ -1806,6 +1835,14 @@ fn valueKeyAlloc(ally: std.mem.Allocator, v: BindingValue) ![]u8 {
             try buf.appendSlice(ally, s);
         },
         .Decimal => |d| try buf.writer(ally).print("d{d}:{d}", .{ d.coeff, d.scale }),
+        .List => |l| {
+            try buf.writer(ally).print("l{d}:", .{l.len});
+            for (l) |item| {
+                const item_key = try valueKeyAlloc(ally, item);
+                defer ally.free(item_key);
+                try buf.appendSlice(ally, item_key);
+            }
+        },
     }
     return buf.toOwnedSlice(ally);
 }
@@ -2306,6 +2343,7 @@ fn bindingValueToExpr(v: BindingValue) !ast.Expr {
         .Decimal => |d| ast.Expr{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .Str => |s| ast.Expr{ .String = s },
         .Bool => |b| ast.Expr{ .Bool = b },
+        .List => ast.Expr{ .Null = {} }, // TODO: Convert List to ArrayLit expression
     };
 }
 

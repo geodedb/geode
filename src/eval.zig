@@ -29,6 +29,7 @@ pub const EvalError = error{
     InvalidSubnet,
     InvalidMac,
     InvalidArgs,
+    OutOfMemory,
 };
 
 pub const Value = union(enum) {
@@ -45,6 +46,7 @@ pub const Value = union(enum) {
         // Original literal bytes (without surrounding quotes) if preservation required; optional to avoid extra alloc for computed decimals.
         orig_repr: ?[]const u8 = null,
     },
+    List: []Value,
 };
 
 const Dec = struct { coeff: i128, scale: u8 };
@@ -200,6 +202,15 @@ fn eqVals(a: Value, b: Value) bool {
         .Bool => |ab| b == .Bool and ab == b.Bool,
         .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
+        .List => |al| blk: {
+            if (b != .List) break :blk false;
+            const bl = b.List;
+            if (al.len != bl.len) break :blk false;
+            for (al, bl) |av, bv| {
+                if (!eqVals(av, bv)) break :blk false;
+            }
+            break :blk true;
+        },
     };
 }
 
@@ -720,7 +731,13 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .DomainLit => |d| Value{ .Str = d },
         .UuidLit => |u| Value{ .Str = u },
         .EnumLit => |enum_val| Value{ .Str = enum_val.value },
-        .ArrayLit => |_| Value{ .Null = {} },
+        .ArrayLit => |arr| blk_arr: {
+            var list = try ally.alloc(Value, arr.len);
+            for (arr, 0..) |elem, i| {
+                list[i] = try evalExpr(ally, elem.*, env);
+            }
+            break :blk_arr Value{ .List = list };
+        },
         .BitLit => |b| Value{ .Str = b },
         .VarBitLit => |vb| Value{ .Str = vb },
         // Unimplemented in evaluator: treat these as null for now
@@ -735,6 +752,7 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .List => .{ .Null = {} }, // TODO: ExtValue needs List support
     };
 }
 
@@ -763,6 +781,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = d.scale } },
+        .List => .{ .Null = {} }, // TODO: heap.Value needs List support
     };
 }
 

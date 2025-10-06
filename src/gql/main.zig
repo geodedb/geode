@@ -438,6 +438,7 @@ pub fn main() !void {
                                     .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                     .Decimal => |_| try w.print("<dec>", .{}),
+                                    .List => |_| try w.print("<list>", .{}),
                                 }
                             }
                             try w.print("\n", .{});
@@ -492,6 +493,7 @@ pub fn main() !void {
                                     .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                     .Decimal => |_| try w.print("<dec>", .{}),
+                                    .List => |_| try w.print("<list>", .{}),
                                 }
                             }
                             try w.print("\n", .{});
@@ -712,6 +714,7 @@ pub fn main() !void {
                             switch (v) {
                                 .Null => try w.print("NULL", .{}),
                                 .Int => |n| try w.print("{d}", .{n}),
+                                .List => |_| try w.print("<list>", .{}),
                                 .Decimal => |d| {
                                     const abs: i128 = if (d.coeff < 0) -d.coeff else d.coeff;
                                     var scale_p: i128 = 1;

@@ -1480,6 +1480,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     try executeQuicQuery(ally, server, query_text.?, format, insecure);
 }
 
+
 /// Execute query in no-QUIC mode (embedded server for testing)
 fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8) !void {
     _ = format;

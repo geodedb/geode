@@ -166,3 +166,4 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been suc
 
 *Last Updated: October 2025*  
 *Status: PRODUCTION READY - All major features implemented and tested*
+- You have completely botched the geodetestlab fixes by mocking and simulating the responses from `geode` in the test harness itself. NEVER EVER DO THIS! Always add the complex missing logic and fixes to the code to make the tests work unless the tests are actually wrong
