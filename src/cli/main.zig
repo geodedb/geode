@@ -1506,11 +1506,14 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
         };
     }
     
-    // Wait for handshake to complete with a workaround
-    // The vendored QUIC library appears to have handshake completion detection issues
-    quic_client.waitForHandshake() catch {
-        // If handshake times out, try to proceed anyway as the connection might still work
-        // This is expected behavior due to known issues in handshake detection
+    // Wait for handshake to complete
+    quic_client.waitForHandshake() catch |err| {
+        std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
+        std.debug.print("Ensure the server is running and accessible at {s}:{}\n", .{ host, port });
+        if (!insecure) {
+            std.debug.print("Try using --insecure flag for self-signed certificates\n", .{});
+        }
+        std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     
     // Get a stream for communication

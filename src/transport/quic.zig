@@ -730,7 +730,8 @@ pub const QuicClientStream = struct {
             var attempts: usize = 0;
             while (attempts < 20) : (attempts += 1) {
                 const n = quic_lib.readStream(self.quic_connection.?, sid, buf) catch |err| {
-                    std.debug.print("DEBUG: readStream error: {}\n", .{err});
+                    // TRACE: readStream error
+                    // std.debug.print("DEBUG: readStream error: {}\n", .{err});
                     if (err == error.WouldBlock) {
                         // Poll the endpoint to process incoming packets
                         if (self.client) |c| {
@@ -738,7 +739,8 @@ pub const QuicClientStream = struct {
                                 // Poll multiple times to ensure we receive data
                                 var poll_i: usize = 0;
                                 while (poll_i < 3) : (poll_i += 1) {
-                                    std.debug.print("DEBUG: read() polling endpoint\n", .{});
+                                    // TRACE: read() polling endpoint
+                                    // std.debug.print("DEBUG: read() polling endpoint\n", .{});
                                     quic_lib.poll(ep, 50) catch {};
                                     std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
                                 }
@@ -762,16 +764,36 @@ pub const QuicClientStream = struct {
 
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
         var buf = try self.allocator.alloc(u8, max_size);
+        errdefer self.allocator.free(buf);
+        
         var pos: usize = 0;
         while (pos < max_size) {
             const n = try self.read(buf[pos .. pos + 1]);
             if (n == 0) break;
             if (buf[pos] == '\n') {
-                return self.allocator.realloc(buf, pos + 1) catch buf[0 .. pos + 1];
+                // Resize to actual size (including newline)
+                if (self.allocator.resize(buf, pos + 1)) {
+                    return buf[0 .. pos + 1];
+                } else {
+                    // If resize fails, create a new smaller buffer
+                    const result = try self.allocator.alloc(u8, pos + 1);
+                    @memcpy(result, buf[0 .. pos + 1]);
+                    self.allocator.free(buf);
+                    return result;
+                }
             }
             pos += 1;
         }
-        return buf[0..pos];
+        // Resize to actual size
+        if (self.allocator.resize(buf, pos)) {
+            return buf[0..pos];
+        } else {
+            // If resize fails, create a new smaller buffer
+            const result = try self.allocator.alloc(u8, pos);
+            @memcpy(result, buf[0..pos]);
+            self.allocator.free(buf);
+            return result;
+        }
     }
 
     pub fn deinit(self: *QuicClientStream) void {
