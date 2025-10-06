@@ -617,6 +617,7 @@ fn valueToBinding(v: eval.Value) BindingValue {
             _ = l;
             break :blk BindingValue{ .Null = {} };
         },
+        .Node => BindingValue{ .Null = {} }, // TODO: Add Node to BindingValue if needed
     };
 }
 

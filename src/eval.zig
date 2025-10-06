@@ -37,6 +37,7 @@ pub const Value = union(enum) {
     Int: i64,
     Bool: bool,
     Str: []const u8,
+    Node: *const @import("graph_store.zig").Node,
     // Fixed-point decimal: coeff * 10^-scale. Preserve original scale & literal for round-trip fidelity.
     Decimal: struct {
         coeff: i128,
@@ -202,6 +203,7 @@ fn eqVals(a: Value, b: Value) bool {
         .Bool => |ab| b == .Bool and ab == b.Bool,
         .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
+        .Node => |an| b == .Node and an == b.Node, // Compare node pointers
         .List => |al| blk: {
             if (b != .List) break :blk false;
             const bl = b.List;
@@ -686,17 +688,25 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         },
         .PropertyAccess => |pa| blk_property: {
             // Property access like n.name
-            // This implementation is for basic expression evaluation context.
-            // For graph queries, property access is handled in the server context
-            // via EvalInBinding.evalRet() which has access to the graph storage.
-
             // First, get the object from the environment
-            const _object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
-            _ = _object; // Suppress unused variable warning
-
-            // In basic evaluation context, we don't have access to graph storage,
-            // so property access returns null. This is handled properly in the
-            // server context where graph storage is available.
+            const object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
+            
+            // If it's a Node, access its properties
+            if (object == .Node) {
+                const node = object.Node;
+                if (node.properties.get(pa.property)) |val| {
+                    const result = switch (val) {
+                        .String => |s| Value{ .Str = s },
+                        .Int => |i| Value{ .Int = i },
+                        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                        .Bool => |b| Value{ .Bool = b },
+                        .Null => Value{ .Null = {} },
+                    };
+                    break :blk_property result;
+                }
+            }
+            
+            // Otherwise return null
             break :blk_property .{ .Null = {} };
         },
         .Case => |c| {
@@ -754,6 +764,28 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         },
         .BitLit => |b| Value{ .Str = b },
         .VarBitLit => |vb| Value{ .Str = vb },
+        .Member => |member| blk_member: {
+            // Handle member access like n.name (where n is already evaluated)
+            const target = try evalExpr(ally, member.target.*, env);
+            
+            // If target is a Node, access its properties
+            if (target == .Node) {
+                const node = target.Node;
+                if (node.properties.get(member.field)) |val| {
+                    const result = switch (val) {
+                        .String => |s| Value{ .Str = s },
+                        .Int => |i| Value{ .Int = i },
+                        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                        .Bool => |b| Value{ .Bool = b },
+                        .Null => Value{ .Null = {} },
+                    };
+                    break :blk_member result;
+                }
+            }
+            
+            // Otherwise return null
+            break :blk_member Value{ .Null = {} };
+        },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };
@@ -767,6 +799,7 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .List => .{ .Null = {} }, // TODO: ExtValue needs List support
+        .Node => .{ .Null = {} }, // TODO: ExtValue needs Node support
     };
 }
 
@@ -796,6 +829,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = d.scale } },
         .List => .{ .Null = {} }, // TODO: heap.Value needs List support
+        .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
     };
 }
 

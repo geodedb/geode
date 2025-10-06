@@ -494,6 +494,7 @@ pub fn main() !void {
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                     .Decimal => |_| try w.print("<dec>", .{}),
                                     .List => |_| try w.print("<list>", .{}),
+                                    .Node => |_| try w.print("<node>", .{}),
                                 }
                             }
                             try w.print("\n", .{});

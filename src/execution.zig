@@ -118,6 +118,47 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
             }
             try writer.writeByte(']');
         },
+        .Node => |node| {
+            // For now, output node as a JSON object with its properties
+            try writer.writeAll("{");
+            try writer.print("\"id\":{d}", .{node.id});
+            if (node.labels.len > 0) {
+                try writer.writeAll(",\"labels\":[");
+                for (node.labels, 0..) |label, i| {
+                    if (i > 0) try writer.writeAll(",");
+                    try writer.writeByte('"');
+                    try writer.writeAll(label);
+                    try writer.writeByte('"');
+                }
+                try writer.writeAll("]");
+            }
+            // Add properties if any
+            if (node.properties.count() > 0) {
+                try writer.writeAll(",\"properties\":{");
+                var iter = node.properties.iterator();
+                var first = true;
+                while (iter.next()) |entry| {
+                    if (!first) try writer.writeAll(",");
+                    first = false;
+                    try writer.writeByte('"');
+                    try writer.writeAll(entry.key_ptr.*);
+                    try writer.writeAll("\":");
+                    switch (entry.value_ptr.*) {
+                        .String => |s| {
+                            try writer.writeByte('"');
+                            try writer.writeAll(s);
+                            try writer.writeByte('"');
+                        },
+                        .Int => |i| try writer.print("{d}", .{i}),
+                        .Float => |f| try writer.print("{d}", .{f}),
+                        .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                        .Null => try writer.writeAll("null"),
+                    }
+                }
+                try writer.writeAll("}");
+            }
+            try writer.writeAll("}");
+        },
     }
 }
 
@@ -334,11 +375,43 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
 fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     
+    // Track created nodes by variable name
+    var created_nodes = std.StringHashMap(*graph_store.Node).init(allocator);
+    defer created_nodes.deinit();
+    
     // Create nodes from pattern
     for (c.pattern.chains) |chain| {
         // Handle single node creation
-        if (chain.head) |node| {
-            _ = try store.createNode(node.labels);
+        if (chain.head) |node_pattern| {
+            const node_id = try store.createNode(node_pattern.labels);
+            
+            // Set properties if present
+            if (node_pattern.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(node_id, prop.key, prop_value);
+                }
+            }
+            
+            // Get the created node and store reference if it has a variable name
+            if (node_pattern.name) |name| {
+                if (store.nodes.getPtr(node_id)) |new_node| {
+                    try created_nodes.put(name, new_node);
+                }
+            }
         }
         
         // Handle chains with relationships
@@ -347,9 +420,30 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
         }
     }
     
-    // Return empty result for now (unless RETURN clause is present)
+    // Handle RETURN clause if present
     if (c.return_clause) |ret| {
-        return executeReturnClause(allocator, ret);
+        // Build environment with created nodes
+        var names = try allocator.alloc([]const u8, created_nodes.count());
+        var values = try allocator.alloc(eval.Value, created_nodes.count());
+        defer allocator.free(names);
+        defer allocator.free(values);
+        
+        var iter = created_nodes.iterator();
+        var idx: usize = 0;
+        while (iter.next()) |entry| {
+            names[idx] = entry.key_ptr.*;
+            // Convert node to Value (as a Node reference)
+            values[idx] = eval.Value{ .Node = entry.value_ptr.* };
+            idx += 1;
+        }
+        
+        const env = eval.Env{
+            .names = names,
+            .values = values,
+        };
+        
+        // Execute RETURN with the created nodes in scope
+        return executeReturnClauseWithEnv(allocator, ret, env);
     }
     
     return ExecutionResult{
@@ -1057,6 +1151,7 @@ fn getTypeOrder(v: eval.Value) u8 {
         .Decimal => 3,
         .Str => 4,
         .List => 5,
+        .Node => 6,
     };
 }
 
@@ -1099,7 +1194,7 @@ fn isNonConstantExpr(expr: ast.Expr) bool {
     }
 }
 
-fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !ExecutionResult {
+fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClause, env: eval.Env) !ExecutionResult {
     const items = ret.items;
     
     // Collect column names
@@ -1109,13 +1204,8 @@ fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !Exe
         columns[i] = try allocator.dupe(u8, name);
     }
     
-    // Evaluate expressions
+    // Evaluate expressions with provided environment
     var row = try allocator.alloc(eval.Value, items.len);
-    const env = eval.Env{
-        .names = &.{},
-        .values = &.{},
-    };
-    
     for (items, 0..) |item, i| {
         row[i] = try eval.evalExpr(allocator, item.expr, env);
     }
@@ -1131,4 +1221,12 @@ fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !Exe
                 break :blk list;
             },
     };
+}
+
+fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !ExecutionResult {
+    const env = eval.Env{
+        .names = &.{},
+        .values = &.{},
+    };
+    return executeReturnClauseWithEnv(allocator, ret, env);
 }
