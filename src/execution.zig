@@ -1327,6 +1327,15 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
             }
         }
         
+        // For OPTIONAL MATCH, if no rows were matched, return a single row with NULL values
+        if (q.optional_match and rows.items.len == 0) {
+            var null_row = try allocator.alloc(eval.Value, items.len);
+            for (items, 0..) |_, i| {
+                null_row[i] = eval.Value{ .Null = {} };
+            }
+            try rows.append(allocator, null_row);
+        }
+        
         var result = ExecutionResult{
             .columns = columns,
             .rows = try rows.toOwnedSlice(allocator),
@@ -1781,6 +1790,36 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
     return eval.Value{ .Null = {} };
 }
 
+fn rowsEqual(a: []eval.Value, b: []eval.Value) bool {
+    if (a.len != b.len) return false;
+    
+    for (a, b) |val_a, val_b| {
+        if (!valuesEqual(val_a, val_b)) return false;
+    }
+    
+    return true;
+}
+
+fn valuesEqual(a: eval.Value, b: eval.Value) bool {
+    return switch (a) {
+        .Int => |i| b == .Int and b.Int == i,
+        .Str => |s| b == .Str and std.mem.eql(u8, b.Str, s),
+        .Bool => |bool_val| b == .Bool and b.Bool == bool_val,
+        .Null => b == .Null,
+        .Decimal => |d| b == .Decimal and b.Decimal.coeff == d.coeff and b.Decimal.scale == d.scale,
+        .List => |list_a| blk: {
+            if (b != .List) break :blk false;
+            const list_b = b.List;
+            if (list_a.len != list_b.len) break :blk false;
+            for (list_a, list_b) |item_a, item_b| {
+                if (!valuesEqual(item_a, item_b)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Node => |node_a| b == .Node and b.Node.id == node_a.id,
+    };
+}
+
 fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !ExecutionResult {
     // Execute first query (but don't apply its limit/offset yet)
     var result = try executeQueryNoLimit(allocator, union_query.first);
@@ -1820,8 +1859,65 @@ fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !Exec
             // Free the old rows array (but not the rows themselves - they're transferred)
             allocator.free(old_rows);
         } else {
-            // UNION DISTINCT - would need deduplication
-            return error.NotImplemented;
+            // UNION DISTINCT - deduplicate rows
+            var part_result = try executeQueryNoLimit(allocator, part.query);
+            defer part_result.deinit(allocator);
+            
+            // Build a combined result with deduplication
+            var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            
+            // Add existing rows
+            for (result.rows) |row| {
+                var is_duplicate = false;
+                
+                // Check if this row already exists in new_rows
+                for (new_rows.items) |existing_row| {
+                    if (rowsEqual(row, existing_row)) {
+                        is_duplicate = true;
+                        break;
+                    }
+                }
+                
+                if (!is_duplicate) {
+                    // Duplicate the row since we're building a new array
+                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    for (row, 0..) |val, j| {
+                        new_row[j] = val;
+                    }
+                    try new_rows.append(allocator, new_row);
+                }
+            }
+            
+            // Add new rows from part_result that aren't duplicates
+            for (part_result.rows) |row| {
+                var is_duplicate = false;
+                
+                // Check if this row already exists
+                for (new_rows.items) |existing_row| {
+                    if (rowsEqual(row, existing_row)) {
+                        is_duplicate = true;
+                        break;
+                    }
+                }
+                
+                if (!is_duplicate) {
+                    // Duplicate the row since part_result will be freed
+                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    for (row, 0..) |val, j| {
+                        new_row[j] = val;
+                    }
+                    try new_rows.append(allocator, new_row);
+                }
+            }
+            
+            // Free old result rows
+            for (result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(result.rows);
+            
+            // Set new deduplicated rows
+            result.rows = try new_rows.toOwnedSlice(allocator);
         }
     }
     
