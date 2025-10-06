@@ -8,7 +8,7 @@ const expect = testing.expect;
 // Test data structures matching actual CLI configuration
 const ClientConfig = struct {
     query_text: []const u8,
-    server: []const u8 = "127.0.0.1:8443",
+    server: []const u8 = "127.0.0.1:3141",
     no_quic: bool = false,
 };
 
@@ -108,8 +108,8 @@ test "query text configuration preserved" {
 // Test server configuration handling
 test "server configuration handling" {
     const test_servers = [_][]const u8{
-        "127.0.0.1:8443",
-        "localhost:8443",
+        "127.0.0.1:3141",
+        "localhost:3141",
         "custom.host:9000",
     };
     
@@ -173,10 +173,10 @@ test "default configuration values" {
     const minimal_config = ClientConfig{
         .query_text = "DEFAULT TEST",
         // no_quic defaults to false
-        // server defaults to "127.0.0.1:8443"
+        // server defaults to "127.0.0.1:3141"
     };
     
-    try expect(std.mem.eql(u8, minimal_config.server, "127.0.0.1:8443"));
+    try expect(std.mem.eql(u8, minimal_config.server, "127.0.0.1:3141"));
     try expect(minimal_config.no_quic == false);
     
     const result = mockCliHandler(minimal_config);

@@ -109,8 +109,8 @@ pub const QuicTransport = struct {
             }
         }
 
-        // Print startup JSON exactly once (port 8443 for QUIC+TLS)
-        const port: u16 = 8443;
+        // Print startup JSON exactly once (port 3141 for QUIC+TLS)
+        const port: u16 = 3141;
         const tls_str = if (use_tls) "true" else "false";
         std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"{s}\",\"port\":{}}}\n", .{ tls_str, port });
 

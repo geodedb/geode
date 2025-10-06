@@ -167,7 +167,7 @@ Add to your `configuration.nix`:
     # Basic network settings
     network = {
       listenAddress = "0.0.0.0";
-      quicPort = 8443;
+      quicPort = 3141;
     };
     
     # Performance settings
@@ -191,7 +191,7 @@ services.geode = {
   # Network configuration
   network = {
     listenAddress = "0.0.0.0";
-    quicPort = 8443;
+    quicPort = 3141;
   };
   
   # Performance tuning for production
@@ -220,8 +220,8 @@ services.geode = {
     enable = true;
     role = "shard";           # or "coordinator"
     peers = [
-      "coordinator1.prod.com:8443"
-      "coordinator2.prod.com:8443"
+      "coordinator1.prod.com:3141"
+      "coordinator2.prod.com:3141"
     ];
   };
   
@@ -332,16 +332,16 @@ services.geode = {
     enable = true;
     role = "coordinator";     # Primary coordinator
     peers = [
-      "geode-shard-1.internal:8443"
-      "geode-shard-2.internal:8443"
-      "geode-shard-3.internal:8443"
+      "geode-shard-1.internal:3141"
+      "geode-shard-2.internal:3141"
+      "geode-shard-3.internal:3141"
     ];
   };
   
   # Load balancing
   network = {
     listenAddress = "0.0.0.0";
-    quicPort = 8443;
+    quicPort = 3141;
   };
   
   # Shared storage (if using NFS/distributed storage)
@@ -374,14 +374,14 @@ services.haproxy = {
         timeout server 50000ms
         
     frontend geode_frontend
-        bind *:8443
+        bind *:3141
         default_backend geode_servers
         
     backend geode_servers
         balance roundrobin
-        server coord1 geode-coord-1.internal:8443 check
-        server coord2 geode-coord-2.internal:8443 check
-        server coord3 geode-coord-3.internal:8443 check
+        server coord1 geode-coord-1.internal:3141 check
+        server coord2 geode-coord-2.internal:3141 check
+        server coord3 geode-coord-3.internal:3141 check
   '';
 };
 ```
@@ -409,7 +409,7 @@ docker push myregistry.com/geode:latest
 docker run -d \
   --name geode \
   --restart unless-stopped \
-  -p 8443:8443/udp \
+  -p 3141:3141/udp \
   -v geode-data:/var/lib/geode \
   -v geode-logs:/var/log/geode \
   geode:latest serve
@@ -417,7 +417,7 @@ docker run -d \
 # With custom configuration
 docker run -d \
   --name geode \
-  -p 8443:8443/udp \
+  -p 3141:3141/udp \
   -v ./geode.conf:/etc/geode/geode.conf:ro \
   -v geode-data:/var/lib/geode \
   -v geode-logs:/var/log/geode \
@@ -449,7 +449,7 @@ services:
     container_name: geode-server
     restart: unless-stopped
     ports:
-      - "8443:8443/udp"   # QUIC
+      - "3141:3141/udp"   # QUIC
       - "9090:9090"       # Metrics
     volumes:
       - geode-data:/var/lib/geode
@@ -544,7 +544,7 @@ data:
   geode.conf: |
     data_dir = "/var/lib/geode"
     log_dir = "/var/log/geode"
-    listen_quic = "0.0.0.0:8443"
+    listen_quic = "0.0.0.0:3141"
     log_level = "info"
     log_json = true
     max_connections = 2000
@@ -603,7 +603,7 @@ spec:
         image: geode:latest
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8443
+        - containerPort: 3141
           name: quic
           protocol: UDP
         - containerPort: 9090
@@ -693,8 +693,8 @@ spec:
     app: geode
   ports:
   - name: quic
-    port: 8443
-    targetPort: 8443
+    port: 3141
+    targetPort: 3141
     protocol: UDP
   - name: metrics
     port: 9090
@@ -744,7 +744,7 @@ kubectl get services -n geode
 kubectl logs -n geode -l app=geode -f
 
 # Port forward for testing
-kubectl port-forward -n geode svc/geode-service 8443:8443
+kubectl port-forward -n geode svc/geode-service 3141:3141
 
 # Scale deployment
 kubectl scale deployment geode -n geode --replicas=5
@@ -839,7 +839,7 @@ services.geode.network.listenAddress = "localhost";   # ✓ Valid
 services.geode.network.listenAddress = "invalid.ip";  # ✗ Invalid
 
 # Port validation
-services.geode.network.quicPort = 8443;  # ✓ Valid
+services.geode.network.quicPort = 3141;  # ✓ Valid
 services.geode.network.quicPort = 70000; # ✗ Invalid
 ```
 
@@ -968,18 +968,18 @@ services.geode.tls = {
 # Automatic firewall rules (applied by module)
 networking.firewall = {
   enable = true;
-  allowedTCPPorts = [ 8443 9090 ];  # QUIC, Metrics
-  allowedUDPPorts = [ 8443 ];       # QUIC
+  allowedTCPPorts = [ 3141 9090 ];  # QUIC, Metrics
+  allowedUDPPorts = [ 3141 ];       # QUIC
 };
 
 # Custom firewall rules
 networking.firewall.extraCommands = ''
   # Rate limiting
-  iptables -A INPUT -p udp --dport 8443 -m limit --limit 1000/sec -j ACCEPT
-  iptables -A INPUT -p udp --dport 8443 -j DROP
+  iptables -A INPUT -p udp --dport 3141 -m limit --limit 1000/sec -j ACCEPT
+  iptables -A INPUT -p udp --dport 3141 -j DROP
   
   # Geo-blocking (example)
-  iptables -A INPUT -p udp --dport 8443 -m geoip --src-cc CN,RU -j DROP
+  iptables -A INPUT -p udp --dport 3141 -m geoip --src-cc CN,RU -j DROP
 '';
 ```
 
@@ -1435,14 +1435,14 @@ ls -la /var/lib/geode /var/log/geode /etc/geode
 
 ```bash
 # Check if QUIC port is open
-ss -tulpn | grep 8443
-netstat -ulpn | grep 8443
+ss -tulpn | grep 3141
+netstat -ulpn | grep 3141
 
 # Test connectivity
-nc -u localhost 8443
+nc -u localhost 3141
 
 # Check firewall
-iptables -L -n | grep 8443
+iptables -L -n | grep 3141
 ```
 
 #### 4. Memory Issues
@@ -1573,10 +1573,10 @@ else
 fi
 
 # Port connectivity
-if nc -z -u localhost 8443; then
-  echo "✅ Network: Port 8443 accessible"
+if nc -z -u localhost 3141; then
+  echo "✅ Network: Port 3141 accessible"
 else
-  echo "❌ Network: Port 8443 not accessible"
+  echo "❌ Network: Port 3141 not accessible"
   exit 1
 fi
 

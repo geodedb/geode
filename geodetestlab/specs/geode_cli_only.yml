@@ -10,7 +10,7 @@ cli:
   server:
     enabled: false  # No server needed for these tests
   client:
-    server_address: "127.0.0.1:8443"
+    server_address: "127.0.0.1:3141"
     timeout_ms: 30000
     tls_verify: false
     format: "json"

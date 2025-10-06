@@ -10,7 +10,7 @@ pub fn main() !void {
     // Configure and connect
     const config = client.Config{
         .host = "127.0.0.1",
-        .port = 8443, // v0.18.0: QUIC+TLS port
+        .port = 3141, // v0.18.0: QUIC+TLS port
         .use_quic = true,
     };
 

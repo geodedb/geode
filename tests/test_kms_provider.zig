@@ -11,7 +11,7 @@ test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
     const provider_configs = [_]kms.KMSConfig{
         .{ .provider_type = .local_dev },
         .{ .provider_type = .external_kms, .seed = 0x123456789ABCDEF0 },
-        .{ .provider_type = .remote_kms, .endpoint = "localhost", .port = 8443, .auth_token = "test_token" },
+        .{ .provider_type = .remote_kms, .endpoint = "localhost", .port = 3141, .auth_token = "test_token" },
     };
     
     for (provider_configs) |config| {

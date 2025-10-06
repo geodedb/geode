@@ -5,10 +5,10 @@
 ### Starting the Server
 ```bash
 # Basic server start
-geoded --listen-quic 0.0.0.0:8443
+geoded --listen-quic 0.0.0.0:3141
 
 # With all options
-geoded --listen-quic 0.0.0.0:8443 \
+geoded --listen-quic 0.0.0.0:3141 \
        --data-dir /var/geode/data \
        --tls-cert server.crt \
        --tls-key server.key \
@@ -233,7 +233,7 @@ geoded --help
 #### Server won't start
 ```bash
 # Check port availability
-lsof -i :8443
+lsof -i :3141
 
 # Verify TLS certificates
 openssl x509 -in server.crt -text -noout
@@ -347,7 +347,7 @@ Add to your shell profile:
 
 ```bash
 # Geode aliases
-alias gs='geoded --listen-quic 0.0.0.0:8443'
+alias gs='geoded --listen-quic 0.0.0.0:3141'
 alias gc='geodec'
 alias gql='gql'
 alias gbuild='make build'

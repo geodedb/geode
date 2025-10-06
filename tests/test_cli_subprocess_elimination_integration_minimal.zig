@@ -96,9 +96,9 @@ test "integration various server addresses return error in QUIC mode" {
     const allocator = testing.allocator;
     
     const test_servers = [_][]const u8{
-        "localhost:8443",
+        "localhost:3141",
         "127.0.0.1:9000",
-        "custom.host:8443",
+        "custom.host:3141",
     };
     
     for (test_servers) |server| {

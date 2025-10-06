@@ -93,7 +93,7 @@ tests:
 
   - name: "invalid-host"
     description: "Test invalid hostname handling"
-    args: ["query", "--server", "invalid.invalid:8443", "--timeout", "2", "RETURN 1"]
+    args: ["query", "--server", "invalid.invalid:3141", "--timeout", "2", "RETURN 1"]
     expect:
       exit_code: 1
     tags: ["error", "dns", "connection"]

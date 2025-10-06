@@ -15,7 +15,7 @@ test "transport interface - mock transport connectivity" {
     const transport = &repl_dispatch.mock_transport;
     
     // Test connection creation
-    var connection = transport.connect(ally, "127.0.0.1:8443") catch |err| {
+    var connection = transport.connect(ally, "127.0.0.1:3141") catch |err| {
         std.debug.print("Failed to create mock connection: {s}\n", .{@errorName(err)});
         return err;
     };
@@ -35,7 +35,7 @@ test "transport interface - client session with mock transport" {
     const ally = testing.allocator;
     
     // Test ClientSession with mock transport
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     // Test connection
@@ -69,7 +69,7 @@ test "address parsing - valid addresses" {
         expected_host: []const u8,
         expected_port: u16,
     }{
-        .{ .addr = "localhost:8443", .expected_host = "localhost", .expected_port = 8443 },
+        .{ .addr = "localhost:3141", .expected_host = "localhost", .expected_port = 3141 },
         .{ .addr = "127.0.0.1:7567", .expected_host = "127.0.0.1", .expected_port = 7567 },
         .{ .addr = "example.com:443", .expected_host = "example.com", .expected_port = 443 },
     };
@@ -88,7 +88,7 @@ test "address parsing - valid addresses" {
 test "address parsing - invalid addresses" {
     const invalid_addresses = [_][]const u8{
         "localhost",          // No port
-        ":8443",             // No host
+        ":3141",             // No host
         "localhost:abc",     // Invalid port
         "localhost:99999",   // Port out of range
     };
@@ -143,7 +143,7 @@ test "transport interface - connection lifecycle" {
     const ally = testing.allocator;
     
     // Test complete connection lifecycle
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     // Test initial state
@@ -195,7 +195,7 @@ test "address parsing - comprehensive edge cases" {
         expected_host: []const u8,
         expected_port: u16,
     }{
-        .{ .addr = "localhost:8443", .expected_host = "localhost", .expected_port = 8443 },
+        .{ .addr = "localhost:3141", .expected_host = "localhost", .expected_port = 3141 },
         .{ .addr = "127.0.0.1:7567", .expected_host = "127.0.0.1", .expected_port = 7567 },
         .{ .addr = "0.0.0.0:1", .expected_host = "0.0.0.0", .expected_port = 1 },
         .{ .addr = "example.com:65535", .expected_host = "example.com", .expected_port = 65535 },

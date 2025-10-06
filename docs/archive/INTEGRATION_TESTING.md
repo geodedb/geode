@@ -204,7 +204,7 @@ Tests can use migration files as templates:
 make load-dataset
 
 # Use specific migration
-./scripts/load_example_dataset.sh --host localhost --port 8443
+./scripts/load_example_dataset.sh --host localhost --port 3141
 ```
 
 ## Performance Expectations
@@ -244,7 +244,7 @@ Expected performance for standard hardware (8-core CPU, 16GB RAM, SSD):
 
 #### Connection Issues
 - Verify server is running: `ps aux | grep geoded`
-- Check port availability: `netstat -an | grep 8443`
+- Check port availability: `netstat -an | grep 3141`
 - Review server logs: `tail -f geode.log`
 
 ## Writing New Integration Tests
@@ -261,7 +261,7 @@ test "CANARY: REQ=REQ-GQL-YOUR-FEATURE" {
     
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();

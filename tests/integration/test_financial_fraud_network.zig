@@ -8,7 +8,7 @@ test "CANARY: REQ=REQ-GQL-FINANCIAL-NETWORK" {
 
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();
@@ -414,7 +414,7 @@ test "anti-money laundering detection" {
 
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();
@@ -465,7 +465,7 @@ test "real-time fraud scoring" {
 
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();

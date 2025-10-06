@@ -44,7 +44,7 @@ test "load dataset migrations" {
     // Connect to server
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -76,7 +76,7 @@ test "network types - IP address operations" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -117,7 +117,7 @@ test "geographic types - distance calculations" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -137,7 +137,7 @@ test "vector similarity search" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -157,7 +157,7 @@ test "currency type operations" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -176,7 +176,7 @@ test "graph traversals - relationships" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -217,7 +217,7 @@ test "transactions - commit and rollback" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -258,7 +258,7 @@ test "constraint enforcement" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -275,7 +275,7 @@ test "index performance" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -298,7 +298,7 @@ test "spatial queries with R-tree index" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();
@@ -319,7 +319,7 @@ test "full-text search" {
 
     var conn = try client.connect(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .use_quic = true,
     });
     defer conn.close();

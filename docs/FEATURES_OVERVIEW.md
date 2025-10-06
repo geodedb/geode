@@ -131,7 +131,7 @@ Geode is a production-ready graph database with enterprise-grade features, achie
 ### **Quick Start**
 ```bash
 # Install and start server
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:3141
 
 # Interactive shell
 ./zig-out/bin/geode shell

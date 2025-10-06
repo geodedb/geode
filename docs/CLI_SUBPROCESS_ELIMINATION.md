@@ -77,7 +77,7 @@ pub const ServerConfig = struct {
 ```zig
 pub const ClientConfig = struct {
     query_text: []const u8,
-    server: []const u8 = "127.0.0.1:8443",
+    server: []const u8 = "127.0.0.1:3141",
     format: []const u8 = "json",
     page_size: u32 = 1,
     pull_all: bool = false,
@@ -113,7 +113,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 **Usage Examples:**
 ```bash
 # Start server with unified binary
-geode serve --listen 0.0.0.0:8443 --data-dir /var/lib/geode
+geode serve --listen 0.0.0.0:3141 --data-dir /var/lib/geode
 
 # Server response indicates unified binary operation
 # Output: "✅ Server startup simulation complete (unified binary)"
@@ -144,9 +144,9 @@ geode query "RETURN 1 AS test" --no-quic
 # Output: {"message":"Query executed in no-quic mode (test compatibility)", "query":"RETURN 1 AS test"}
 
 # For QUIC mode, guidance provided for shell command
-geode query "RETURN 1 AS test" --server 127.0.0.1:8443
+geode query "RETURN 1 AS test" --server 127.0.0.1:3141
 # Output: Error: Direct QUIC client functionality has been moved to the shell command.
-#         Use 'geode shell --server 127.0.0.1:8443' for interactive queries.
+#         Use 'geode shell --server 127.0.0.1:3141' for interactive queries.
 ```
 
 ## Error Handling
@@ -306,12 +306,12 @@ deployment/
 **Command Migration:**
 ```bash
 # OLD: Separate binaries
-./geoded --listen 0.0.0.0:8443
-./geodec "RETURN 1" --server 127.0.0.1:8443
+./geoded --listen 0.0.0.0:3141
+./geodec "RETURN 1" --server 127.0.0.1:3141
 
 # NEW: Unified binary
-./geode serve --listen 0.0.0.0:8443
-./geode query "RETURN 1" --server 127.0.0.1:8443
+./geode serve --listen 0.0.0.0:3141
+./geode query "RETURN 1" --server 127.0.0.1:3141
 ```
 
 **Script Updates:**

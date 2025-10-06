@@ -7,19 +7,19 @@ Geode v0.17.0 introduces a unified CLI interface. The legacy binaries are still 
 ### Server
 ```bash
 # Old
-geoded --data_dir ./data --listen 0.0.0.0:8443
+geoded --data_dir ./data --listen 0.0.0.0:3141
 
 # New  
-geode serve --data-dir ./data --listen 0.0.0.0:8443
+geode serve --data-dir ./data --listen 0.0.0.0:3141
 ```
 
 ### Query Client
 ```bash
 # Old
-geodec "MATCH (n) RETURN n LIMIT 10" --server localhost:8443
+geodec "MATCH (n) RETURN n LIMIT 10" --server localhost:3141
 
 # New
-geode query "MATCH (n) RETURN n LIMIT 10" --server localhost:8443
+geode query "MATCH (n) RETURN n LIMIT 10" --server localhost:3141
 ```
 
 ### User Management
@@ -39,7 +39,7 @@ geode grant role editor to alice
 
 ### Interactive Shell
 ```bash
-geode shell --server localhost:8443
+geode shell --server localhost:3141
 ```
 
 ### Authentication

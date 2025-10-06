@@ -308,7 +308,7 @@ const Connection = struct {
     
     fn connect(self: *Connection) !void {
         // TODO: Get actual node address from registry
-        const node_address = try std.fmt.allocPrint(self.allocator, "node-{d}.cluster.local:8443", .{self.node_id});
+        const node_address = try std.fmt.allocPrint(self.allocator, "node-{d}.cluster.local:3141", .{self.node_id});
         defer self.allocator.free(node_address);
         
         // Create QUIC connection (placeholder - would need actual QUIC implementation)

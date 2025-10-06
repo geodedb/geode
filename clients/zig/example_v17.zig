@@ -8,7 +8,7 @@ pub fn main() !void {
     std.debug.print("==============================\n\n", .{});
 
     // Note: These are example GQL queries demonstrating new features
-    // In a real client, you would send these via QUIC to port 8443
+    // In a real client, you would send these via QUIC to port 3141
 
     // 1. MATCH with complex patterns
     const match_complex =
@@ -91,7 +91,7 @@ pub fn main() !void {
     std.debug.print("Connection Details:\n", .{});
     std.debug.print("===================\n", .{});
     std.debug.print("Protocol: QUIC+TLS (mandatory)\n", .{});
-    std.debug.print("Default Port: 8443\n", .{});
+    std.debug.print("Default Port: 3141\n", .{});
     std.debug.print("TCP Support: REMOVED in v0.17.0\n", .{});
     std.debug.print("Certificates: Auto-generated if missing\n\n", .{});
 
@@ -101,7 +101,7 @@ pub fn main() !void {
     const connection_example =
         \\const transport = try QuicTransport.init(allocator, .{
         \\    .address = "127.0.0.1",
-        \\    .port = 8443,
+        \\    .port = 3141,
         \\    .cert_path = "certs/client.crt", // Optional, auto-generated
         \\    .key_path = "certs/client.key",   // Optional, auto-generated
         \\});

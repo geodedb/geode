@@ -17,7 +17,7 @@ import (
 
 func main() {
     // Network mode (QUIC+TLS) - v0.16.0 default
-    db, _ := gql.Open("quic:127.0.0.1:8443?page_size=1000")
+    db, _ := gql.Open("quic:127.0.0.1:3141?page_size=1000")
     
     // Process mode (for local development)
     // db, _ := gql.Open("process:./zig-out/bin/geoded?page_size=1000")
@@ -50,10 +50,10 @@ func main() {
 ### QUIC Mode (v0.16.0 Default)
 ```go
 // Default QUIC connection
-db, _ := gql.Open("quic:127.0.0.1:8443")
+db, _ := gql.Open("quic:127.0.0.1:3141")
 
 // With options
-db, _ := gql.Open("quic:host:8443?page_size=5000&hello_name=myapp")
+db, _ := gql.Open("quic:host:3141?page_size=5000&hello_name=myapp")
 ```
 
 ### Process Mode (Local Development)
@@ -68,7 +68,7 @@ db, _ := gql.Open("process:/path/to/geoded?page_size=1000")
 ## v0.16.0 Breaking Changes
 
 - **TCP Removed**: The `tcp:` DSN prefix is no longer supported. Use `quic:` for network connections.
-- **Default Port**: Changed from 7567 to 8443 for QUIC connections
+- **Default Port**: Changed from 7567 to 3141 for QUIC connections
 - **TLS Mandatory**: QUIC connections always use TLS 1.3 (currently with InsecureSkipVerify for development)
 
 ## Features
@@ -87,7 +87,7 @@ db, _ := gql.Open("process:/path/to/geoded?page_size=1000")
 db, _ := gql.Open("tcp:127.0.0.1:7567")  // NO LONGER WORKS
 
 // New (v0.16.0)
-db, _ := gql.Open("quic:127.0.0.1:8443") // Use QUIC
+db, _ := gql.Open("quic:127.0.0.1:3141") // Use QUIC
 ```
 
 ## Advanced Usage
@@ -134,7 +134,7 @@ For production, configure proper TLS:
 
 ```go
 // Custom TLS config (coming in future release)
-// db, _ := gql.OpenWithTLS("quic:host:8443", &tls.Config{
+// db, _ := gql.OpenWithTLS("quic:host:3141", &tls.Config{
 //     RootCAs: certPool,
 //     ServerName: "geode.example.com",
 // })

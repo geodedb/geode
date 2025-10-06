@@ -3348,7 +3348,7 @@ pub fn main() !void {
             std.debug.print("Geode Server v0.16.0\n\n", .{});
             std.debug.print("Usage: geoded [OPTIONS]\n\n", .{});
             std.debug.print("Options:\n", .{});
-            std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:8443)\n", .{});
+            std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
             std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
             std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
             std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});

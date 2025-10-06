@@ -466,10 +466,10 @@ fn printMainUsage() void {
         "  revoke              Revoke permissions\n" ++
         "\n" ++
         "Examples:\n" ++
-        "  geode serve --data-dir ./data --listen 0.0.0.0:8443\n" ++
+        "  geode serve --data-dir ./data --listen 0.0.0.0:3141\n" ++
         "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
         "  geode user create alice alice@example.com\n" ++
-        "  geode shell --server localhost:8443\n" ++
+        "  geode shell --server localhost:3141\n" ++
         "\n" ++
         "Use 'geode <subcommand> --help' for more information on a specific command.\n" ++
         "\n", .{});
@@ -482,7 +482,7 @@ fn printServeUsage() void {
         "\n" ++
         "Options:\n" ++
         "  --data-dir <path>      Data directory (default: ./data)\n" ++
-        "  --listen <addr:port>   Listen address (default: 0.0.0.0:8443)\n" ++
+        "  --listen <addr:port>   Listen address (default: 0.0.0.0:3141)\n" ++
         "  --cert <path>          TLS certificate path (auto-generated if missing)\n" ++
         "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
         "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
@@ -491,7 +491,7 @@ fn printServeUsage() void {
         "\n" ++
         "Examples:\n" ++
         "  geode serve\n" ++
-        "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:8443\n" ++
+        "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
         "  geode serve --stdio --log-level debug\n" ++
         "\n", .{});
 }
@@ -502,7 +502,7 @@ fn printQueryUsage() void {
         "Usage: geode query [options] <query|-> \n" ++
         "\n" ++
         "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
         "  --format <fmt>         Output format: json|table|csv (default: json)\n" ++
         "  --json-param <name> <value>  Add JSON parameter\n" ++
@@ -520,7 +520,7 @@ fn printQueryUsage() void {
         "\n" ++
         "Examples:\n" ++
         "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
-        "  geode query --server localhost:8443 --insecure \"RETURN 1 AS x\"\n" ++
+        "  geode query --server localhost:3141 --insecure \"RETURN 1 AS x\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
@@ -546,7 +546,7 @@ const ServerConfig = struct {
 // Client configuration structure for embedded client
 const ClientConfig = struct {
     query_text: []const u8,
-    server: []const u8 = "127.0.0.1:8443",
+    server: []const u8 = "127.0.0.1:3141",
     format: []const u8 = "json",
     page_size: usize = 1,
     pull_all: bool = false,
@@ -670,7 +670,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     
     var ai: usize = 1;
     var listen_addr: []const u8 = "0.0.0.0";
-    var listen_port: u16 = 8443;
+    var listen_port: u16 = 3141;
     var data_dir: ?[]const u8 = null;
     var log_level_arg: ?[]const u8 = null;
     var test_exit_after_first: bool = false;
@@ -686,7 +686,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             // Parse address:port
             if (std.mem.lastIndexOf(u8, addr_port, ":")) |colon_idx| {
                 listen_addr = addr_port[0..colon_idx];
-                listen_port = std.fmt.parseInt(u16, addr_port[colon_idx + 1..], 10) catch 8443;
+                listen_port = std.fmt.parseInt(u16, addr_port[colon_idx + 1..], 10) catch 3141;
             }
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--data_dir") and ai + 1 < args.len) {
@@ -932,7 +932,7 @@ fn printShellUsage() void {
         "Usage: geode shell [options]\n" ++
         "\n" ++
         "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
         "  --no-history           Disable command history\n" ++
         "  --format <fmt>         Default output format: json|table|csv (default: table)\n" ++
@@ -941,7 +941,7 @@ fn printShellUsage() void {
         "\n" ++
         "Examples:\n" ++
         "  geode shell\n" ++
-        "  geode shell --server localhost:8443 --insecure\n" ++
+        "  geode shell --server localhost:3141 --insecure\n" ++
         "  geode shell --no-history --format json\n" ++
         "\n", .{});
 }
@@ -961,7 +961,7 @@ fn printUserUsage() void {
         "  password <username> [new_password]      Change user password\n" ++
         "\n" ++
         "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
         "  --format <fmt>         Output format: json|table|csv (default: table)\n" ++
         "  --yes                  Skip confirmation prompts\n" ++
@@ -1030,7 +1030,7 @@ fn printAuthUsage() void {
         "  logout                 Clear saved credentials\n" ++
         "\n" ++
         "Login Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -U, --user <username>  Username\n" ++
         "  --password <password>  Password (prompt if not provided)\n" ++
         "  --password-file <path> Read password from file\n" ++
@@ -1057,7 +1057,7 @@ fn printRoleUsage() void {
         "  revoke                 Revoke permissions from a role\n" ++
         "\n" ++
         "Common Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -1125,7 +1125,7 @@ fn printPolicyUsage() void {
         "  disable                Disable a policy\n" ++
         "\n" ++
         "Common Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -1191,7 +1191,7 @@ fn printGrantUsage() void {
         "  ALL PRIVILEGES\n" ++
         "\n" ++
         "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -1211,7 +1211,7 @@ fn printRevokeUsage() void {
         "  ALL PRIVILEGES\n" ++
         "\n" ++
         "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -1255,7 +1255,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     var data_dir: []const u8 = "./data";
-    var listen_addr: []const u8 = "0.0.0.0:8443";
+    var listen_addr: []const u8 = "0.0.0.0:3141";
     var log_level: []const u8 = "info";
     var use_stdio = false;
     var override_listen = false;
@@ -1377,7 +1377,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     // Parse arguments
-    var server: []const u8 = "127.0.0.1:8443";
+    var server: []const u8 = "127.0.0.1:3141";
     var format: []const u8 = "json";
     var insecure = false;
     var no_quic = false;
@@ -1593,8 +1593,8 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
     // Parse server address
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "8443";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch 8443;
+    const port_str = addr_port.next() orelse "3141";
+    const port = std.fmt.parseInt(u16, port_str, 10) catch 3141;
     
     // Initialize QUIC client
     var quic_client = QuicTransport.QuicClient.init(ally);
@@ -1733,7 +1733,7 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     const repl_loop = geode.repl.repl_loop;
 
     // Parse arguments
-    var server: []const u8 = "127.0.0.1:8443";
+    var server: []const u8 = "127.0.0.1:3141";
     var format: repl_loop.ReplLoop.Format = .table;
     var keymap: repl_loop.ReplLoop.Keymap = .emacs;
     var history_enabled = true;
@@ -1748,7 +1748,7 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a server address\n", .{});
-                std.debug.print("Example: --server localhost:8443 or --server 192.168.1.100:8443\n", .{});
+                std.debug.print("Example: --server localhost:3141 or --server 192.168.1.100:3141\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             server = argv[i + 1];
@@ -2529,7 +2529,7 @@ fn cmdBackupCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !v
     var output: ?[]const u8 = null;
     var backup_type: []const u8 = "full";
     var parent_id: ?[]const u8 = null;
-    var server: []const u8 = "127.0.0.1:8443";
+    var server: []const u8 = "127.0.0.1:3141";
     var compress: bool = false;
 
     // Parse arguments
@@ -2544,7 +2544,7 @@ fn cmdBackupCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !v
                 "  --output <path>        Backup output file (required)\n" ++
                 "  --type <type>          Backup type: full|incremental (default: full)\n" ++
                 "  --parent <id>          Parent backup ID (for incremental)\n" ++
-                "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+                "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --compress             Compress backup file\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n" ++
@@ -2674,7 +2674,7 @@ fn cmdBackupCreateLegacy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     var dest: ?[]const u8 = null;
     var mode: []const u8 = "full";
     var parent_id: ?[]const u8 = null;
-    var server: []const u8 = "127.0.0.1:8443";
+    var server: []const u8 = "127.0.0.1:3141";
 
     // Parse arguments
     var i: usize = start_idx;
@@ -2731,7 +2731,7 @@ fn cmdBackupCreateLegacy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 fn cmdRestore(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var source: ?[]const u8 = null;
     var target_time: ?[]const u8 = null;
-    var server: []const u8 = "127.0.0.1:8443";
+    var server: []const u8 = "127.0.0.1:3141";
     var skip_confirmation: bool = false;
 
     // Parse arguments
@@ -2749,7 +2749,7 @@ fn cmdRestore(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 "Options:\n" ++
                 "  --source <URI>         Backup source (alternative to positional)\n" ++
                 "  --target-time <time>   Restore to specific timestamp\n" ++
-                "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
+                "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --yes                  Skip confirmation prompts\n" ++
                 "  --confirm              Skip confirmation prompts (alias for --yes)\n" ++
                 "  -h, --help             Show this help\n" ++
@@ -3408,7 +3408,7 @@ fn isPassphrase(password: []const u8) bool {
 }
 
 fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var server: []const u8 = "127.0.0.1:8443";
+    var server: []const u8 = "127.0.0.1:3141";
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
     var password_file: ?[]const u8 = null;
@@ -3816,7 +3816,7 @@ fn executeBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const u8, pa
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
     
     // Check if we should use remote server or local backup
-    if (!std.mem.eql(u8, server, "127.0.0.1:8443")) {
+    if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
         // Use remote server backup
         try executeRemoteBackup(ally, dest, mode, parent_id, server, compress);
         return;
@@ -4150,7 +4150,7 @@ fn executeRestore(ally: std.mem.Allocator, source: []const u8, target_time: ?[]c
     std.debug.print("Restoring database from: {s}\n", .{source});
     
     // Check if we should use remote server or local restore
-    if (!std.mem.eql(u8, server, "127.0.0.1:8443")) {
+    if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
         // Use remote server restore
         try executeRemoteRestore(ally, source, target_time, server);
         return;

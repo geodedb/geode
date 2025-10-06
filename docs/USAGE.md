@@ -5,7 +5,7 @@
 ### Starting the Server
 
 ```bash
-# Default configuration (QUIC/TLS on port 8443)
+# Default configuration (QUIC/TLS on port 3141)
 ./geoded
 
 # With custom data directory
@@ -186,7 +186,7 @@ DELETE p
 ```yaml
 # geode.yaml
 server:
-  listen: '0.0.0.0:8443'
+  listen: '0.0.0.0:3141'
   data_dir: '/var/lib/geode'
 
 tls:
@@ -204,9 +204,9 @@ federation:
   coordinator: true
   shards:
     - id: 'shard1'
-      endpoint: 'node1.cluster:8443'
+      endpoint: 'node1.cluster:3141'
     - id: 'shard2'
-      endpoint: 'node2.cluster:8443'
+      endpoint: 'node2.cluster:3141'
 
 optimizer:
   # Enable/disable removed; only tuning parameters remain

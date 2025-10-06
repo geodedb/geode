@@ -129,12 +129,12 @@ test "server_configuration_validation" {
     // Test custom configuration
     const custom_config = ServerConfig{
         .data_dir = "./custom_data",
-        .listen_quic = "0.0.0.0:8443",
+        .listen_quic = "0.0.0.0:3141",
         .log_level = "debug",
         .force_no_tls = true,
     };
     try expectEqualStrings("./custom_data", custom_config.data_dir.?);
-    try expectEqualStrings("0.0.0.0:8443", custom_config.listen_quic.?);
+    try expectEqualStrings("0.0.0.0:3141", custom_config.listen_quic.?);
     try expectEqualStrings("debug", custom_config.log_level);
     try expectEqual(true, custom_config.force_no_tls);
     
@@ -184,7 +184,7 @@ test "server_argument_array_building" {
     // Test building argument array
     try server_args.append(allocator, "geode-server");
     try server_args.append(allocator, "--listen-quic");
-    try server_args.append(allocator, "0.0.0.0:8443");
+    try server_args.append(allocator, "0.0.0.0:3141");
     try server_args.append(allocator, "--data_dir");
     try server_args.append(allocator, "./test_data");
     try server_args.append(allocator, "--log-level");
@@ -194,7 +194,7 @@ test "server_argument_array_building" {
     try expectEqual(@as(usize, 7), server_args.items.len);
     try expectEqualStrings("geode-server", server_args.items[0]);
     try expectEqualStrings("--listen-quic", server_args.items[1]);
-    try expectEqualStrings("0.0.0.0:8443", server_args.items[2]);
+    try expectEqualStrings("0.0.0.0:3141", server_args.items[2]);
     try expectEqualStrings("--data_dir", server_args.items[3]);
     try expectEqualStrings("./test_data", server_args.items[4]);
     try expectEqualStrings("--log-level", server_args.items[5]);

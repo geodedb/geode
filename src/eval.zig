@@ -866,7 +866,20 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     // Handle aggregation functions (simplified for now - real implementation needs context)
     if (std.mem.eql(u8, function_name, "count")) {
         // COUNT(*) or COUNT(expr)
-        // For now, return a placeholder - real implementation needs aggregation context
+        if (args.len == 1) {
+            // Check if argument is "*"
+            if (args[0].* == .Ident and std.mem.eql(u8, args[0].Ident.orig, "*")) {
+                // COUNT(*) - for now return 1 since we're in a single-row context
+                return Value{ .Int = 1 };
+            }
+            // Evaluate the argument
+            const arg = try evalExpr(ally, args[0].*, env);
+            // If the argument is not null, count it as 1
+            if (arg != .Null) {
+                return Value{ .Int = 1 };
+            }
+            return Value{ .Int = 0 };
+        }
         return Value{ .Int = 0 };
     } else if (std.mem.eql(u8, function_name, "sum")) {
         // For now, return a placeholder

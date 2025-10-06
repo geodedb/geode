@@ -31,7 +31,7 @@ var provider = kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
 ### 3. Remote KMS Provider (QUIC-based)
 
 ```zig
-var provider = kms.remoteKMSProvider(allocator, "kms.example.com", 8443, "auth_token");
+var provider = kms.remoteKMSProvider(allocator, "kms.example.com", 3141, "auth_token");
 // Production KMS over QUIC with authentication and tamper detection
 ```
 
@@ -76,7 +76,7 @@ var dev_tde = try tde_kms.createLocalDevTDE(allocator);
 var test_tde = try tde_kms.createExternalKMSTDE(allocator, 0xSEED);
 
 // Remote KMS TDE (production QUIC)
-var prod_tde = try tde_kms.createRemoteKMSTDE(allocator, "kms.prod.com", 8443, token);
+var prod_tde = try tde_kms.createRemoteKMSTDE(allocator, "kms.prod.com", 3141, token);
 
 // HashiCorp Vault TDE (enterprise)
 var vault_tde = try tde_kms.createVaultTDE(allocator, vault_addr, vault_token, key_path);
@@ -174,7 +174,7 @@ export GEODE_KMS_PROVIDER="vault"
 export GEODE_VAULT_KEY_PATH="geode"
 
 # Start Geode with enterprise encryption
-./zig-out/bin/geoded --data-dir /secure/data --listen-quic 0.0.0.0:8443
+./zig-out/bin/geoded --data-dir /secure/data --listen-quic 0.0.0.0:3141
 ```
 
 ## Performance Characteristics

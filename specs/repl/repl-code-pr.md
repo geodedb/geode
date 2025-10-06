@@ -189,7 +189,7 @@ pub const HistoryStore = struct {
 ### **Run Instructions**
 
 * **Build:** `zig build -Doptimize=ReleaseSafe`
-* **Run:** `./zig-out/bin/geode shell --server 127.0.0.1:8443 --format table --keymap vi`
+* **Run:** `./zig-out/bin/geode shell --server 127.0.0.1:3141 --format table --keymap vi`
 * **Disable history:** `./zig-out/bin/geode shell --no-history`
 * **Tests:** `zig build test -Doptimize=Debug` 
 

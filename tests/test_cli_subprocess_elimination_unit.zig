@@ -8,7 +8,7 @@ const expect = testing.expect;
 // Test data structures for CLI configuration
 const ClientConfig = struct {
     query_text: []const u8,
-    server: []const u8 = "127.0.0.1:8443",
+    server: []const u8 = "127.0.0.1:3141",
     format: []const u8 = "json",
     page_size: usize = 1,
     pull_all: bool = false,
@@ -74,7 +74,7 @@ test "quic mode returns usage error with guidance message" {
     
     const config = ClientConfig{
         .query_text = "RETURN 2 AS test",
-        .server = "localhost:8443",
+        .server = "localhost:3141",
         .no_quic = false,
     };
     
@@ -89,7 +89,7 @@ test "quic mode returns usage error with guidance message" {
     // Verify error message content
     const response = output.items;
     try expect(std.mem.indexOf(u8, response, "Error: Direct QUIC client functionality has been moved") != null);
-    try expect(std.mem.indexOf(u8, response, "Use 'geode shell --server localhost:8443'") != null);
+    try expect(std.mem.indexOf(u8, response, "Use 'geode shell --server localhost:3141'") != null);
 }
 
 // Test different query texts with --no-quic
@@ -128,10 +128,10 @@ test "quic mode error includes correct server address" {
     const allocator = testing.allocator;
     
     const test_servers = [_][]const u8{
-        "127.0.0.1:8443",
-        "localhost:8443", 
+        "127.0.0.1:3141",
+        "localhost:3141", 
         "192.168.1.100:9000",
-        "example.com:8443",
+        "example.com:3141",
     };
     
     for (test_servers) |server| {

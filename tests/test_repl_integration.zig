@@ -12,7 +12,7 @@ test "repl loop options - transport integration" {
     
     // Test that ReplLoop.Options correctly accepts transport parameter
     const options = repl_loop.ReplLoop.Options{
-        .server = "127.0.0.1:8443",
+        .server = "127.0.0.1:3141",
         .format = .json,
         .keymap = .emacs,
         .history_enabled = false,
@@ -23,7 +23,7 @@ test "repl loop options - transport integration" {
     };
     
     // Verify options are properly constructed
-    try testing.expectEqualStrings("127.0.0.1:8443", options.server);
+    try testing.expectEqualStrings("127.0.0.1:3141", options.server);
     try testing.expectEqual(repl_loop.ReplLoop.Format.json, options.format);
     try testing.expectEqual(repl_loop.ReplLoop.Keymap.emacs, options.keymap);
     try testing.expect(!options.history_enabled);
@@ -36,7 +36,7 @@ test "client session lifecycle - mock transport" {
     const ally = testing.allocator;
     
     // Test full ClientSession lifecycle with mock transport
-    var session = try repl_dispatch.ClientSession.init(ally, "localhost:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "localhost:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     // Initial state
@@ -69,7 +69,7 @@ test "meta command parsing - connect command" {
         expected_cmd: []const u8,
         expected_args: []const u8,
     }{
-        .{ .input = "\\connect localhost:8443", .expected_cmd = "connect", .expected_args = "localhost:8443" },
+        .{ .input = "\\connect localhost:3141", .expected_cmd = "connect", .expected_args = "localhost:3141" },
         .{ .input = "\\help", .expected_cmd = "help", .expected_args = "" },
         .{ .input = "\\quit", .expected_cmd = "quit", .expected_args = "" },
         .{ .input = "\\timing on", .expected_cmd = "timing", .expected_args = "on" },
@@ -181,7 +181,7 @@ test "end-to-end repl workflow simulation" {
     const ally = testing.allocator;
     
     // Simulate a complete REPL session workflow
-    var session = try repl_dispatch.ClientSession.init(ally, "localhost:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "localhost:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     // 1. Connect and handshake

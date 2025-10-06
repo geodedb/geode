@@ -149,7 +149,7 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
 ```zig
 pub const Config = struct {
   host: []const u8 = "127.0.0.1",
-  port: u16 = 8443,
+  port: u16 = 3141,
   use_quic: bool = true,
   use_tls: bool = true,
   ca_cert_path: ?[]const u8 = null,
@@ -191,13 +191,13 @@ pub const Config = struct {
   `geoded --cert certs/s.crt --key certs/s.key --client-ca certs/ca.crt --require-client-cert`
   Expect **stdout (contains)**: `INFO mTLS: client certs required`
 * **Connect client:**
-  `geodec --host 127.0.0.1 --port 8443 --ca-cert certs/ca.crt --client-cert certs/c.crt --client-key certs/c.key`
+  `geodec --host 127.0.0.1 --port 3141 --ca-cert certs/ca.crt --client-cert certs/c.crt --client-key certs/c.key`
   **Exit:** `0`
   **stdout (exact contains):** `INFO mTLS: handshake complete`
 
 **T3 — Client missing cert**
 
-* **Cmd:** `geodec --host 127.0.0.1 --port 8443 --ca-cert certs/ca.crt`
+* **Cmd:** `geodec --host 127.0.0.1 --port 3141 --ca-cert certs/ca.crt`
 * **Exit:** `70`
 * **stderr (exact contains):** `ERROR mTLS: client certificate required by server`
 

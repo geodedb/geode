@@ -125,7 +125,7 @@ geode auth login --user $GEODE_ADMIN_USERNAME
 | Option | Description | Example |
 |--------|-------------|---------|
 | `--user`, `-U` | Username to authenticate | `--user admin` |
-| `--server` | Server address | `--server prod.geode.com:8443` |
+| `--server` | Server address | `--server prod.geode.com:3141` |
 | `--password` | Password (not recommended) | `--password "secret"` |
 | `--password-file` | Read password from file | `--password-file /dev/stdin` |
 
@@ -142,7 +142,7 @@ geode auth logout
 $ geode auth login --user geode
 Username: geode
 Password: [hidden input]
-Successfully authenticated as 'geode' on server '127.0.0.1:8443'
+Successfully authenticated as 'geode' on server '127.0.0.1:3141'
 Session token saved to ~/.geode/credentials.json
 ```
 
@@ -169,7 +169,7 @@ export GEODE_PASSWORD_MIN_WORDS=4                   # Default: 3, Min: 2
 
 # === Server Configuration ===
 export GEODE_SERVER_HOST="prod.geode.com"          # Default: "127.0.0.1"
-export GEODE_SERVER_PORT="8443"                    # Default: "8443"
+export GEODE_SERVER_PORT="3141"                    # Default: "3141"
 ```
 
 ## 6. Security Implementation
@@ -221,7 +221,7 @@ export GEODE_PASSWORD_MIN_WORDS=5
 # First login (secure password meets policy)
 $ geode auth login --user prod_db_admin
 Password: [Production Database Administrative Access Phrase 2024]
-Successfully authenticated as 'prod_db_admin' on server '127.0.0.1:8443'
+Successfully authenticated as 'prod_db_admin' on server '127.0.0.1:3141'
 Session token saved to ~/.geode/credentials.json
 ```
 
@@ -260,7 +260,7 @@ export GEODE_PASSWORD_MIN_WORDS=6
 $ geode auth login --user security_officer
 Username: security_officer
 Password: [Ultra Secure Database Administrative Access Control Passphrase With Extended Length Requirements 2024]
-Successfully authenticated as 'security_officer' on server '127.0.0.1:8443'
+Successfully authenticated as 'security_officer' on server '127.0.0.1:3141'
 ```
 
 ### Example 4: Custom Server Configuration
@@ -268,9 +268,9 @@ Successfully authenticated as 'security_officer' on server '127.0.0.1:8443'
 export GEODE_ADMIN_USERNAME="cluster_admin"
 export GEODE_DEFAULT_PASSWORD="Distributed Database Cluster Administrative Passphrase 2024"
 
-$ geode auth login --user cluster_admin --server cluster-01.geode.internal:8443
+$ geode auth login --user cluster_admin --server cluster-01.geode.internal:3141
 Password: [Distributed Database Cluster Administrative Passphrase 2024]
-Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.internal:8443'
+Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.internal:3141'
 ```
 
 ## 8. Security Features & Benefits

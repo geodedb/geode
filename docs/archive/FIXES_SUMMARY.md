@@ -74,7 +74,7 @@ CREATE (n {name: 'Alice'})
 ### For Client Applications
 Always use `--insecure` flag when connecting without proper certificates:
 ```bash
-./geodec 'RETURN 1' --quic-addr localhost --quic-port 8443 --insecure
+./geodec 'RETURN 1' --quic-addr localhost --quic-port 3141 --insecure
 ```
 
 ## Verification Commands
@@ -88,10 +88,10 @@ grep -r 'name:.*"' examples/ --include="*.gql" | wc -l
 ### Verify TLS Handshake
 ```bash
 # Start server
-./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 &
+./zig-out/bin/geoded --listen-quic 0.0.0.0:3141 &
 
 # Test insecure connection (should complete in <5s)
-time ./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 8443 --insecure
+time ./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 3141 --insecure
 ```
 
 ## Next Steps

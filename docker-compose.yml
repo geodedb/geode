@@ -6,7 +6,7 @@ services:
     container_name: geode-singleton
     hostname: geode-node
     ports:
-      - '8443:8443/udp'
+      - '3141:3141/udp'
       - '9090:9090'
     volumes:
       - geode-data:/data
@@ -16,7 +16,7 @@ services:
       - GEODE_LOG_LEVEL=info
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'geode', 'query', 'RETURN 1 AS health', '--server', '127.0.0.1:8443']
+      test: ['CMD', 'geode', 'query', 'RETURN 1 AS health', '--server', '127.0.0.1:3141']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -24,7 +24,7 @@ services:
     networks:
       - geode-net
     entrypoint: ["/usr/local/bin/geode", "serve"]
-    command: ["--data-dir", "/data", "--listen", "0.0.0.0:8443", "--log-level", "info"]
+    command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
 
   geode-cli:
     build:

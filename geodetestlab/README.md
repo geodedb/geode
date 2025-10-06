@@ -69,7 +69,7 @@ cli:
   binary: "geode"
   server:
     enabled: true
-    port: 8443  # or null for auto-allocation
+    port: 3141  # or null for auto-allocation
     data_dir: null  # temporary directory
     startup_timeout_ms: 60000
     cleanup: true
@@ -157,9 +157,9 @@ geodetestlab secrets check --spec <path>
 geodetestlab secrets list --spec <path> [--show]
 
 # Manage server instances  
-geodetestlab server start [--port 8443] [--background]
-geodetestlab server stop [--port 8443] [--force]
-geodetestlab server status [--port 8443]
+geodetestlab server start [--port 3141] [--background]
+geodetestlab server stop [--port 3141] [--force]
+geodetestlab server status [--port 3141]
 ```
 
 ### Run Options
@@ -190,7 +190,7 @@ cli:
     enabled: true
     # Server configuration...
   client:
-    server_address: "127.0.0.1:8443"
+    server_address: "127.0.0.1:3141"
     timeout_ms: 30000
     format: "json"
 
@@ -485,7 +485,7 @@ geodetestlab run --spec tests.yml --timeout-ms 60000 --server-timeout-ms 120000
 geodetestlab run --spec tests.yml --verbose --dry-run
 
 # Server logs only
-geodetestlab server start --port 8443 --verbose
+geodetestlab server start --port 3141 --verbose
 
 # Detailed error reporting
 PYTHONPATH=. python -m geodetestlab.cli run --spec tests.yml --verbose

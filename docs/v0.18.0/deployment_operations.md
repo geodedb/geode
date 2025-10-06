@@ -4,7 +4,7 @@ Build:
 - Zig 0.15.1: `zig build -Drelease-safe`; tests: `zig build test`; Make targets available.
 
 Docker:
-- QUIC on 8443/udp; mount data & certs; JSON logs; Prometheus/Grafana example.
+- QUIC on 3141/udp; mount data & certs; JSON logs; Prometheus/Grafana example.
 
 Config (YAML/env):
 - server.listen, data_dir; tls.cert/key (auto_generate true/false)
@@ -21,7 +21,7 @@ Monitoring:
 - Prometheus /metrics (port 9090); dashboards included; health endpoints /health, /ready.
 
 Troubleshooting:
-- Connectivity (listen 0.0.0.0:8443, UDP firewall); TLS errors (cert/key perms); auth (exit 3); US001 (add ORDER BY); WAL growth (long txns, checkpoint); S3 creds.
+- Connectivity (listen 0.0.0.0:3141, UDP firewall); TLS errors (cert/key perms); auth (exit 3); US001 (add ORDER BY); WAL growth (long txns, checkpoint); S3 creds.
 
 Upgrades & Tuning:
 - Follow MIGRATION.md; adjust commit flush policy; increase cache; indexes for hot predicates; batch writes.

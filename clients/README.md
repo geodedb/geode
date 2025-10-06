@@ -4,7 +4,7 @@ Comprehensive client libraries for Geode graph database supporting all features 
 
 **v0.16.0 Breaking Changes:**
 - TCP transport removed - QUIC+TLS is now mandatory for network connections
-- Default port changed from 7567 to 8443
+- Default port changed from 7567 to 3141
 - All network connections use TLS 1.3
 
 ## Features Supported
@@ -77,8 +77,8 @@ import (
 )
 
 func main() {
-    // Connect with QUIC (v0.16.0: default port 8443)
-    db, err := gql.Open("quic://127.0.0.1:8443")
+    // Connect with QUIC (v0.16.0: default port 3141)
+    db, err := gql.Open("quic://127.0.0.1:3141")
     if err != nil {
         log.Fatal(err)
     }
@@ -146,7 +146,7 @@ pub fn main() !void {
     // Configure and connect
     const config = client.Config{
         .host = "127.0.0.1",
-        .port = 8443,  // v0.16.0: Default QUIC port
+        .port = 3141,  // v0.16.0: Default QUIC port
         .use_quic = true,  // v0.16.0: Only network transport
     };
 
@@ -193,14 +193,14 @@ See `clients/zig/example.zig` for comprehensive examples including:
 ### QUIC (v0.18.0: Only Network Transport + mTLS)
 
 ```
-quic://hostname:8443?page_size=100&hello_name=myapp&ca_cert=/path/ca.crt&client_cert=/path/client.crt&client_key=/path/client.key
+quic://hostname:3141?page_size=100&hello_name=myapp&ca_cert=/path/ca.crt&client_cert=/path/client.crt&client_key=/path/client.key
 ```
 
 - ca_cert: PEM trust root to verify server (sets verify on)
 - client_cert/client_key: present client certificate for mTLS when server requires it
 - skip_verify=1 can be used in dev to skip server verification (not recommended)
 
-Default port is 8443. Server auto-generates self-signed certificates if missing.
+Default port is 3141. Server auto-generates self-signed certificates if missing.
 
 ### Process Mode (Local Development)
 

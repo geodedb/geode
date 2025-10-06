@@ -4,7 +4,7 @@ provider: geode
 
 setup:
   - name: start_server
-    command: ["serve", "--listen-quic", "127.0.0.1:8443"]
+    command: ["serve", "--listen-quic", "127.0.0.1:3141"]
     background: true
     wait_for: "QUIC server listening"
     timeout: 5
@@ -20,19 +20,19 @@ tests:
     description: Verify one client's error doesn't affect others
     steps:
       - name: healthy_client_before
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'healthy1' AS status"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'healthy1' AS status"]
         expect:
           exit_code: 0
           stdout_contains: ['"status":"healthy1"']
       
       - name: failing_client
-        command: ["query", "--server", "127.0.0.1:8443", "INVALID QUERY SYNTAX !!!"]
+        command: ["query", "--server", "127.0.0.1:3141", "INVALID QUERY SYNTAX !!!"]
         expect:
           exit_code: 1
         ignore_errors: true
       
       - name: healthy_client_after
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'healthy2' AS status"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'healthy2' AS status"]
         expect:
           exit_code: 0
           stdout_contains: ['"status":"healthy2"']
@@ -42,18 +42,18 @@ tests:
     parallel: true
     steps:
       - name: slow_client
-        command: ["query", "--server", "127.0.0.1:8443", "UNWIND range(1, 1000000) AS i RETURN count(i) AS total"]
+        command: ["query", "--server", "127.0.0.1:3141", "UNWIND range(1, 1000000) AS i RETURN count(i) AS total"]
         timeout: 10
         ignore_errors: true
       
       - name: fast_client_1
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'fast1' AS result"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'fast1' AS result"]
         expect:
           exit_code: 0
           stdout_contains: ['"result":"fast1"']
       
       - name: fast_client_2
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'fast2' AS result"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'fast2' AS result"]
         expect:
           exit_code: 0
           stdout_contains: ['"result":"fast2"']
@@ -62,18 +62,18 @@ tests:
     description: Test server handles client disconnections gracefully
     steps:
       - name: client_connects
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'connected' AS state"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'connected' AS state"]
         expect:
           exit_code: 0
           stdout_contains: ['"state":"connected"']
       
       - name: force_disconnect
         # Simulate abrupt disconnection by killing client mid-query
-        command: ["timeout", "0.1", "geode", "query", "--server", "127.0.0.1:8443", "UNWIND range(1, 1000000) AS i RETURN i"]
+        command: ["timeout", "0.1", "geode", "query", "--server", "127.0.0.1:3141", "UNWIND range(1, 1000000) AS i RETURN i"]
         ignore_errors: true
       
       - name: new_client_after_disconnect
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'new_client' AS state"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'new_client' AS state"]
         expect:
           exit_code: 0
           stdout_contains: ['"state":"new_client"']
@@ -82,19 +82,19 @@ tests:
     description: Verify malformed requests don't crash server
     steps:
       - name: valid_before_malformed
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 1 AS num"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 1 AS num"]
         expect:
           exit_code: 0
           stdout_contains: ['"num":1']
       
       - name: malformed_json_request
         # Try to send malformed JSON (missing closing brace)
-        command: ["bash", "-c", "echo '{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1\"' | nc -u 127.0.0.1 8443"]
+        command: ["bash", "-c", "echo '{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1\"' | nc -u 127.0.0.1 3141"]
         ignore_errors: true
         timeout: 1
       
       - name: valid_after_malformed
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 2 AS num"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 2 AS num"]
         expect:
           exit_code: 0
           stdout_contains: ['"num":2']
@@ -105,7 +105,7 @@ tests:
       - name: create_many_connections
         parallel: true
         repeat: 10
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 1 AS x"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 1 AS x"]
         expect:
           exit_code: 0
       
@@ -114,7 +114,7 @@ tests:
         ignore_errors: true
       
       - name: verify_new_connection_works
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'cleanup_ok' AS status"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'cleanup_ok' AS status"]
         expect:
           exit_code: 0
           stdout_contains: ['"status":"cleanup_ok"']
@@ -124,31 +124,31 @@ tests:
     parallel: true
     steps:
       - name: success_1
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'ok1' AS msg"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'ok1' AS msg"]
         expect:
           exit_code: 0
           stdout_contains: ['"msg":"ok1"']
       
       - name: failure_1
-        command: ["query", "--server", "127.0.0.1:8443", "SYNTAX ERROR"]
+        command: ["query", "--server", "127.0.0.1:3141", "SYNTAX ERROR"]
         expect:
           exit_code: 1
         ignore_errors: true
       
       - name: success_2
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'ok2' AS msg"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'ok2' AS msg"]
         expect:
           exit_code: 0
           stdout_contains: ['"msg":"ok2"']
       
       - name: failure_2
-        command: ["query", "--server", "127.0.0.1:8443", "MORE SYNTAX ERRORS"]
+        command: ["query", "--server", "127.0.0.1:3141", "MORE SYNTAX ERRORS"]
         expect:
           exit_code: 1
         ignore_errors: true
       
       - name: success_3
-        command: ["query", "--server", "127.0.0.1:8443", "RETURN 'ok3' AS msg"]
+        command: ["query", "--server", "127.0.0.1:3141", "RETURN 'ok3' AS msg"]
         expect:
           exit_code: 0
           stdout_contains: ['"msg":"ok3"']
@@ -160,19 +160,19 @@ tests:
       that operations on different streams don't interfere with each other.
     steps:
       - name: stream_1_operation
-        command: ["query", "--server", "127.0.0.1:8443", "CREATE (n:Stream1 {id: 1}) RETURN n.id AS stream"]
+        command: ["query", "--server", "127.0.0.1:3141", "CREATE (n:Stream1 {id: 1}) RETURN n.id AS stream"]
         expect:
           exit_code: 0
           stdout_contains: ['"stream":1']
       
       - name: stream_2_operation
-        command: ["query", "--server", "127.0.0.1:8443", "CREATE (n:Stream2 {id: 2}) RETURN n.id AS stream"]
+        command: ["query", "--server", "127.0.0.1:3141", "CREATE (n:Stream2 {id: 2}) RETURN n.id AS stream"]
         expect:
           exit_code: 0
           stdout_contains: ['"stream":2']
       
       - name: verify_both_exist
-        command: ["query", "--server", "127.0.0.1:8443", "MATCH (n) WHERE n.id IN [1, 2] RETURN n.id AS id ORDER BY id"]
+        command: ["query", "--server", "127.0.0.1:3141", "MATCH (n) WHERE n.id IN [1, 2] RETURN n.id AS id ORDER BY id"]
         expect:
           exit_code: 0
           stdout_contains:

@@ -11,7 +11,7 @@ test "repl server handshake simulation" {
     const ally = testing.allocator;
     
     // Test HELLO handshake with expected client info
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     try session.connect();
@@ -30,7 +30,7 @@ test "repl transaction isolation" {
     const ally = testing.allocator;
     
     // Test transaction isolation in REPL context
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     try session.connect();
@@ -59,7 +59,7 @@ test "repl query result pagination" {
     const ally = testing.allocator;
     
     // Test PULL request handling for large result sets
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     try session.connect();
@@ -80,7 +80,7 @@ test "repl error recovery" {
     const ally = testing.allocator;
     
     // Test that REPL can recover from query errors
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     try session.connect();
@@ -106,7 +106,7 @@ test "repl concurrent operations simulation" {
     const ally = testing.allocator;
     
     // Test handling of multiple operations in sequence
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     try session.connect();
@@ -134,7 +134,7 @@ test "repl security context" {
     const ally = testing.allocator;
     
     // Test security-related session behavior
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:8443", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
     
     // Connection should work with TLS transport
@@ -156,7 +156,7 @@ test "repl format handling" {
     
     for (formats) |format| {
         const options = repl_loop.ReplLoop.Options{
-            .server = "127.0.0.1:8443",
+            .server = "127.0.0.1:3141",
             .format = format,
             .keymap = .emacs,
             .history_enabled = false,
@@ -183,7 +183,7 @@ test "repl timing functionality" {
     
     // Test timing functionality integration
     const options = repl_loop.ReplLoop.Options{
-        .server = "127.0.0.1:8443",
+        .server = "127.0.0.1:3141",
         .format = .json,
         .keymap = .emacs,
         .history_enabled = false,
@@ -208,7 +208,7 @@ test "repl meta command integration" {
         .{ .command = "\\help", .affects_connection = false },
         .{ .command = "\\timing on", .affects_connection = false },
         .{ .command = "\\timing off", .affects_connection = false },
-        .{ .command = "\\connect localhost:8443", .affects_connection = true },
+        .{ .command = "\\connect localhost:3141", .affects_connection = true },
         .{ .command = "\\quit", .affects_connection = true },
     };
     

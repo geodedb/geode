@@ -21,7 +21,7 @@ Geode v0.18.0 closes critical gaps identified in v0.17.0, delivering **distribut
 
 - `src/distributed/query_coordinator.zig`: Main coordinator logic
 - `src/distributed/federation.zig`: Federation configuration and connection management
-- Transport: QUIC/TLS for shard communication (port 8443)
+- Transport: QUIC/TLS for shard communication (port 3141)
 
 #### Acceptance Criteria Met
 
@@ -187,7 +187,7 @@ geodec "MATCH (n) RETURN n ORDER BY n.id LIMIT 100"  # Distributed planning alwa
 
 ### Client Updates
 
-- QUIC/TLS on port 8443 (ensure firewall rules updated)
+- QUIC/TLS on port 3141 (ensure firewall rules updated)
 - Client libraries should handle new EXPLAIN format
 
 ## Known Limitations

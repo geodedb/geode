@@ -201,7 +201,7 @@ pub fn main() !void {
             "\n" ++
             "Options:\n" ++
             "  -h, --help              Show this help\n" ++
-            "  --server <host:port>    Server address (default: 127.0.0.1:8443)\n" ++
+            "  --server <host:port>    Server address (default: 127.0.0.1:3141)\n" ++
             "  --format <fmt>          Output format: txt|json (default: json)\n" ++
             "  --json-param <name> <value>  Add JSON parameter\n" ++
             "  --page-size <n>         Page size for results (default: 1)\n" ++
@@ -220,7 +220,7 @@ pub fn main() !void {
             "Examples:\n" ++
             "  geodec \"MATCH (n) RETURN n LIMIT 10\"\n" ++
             "  geodec --format txt \"MATCH (u:User) RETURN u.name\"\n" ++
-            "  geodec --server localhost:8443 \"RETURN 1 AS test\"\n" ++
+            "  geodec --server localhost:3141 \"RETURN 1 AS test\"\n" ++
             "\n" ++
             "Note: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n" ++
             "\n", .{});
@@ -236,7 +236,7 @@ pub fn main() !void {
     }
     const text: []const u8 = argv[1];
     var server_address: []const u8 = "127.0.0.1";
-    var server_port: u16 = 8443; // v0.17.0: Default QUIC+TLS port
+    var server_port: u16 = 3141; // v0.17.0: Default QUIC+TLS port
     var param_name: ?[]const u8 = null;
     var param_json: ?[]const u8 = null;
     var do_begin = false;
@@ -270,7 +270,7 @@ pub fn main() !void {
             // Parse host:port for QUIC
             if (std.mem.lastIndexOfScalar(u8, server_str, ':')) |colon| {
                 server_address = server_str[0..colon];
-                server_port = std.fmt.parseInt(u16, server_str[colon + 1 ..], 10) catch 8443;
+                server_port = std.fmt.parseInt(u16, server_str[colon + 1 ..], 10) catch 3141;
             } else {
                 server_address = server_str;
             }

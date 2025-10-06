@@ -414,8 +414,107 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
         }
         
         // Handle chains with relationships
-        for (chain.hops) |_| {
-            // TODO: Implement edge creation
+        for (chain.hops) |hop| {
+            // Create left node if not already created
+            var left_node_id: u64 = undefined;
+            if (hop.left.name) |left_name| {
+                if (created_nodes.get(left_name)) |existing| {
+                    left_node_id = existing.id;
+                } else {
+                    left_node_id = try store.createNode(hop.left.labels);
+                    if (store.nodes.getPtr(left_node_id)) |new_node| {
+                        try created_nodes.put(left_name, new_node);
+                    }
+                }
+            } else {
+                left_node_id = try store.createNode(hop.left.labels);
+            }
+            
+            // Set properties on left node if present and not already set
+            if (hop.left.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(left_node_id, prop.key, prop_value);
+                }
+            }
+            
+            // Create right node if not already created
+            var right_node_id: u64 = undefined;
+            if (hop.right.name) |right_name| {
+                if (created_nodes.get(right_name)) |existing| {
+                    right_node_id = existing.id;
+                } else {
+                    right_node_id = try store.createNode(hop.right.labels);
+                    if (store.nodes.getPtr(right_node_id)) |new_node| {
+                        try created_nodes.put(right_name, new_node);
+                    }
+                }
+            } else {
+                right_node_id = try store.createNode(hop.right.labels);
+            }
+            
+            // Set properties on right node if present and not already set
+            if (hop.right.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(right_node_id, prop.key, prop_value);
+                }
+            }
+            
+            // Create edge
+            const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
+            const edge_id = switch (hop.rel.dir) {
+                .right => try store.createEdge(left_node_id, right_node_id, edge_type),
+                .left => try store.createEdge(right_node_id, left_node_id, edge_type),
+                .undirected => try store.createEdge(left_node_id, right_node_id, edge_type),
+            };
+            
+            // Set edge properties if present
+            if (hop.rel.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setEdgeProperty(edge_id, prop.key, prop_value);
+                }
+            }
         }
     }
     
@@ -581,10 +680,38 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
     // Extract pattern information from MATCH
     var match_variable: ?[]const u8 = null;
     var match_labels: [][]const u8 = &.{};
+    var has_relationship = false;
+    var rel_type: ?[]const u8 = null;
+    var left_node_var: ?[]const u8 = null;
+    var right_node_var: ?[]const u8 = null;
+    var rel_var: ?[]const u8 = null;
     
-    // Get the first chain from the pattern (handle simple patterns for now)
+    // Get the first chain from the pattern
     if (q.match.chains.len > 0) {
-        if (q.match.chains[0].head) |node_pattern| {
+        const chain = q.match.chains[0];
+        
+        // Check if this is a relationship pattern (has hops)
+        if (chain.hops.len > 0) {
+            has_relationship = true;
+            const hop = chain.hops[0];
+            
+            // Get left node info
+            left_node_var = hop.left.name;
+            
+            // Get relationship info
+            rel_var = hop.rel.name;
+            if (hop.rel.types.len > 0) {
+                rel_type = hop.rel.types[0];
+            }
+            
+            // Get right node info
+            right_node_var = hop.right.name;
+            
+            // For now, use left node as the main match variable
+            match_variable = left_node_var;
+            match_labels = hop.left.labels;
+        } else if (chain.head) |node_pattern| {
+            // Simple node pattern without relationships
             match_variable = node_pattern.name;
             match_labels = node_pattern.labels;
         }
@@ -640,6 +767,47 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                         }
                     }
                     if (!has_all_labels) continue;
+                }
+                
+                // Create environment with matched node for WHERE clause evaluation
+                var env_names: [][]const u8 = &.{};
+                var env_values: []eval.Value = &.{};
+                
+                if (match_variable) |var_name| {
+                    env_names = try allocator.alloc([]const u8, 1);
+                    env_values = try allocator.alloc(eval.Value, 1);
+                    env_names[0] = var_name;
+                    env_values[0] = eval.Value{ .Node = node };
+                }
+                
+                const env = eval.Env{
+                    .names = env_names,
+                    .values = env_values,
+                };
+                
+                // Evaluate WHERE clause if present
+                if (q.where_clause) |where_expr| {
+                    const where_result = try eval.evalExpr(allocator, where_expr, env);
+                    const passes_where = switch (where_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+                    
+                    if (!passes_where) {
+                        if (match_variable != null) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                        }
+                        continue;
+                    }
+                }
+                
+                // Free environment memory since we don't need it for grouping
+                if (match_variable != null) {
+                    allocator.free(env_names);
+                    allocator.free(env_values);
                 }
                 
                 // Evaluate grouping key for this node
@@ -737,61 +905,189 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
             };
         }
     } else {
-        // Non-aggregation query - return one row per matching node
+        // Non-aggregation query - return one row per matching pattern
         var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
         
-        var iter = store.nodes.iterator();
-        while (iter.next()) |entry| {
-            const node = entry.value_ptr;
-            
-            // Filter by labels if specified
-            if (match_labels.len > 0) {
-                var has_all_labels = true;
-                for (match_labels) |required_label| {
-                    var found = false;
-                    for (node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            found = true;
+        if (has_relationship) {
+            // Handle relationship patterns
+            var left_iter = store.nodes.iterator();
+            while (left_iter.next()) |left_entry| {
+                const left_node = left_entry.value_ptr;
+                
+                // Filter left node by labels if specified
+                if (match_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (match_labels) |required_label| {
+                        var found = false;
+                        for (left_node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
                             break;
                         }
                     }
-                    if (!found) {
-                        has_all_labels = false;
-                        break;
-                    }
+                    if (!has_all_labels) continue;
                 }
-                if (!has_all_labels) continue;
+                
+                // Get edges from this node
+                const edges = store.getEdgesFrom(left_node.id);
+                defer allocator.free(edges);
+                
+                for (edges) |edge| {
+                    // Filter by relationship type if specified
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    
+                    // Get the target node
+                    const right_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
+                    
+                    // Create environment with all matched elements
+                    var env_count: usize = 0;
+                    if (left_node_var != null) env_count += 1;
+                    if (right_node_var != null) env_count += 1;
+                    if (rel_var != null) env_count += 1;
+                    
+                    const env_names = try allocator.alloc([]const u8, env_count);
+                    const env_values = try allocator.alloc(eval.Value, env_count);
+                    
+                    var env_idx: usize = 0;
+                    if (left_node_var) |var_name| {
+                        env_names[env_idx] = var_name;
+                        env_values[env_idx] = eval.Value{ .Node = left_node };
+                        env_idx += 1;
+                    }
+                    if (right_node_var) |var_name| {
+                        env_names[env_idx] = var_name;
+                        env_values[env_idx] = eval.Value{ .Node = right_node_ptr };
+                        env_idx += 1;
+                    }
+                    if (rel_var) |var_name| {
+                        env_names[env_idx] = var_name;
+                        // For now, store edge as a Node type (we'll need to add Edge type to eval.Value later)
+                        env_values[env_idx] = eval.Value{ .Null = {} };
+                        env_idx += 1;
+                    }
+                    
+                    const env = eval.Env{
+                        .names = env_names,
+                        .values = env_values,
+                    };
+                    
+                    // Evaluate WHERE clause if present
+                    if (q.where_clause) |where_expr| {
+                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        const passes_where = switch (where_result) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
+                        
+                        if (!passes_where) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                            continue;
+                        }
+                    }
+                    
+                    // Evaluate return items
+                    var row = try allocator.alloc(eval.Value, items.len);
+                    for (items, 0..) |item, i| {
+                        row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    }
+                    
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                    
+                    try rows.append(allocator, row);
+                }
             }
-            
-            // Create environment with matched node bound to variable
-            var env_names: [][]const u8 = &.{};
-            var env_values: []eval.Value = &.{};
-            
-            if (match_variable) |var_name| {
-                env_names = try allocator.alloc([]const u8, 1);
-                env_values = try allocator.alloc(eval.Value, 1);
-                defer allocator.free(env_names);
-                defer allocator.free(env_values);
-                env_names[0] = var_name;
-                env_values[0] = eval.Value{ .Node = node };
+        } else {
+            // Handle simple node patterns (no relationships)
+            var iter = store.nodes.iterator();
+            while (iter.next()) |entry| {
+                const node = entry.value_ptr;
+                
+                // Filter by labels if specified
+                if (match_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (match_labels) |required_label| {
+                        var found = false;
+                        for (node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
+                
+                // Create environment with matched node bound to variable
+                var env_names: [][]const u8 = &.{};
+                var env_values: []eval.Value = &.{};
+                
+                if (match_variable) |var_name| {
+                    env_names = try allocator.alloc([]const u8, 1);
+                    env_values = try allocator.alloc(eval.Value, 1);
+                    env_names[0] = var_name;
+                    env_values[0] = eval.Value{ .Node = node };
+                }
+                
+                const env = eval.Env{
+                    .names = env_names,
+                    .values = env_values,
+                };
+                
+                // Evaluate WHERE clause if present
+                if (q.where_clause) |where_expr| {
+                const where_result = try eval.evalExpr(allocator, where_expr, env);
+                // Check if WHERE clause evaluates to true
+                const passes_where = switch (where_result) {
+                    .Bool => |b| b,
+                    .Null => false, // NULL is treated as false in WHERE
+                    .Int => |i| i != 0, // Non-zero integers are true
+                    else => false, // Other types are false
+                };
+                
+                if (!passes_where) {
+                    // Free allocated memory before continuing
+                    if (match_variable != null) {
+                        allocator.free(env_names);
+                        allocator.free(env_values);
+                    }
+                    continue;
+                }
             }
-            
-            const env = eval.Env{
-                .names = env_names,
-                .values = env_values,
-            };
-            
-            var row = try allocator.alloc(eval.Value, items.len);
-            
-            for (items, 0..) |item, i| {
-                // Evaluate expression with node in environment
-                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                
+                // Note: env is still valid here since we only free on continue
+                var row = try allocator.alloc(eval.Value, items.len);
+                
+                for (items, 0..) |item, i| {
+                    // Evaluate expression with node in environment
+                    row[i] = try eval.evalExpr(allocator, item.expr, env);
+                }
+                
+                // Free environment memory
+                if (match_variable != null) {
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                }
+                
+                try rows.append(allocator, row);
             }
-            
-            try rows.append(allocator, row);
         }
         
-        return ExecutionResult{
+        var result = ExecutionResult{
             .columns = columns,
             .rows = try rows.toOwnedSlice(allocator),
             .flags = blk: {
@@ -799,6 +1095,13 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                     break :blk list;
                 },
         };
+        
+        // Apply ORDER BY if present
+        if (q.order_by) |order| {
+            try sortRows(allocator, &result, order);
+        }
+        
+        return result;
     }
 }
 
@@ -866,6 +1169,62 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
                             if (count > 0) {
                                 const avg = sum / count;
                                 return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
+                            }
+                            return eval.Value{ .Null = {} };
+                        }
+                    }
+                    return eval.Value{ .Null = {} };
+                } else if (std.mem.eql(u8, func_name, "min")) {
+                    // MIN aggregation over group
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else
+                            null;
+                        
+                        if (field_name) |field| {
+                            var min_val: ?i64 = null;
+                            for (nodes) |node| {
+                                if (node.properties.get(field)) |val| {
+                                    if (val == .Int) {
+                                        if (min_val == null or val.Int < min_val.?) {
+                                            min_val = val.Int;
+                                        }
+                                    }
+                                }
+                            }
+                            if (min_val) |v| {
+                                return eval.Value{ .Int = v };
+                            }
+                            return eval.Value{ .Null = {} };
+                        }
+                    }
+                    return eval.Value{ .Null = {} };
+                } else if (std.mem.eql(u8, func_name, "max")) {
+                    // MAX aggregation over group
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else
+                            null;
+                        
+                        if (field_name) |field| {
+                            var max_val: ?i64 = null;
+                            for (nodes) |node| {
+                                if (node.properties.get(field)) |val| {
+                                    if (val == .Int) {
+                                        if (max_val == null or val.Int > max_val.?) {
+                                            max_val = val.Int;
+                                        }
+                                    }
+                                }
+                            }
+                            if (max_val) |v| {
+                                return eval.Value{ .Int = v };
                             }
                             return eval.Value{ .Null = {} };
                         }

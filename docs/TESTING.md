@@ -91,9 +91,9 @@ tests:
 
 #### Variable Substitution
 Tests support variable substitution for dynamic values:
-- `${server}` or `${server_address}`: Replaced with `127.0.0.1:8443`
+- `${server}` or `${server_address}`: Replaced with `127.0.0.1:3141`
 - `${server:host}`: Replaced with `127.0.0.1`
-- `${server:port}`: Replaced with `8443`
+- `${server:port}`: Replaced with `3141`
 - `${secret:api_token}`: Replaced with test token
 - `${secret:user_password}`: Replaced with test password
 

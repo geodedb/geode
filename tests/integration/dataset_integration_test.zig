@@ -33,7 +33,7 @@ pub fn loadMigrations(allocator: std.mem.Allocator) !void {
         defer allocator.free(content);
 
         // Execute migration
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "--host", "127.0.0.1", "--port", "8443", content });
+        const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "--host", "127.0.0.1", "--port", "3141", content });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -48,7 +48,7 @@ test "dataset migration system loads successfully" {
     const allocator = testing.allocator;
 
     // Start server in background
-    var server = std.ChildProcess.init(&.{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "8443" }, allocator);
+    var server = std.ChildProcess.init(&.{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "3141" }, allocator);
     try server.spawn();
     defer _ = server.kill() catch {};
 

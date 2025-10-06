@@ -108,7 +108,7 @@ Add to your `configuration.nix`:
   
   services.geode = {
     enable = true;
-    network.quicPort = 8443;
+    network.quicPort = 3141;
     performance.memoryLimit = "4GB";
     monitoring.enable = true;
   };
@@ -124,7 +124,7 @@ services.geode = {
   # Network settings
   network = {
     listenAddress = "0.0.0.0";
-    quicPort = 8443;
+    quicPort = 3141;
   };
   
   # Performance tuning
@@ -146,8 +146,8 @@ services.geode = {
     enable = true;
     role = "shard";
     peers = [
-      "coordinator1.example.com:8443"
-      "coordinator2.example.com:8443"
+      "coordinator1.example.com:3141"
+      "coordinator2.example.com:3141"
     ];
   };
   
@@ -254,7 +254,7 @@ docker-compose up -d
 # Basic run
 docker run -d \
   --name geode \
-  -p 8443:8443/udp \
+  -p 3141:3141/udp \
   -v geode-data:/var/lib/geode \
   -v geode-logs:/var/log/geode \
   geode:latest
@@ -262,7 +262,7 @@ docker run -d \
 # With custom config
 docker run -d \
   --name geode \
-  -p 8443:8443/udp \
+  -p 3141:3141/udp \
   -v ./geode.conf:/etc/geode/geode.conf:ro \
   -v geode-data:/var/lib/geode \
   geode:latest

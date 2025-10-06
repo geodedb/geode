@@ -224,7 +224,7 @@ test "TestCANARY_DISTRIBUTED_QUERY_006_ShardOptimization shard registry manageme
         .shard_id = 1,
         .node_id = 101,
         .endpoint = try allocator.dupe(u8, "192.168.1.10"),
-        .port = 8443,
+        .port = 3141,
         .status = .online,
         .data_partitions = &partitions,
     };
@@ -232,7 +232,7 @@ test "TestCANARY_DISTRIBUTED_QUERY_006_ShardOptimization shard registry manageme
     
     try testing.expect(shard_info.shard_id == 1);
     try testing.expect(shard_info.node_id == 101);
-    try testing.expect(shard_info.port == 8443);
+    try testing.expect(shard_info.port == 3141);
     try testing.expect(shard_info.status == .online);
     try testing.expect(shard_info.data_partitions.len == 1);
     try testing.expect(shard_info.data_partitions[0].row_count == 50000);

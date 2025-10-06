@@ -17,7 +17,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
     
     // Test ServerConfig structure
     const server_config = ServerConfig{
-        .listen_quic = "127.0.0.1:8443",
+        .listen_quic = "127.0.0.1:3141",
         .data_dir = "/tmp/test_data",
         .cert_path = null,
         .key_path = null,
@@ -34,7 +34,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
     // Test ClientConfig structure
     const client_config = ClientConfig{
         .query_text = "RETURN 1 AS test",
-        .server = "127.0.0.1:8443",
+        .server = "127.0.0.1:3141",
         .format = "json",
         .page_size = 10,
         .pull_all = false,
@@ -48,7 +48,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
     };
     
     try testing.expect(client_config.query_text.len > 0);
-    try testing.expect(std.mem.eql(u8, client_config.server, "127.0.0.1:8443"));
+    try testing.expect(std.mem.eql(u8, client_config.server, "127.0.0.1:3141"));
     try testing.expect(std.mem.eql(u8, client_config.format, "json"));
     try testing.expect(client_config.page_size == 10);
     try testing.expect(client_config.no_quic == true);
@@ -63,7 +63,7 @@ test "Server configuration supports unified binary operation" {
     const CliMain = @import("../src/cli/main.zig");
     
     const config = CliMain.ServerConfig{
-        .listen_quic = "0.0.0.0:8443",
+        .listen_quic = "0.0.0.0:3141",
         .data_dir = "/var/lib/geode",
         .cert_path = "/etc/geode/cert.pem",
         .key_path = "/etc/geode/key.pem",
@@ -74,7 +74,7 @@ test "Server configuration supports unified binary operation" {
     };
     
     // Verify configuration fields are properly accessible
-    try testing.expect(std.mem.eql(u8, config.listen_quic.?, "0.0.0.0:8443"));
+    try testing.expect(std.mem.eql(u8, config.listen_quic.?, "0.0.0.0:3141"));
     try testing.expect(std.mem.eql(u8, config.data_dir.?, "/var/lib/geode"));
     try testing.expect(std.mem.eql(u8, config.cert_path.?, "/etc/geode/cert.pem"));
     try testing.expect(std.mem.eql(u8, config.key_path.?, "/etc/geode/key.pem"));
@@ -100,7 +100,7 @@ test "Client configuration supports unified binary operation" {
     
     const config = CliMain.ClientConfig{
         .query_text = "MATCH (n:Node) RETURN n LIMIT 5",
-        .server = "192.168.1.100:8443",
+        .server = "192.168.1.100:3141",
         .format = "table",
         .page_size = 25,
         .pull_all = true,
@@ -115,7 +115,7 @@ test "Client configuration supports unified binary operation" {
     
     // Verify configuration fields are properly accessible
     try testing.expect(std.mem.eql(u8, config.query_text, "MATCH (n:Node) RETURN n LIMIT 5"));
-    try testing.expect(std.mem.eql(u8, config.server, "192.168.1.100:8443"));
+    try testing.expect(std.mem.eql(u8, config.server, "192.168.1.100:3141"));
     try testing.expect(std.mem.eql(u8, config.format, "table"));
     try testing.expect(config.page_size == 25);
     try testing.expect(config.pull_all == true);
@@ -130,7 +130,7 @@ test "Client configuration supports unified binary operation" {
     // Test default configuration
     const default_config = CliMain.ClientConfig{
         .query_text = "RETURN 1",
-        .server = "127.0.0.1:8443",
+        .server = "127.0.0.1:3141",
         .format = "json",
         .page_size = 1,
         .pull_all = false,
@@ -144,7 +144,7 @@ test "Client configuration supports unified binary operation" {
     };
     
     try testing.expect(std.mem.eql(u8, default_config.query_text, "RETURN 1"));
-    try testing.expect(std.mem.eql(u8, default_config.server, "127.0.0.1:8443"));
+    try testing.expect(std.mem.eql(u8, default_config.server, "127.0.0.1:3141"));
     try testing.expect(std.mem.eql(u8, default_config.format, "json"));
     try testing.expect(default_config.page_size == 1);
     try testing.expect(default_config.process_path == null);
@@ -230,13 +230,13 @@ test "Memory management in unified binary configuration" {
     defer server_args.deinit();
     
     try server_args.append("--listen-quic");
-    try server_args.append("0.0.0.0:8443");
+    try server_args.append("0.0.0.0:3141");
     try server_args.append("--data-dir");
     try server_args.append("/tmp/geode");
     
     try testing.expect(server_args.items.len == 4);
     try testing.expect(std.mem.eql(u8, server_args.items[0], "--listen-quic"));
-    try testing.expect(std.mem.eql(u8, server_args.items[1], "0.0.0.0:8443"));
+    try testing.expect(std.mem.eql(u8, server_args.items[1], "0.0.0.0:3141"));
     try testing.expect(std.mem.eql(u8, server_args.items[2], "--data-dir"));
     try testing.expect(std.mem.eql(u8, server_args.items[3], "/tmp/geode"));
     
@@ -245,14 +245,14 @@ test "Memory management in unified binary configuration" {
     defer client_args.deinit();
     
     try client_args.append("--server");
-    try client_args.append("127.0.0.1:8443");
+    try client_args.append("127.0.0.1:3141");
     try client_args.append("--format");
     try client_args.append("json");
     try client_args.append("RETURN 1 AS test");
     
     try testing.expect(client_args.items.len == 5);
     try testing.expect(std.mem.eql(u8, client_args.items[0], "--server"));
-    try testing.expect(std.mem.eql(u8, client_args.items[1], "127.0.0.1:8443"));
+    try testing.expect(std.mem.eql(u8, client_args.items[1], "127.0.0.1:3141"));
     try testing.expect(std.mem.eql(u8, client_args.items[4], "RETURN 1 AS test"));
 }
 
@@ -283,7 +283,7 @@ test "Configuration validation for unified binary operation" {
     
     // Test server configuration validation
     const valid_server_config = CliMain.ServerConfig{
-        .listen_quic = "127.0.0.1:8443",
+        .listen_quic = "127.0.0.1:3141",
         .data_dir = "/valid/path",
         .cert_path = null,
         .key_path = null,
@@ -300,7 +300,7 @@ test "Configuration validation for unified binary operation" {
     // Test client configuration validation
     const valid_client_config = CliMain.ClientConfig{
         .query_text = "RETURN 1",
-        .server = "127.0.0.1:8443",
+        .server = "127.0.0.1:3141",
         .format = "json",
         .page_size = 1,
         .pull_all = false,

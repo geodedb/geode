@@ -147,12 +147,12 @@ Added geodetestlab specifications:
 ```bash
 #!/bin/bash
 # Start server
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8443 --test-exit-after-first &
+./zig-out/bin/geode serve --listen-quic 127.0.0.1:3141 --test-exit-after-first &
 SERVER_PID=$!
 sleep 2
 
 # Run query
-./zig-out/bin/geode query --server 127.0.0.1:8443 "RETURN 1 AS test"
+./zig-out/bin/geode query --server 127.0.0.1:3141 "RETURN 1 AS test"
 
 # Cleanup
 kill $SERVER_PID

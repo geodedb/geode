@@ -8,7 +8,7 @@ test "CANARY: REQ=REQ-GQL-GEOGRAPHIC-MAPPING" {
 
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();
@@ -616,7 +616,7 @@ test "proximity search performance" {
 
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();
@@ -646,7 +646,7 @@ test "geofencing and containment" {
 
     var client = try geode.Client.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
         .insecure = true,
     });
     defer client.deinit();

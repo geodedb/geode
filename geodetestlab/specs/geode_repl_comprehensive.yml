@@ -158,10 +158,10 @@ tests:
     timeout: 10
     cmd: "./zig-out/bin/geode"
     args: ["shell", "--server", "localhost:7567"]
-    stdin: "\\connect localhost:8443\n\\disconnect\n\\quit\n"
+    stdin: "\\connect localhost:3141\n\\disconnect\n\\quit\n"
     expect_exit_code: 0
     expect_stdout_contains:
-      - "Connected to localhost:8443"
+      - "Connected to localhost:3141"
       - "Disconnected"
 
   - name: "REPL connect command error handling"

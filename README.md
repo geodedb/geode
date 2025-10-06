@@ -51,7 +51,7 @@ cd geode
 make build
 
 # Start server
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:3141
 ```
 
 ### **Basic Usage**
@@ -62,7 +62,7 @@ make build
 ./zig-out/bin/geode shell
 
 # Connect to remote server
-./zig-out/bin/geode shell --server geode.example.com:8443
+./zig-out/bin/geode shell --server geode.example.com:3141
 ```
 
 #### Query Execution

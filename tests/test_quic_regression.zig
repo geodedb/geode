@@ -16,7 +16,7 @@ test "readStream returns WouldBlock when inbox is empty" {
     defer quic_lib.destroyEndpoint(endpoint);
     
     // Create a connection
-    const conn = try quic_lib.connect(endpoint, "127.0.0.1", 8443, "localhost");
+    const conn = try quic_lib.connect(endpoint, "127.0.0.1", 3141, "localhost");
     defer quic_lib.closeConnection(conn, 0);
     
     // Open a stream
@@ -38,7 +38,7 @@ test "client polls endpoint on WouldBlock" {
     defer client.deinit();
     
     // Mock setup for testing polling behavior
-    try client.connectInsecure("127.0.0.1", 8443);
+    try client.connectInsecure("127.0.0.1", 3141);
     
     var stream = try client.getStream();
     defer stream.deinit();
@@ -76,7 +76,7 @@ test "readLine properly manages memory" {
     defer client.deinit();
     
     // Simulate connection
-    try client.connectInsecure("127.0.0.1", 8443);
+    try client.connectInsecure("127.0.0.1", 3141);
     var stream = try client.getStream();
     defer stream.deinit();
     
@@ -125,7 +125,7 @@ test "end-to-end QUIC query execution" {
             const transport = try QuicTransport.QuicTransport.init(srv_alloc);
             defer transport.deinit();
             
-            try transport.listen("127.0.0.1", 18443);
+            try transport.listen("127.0.0.1", 13141);
             
             // Accept one connection and respond
             if (try transport.accept()) |conn| {
@@ -152,7 +152,7 @@ test "end-to-end QUIC query execution" {
     var client = try QuicTransport.QuicClient.init(allocator);
     defer client.deinit();
     
-    try client.connectInsecure("127.0.0.1", 18443);
+    try client.connectInsecure("127.0.0.1", 13141);
     try client.waitForHandshake();
     
     var stream = try client.getStream();

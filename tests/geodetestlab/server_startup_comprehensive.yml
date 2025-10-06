@@ -16,7 +16,7 @@ cli:
     args: []
     env: {}
   client:
-    server_address: "127.0.0.1:8443"
+    server_address: "127.0.0.1:3141"
     timeout_ms: 10000
     tls_verify: false
     format: "json"

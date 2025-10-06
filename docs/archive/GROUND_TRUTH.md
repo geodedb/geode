@@ -364,7 +364,7 @@ Unique system for tracking implementation evidence:
 
 #### Server (`geoded`)
 ```bash
-geoded --listen-quic 0.0.0.0:8443 \
+geoded --listen-quic 0.0.0.0:3141 \
        --data-dir /var/geode/data \
        --tls-cert server.crt \
        --tls-key server.key
@@ -373,7 +373,7 @@ geoded --listen-quic 0.0.0.0:8443 \
 #### Client (`geodec`)
 ```bash
 geodec "MATCH (n) RETURN n LIMIT 10" \
-       --server localhost:8443 \
+       --server localhost:3141 \
        --format json
 ```
 
@@ -390,7 +390,7 @@ Interactive shell with:
 ```go
 import "github.com/spyderorg/geode/clients/go"
 
-client := geode.NewClient("localhost:8443")
+client := geode.NewClient("localhost:3141")
 result := client.Query("MATCH (n) RETURN n")
 ```
 

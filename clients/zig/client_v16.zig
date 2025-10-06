@@ -11,7 +11,7 @@ pub const GeodeClient = struct {
 
     pub const Config = struct {
         host: []const u8 = "127.0.0.1",
-        port: u16 = 8443, // v0.16.0: Default QUIC port
+        port: u16 = 3141, // v0.16.0: Default QUIC port
         page_size: usize = 1000,
         client_name: []const u8 = "geode-zig-client",
         client_version: []const u8 = "0.16.0",
@@ -254,7 +254,7 @@ pub fn main() !void {
     // v0.16.0: Connect with QUIC+TLS
     var client = GeodeClient.init(allocator, .{
         .host = "127.0.0.1",
-        .port = 8443,
+        .port = 3141,
     });
     defer client.deinit();
 

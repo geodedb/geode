@@ -80,7 +80,7 @@ pub const KMSProvider = struct {
             },
             .remote_kms => blk: {
                 const endpoint = self.config.endpoint orelse "localhost";
-                const port = self.config.port orelse 8443;
+                const port = self.config.port orelse 3141;
                 var buf: [128]u8 = undefined;
                 const len = std.fmt.bufPrint(&buf, "remote-kms-{s}:{}", .{endpoint, port}) catch return error.BufferTooSmall;
                 const owned = try self.allocator.dupe(u8, buf[0..len]);
@@ -183,7 +183,7 @@ pub const KMSProvider = struct {
         }
         
         const endpoint = self.config.endpoint orelse "localhost";
-        const port = self.config.port orelse 8443;
+        const port = self.config.port orelse 3141;
         try self.remote_client.?.connect(endpoint, port);
         
         // Generate new key remotely (ignores input plaintext)
@@ -232,7 +232,7 @@ pub const KMSProvider = struct {
         }
         
         const endpoint = self.config.endpoint orelse "localhost";
-        const port = self.config.port orelse 8443;
+        const port = self.config.port orelse 3141;
         try self.remote_client.?.connect(endpoint, port);
         
         // Parse envelope from metadata

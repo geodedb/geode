@@ -128,6 +128,75 @@ pub const GraphStore = struct {
         return self.nodes.count();
     }
     
+    pub fn createEdge(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8) !u64 {
+        const id = self.next_edge_id;
+        self.next_edge_id += 1;
+        
+        const edge_type_copy = try self.allocator.dupe(u8, edge_type);
+        
+        const edge = Edge{
+            .id = id,
+            .from_id = from_id,
+            .to_id = to_id,
+            .label = edge_type_copy,
+            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+        };
+        
+        try self.edges.put(id, edge);
+        
+        // Save to persistent storage
+        self.saveToFile() catch {};
+        
+        return id;
+    }
+    
+    pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        if (self.edges.getPtr(edge_id)) |edge| {
+            const key_copy = try self.allocator.dupe(u8, key);
+            const value_copy = switch (value) {
+                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
+                else => value,
+            };
+            try edge.properties.put(key_copy, value_copy);
+            
+            // Save to persistent storage
+            self.saveToFile() catch {};
+        }
+    }
+    
+    pub fn getEdgesByType(self: *GraphStore, edge_type: []const u8) []Edge {
+        var result = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch return &.{};
+        var iter = self.edges.valueIterator();
+        while (iter.next()) |edge| {
+            if (std.mem.eql(u8, edge.label, edge_type)) {
+                result.append(self.allocator, edge.*) catch continue;
+            }
+        }
+        return result.toOwnedSlice(self.allocator) catch &.{};
+    }
+    
+    pub fn getEdgesFrom(self: *GraphStore, node_id: u64) []Edge {
+        var result = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch return &.{};
+        var iter = self.edges.valueIterator();
+        while (iter.next()) |edge| {
+            if (edge.from_id == node_id) {
+                result.append(self.allocator, edge.*) catch continue;
+            }
+        }
+        return result.toOwnedSlice(self.allocator) catch &.{};
+    }
+    
+    pub fn getEdgesTo(self: *GraphStore, node_id: u64) []Edge {
+        var result = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch return &.{};
+        var iter = self.edges.valueIterator();
+        while (iter.next()) |edge| {
+            if (edge.to_id == node_id) {
+                result.append(self.allocator, edge.*) catch continue;
+            }
+        }
+        return result.toOwnedSlice(self.allocator) catch &.{};
+    }
+    
     // Simple file-based persistence for testing
     fn saveToFile(self: *GraphStore) !void {
         const file = try std.fs.cwd().createFile("/tmp/geode_graph_store.dat", .{});

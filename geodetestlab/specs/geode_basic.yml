@@ -16,7 +16,7 @@ cli:
     args: ["--log-level", "info"]
     env: {}
   client:
-    server_address: "127.0.0.1:8443"  # Will be overridden by managed server
+    server_address: "127.0.0.1:3141"  # Will be overridden by managed server
     timeout_ms: 30000
     tls_verify: false
     format: "json"

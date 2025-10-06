@@ -36,11 +36,11 @@ test "ClientSession initialization and cleanup" {
     
     // Test with IP address
     {
-        var session = try repl_dispatch.ClientSession.connect(allocator, "192.168.1.100:8443");
+        var session = try repl_dispatch.ClientSession.connect(allocator, "192.168.1.100:3141");
         defer session.deinit();
         
         try testing.expectEqualStrings("192.168.1.100", session.server_addr);
-        try testing.expect(session.server_port == 8443);
+        try testing.expect(session.server_port == 3141);
     }
 }
 

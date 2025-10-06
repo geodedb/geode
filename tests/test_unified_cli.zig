@@ -30,7 +30,7 @@ test "ServerConfig initialization with defaults" {
 test "ClientConfig initialization with defaults" {
     const ClientConfig = struct {
         query_text: []const u8,
-        server: []const u8 = "127.0.0.1:8443",
+        server: []const u8 = "127.0.0.1:3141",
         format: []const u8 = "json",
         page_size: usize = 1,
         pull_all: bool = false,
@@ -49,7 +49,7 @@ test "ClientConfig initialization with defaults" {
     };
     
     try testing.expectEqualStrings("RETURN 1 AS x", config.query_text);
-    try testing.expectEqualStrings("127.0.0.1:8443", config.server);
+    try testing.expectEqualStrings("127.0.0.1:3141", config.server);
     try testing.expectEqualStrings("json", config.format);
     try testing.expect(config.page_size == 1);
     try testing.expect(config.pull_all == false);
@@ -136,7 +136,7 @@ test "Server configuration validation" {
     var config1 = ServerConfig{ .log_level = "debug" };
     try config1.validate();
     
-    var config2 = ServerConfig{ .listen_quic = "127.0.0.1:8443" };
+    var config2 = ServerConfig{ .listen_quic = "127.0.0.1:3141" };
     try config2.validate();
     
     // Invalid configurations
@@ -153,7 +153,7 @@ test "Server configuration validation" {
 test "Client configuration validation" {
     const ClientConfig = struct {
         query_text: []const u8,
-        server: []const u8 = "127.0.0.1:8443",
+        server: []const u8 = "127.0.0.1:3141",
         format: []const u8 = "json",
         
         fn validate(self: @This()) !void {
@@ -255,7 +255,7 @@ test "Process argument building" {
     try server_args.append(allocator, "--data-dir");
     try server_args.append(allocator, "./test_data");
     try server_args.append(allocator, "--listen-quic");
-    try server_args.append(allocator, "127.0.0.1:8443");
+    try server_args.append(allocator, "127.0.0.1:3141");
     
     const server_argv = try server_args.toOwnedSlice(allocator);
     try testing.expect(server_argv.len == 5);
