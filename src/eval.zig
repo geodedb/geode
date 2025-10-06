@@ -852,6 +852,17 @@ fn heapValueToEvalValue(value: heap.Value) Value {
 fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
 
+    // Handle id() function - returns node ID or input if already an integer
+    if (std.mem.eql(u8, function_name, "id")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Int => |i| return Value{ .Int = i }, // Already an integer ID
+            .Node => |n| return Value{ .Int = @intCast(n.id) }, // Get node ID
+            else => return Value{ .Null = {} }, // Can't get ID from other types
+        }
+    }
+    
     // Handle aggregation functions (simplified for now - real implementation needs context)
     if (std.mem.eql(u8, function_name, "count")) {
         // COUNT(*) or COUNT(expr)

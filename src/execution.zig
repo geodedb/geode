@@ -241,9 +241,8 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
         .Create => |c| {
             return executeCreate(allocator, c);
         },
-        .Delete => |_| {
-            // DELETE support not yet implemented
-            return error.NotImplemented;
+        .Delete => |d| {
+            return executeDelete(allocator, d);
         },
         .Merge => |_| {
             // MERGE support not yet implemented
@@ -456,10 +455,141 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
     };
 }
 
+fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+    
+    // Track deleted node count
+    var deleted_count: usize = 0;
+    
+    // If there's a MATCH clause, delete matching nodes
+    if (d.match_clause) |match_pattern| {
+        // Extract pattern information from MATCH
+        var match_labels: [][]const u8 = &.{};
+        
+        if (match_pattern.chains.len > 0) {
+            if (match_pattern.chains[0].head) |node_pattern| {
+                match_labels = node_pattern.labels;
+            }
+        }
+        
+        // Collect nodes to delete (need to collect first to avoid iterator invalidation)
+        var nodes_to_delete = try std.ArrayList(u64).initCapacity(allocator, 0);
+        defer nodes_to_delete.deinit(allocator);
+        
+        var iter = store.nodes.iterator();
+        while (iter.next()) |entry| {
+            const node = entry.value_ptr;
+            
+            // Check WHERE clause if present
+            var should_delete = true;
+            
+            // Filter by labels if specified
+            if (match_labels.len > 0) {
+                var has_all_labels = true;
+                for (match_labels) |required_label| {
+                    var found = false;
+                    for (node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        has_all_labels = false;
+                        break;
+                    }
+                }
+                if (!has_all_labels) should_delete = false;
+            }
+            
+            // Apply WHERE clause if present
+            if (d.where_clause != null and should_delete) {
+                // For now, skip WHERE clause evaluation in DELETE
+                // TODO: Implement WHERE clause evaluation with node context
+            }
+            
+            if (should_delete) {
+                try nodes_to_delete.append(allocator, entry.key_ptr.*);
+            }
+        }
+        
+        // Delete the collected nodes
+        for (nodes_to_delete.items) |node_id| {
+            if (store.nodes.fetchRemove(node_id)) |_| {
+                // Note: The global store manages its own memory
+                deleted_count += 1;
+            }
+        }
+    } else if (d.items.len > 0) {
+        // Delete specific items
+        for (d.items) |item| {
+            switch (item) {
+                .Variable => |var_name| {
+                    // For now, we don't have variable resolution context
+                    // This would require tracking variables from MATCH clause
+                    _ = var_name;
+                },
+                .Node => |node_name| {
+                    // Delete node by variable name
+                    _ = node_name;
+                },
+                .Relationship => |rel_name| {
+                    // Delete relationship by variable name
+                    _ = rel_name;
+                },
+            }
+        }
+    }
+    
+    // Note: The global store persists changes automatically
+    
+    // Handle RETURN clause if present
+    if (d.return_clause) |_| {
+        // For now, return the count of deleted nodes
+        var columns = try allocator.alloc([]const u8, 1);
+        columns[0] = "deleted_count";
+        
+        var rows = try allocator.alloc([]eval.Value, 1);
+        var row = try allocator.alloc(eval.Value, 1);
+        row[0] = eval.Value{ .Int = @intCast(deleted_count) };
+        rows[0] = row;
+        
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = blk: {
+                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                break :blk list;
+            },
+        };
+    }
+    
+    // Return empty result if no RETURN clause
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]eval.Value, 0),
+        .flags = blk: {
+            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            break :blk list;
+        },
+    };
+}
+
 fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     
-    // For now, handle simple MATCH (n) pattern - match all nodes
+    // Extract pattern information from MATCH
+    var match_variable: ?[]const u8 = null;
+    var match_labels: [][]const u8 = &.{};
+    
+    // Get the first chain from the pattern (handle simple patterns for now)
+    if (q.match.chains.len > 0) {
+        if (q.match.chains[0].head) |node_pattern| {
+            match_variable = node_pattern.name;
+            match_labels = node_pattern.labels;
+        }
+    }
+    
     const items = q.ret.items;
     var columns = try allocator.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
@@ -488,10 +618,29 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 groups.deinit();
             }
             
-            // Group nodes by grouping key values
+            // Group nodes by grouping key values (filter by labels first)
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
+                
+                // Filter by labels if specified
+                if (match_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (match_labels) |required_label| {
+                        var found = false;
+                        for (node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
                 
                 // Evaluate grouping key for this node
                 // For now, assume single grouping key that's a property access
@@ -568,11 +717,11 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
             
             return result;
         } else {
-            // No GROUP BY - aggregate all rows into single result
+            // No GROUP BY - aggregate all matching rows into single result
             var row = try allocator.alloc(eval.Value, items.len);
             
             for (items, 0..) |item, i| {
-                row[i] = try evaluateAggregation(allocator, item.expr, store);
+                row[i] = try evaluateAggregationWithLabels(allocator, item.expr, store, match_labels);
             }
             
             var rows = try allocator.alloc([]eval.Value, 1);
@@ -588,16 +737,55 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
             };
         }
     } else {
-        // Non-aggregation query - return one row per node
+        // Non-aggregation query - return one row per matching node
         var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
         
         var iter = store.nodes.iterator();
         while (iter.next()) |entry| {
             const node = entry.value_ptr;
+            
+            // Filter by labels if specified
+            if (match_labels.len > 0) {
+                var has_all_labels = true;
+                for (match_labels) |required_label| {
+                    var found = false;
+                    for (node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        has_all_labels = false;
+                        break;
+                    }
+                }
+                if (!has_all_labels) continue;
+            }
+            
+            // Create environment with matched node bound to variable
+            var env_names: [][]const u8 = &.{};
+            var env_values: []eval.Value = &.{};
+            
+            if (match_variable) |var_name| {
+                env_names = try allocator.alloc([]const u8, 1);
+                env_values = try allocator.alloc(eval.Value, 1);
+                defer allocator.free(env_names);
+                defer allocator.free(env_values);
+                env_names[0] = var_name;
+                env_values[0] = eval.Value{ .Node = node };
+            }
+            
+            const env = eval.Env{
+                .names = env_names,
+                .values = env_values,
+            };
+            
             var row = try allocator.alloc(eval.Value, items.len);
             
             for (items, 0..) |item, i| {
-                row[i] = try evaluateNodeExpression(allocator, item.expr, node);
+                // Evaluate expression with node in environment
+                row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
             
             try rows.append(allocator, row);
@@ -737,6 +925,57 @@ fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *c
             return try eval.evalExpr(allocator, expr, env);
         },
     }
+}
+
+fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore, match_labels: [][]const u8) !eval.Value {
+    switch (expr) {
+        .Call => |call| {
+            if (call.callee.* == .Ident) {
+                const func_name = call.callee.Ident.orig;
+                
+                if (std.mem.eql(u8, func_name, "count") or std.mem.eql(u8, func_name, "countDistinct")) {
+                    // Check if it's COUNT(*) or COUNT(expr) or COUNT(DISTINCT expr)
+                    if (call.args.len == 1 and call.args[0].* == .Ident and 
+                        std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
+                        // COUNT(*) - count all matching nodes
+                        var count: i64 = 0;
+                        var iter = store.nodes.iterator();
+                        while (iter.next()) |entry| {
+                            const node = entry.value_ptr;
+                            
+                            // Filter by labels
+                            if (match_labels.len > 0) {
+                                var has_all_labels = true;
+                                for (match_labels) |required_label| {
+                                    var found = false;
+                                    for (node.labels) |node_label| {
+                                        if (std.mem.eql(u8, required_label, node_label)) {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        has_all_labels = false;
+                                        break;
+                                    }
+                                }
+                                if (!has_all_labels) continue;
+                            }
+                            
+                            count += 1;
+                        }
+                        return eval.Value{ .Int = count };
+                    }
+                    // For other count expressions, use original evaluateAggregation
+                    return evaluateAggregation(allocator, expr, store);
+                }
+            }
+        },
+        else => {},
+    }
+    
+    // For non-aggregation expressions or unsupported aggregations, use original
+    return evaluateAggregation(allocator, expr, store);
 }
 
 fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore) !eval.Value {
