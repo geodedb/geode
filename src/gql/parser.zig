@@ -1115,7 +1115,12 @@ pub const Parser = struct {
             var alias: ?[]const u8 = null;
             if (self.cur.kind == .AS) {
                 self.advance();
-                const a = try self.expectIdentifierOrKeyword();
+                // Accept either identifier/keyword or quoted string literal for alias
+                const a = if (self.cur.kind == .string_lit) blk: {
+                    const token = self.cur;
+                    self.advance();
+                    break :blk token;
+                } else try self.expectIdentifierOrKeyword();
                 alias = a.lexeme;
             }
             try out.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });

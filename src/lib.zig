@@ -16,6 +16,7 @@ pub const ParseResult = struct {
     program: ast.Program,
     arena: std.heap.ArenaAllocator,
     last_error: ?[]const u8 = null,
+    has_double_solidus_comment: bool = false,
 
     pub fn deinit(self: *ParseResult) void {
         self.arena.deinit();
@@ -43,6 +44,7 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
     return ParseResult{
         .program = program,
         .arena = arena,
+        .has_double_solidus_comment = lexer.has_double_solidus_comment,
     };
 }
 
@@ -299,7 +301,7 @@ pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = try p.parseProgram();
-    return .{ .program = program, .arena = arena, .last_error = p.last_error };
+    return .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment };
 }
 
 pub const ParseOutcome = union(enum) {
