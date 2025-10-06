@@ -7,8 +7,8 @@ updated: "2025-10-04"
 
 # Test environment configuration
 environment:
-  executable: "./zig-out/bin/geode", "query"
-  default_args: ["--no-quic", "--process", "./zig-out/bin/geode", "serve"]
+  executable: "./zig-out/bin/geode"
+  default_args: ["query", "--no-quic"]
   timeout: 30
   setup_commands:
     - "make build"

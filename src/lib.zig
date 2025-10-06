@@ -103,6 +103,9 @@ pub const graph_common = @import("types/graph_common.zig");
 // Re-export materialized views
 pub const materialized_views = @import("query/materialized_views.zig");
 
+// Re-export test harness for CLI integration
+pub const test_harness = @import("test_harness.zig");
+
 // Machine Learning and Analytics
 pub const ml = struct {
     pub const graph_embeddings = @import("ml/graph_embeddings.zig");

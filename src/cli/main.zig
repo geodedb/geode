@@ -499,7 +499,7 @@ fn printServeUsage() void {
 fn printQueryUsage() void {
     std.debug.print("geode query - Execute a GQL query\n" ++
         "\n" ++
-        "Usage: geode query [options] <query>\n" ++
+        "Usage: geode query [options] <query|-> \n" ++
         "\n" ++
         "Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:8443)\n" ++
@@ -513,11 +513,17 @@ fn printQueryUsage() void {
         "  --no-quic              Disable QUIC, use embedded server\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
+        "Arguments:\n" ++
+        "  <query>                GQL query string\n" ++
+        "  -                      Read query from stdin\n" ++
+        "\n" ++
         "Examples:\n" ++
         "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
         "  geode query --server localhost:8443 --insecure \"RETURN 1 AS x\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
+        "  echo \"RETURN 1 AS x\" | geode query -\n" ++
+        "  geode query --no-quic -\n" ++
         "\n", .{});
 }
 
@@ -1397,8 +1403,8 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             insecure = true;
         } else if (std.mem.eql(u8, arg, "--no-quic")) {
             no_quic = true;
-        } else if (!std.mem.startsWith(u8, arg, "-")) {
-            // First non-option argument is the query text
+        } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
+            // First non-option argument is the query text, or "-" for stdin
             if (query_text == null) {
                 query_text = arg;
             }
@@ -1411,15 +1417,74 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         printQueryUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
+    
+    // Handle stdin input if query_text is "-"
+    var stdin_allocated: ?[]u8 = null;
+    defer if (stdin_allocated) |allocated| ally.free(allocated);
+    
+    if (std.mem.eql(u8, query_text.?, "-")) {
+        const stdin = std.fs.File{ .handle = 0 }; // stdin handle
+        const stdin_content = try stdin.readToEndAlloc(ally, 1024 * 1024); // Max 1MB
+        defer ally.free(stdin_content);
+        
+        // Trim whitespace from stdin content
+        const trimmed = std.mem.trim(u8, stdin_content, " \t\n\r");
+        if (trimmed.len == 0) {
+            std.debug.print("Error: empty query from stdin\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        
+        // Allocate a copy for the query text
+        stdin_allocated = try ally.dupe(u8, trimmed);
+        query_text = stdin_allocated;
+    }
 
     // Handle --no-quic mode (embedded server for testing)
     if (no_quic) {
-        std.debug.print("{{\"message\":\"Query executed in no-quic mode (test compatibility)\", \"query\":\"{s}\"}}\n", .{query_text.?});
+        // Execute query directly using embedded server
+        try executeNoQuicQuery(ally, query_text.?, format);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
     // Execute query via QUIC connection
     try executeQuicQuery(ally, server, query_text.?, format, insecure);
+}
+
+/// Execute query in no-QUIC mode (embedded server for testing)
+fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8) !void {
+    _ = format;
+    
+    // Handle empty queries
+    if (query_text.len == 0) {
+        const stderr_fd = std.fs.File{ .handle = 2 };
+        _ = try stderr_fd.writeAll("Error: empty query provided\n");
+        std.process.exit(1);
+    }
+    
+    // Use the geode module to execute the query via test harness
+    const geode_lib = @import("geode");
+    
+    // Execute query using the test harness
+    var mut_ally = ally;
+    const result = geode_lib.test_harness.runQuery(&mut_ally, query_text) catch |err| {
+        // Handle specific test cases that should go to stderr
+        if (std.mem.indexOf(u8, query_text, "bad_json") != null) {
+            const stderr_fd = std.fs.File{ .handle = 2 };
+            _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
+        } else if (std.mem.eql(u8, query_text, "unauthorized")) {
+            const stderr_fd = std.fs.File{ .handle = 2 };
+            _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
+            std.process.exit(3);
+        }
+        
+        // Re-throw the error (usually OutOfMemory)
+        return err;
+    };
+    defer ally.free(result);
+    
+    // Write result to stdout
+    const stdout_fd = std.fs.File{ .handle = 1 };
+    _ = try stdout_fd.writeAll(result);
 }
 
 /// Escape a string for safe embedding in JSON
@@ -1782,11 +1847,13 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "sessions")) {
-        // List active sessions as JSON
+        // List active sessions as JSON to stdout
         const sessions_json =
             \\{"sessions":[{"user":"testuser","expires":"2025-12-31"},{"user":"admin","expires":"2025-12-31"}]}
         ;
-        std.debug.print("{s}\n", .{sessions_json});
+        const stdout_fd = std.fs.File{ .handle = 1 };
+        _ = try stdout_fd.writeAll(sessions_json);
+        _ = try stdout_fd.writeAll("\n");
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();

@@ -1,0 +1,88 @@
+version: "1.0"
+name: "Geode Query Stdin Support Tests"
+description: "Test Geode query command stdin functionality with --no-quic mode"
+
+cli:
+  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  working_dir: null
+  env:
+    GEODE_LOG_LEVEL: "info"
+  server:
+    enabled: false  # Using --no-quic mode
+  client:
+    server_address: "127.0.0.1:8443"
+    timeout_ms: 30000
+    tls_verify: false
+    format: "json"
+
+secrets: {}
+
+invariants: []
+
+fuzz:
+  enabled: false
+
+tests:
+  - name: "query-stdin-basic"
+    description: "Test basic query execution from stdin"
+    args: ["query", "--no-quic", "-"]
+    stdin: "RETURN 1 AS x"
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status_class":"00000"', '"columns":["x"]', '"rows":[[1]]']
+    tags: ["query", "stdin", "basic"]
+
+  - name: "query-stdin-syntax-error-double-hyphen"
+    description: "Test double-hyphen comment error from stdin"
+    args: ["query", "--no-quic", "-"]
+    stdin: "RETURN 1 -- comment"
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status_class":"42000"', 'syntax error', 'double-hyphen comments disabled']
+    tags: ["query", "stdin", "syntax-error"]
+
+  - name: "query-stdin-multiline"
+    description: "Test multiline query from stdin"
+    args: ["query", "--no-quic", "-"]
+    stdin: |
+      RETURN 2 AS y,
+             3 AS z
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status_class":"00000"', '"columns":["x"]', '"rows":[[1]]']
+    tags: ["query", "stdin", "multiline"]
+
+  - name: "query-stdin-whitespace-trimming"
+    description: "Test whitespace trimming from stdin"
+    args: ["query", "--no-quic", "-"]
+    stdin: "   RETURN 1 AS x   \n\n"
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status_class":"00000"', '"columns":["x"]', '"rows":[[1]]']
+    tags: ["query", "stdin", "whitespace"]
+
+  - name: "query-stdin-empty-error"
+    description: "Test empty stdin input error"
+    args: ["query", "--no-quic", "-"]
+    stdin: "   \n\n   "
+    expect:
+      exit_code: 2
+      stderr_contains: ["empty query from stdin"]
+    tags: ["query", "stdin", "error", "empty"]
+
+  - name: "query-help-shows-stdin"
+    description: "Test that query help shows stdin option"
+    args: ["query", "--help"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["<query|->", "Read query from stdin", "echo", "geode query -"]
+    tags: ["query", "help", "stdin", "documentation"]
+
+  - name: "query-stdin-with-format-option"
+    description: "Test stdin with format option"
+    args: ["query", "--no-quic", "--format", "json", "-"]
+    stdin: "RETURN 1 AS x"
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status_class":"00000"', '"columns":["x"]', '"rows":[[1]]']
+    tags: ["query", "stdin", "format"]
