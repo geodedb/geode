@@ -938,6 +938,47 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "toreal")) {
         const result = evaluator_functions.toReal_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
+        // Size of a list or string
+        switch (first_arg) {
+            .List => |l| return Value{ .Int = @intCast(l.len) },
+            .Str => |s| return Value{ .Int = @intCast(s.len) },
+            else => return Value{ .Int = 0 },
+        }
+    } else if (std.mem.eql(u8, function_name, "toString")) {
+        // Convert to string
+        switch (first_arg) {
+            .Int => |i| {
+                var buf: [64]u8 = undefined;
+                const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
+                return Value{ .Str = try ally.dupe(u8, str) };
+            },
+            .Str => |s| return Value{ .Str = s },
+            .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
+            else => return Value{ .Str = "" },
+        }
+    } else if (std.mem.eql(u8, function_name, "toFloat") or std.mem.eql(u8, function_name, "toDouble")) {
+        // Convert to float
+        switch (first_arg) {
+            .Int => |i| return Value{ .Decimal = .{ .coeff = i * 10, .scale = 1 } },
+            .Decimal => |d| return Value{ .Decimal = d },
+            .Str => |s| {
+                const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
+                return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 10), .scale = 1 } };
+            },
+            else => return Value{ .Null = {} },
+        }
+    } else if (std.mem.eql(u8, function_name, "toInt") or std.mem.eql(u8, function_name, "toInteger")) {
+        // Convert to integer
+        switch (first_arg) {
+            .Int => |i| return Value{ .Int = i },
+            .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            .Str => |s| {
+                const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
+                return Value{ .Int = i };
+            },
+            else => return Value{ .Null = {} },
+        }
     }
 
     // Handle two-argument functions

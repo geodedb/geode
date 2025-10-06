@@ -244,9 +244,8 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
         .Delete => |d| {
             return executeDelete(allocator, d);
         },
-        .Merge => |_| {
-            // MERGE support not yet implemented
-            return error.NotImplemented;
+        .Merge => |m| {
+            return executeMerge(allocator, m);
         },
         .StartTransaction, .Commit, .Rollback => {
             // Transaction support not yet implemented
@@ -366,6 +365,11 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     // Apply ORDER BY if present
     if (q.order_by) |order| {
         try sortRows(allocator, &result, order);
+    }
+    
+    // Apply WITH clause for query pipelining if present
+    if (q.with_clause) |with_clause| {
+        result = try executeWithClause(allocator, result, with_clause);
     }
     
     return result;
@@ -554,6 +558,190 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
     };
 }
 
+fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+    
+    // MERGE is like a CREATE but checks if the pattern already exists
+    // For now, implement simplified version for single nodes
+    if (m.pattern.chains.len > 0 and m.pattern.chains[0].head != null) {
+        const node_pattern = m.pattern.chains[0].head.?;
+        
+        // Look for existing node matching the pattern
+        var found_node: ?*graph_store.Node = null;
+        var node_iter = store.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            
+            // Check if labels match
+            var labels_match = true;
+            for (node_pattern.labels) |required_label| {
+                var has_label = false;
+                for (node.labels) |node_label| {
+                    if (std.mem.eql(u8, required_label, node_label)) {
+                        has_label = true;
+                        break;
+                    }
+                }
+                if (!has_label) {
+                    labels_match = false;
+                    break;
+                }
+            }
+            
+            if (!labels_match) continue;
+            
+            // Check if properties match (if properties are specified)
+            if (node_pattern.props != null and node_pattern.props.?.len > 0) {
+                var props_match = true;
+                for (node_pattern.props.?) |prop| {
+                    // For MERGE, we need to evaluate the property value
+                    // This is simplified - just check for string literals for now
+                    if (prop.value.* == .String) {
+                        const expected_val = prop.value.String;
+                        if (node.properties.get(prop.key)) |actual_val| {
+                            if (actual_val == .String) {
+                                if (!std.mem.eql(u8, actual_val.String, expected_val)) {
+                                    props_match = false;
+                                    break;
+                                }
+                            } else {
+                                props_match = false;
+                                break;
+                            }
+                        } else {
+                            props_match = false;
+                            break;
+                        }
+                    }
+                }
+                if (props_match) {
+                    found_node = node;
+                    break;
+                }
+            } else if (labels_match) {
+                // If no properties specified, match on labels alone
+                found_node = node;
+                break;
+            }
+        }
+        
+        var node_id: u64 = undefined;
+        var created = false;
+        
+        if (found_node) |node| {
+            // Node exists - apply ON MATCH clauses
+            node_id = node.id;
+            for (m.on_match) |set_clause| {
+                if (node_pattern.name) |var_name| {
+                    if (std.mem.eql(u8, set_clause.target.object, var_name)) {
+                        // Simplified: just set to true for SET n.property = true patterns
+                        if (set_clause.value == .Bool) {
+                            const prop_value = graph_store.PropertyValue{ .Bool = set_clause.value.Bool };
+                            try store.setNodeProperty(node_id, set_clause.target.property, prop_value);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Node doesn't exist - create it and apply ON CREATE clauses
+            created = true;
+            node_id = try store.createNode(node_pattern.labels);
+            
+            // Set properties from pattern
+            if (node_pattern.props) |props| {
+                for (props) |prop| {
+                const value = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .names = &.{}, .values = &.{} });
+                const prop_value = switch (value) {
+                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                    .Int => |i| graph_store.PropertyValue{ .Int = i },
+                    .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                    else => graph_store.PropertyValue{ .Null = {} },
+                };
+                try store.setNodeProperty(node_id, prop.key, prop_value);
+                }
+            }
+            
+            // Apply ON CREATE clauses
+            for (m.on_create) |set_clause| {
+                if (node_pattern.name) |var_name| {
+                    if (std.mem.eql(u8, set_clause.target.object, var_name)) {
+                        // Simplified: just set to true for SET n.property = true patterns
+                        if (set_clause.value == .Bool) {
+                            const prop_value = graph_store.PropertyValue{ .Bool = set_clause.value.Bool };
+                            try store.setNodeProperty(node_id, set_clause.target.property, prop_value);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Return the node if there's a RETURN clause
+        if (m.return_clause) |ret| {
+            var columns = try allocator.alloc([]const u8, ret.items.len);
+            for (ret.items, 0..) |item, i| {
+                const column_name = item.alias orelse blk: {
+                    // Use variable name as column name if expression is an identifier
+                    switch (item.expr) {
+                        .Ident => |ident| break :blk ident.orig,
+                        else => break :blk "column",
+                    }
+                };
+                columns[i] = try allocator.dupe(u8, column_name);
+            }
+            
+            var rows = try allocator.alloc([]eval.Value, 1);
+            var row = try allocator.alloc(eval.Value, ret.items.len);
+            
+            // Create environment with the merged node
+            const node = store.nodes.getPtr(node_id).?;
+            var env_names: [][]const u8 = &.{};
+            var env_values: []eval.Value = &.{};
+            
+            if (node_pattern.name) |var_name| {
+                env_names = try allocator.alloc([]const u8, 1);
+                env_values = try allocator.alloc(eval.Value, 1);
+                env_names[0] = var_name;
+                env_values[0] = eval.Value{ .Node = node };
+            }
+            
+            const env = eval.Env{
+                .names = env_names,
+                .values = env_values,
+            };
+            
+            for (ret.items, 0..) |item, i| {
+                row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+            
+            if (node_pattern.name != null) {
+                allocator.free(env_names);
+                allocator.free(env_values);
+            }
+            
+            rows[0] = row;
+            
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = blk: {
+                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    break :blk list;
+                },
+            };
+        }
+    }
+    
+    // Return empty result if no RETURN clause
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]eval.Value, 0),
+        .flags = blk: {
+            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            break :blk list;
+        },
+    };
+}
+
 fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     
@@ -614,11 +802,33 @@ fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Executio
         
         // Delete the collected nodes
         for (nodes_to_delete.items) |node_id| {
+            // If DETACH DELETE, also delete associated edges
+            if (d.detach) {
+                // Delete edges where this node is the source or target
+                var edges_to_delete = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable;
+                defer edges_to_delete.deinit(allocator);
+                
+                var edge_iter = store.edges.iterator();
+                while (edge_iter.next()) |edge_entry| {
+                    const edge = edge_entry.value_ptr;
+                    if (edge.from_id == node_id or edge.to_id == node_id) {
+                        try edges_to_delete.append(allocator, edge.id);
+                    }
+                }
+                
+                for (edges_to_delete.items) |edge_id| {
+                    _ = store.edges.remove(edge_id);
+                }
+            }
+            
             if (store.nodes.fetchRemove(node_id)) |_| {
                 // Note: The global store manages its own memory
                 deleted_count += 1;
             }
         }
+        
+        // Save changes to persistent storage
+        store.saveToFile() catch {};
     } else if (d.items.len > 0) {
         // Delete specific items
         for (d.items) |item| {
@@ -720,7 +930,14 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
     const items = q.ret.items;
     var columns = try allocator.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
-        columns[i] = try allocator.dupe(u8, item.alias orelse "column");
+        const column_name = item.alias orelse blk: {
+            // Use variable name as column name if expression is an identifier
+            switch (item.expr) {
+                .Ident => |ident| break :blk ident.orig,
+                else => break :blk "column",
+            }
+        };
+        columns[i] = try allocator.dupe(u8, column_name);
     }
     
     // Check if we have any aggregations
@@ -1069,6 +1286,29 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 }
             }
                 
+                // Apply SET clauses if present
+                for (q.set_clauses) |set_clause| {
+                    if (std.mem.eql(u8, set_clause.target.object, match_variable orelse "")) {
+                        const value = try eval.evalExpr(allocator, set_clause.value, env);
+                        // Convert eval.Value to PropertyValue
+                        const prop_value = switch (value) {
+                            .Str => |s| graph_store.PropertyValue{ .String = s },
+                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                            else => graph_store.PropertyValue{ .Null = {} },
+                        };
+                        try store.setNodeProperty(node.id, set_clause.target.property, prop_value);
+                    }
+                }
+                
+                // Apply REMOVE clauses if present
+                for (q.remove_clauses) |remove_clause| {
+                    if (std.mem.eql(u8, remove_clause.target.object, match_variable orelse "")) {
+                        store.removeNodeProperty(node.id, remove_clause.target.property);
+                    }
+                }
+                
                 // Note: env is still valid here since we only free on continue
                 var row = try allocator.alloc(eval.Value, items.len);
                 
@@ -1101,8 +1341,70 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
             try sortRows(allocator, &result, order);
         }
         
+        // Apply WITH clause for query pipelining if present
+        if (q.with_clause) |with_clause| {
+            result = try executeWithClause(allocator, result, with_clause);
+        }
+        
         return result;
     }
+}
+
+fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause) !ExecutionResult {
+    // Transform the input result according to WITH clause items
+    const with_items = with_clause.items;
+    
+    // Calculate new column count - allocate new strings for column names
+    var new_columns = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    defer new_columns.deinit(allocator);
+    
+    for (with_items) |item| {
+        const alias = item.alias orelse getExpressionNameFromAst(item.expr);
+        // Duplicate the column name to avoid double-free
+        const owned_alias = try allocator.dupe(u8, alias);
+        try new_columns.append(allocator, owned_alias);
+    }
+    
+    // Transform each row according to WITH items
+    var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+    
+    for (input_result.rows) |input_row| {
+        var new_row = try allocator.alloc(eval.Value, with_items.len);
+        
+        // Create environment from input row for expression evaluation
+        const env = eval.Env{
+            .names = input_result.columns,
+            .values = input_row,
+        };
+        
+        for (with_items, 0..) |item, i| {
+            // Evaluate the WITH expression in the context of the current row
+            new_row[i] = try eval.evalExpr(allocator, item.expr, env);
+        }
+        
+        try new_rows.append(allocator, new_row);
+    }
+    
+    // Create a new flags list to avoid sharing references
+    var new_flags = try std.ArrayList([]const u8).initCapacity(allocator, input_result.flags.items.len);
+    for (input_result.flags.items) |flag| {
+        try new_flags.append(allocator, try allocator.dupe(u8, flag));
+    }
+    
+    return ExecutionResult{
+        .columns = try new_columns.toOwnedSlice(allocator),
+        .rows = try new_rows.toOwnedSlice(allocator),
+        .flags = new_flags,
+    };
+}
+
+fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
+    return switch (expr) {
+        .Ident => |ident| ident.orig,
+        .PropertyAccess => |prop| prop.property,
+        .Call => |call| if (call.callee.* == .Ident) call.callee.Ident.orig else "expr",
+        else => "expr",
+    };
 }
 
 fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes: []*graph_store.Node) !eval.Value {

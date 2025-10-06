@@ -112,6 +112,14 @@ pub const GraphStore = struct {
         }
         return null;
     }
+    
+    pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            _ = node.properties.remove(key);
+            // Save to persistent storage
+            self.saveToFile() catch {};
+        }
+    }
 
     pub fn getAllNodes(self: *GraphStore) []Node {
         var result = self.allocator.alloc(Node, self.nodes.count()) catch return &.{};
@@ -198,7 +206,7 @@ pub const GraphStore = struct {
     }
     
     // Simple file-based persistence for testing
-    fn saveToFile(self: *GraphStore) !void {
+    pub fn saveToFile(self: *GraphStore) !void {
         const file = try std.fs.cwd().createFile("/tmp/geode_graph_store.dat", .{});
         defer file.close();
         
