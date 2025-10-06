@@ -935,7 +935,7 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 
                 // Get edges from this node
                 const edges = store.getEdgesFrom(left_node.id);
-                defer allocator.free(edges);
+                // Note: edges are allocated by store's allocator, don't free here
                 
                 for (edges) |edge| {
                     // Filter by relationship type if specified

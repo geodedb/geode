@@ -202,37 +202,244 @@ pub const GraphStore = struct {
         const file = try std.fs.cwd().createFile("/tmp/geode_graph_store.dat", .{});
         defer file.close();
         
-        // Simple format: just save node count and next_id
-        var buf: [16]u8 = undefined;
-        std.mem.writeInt(u64, buf[0..8], self.next_node_id, .little);
-        std.mem.writeInt(u64, buf[8..16], self.nodes.count(), .little);
-        _ = try file.write(&buf);
+        // Write header: next_node_id, next_edge_id, node_count, edge_count
+        var header: [32]u8 = undefined;
+        std.mem.writeInt(u64, header[0..8], self.next_node_id, .little);
+        std.mem.writeInt(u64, header[8..16], self.next_edge_id, .little);
+        std.mem.writeInt(u64, header[16..24], self.nodes.count(), .little);
+        std.mem.writeInt(u64, header[24..32], self.edges.count(), .little);
+        _ = try file.write(&header);
+        
+        // Write each node
+        var node_iter = self.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            // Write node ID
+            var id_buf: [8]u8 = undefined;
+            std.mem.writeInt(u64, &id_buf, node.id, .little);
+            _ = try file.write(&id_buf);
+            
+            // Write label count
+            var label_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &label_count_buf, @intCast(node.labels.len), .little);
+            _ = try file.write(&label_count_buf);
+            
+            // Write each label
+            for (node.labels) |label| {
+                var len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &len_buf, @intCast(label.len), .little);
+                _ = try file.write(&len_buf);
+                _ = try file.write(label);
+            }
+            
+            // Write property count
+            var prop_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &prop_count_buf, @intCast(node.properties.count()), .little);
+            _ = try file.write(&prop_count_buf);
+            
+            // Write each property
+            var prop_iter = node.properties.iterator();
+            while (prop_iter.next()) |prop| {
+                // Write key length and key
+                var key_len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &key_len_buf, @intCast(prop.key_ptr.*.len), .little);
+                _ = try file.write(&key_len_buf);
+                _ = try file.write(prop.key_ptr.*);
+                
+                // Write value type and value
+                const val_type: u8 = switch (prop.value_ptr.*) {
+                    .String => 0,
+                    .Int => 1,
+                    .Float => 2,
+                    .Bool => 3,
+                    .Null => 4,
+                };
+                _ = try file.write(&[1]u8{val_type});
+                
+                switch (prop.value_ptr.*) {
+                    .String => |s| {
+                        var len_buf2: [4]u8 = undefined;
+                        std.mem.writeInt(u32, &len_buf2, @intCast(s.len), .little);
+                        _ = try file.write(&len_buf2);
+                        _ = try file.write(s);
+                    },
+                    .Int => |i| {
+                        var int_buf: [8]u8 = undefined;
+                        std.mem.writeInt(i64, &int_buf, i, .little);
+                        _ = try file.write(&int_buf);
+                    },
+                    .Float => |f| {
+                        var float_buf: [8]u8 = undefined;
+                        std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
+                        _ = try file.write(&float_buf);
+                    },
+                    .Bool => |b| {
+                        _ = try file.write(&[1]u8{if (b) 1 else 0});
+                    },
+                    .Null => {
+                        // Nothing to write for null
+                    },
+                }
+            }
+        }
+        
+        // Write each edge
+        var edge_iter = self.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            const edge = entry.value_ptr;
+            // Write edge data
+            var edge_buf: [24]u8 = undefined;
+            std.mem.writeInt(u64, edge_buf[0..8], edge.id, .little);
+            std.mem.writeInt(u64, edge_buf[8..16], edge.from_id, .little);
+            std.mem.writeInt(u64, edge_buf[16..24], edge.to_id, .little);
+            _ = try file.write(&edge_buf);
+            
+            // Write label
+            var label_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &label_len_buf, @intCast(edge.label.len), .little);
+            _ = try file.write(&label_len_buf);
+            _ = try file.write(edge.label);
+            
+            // Write property count (currently edges don't have properties in our simple impl)
+            _ = try file.write(&[4]u8{0, 0, 0, 0});
+        }
     }
     
     fn loadFromFile(self: *GraphStore) !void {
         const file = std.fs.cwd().openFile("/tmp/geode_graph_store.dat", .{}) catch return;
         defer file.close();
         
-        // Read saved state
-        var buf: [16]u8 = undefined;
-        const bytes_read = try file.read(&buf);
-        if (bytes_read < 16) return;
+        // Read header
+        var header: [32]u8 = undefined;
+        const bytes_read = try file.read(&header);
+        if (bytes_read < 32) return;
         
-        const saved_next_id = std.mem.readInt(u64, buf[0..8], .little);
-        const saved_node_count = std.mem.readInt(u64, buf[8..16], .little);
+        self.next_node_id = std.mem.readInt(u64, header[0..8], .little);
+        self.next_edge_id = std.mem.readInt(u64, header[8..16], .little);
+        const node_count = std.mem.readInt(u64, header[16..24], .little);
+        const edge_count = std.mem.readInt(u64, header[24..32], .little);
         
-        // Recreate nodes with empty labels for now (simple persistence)
-        self.next_node_id = saved_next_id;
-        var i: u64 = 1;
-        while (i < saved_next_id) : (i += 1) {
-            if (self.nodes.count() >= saved_node_count) break;
+        // Read nodes
+        var nodes_read: u64 = 0;
+        while (nodes_read < node_count) : (nodes_read += 1) {
+            // Read node ID
+            var id_buf: [8]u8 = undefined;
+            if ((try file.read(&id_buf)) < 8) break;
+            const node_id = std.mem.readInt(u64, &id_buf, .little);
             
-            const node = Node{
-                .id = i,
-                .labels = try self.allocator.alloc([]const u8, 0),
+            // Read label count
+            var label_count_buf: [4]u8 = undefined;
+            if ((try file.read(&label_count_buf)) < 4) break;
+            const label_count = std.mem.readInt(u32, &label_count_buf, .little);
+            
+            // Read labels
+            var labels = try self.allocator.alloc([]const u8, label_count);
+            for (0..label_count) |i| {
+                var len_buf: [4]u8 = undefined;
+                if ((try file.read(&len_buf)) < 4) break;
+                const label_len = std.mem.readInt(u32, &len_buf, .little);
+                
+                const label_data = try self.allocator.alloc(u8, label_len);
+                if ((try file.read(label_data)) < label_len) break;
+                labels[i] = label_data;
+            }
+            
+            // Read property count
+            var prop_count_buf: [4]u8 = undefined;
+            if ((try file.read(&prop_count_buf)) < 4) break;
+            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
+            
+            // Create node
+            var node = Node{
+                .id = node_id,
+                .labels = labels,
                 .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             };
-            try self.nodes.put(i, node);
+            
+            // Read properties
+            var props_read: u32 = 0;
+            while (props_read < prop_count) : (props_read += 1) {
+                // Read key
+                var key_len_buf: [4]u8 = undefined;
+                if ((try file.read(&key_len_buf)) < 4) break;
+                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
+                
+                const key_data = try self.allocator.alloc(u8, key_len);
+                if ((try file.read(key_data)) < key_len) break;
+                
+                // Read value type
+                var val_type_buf: [1]u8 = undefined;
+                if ((try file.read(&val_type_buf)) < 1) break;
+                const val_type = val_type_buf[0];
+                
+                // Read value based on type
+                const value = switch (val_type) {
+                    0 => blk: { // String
+                        var len_buf: [4]u8 = undefined;
+                        if ((try file.read(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
+                        const str_len = std.mem.readInt(u32, &len_buf, .little);
+                        
+                        const str_data = try self.allocator.alloc(u8, str_len);
+                        if ((try file.read(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
+                        break :blk PropertyValue{ .String = str_data };
+                    },
+                    1 => blk: { // Int
+                        var int_buf: [8]u8 = undefined;
+                        if ((try file.read(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
+                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
+                    },
+                    2 => blk: { // Float
+                        var float_buf: [8]u8 = undefined;
+                        if ((try file.read(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
+                        const bits = std.mem.readInt(u64, &float_buf, .little);
+                        break :blk PropertyValue{ .Float = @bitCast(bits) };
+                    },
+                    3 => blk: { // Bool
+                        var bool_buf: [1]u8 = undefined;
+                        if ((try file.read(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
+                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
+                    },
+                    4 => PropertyValue{ .Null = {} }, // Null
+                    else => PropertyValue{ .String = "" },
+                };
+                
+                try node.properties.put(key_data, value);
+            }
+            
+            try self.nodes.put(node_id, node);
+        }
+        
+        // Read edges
+        var edges_read: u64 = 0;
+        while (edges_read < edge_count) : (edges_read += 1) {
+            // Read edge data
+            var edge_buf: [24]u8 = undefined;
+            if ((try file.read(&edge_buf)) < 24) break;
+            const edge_id = std.mem.readInt(u64, edge_buf[0..8], .little);
+            const from_id = std.mem.readInt(u64, edge_buf[8..16], .little);
+            const to_id = std.mem.readInt(u64, edge_buf[16..24], .little);
+            
+            // Read label
+            var label_len_buf: [4]u8 = undefined;
+            if ((try file.read(&label_len_buf)) < 4) break;
+            const label_len = std.mem.readInt(u32, &label_len_buf, .little);
+            
+            const label_data = try self.allocator.alloc(u8, label_len);
+            if ((try file.read(label_data)) < label_len) break;
+            
+            // Read property count (skip for now)
+            var prop_count_buf: [4]u8 = undefined;
+            _ = try file.read(&prop_count_buf);
+            
+            const edge = Edge{
+                .id = edge_id,
+                .from_id = from_id,
+                .to_id = to_id,
+                .label = label_data,
+                .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            };
+            
+            try self.edges.put(edge_id, edge);
         }
     }
 };
@@ -249,6 +456,8 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         // Use a persistent arena allocator for the global store
         global_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         global_store = GraphStore.init(global_arena.?.allocator());
+        // Try to load existing data
+        global_store.?.loadFromFile() catch {};
         initialized = true;
     }
     return &global_store.?;
