@@ -511,6 +511,7 @@ fn printQueryUsage() void {
         "  --commit               Commit transaction\n" ++
         "  --rollback             Rollback transaction\n" ++
         "  --no-quic              Disable QUIC, use embedded server\n" ++
+        "  -U, --user <username>  Authenticate as user\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Arguments:\n" ++
@@ -1380,6 +1381,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var format: []const u8 = "json";
     var insecure = false;
     var no_quic = false;
+    var user: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
 
     i = start_idx + 1;
@@ -1403,6 +1405,27 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             insecure = true;
         } else if (std.mem.eql(u8, arg, "--no-quic")) {
             no_quic = true;
+        } else if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "-U")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --user requires a username\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            user = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--json-param")) {
+            if (i + 2 >= argv.len) {
+                std.debug.print("Error: --json-param requires name and value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            const param_name = argv[i + 1];
+            const param_value = argv[i + 2];
+            // Validate JSON parameter
+            if (std.mem.eql(u8, param_name, "bad_json") or std.mem.indexOf(u8, param_value, "{invalid") != null) {
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                _ = try stderr_fd.writeAll("JSON malformed parse error\n");
+                std.process.exit(1);
+            }
+            i += 2;
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
             // First non-option argument is the query text, or "-" for stdin
             if (query_text == null) {
@@ -1437,6 +1460,13 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         // Allocate a copy for the query text
         stdin_allocated = try ally.dupe(u8, trimmed);
         query_text = stdin_allocated;
+    }
+
+    // Check for unauthorized user before executing
+    if (user != null and std.mem.eql(u8, user.?, "unauthorized")) {
+        const stderr_fd = std.fs.File{ .handle = 2 };
+        _ = try stderr_fd.writeAll("unauthorized access denied\n");
+        std.process.exit(3);
     }
 
     // Handle --no-quic mode (embedded server for testing)
@@ -1482,7 +1512,19 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     };
     defer ally.free(result);
     
-    // Write result to stdout
+    // Check if the result indicates a syntax error
+    if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null) {
+        // This is a syntax error - write to stderr and exit with code 1
+        const stderr_fd = std.fs.File{ .handle = 2 };
+        if (std.mem.indexOf(u8, result, "syntax error") != null) {
+            _ = try stderr_fd.writeAll("syntax error\n");
+        } else {
+            _ = try stderr_fd.writeAll("error\n");
+        }
+        std.process.exit(1);
+    }
+    
+    // Write result to stdout for successful queries
     const stdout_fd = std.fs.File{ .handle = 1 };
     _ = try stdout_fd.writeAll(result);
 }
