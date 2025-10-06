@@ -2,6 +2,11 @@ const std = @import("std");
 const gql = @import("lib.zig");
 const execution = @import("execution.zig");
 
+// Cleanup function for test catalog - called at end of tests
+pub fn cleanupTestCatalog() void {
+    // No-op for now - catalog cleanup would go here if needed
+}
+
 // Main query execution function - ONLY parses and calls real Geode execution
 pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
     @setEvalBranchQuota(2000);
