@@ -88,6 +88,7 @@ This directory contains complete technical documentation for Geode, an enterpris
 | Document | Description | Status |
 |----------|-------------|--------|
 | [CLI Subprocess Elimination](CLI_SUBPROCESS_ELIMINATION.md) | Unified binary architecture | ✅ Complete |
+| [QUIC Implementation Fixes](QUIC_IMPLEMENTATION_FIXES.md) | Critical QUIC transport fixes and testing | ✅ Complete |
 
 ## 🏆 Implementation Status Summary
 
