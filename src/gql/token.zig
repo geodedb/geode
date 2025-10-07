@@ -178,10 +178,6 @@ pub const TokenKind = enum {
     ZONED,
     ZONE,
     BINDING,
-    TIME,
-
-    // pattern and string operators (extras)
-    regex_match, // =~
 
     eof,
     invalid,
@@ -362,7 +358,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     // Temporal keywords - checked before regular TIME keyword
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
-    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .TIME;
+    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
     if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit;
 
     // Regular TIME keyword for TIME ZONE statements (after temporal literal check)

@@ -1223,16 +1223,6 @@ pub const Parser = struct {
             rp.* = rhs;
             return .{ .Contains = .{ .value = lp, .needle = rp } };
         }
-        if (self.cur.kind == .regex_match) {
-            self.advance();
-            const rhs = try self.parseAddExpr();
-            const a = self.arena.allocator();
-            const lp = try a.create(ast.Expr);
-            const rp = try a.create(ast.Expr);
-            lp.* = left;
-            rp.* = rhs;
-            return .{ .RegexMatch = .{ .value = lp, .pattern = rp } };
-        }
         const op_kind = switch (self.cur.kind) {
             .eq => ast.BinOp.Eq,
             .ne => ast.BinOp.Ne,
@@ -2153,7 +2143,7 @@ pub const Parser = struct {
             }
         }
 
-        // Index name
+        // Index name (required in GQL)
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         const name = self.cur.lexeme;
         self.advance();
@@ -2867,7 +2857,8 @@ pub const Parser = struct {
                     .expression = graph_expr,
                 } },
             } };
-        } else if (self.cur.kind == .TIME) {
+        } else if (self.cur.kind == .time_lit) {
+            // Handle TIME ZONE in SESSION SET context
             self.advance();
             _ = try self.expect(.ZONE);
 
@@ -2960,7 +2951,8 @@ pub const Parser = struct {
             return .{ .SessionReset = .{
                 .arguments = .{ .Graph = property_graph },
             } };
-        } else if (self.cur.kind == .TIME) {
+        } else if (self.cur.kind == .time_lit) {
+            // Handle TIME ZONE in SESSION SET context
             self.advance();
             _ = try self.expect(.ZONE);
             return .{ .SessionReset = .{

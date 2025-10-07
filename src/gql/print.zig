@@ -466,11 +466,6 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try w.print(" CONTAINS ", .{});
             try printExprWith(w, co.needle.*, 0, opts);
         },
-        .RegexMatch => |rm| {
-            try printExprWith(w, rm.value.*, 0, opts);
-            try w.print(" =~ ", .{});
-            try printExprWith(w, rm.pattern.*, 0, opts);
-        },
         .Param => |pname| {
             try w.print("${s}", .{pname});
         },

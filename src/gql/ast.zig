@@ -179,7 +179,6 @@ pub const Expr = union(enum) {
     StartsWith: struct { value: *Expr, prefix: *Expr },
     EndsWith: struct { value: *Expr, suffix: *Expr },
     Contains: struct { value: *Expr, needle: *Expr },
-    RegexMatch: struct { value: *Expr, pattern: *Expr },
     NotIn: struct { value: *Expr, set: []*Expr },
     // CASE expression
     Case: struct { operand: ?*Expr, whens: []CaseWhen, else_expr: ?*Expr },
@@ -317,7 +316,7 @@ pub const UseGraphStatement = struct {
 
 // Index operation statements
 pub const CreateIndexStatement = struct {
-    name: []const u8,
+    name: []const u8,  // Required in GQL
     unique: bool = false,
     index_type: IndexType = .btree,
     label: []const u8,

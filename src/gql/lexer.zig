@@ -136,7 +136,7 @@ pub const Lexer = struct {
             self.col += 2;
             return tokv;
         }
-        // <=, >=, <>, !=, =~, ..
+        // <=, >=, <>, !=, ..
         if (remain.len >= 2) switch (remain[0]) {
             '<' => switch (remain[1]) {
                 '=' => {
@@ -161,12 +161,6 @@ pub const Lexer = struct {
             },
             '!' => if (remain[1] == '=') {
                 const tokv: t.Token = .{ .kind = .ne, .lexeme = remain[0..2], .loc = loc };
-                self.idx += 2;
-                self.col += 2;
-                return tokv;
-            },
-            '=' => if (remain[1] == '~') {
-                const tokv: t.Token = .{ .kind = .regex_match, .lexeme = remain[0..2], .loc = loc };
                 self.idx += 2;
                 self.col += 2;
                 return tokv;

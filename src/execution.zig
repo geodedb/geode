@@ -279,6 +279,31 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
         .Show => |s| {
             return executeShow(allocator, s);
         },
+        .CreateIndex => |ci| {
+            // CREATE INDEX implementation
+            // For now, just acknowledge the creation without actually building index
+            _ = ci;
+            return ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]eval.Value, 0),
+                .flags = blk: {
+                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    break :blk list;
+                },
+            };
+        },
+        .DropIndex => |di| {
+            // DROP INDEX implementation
+            _ = di;
+            return ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]eval.Value, 0),
+                .flags = blk: {
+                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    break :blk list;
+                },
+            };
+        },
         else => return error.NotImplemented,
     }
 }

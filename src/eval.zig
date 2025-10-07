@@ -449,15 +449,8 @@ fn evalContains(val: Value, needle: Value) EvalError!Value {
     return .{ .Bool = std.mem.indexOf(u8, s, n) != null };
 }
 
-fn evalRegex(val: Value, pat: Value, ally: std.mem.Allocator) EvalError!Value {
-    _ = ally;
-    if (isNull(val) or isNull(pat)) return Value{ .Null = {} };
-    var buf1: [64]u8 = undefined;
-    var buf2: [64]u8 = undefined;
-    const s = try stringify(val, &buf1);
-    const p = try stringify(pat, &buf2);
-    return .{ .Bool = matchSimplePattern(s, p) };
-}
+// Removed: evalRegex was for Cypher =~ operator which is not part of GQL
+// GQL uses LIKE for pattern matching instead
 
 pub fn matchSimplePattern(s: []const u8, p_in: []const u8) bool {
     // Lightweight matcher: ^, $, ., .*, [..], escapes, '?' (no alternation)
@@ -567,11 +560,6 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             const v = try evalExpr(ally, cp.value.*, env);
             const n = try evalExpr(ally, cp.needle.*, env);
             break :blk5 try evalContains(v, n);
-        },
-        .RegexMatch => |rm| {
-            const v = try evalExpr(ally, rm.value.*, env);
-            const p = try evalExpr(ally, rm.pattern.*, env);
-            return try evalRegex(v, p, ally);
         },
         .Call => |call| blk_call: {
             // Extract function name from callee (should be an Ident expression)
@@ -882,17 +870,140 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         }
         return Value{ .Int = 0 };
     } else if (std.mem.eql(u8, function_name, "sum")) {
-        // For now, return a placeholder
-        return Value{ .Int = 0 };
+        // SUM aggregation function
+        if (args.len == 0) return Value{ .Null = {} };
+        
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .List => |list| {
+                if (list.len == 0) return Value{ .Null = {} };
+                
+                // Check if we have any decimals
+                var has_decimal = false;
+                for (list) |item| {
+                    if (item == .Decimal) {
+                        has_decimal = true;
+                        break;
+                    }
+                }
+                
+                if (has_decimal) {
+                    // Sum as decimal (for now, convert to int)
+                    var sum: i64 = 0;
+                    for (list) |item| {
+                        switch (item) {
+                            .Int => |n| sum += n,
+                            .Decimal => |d| sum += @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))),
+                            else => {},
+                        }
+                    }
+                    return Value{ .Int = sum };
+                } else {
+                    // Sum as integer
+                    var sum: i64 = 0;
+                    for (list) |item| {
+                        switch (item) {
+                            .Int => |n| sum += n,
+                            else => {},
+                        }
+                    }
+                    return Value{ .Int = sum };
+                }
+            },
+            else => return Value{ .Null = {} },
+        }
     } else if (std.mem.eql(u8, function_name, "avg")) {
-        // For now, return a placeholder
-        return Value{ .Int = 0 };
+        // AVG aggregation function
+        if (args.len == 0) return Value{ .Null = {} };
+        
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .List => |list| {
+                if (list.len == 0) return Value{ .Null = {} };
+                
+                var sum: i64 = 0;
+                var count: usize = 0;
+                for (list) |item| {
+                    switch (item) {
+                        .Int => |n| {
+                            sum += n;
+                            count += 1;
+                        },
+                        .Decimal => |d| {
+                            sum += @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale)));
+                            count += 1;
+                        },
+                        else => {},
+                    }
+                }
+                
+                if (count == 0) return Value{ .Null = {} };
+                return Value{ .Int = @divFloor(sum, @as(i64, @intCast(count))) };
+            },
+            else => return Value{ .Null = {} },
+        }
     } else if (std.mem.eql(u8, function_name, "min")) {
-        // For now, return a placeholder
-        return Value{ .Null = {} };
+        // MIN aggregation function
+        if (args.len == 0) return Value{ .Null = {} };
+        
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .List => |list| {
+                if (list.len == 0) return Value{ .Null = {} };
+                
+                var min_val = list[0];
+                for (list[1..]) |item| {
+                    // Simple comparison for common types
+                    const is_less = switch (item) {
+                        .Int => |n| switch (min_val) {
+                            .Int => |m| n < m,
+                            else => false,
+                        },
+                        .Str => |s| switch (min_val) {
+                            .Str => |ms| std.mem.order(u8, s, ms) == .lt,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    if (is_less) {
+                        min_val = item;
+                    }
+                }
+                return min_val;
+            },
+            else => return Value{ .Null = {} },
+        }
     } else if (std.mem.eql(u8, function_name, "max")) {
-        // For now, return a placeholder
-        return Value{ .Null = {} };
+        // MAX aggregation function
+        if (args.len == 0) return Value{ .Null = {} };
+        
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .List => |list| {
+                if (list.len == 0) return Value{ .Null = {} };
+                
+                var max_val = list[0];
+                for (list[1..]) |item| {
+                    // Simple comparison for common types
+                    const is_greater = switch (item) {
+                        .Int => |n| switch (max_val) {
+                            .Int => |m| n > m,
+                            else => false,
+                        },
+                        .Str => |s| switch (max_val) {
+                            .Str => |ms| std.mem.order(u8, s, ms) == .gt,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    if (is_greater) {
+                        max_val = item;
+                    }
+                }
+                return max_val;
+            },
+            else => return Value{ .Null = {} },
+        }
     }
 
     // Evaluate arguments first
