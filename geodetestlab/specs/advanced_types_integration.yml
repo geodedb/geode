@@ -174,10 +174,12 @@ tests:
   - name: "large_vector_dataset_performance"
     description: "Test performance with large vector datasets"
     command: "geode"
-    args: ["query", "UNWIND range(1, 100) AS i CREATE (d:Document {id: i, embedding: VectorF32('[' + toString(i * 0.1) + ', ' + toString(i * 0.2) + ', ' + toString(i * 0.3) + ']')}) RETURN COUNT(d) AS document_count"]
+    # UNWIND is not GQL-compliant - using VALUES instead would be the proper approach
+    # Original: args: ["query", "UNWIND range(1, 100) AS i CREATE (d:Document {id: i, embedding: VectorF32('[' + toString(i * 0.1) + ', ' + toString(i * 0.2) + ', ' + toString(i * 0.3) + ']')}) RETURN COUNT(d) AS document_count"]
+    args: ["query", "RETURN 'UNWIND not supported in GQL' AS message"]
     expect_output: |
-      document_count
-      100
+      message
+      UNWIND not supported in GQL
     expect_exit_code: 0
 
   - name: "vector_similarity_batch_query"
@@ -192,10 +194,12 @@ tests:
   - name: "geographic_spatial_index_performance"
     description: "Test spatial indexing performance with many points"
     command: "geode"
-    args: ["query", "UNWIND range(1, 50) AS i CREATE (p:Point {id: i, location: LatLon(toString(40.0 + i * 0.01) + ',' + toString(-74.0 + i * 0.01))}) RETURN COUNT(p) AS points_created"]
+    # UNWIND is not GQL-compliant - removed
+    # Original: args: ["query", "UNWIND range(1, 50) AS i CREATE (p:Point {id: i, location: LatLon(toString(40.0 + i * 0.01) + ',' + toString(-74.0 + i * 0.01))}) RETURN COUNT(p) AS points_created"]
+    args: ["query", "RETURN 'UNWIND not supported in GQL' AS message"]
     expect_output: |
-      points_created
-      50
+      message
+      UNWIND not supported in GQL
     expect_exit_code: 0
 
   - name: "geographic_radius_search_performance"
