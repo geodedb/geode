@@ -852,6 +852,53 @@ fn heapValueToEvalValue(value: heap.Value) Value {
 /// Try to execute basic built-in functions (length, upper, lower, etc.)
 fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
+    
+    // Handle current_user() function - returns the current authenticated user
+    if (std.mem.eql(u8, function_name, "current_user")) {
+        if (args.len != 0) return null;
+        // Check if we have a token-authenticated user in the environment
+        if (env.get("__token_user__")) |user| {
+            return user;
+        }
+        // Default to returning "system" user if no authentication
+        return Value{ .Str = "system" };
+    }
+    
+    // Handle keys() function for maps
+    if (std.mem.eql(u8, function_name, "keys")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Map => |map| {
+                var keys = try ally.alloc(Value, map.count());
+                var iter = map.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                }
+                return Value{ .List = keys };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
+    // Handle values() function for maps
+    if (std.mem.eql(u8, function_name, "values")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Map => |map| {
+                var values = try ally.alloc(Value, map.count());
+                var iter = map.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    values[i] = entry.value_ptr.*;
+                }
+                return Value{ .List = values };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
 
     // Handle id() function - returns node ID or input if already an integer
     if (std.mem.eql(u8, function_name, "id")) {

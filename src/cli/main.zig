@@ -1382,6 +1382,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var insecure = false;
     var no_quic = false;
     var user: ?[]const u8 = null;
+    var token: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
 
     i = start_idx + 1;
@@ -1411,6 +1412,13 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             user = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--token")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --token requires an API token\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            token = argv[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, arg, "--json-param")) {
             if (i + 2 >= argv.len) {
@@ -1472,7 +1480,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Handle --no-quic mode (embedded server for testing)
     if (no_quic) {
         // Execute query directly using embedded server
-        try executeNoQuicQuery(ally, query_text.?, format);
+        try executeNoQuicQuery(ally, query_text.?, format, token);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
@@ -1482,7 +1490,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
 
 /// Execute query in no-QUIC mode (embedded server for testing)
-fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8) !void {
+fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8) !void {
     _ = format;
     
     // Handle empty queries
@@ -1495,9 +1503,16 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     // Use the geode module to execute the query via test harness
     const geode_lib = @import("geode");
     
-    // Execute query using the test harness
+    // Execute query using the test harness with authentication
     var mut_ally = ally;
-    const result = geode_lib.test_harness.runQuery(&mut_ally, query_text) catch |err| {
+    
+    // Prepare authentication options
+    const options = geode_lib.test_harness.QueryOptions{
+        .token = token,
+        .user = null,
+    };
+    
+    const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
         // Handle specific test cases that should go to stderr
         if (std.mem.indexOf(u8, query_text, "bad_json") != null) {
             const stderr_fd = std.fs.File{ .handle = 2 };

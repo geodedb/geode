@@ -7,8 +7,19 @@ pub fn cleanupTestCatalog() void {
     // No-op for now - catalog cleanup would go here if needed
 }
 
+// Query execution options for authentication context
+pub const QueryOptions = struct {
+    token: ?[]const u8 = null,
+    user: ?[]const u8 = null,
+};
+
 // Main query execution function - ONLY parses and calls real Geode execution
 pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
+    return runQueryWithAuth(allocator, query, .{});
+}
+
+// Query execution with authentication context
+pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, options: QueryOptions) ![]u8 {
     @setEvalBranchQuota(2000);
     
     // Check for double-hyphen comments (special case)
@@ -34,8 +45,14 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
         mut_pr.deinit();
     }
 
+    // Create execution context with authentication if token provided
+    const exec_context = execution.ExecutionContext{
+        .user = if (options.token != null) "authenticated_user" else null,
+        .token = options.token,
+    };
+    
     // Execute the parsed program using Geode's execution engine
-    const exec_result = execution.executeProgram(allocator.*, &parse_result.program) catch |err| {
+    const exec_result = execution.executeProgramWithContext(allocator.*, &parse_result.program, exec_context) catch |err| {
         // Return appropriate error for execution failures
         if (err == error.GroupingError) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"grouping error: non-aggregated expression not in GROUP BY\",\"additional_statuses\":[]}}", .{});

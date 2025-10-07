@@ -3,6 +3,11 @@ const ast = @import("gql/ast.zig");
 const eval = @import("eval.zig");
 const graph_store = @import("graph_store.zig");
 
+pub const ExecutionContext = struct {
+    user: ?[]const u8 = null,
+    token: ?[]const u8 = null,
+};
+
 pub const ExecutionError = error{
     OutOfMemory,
     NotImplemented,
@@ -177,6 +182,10 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
 }
 
 pub fn executeProgram(allocator: std.mem.Allocator, program: *const ast.Program) !ExecutionResult {
+    return executeProgramWithContext(allocator, program, .{});
+}
+
+pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     if (program.statements.len == 0) {
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
@@ -197,7 +206,7 @@ pub fn executeProgram(allocator: std.mem.Allocator, program: *const ast.Program)
             result.deinit(allocator);
         }
         
-        last_result = try executeStatement(allocator, stmt);
+        last_result = try executeStatementWithContext(allocator, stmt, context);
     }
     
     return last_result orelse ExecutionResult{
@@ -211,10 +220,14 @@ pub fn executeProgram(allocator: std.mem.Allocator, program: *const ast.Program)
 }
 
 fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !ExecutionResult {
+    return executeStatementWithContext(allocator, stmt, .{});
+}
+
+fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     switch (stmt) {
         .Query => |q| {
             // Check if query has SKIP or LIMIT
-            var result = try executeQuery(allocator, q);
+            var result = try executeQueryWithContext(allocator, q, context);
             
             // Apply SKIP if present
             if (q.offset) |skip_count| {
@@ -418,6 +431,10 @@ fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
 }
 
 fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
+    return executeQueryWithContext(allocator, q, .{});
+}
+
+fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // Check for GROUP BY validation first
     try validateGroupBy(q.ret, q.group_by);
     
@@ -432,7 +449,7 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     }
     
     // Otherwise just execute the return clause
-    var result = try executeReturnClause(allocator, q.ret);
+    var result = try executeReturnClauseWithContext(allocator, q.ret, context);
     
     // Apply ORDER BY if present
     if (q.order_by) |order| {
@@ -2693,9 +2710,25 @@ fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClaus
 }
 
 fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !ExecutionResult {
+    return executeReturnClauseWithContext(allocator, ret, .{});
+}
+
+fn executeReturnClauseWithContext(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext) !ExecutionResult {
+    // Build environment with authentication context
+    var names_list = std.ArrayList([]const u8){};
+    defer names_list.deinit(allocator);
+    var values_list = std.ArrayList(eval.Value){};
+    defer values_list.deinit(allocator);
+    
+    // Add token user to environment if authenticated
+    if (context.token != null) {
+        try names_list.append(allocator, "__token_user__");
+        try values_list.append(allocator, eval.Value{ .Str = context.user orelse "authenticated_user" });
+    }
+    
     const env = eval.Env{
-        .names = &.{},
-        .values = &.{},
+        .names = names_list.items,
+        .values = values_list.items,
     };
     return executeReturnClauseWithEnv(allocator, ret, env);
 }
