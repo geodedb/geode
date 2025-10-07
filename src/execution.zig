@@ -1288,12 +1288,17 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
         if (q.group_by) |group_by| {
             // GROUP BY with aggregations - group rows and compute aggregations per group
             var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
+            var group_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
             defer {
                 var iter = groups.iterator();
                 while (iter.next()) |entry| {
                     entry.value_ptr.deinit(allocator);
                 }
                 groups.deinit();
+                for (group_keys.items) |key| {
+                    allocator.free(key);
+                }
+                group_keys.deinit(allocator);
             }
             
             // Group nodes by grouping key values (filter by labels first)
@@ -1364,23 +1369,42 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 // Evaluate grouping key for this node
                 // For now, assume single grouping key that's a property access
                 var group_key_value: []const u8 = "";
+                var key_val = eval.Value{ .Null = {} };
                 if (group_by.keys.len > 0) {
                     const key_expr = group_by.keys[0];
-                    const key_val = try evaluateNodeExpression(allocator, key_expr, node);
+                    key_val = try evaluateNodeExpression(allocator, key_expr, node);
                     if (key_val == .Str) {
                         group_key_value = key_val.Str;
+                    } else if (key_val == .Int) {
+                        // Convert integer to string for grouping
+                        var buf: [32]u8 = undefined;
+                        group_key_value = try allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}", .{key_val.Int}));
                     } else if (key_val == .Null) {
                         group_key_value = "<null>";
                     }
                 }
                 
-                // Add node to appropriate group
-                if (groups.getPtr(group_key_value)) |group| {
-                    try group.append(allocator, node);
-                } else {
+                // Add node to appropriate group - check if key exists by value
+                var found_group = false;
+                var group_iter = groups.iterator();
+                while (group_iter.next()) |g_entry| {
+                    if (std.mem.eql(u8, g_entry.key_ptr.*, group_key_value)) {
+                        try g_entry.value_ptr.append(allocator, node);
+                        found_group = true;
+                        break;
+                    }
+                }
+                
+                if (!found_group) {
+                    // Store the key for deallocation later
+                    const stored_key = if (key_val == .Int) group_key_value else try allocator.dupe(u8, group_key_value);
+                    if (key_val == .Int) {
+                        try group_keys.append(allocator, stored_key);
+                    }
+                    
                     var new_group = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
                     try new_group.append(allocator, node);
-                    try groups.put(group_key_value, new_group);
+                    try groups.put(stored_key, new_group);
                 }
             }
             

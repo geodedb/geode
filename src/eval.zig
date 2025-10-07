@@ -1250,37 +1250,19 @@ test "eval: string predicates and regex basic" {
     var al = ast.Expr{ .String = "Al" };
     var z = ast.Expr{ .String = "Z" };
     var ice = ast.Expr{ .String = "ice" };
-    var re_pat = ast.Expr{ .String = "^A.*" };
     const sw = ast.Expr{ .StartsWith = .{ .value = &s, .prefix = &al } };
     const ew = ast.Expr{ .EndsWith = .{ .value = &s, .suffix = &z } };
     const ct = ast.Expr{ .Contains = .{ .value = &s, .needle = &ice } };
-    const rx = ast.Expr{ .RegexMatch = .{ .value = &s, .pattern = &re_pat } };
+    // Removed regex test - not part of GQL
     const v1 = try evalExpr(ally, sw, env);
     const v2 = try evalExpr(ally, ew, env);
     const v3 = try evalExpr(ally, ct, env);
-    const v4 = try evalExpr(ally, rx, env);
     try std.testing.expect(v1 == .Bool and v1.Bool == true);
     try std.testing.expect(v2 == .Bool and v2.Bool == false);
     try std.testing.expect(v3 == .Bool and v3.Bool == true);
-    try std.testing.expect(v4 == .Bool and v4.Bool == true);
 }
 
-test "eval: regex classes, negation, optional, escapes" {
-    const ally = std.testing.allocator;
-    var s = ast.Expr{ .String = "Alice." };
-    var p1 = ast.Expr{ .String = "A[il]ice\\." }; // class and escaped dot
-    var p2 = ast.Expr{ .String = "^[^B].*$" }; // negated class at start, anchor end
-    var p3 = ast.Expr{ .String = "Al?ice\\." }; // optional 'l'
-    const rx1 = ast.Expr{ .RegexMatch = .{ .value = &s, .pattern = &p1 } };
-    const rx2 = ast.Expr{ .RegexMatch = .{ .value = &s, .pattern = &p2 } };
-    const rx3 = ast.Expr{ .RegexMatch = .{ .value = &s, .pattern = &p3 } };
-    const v1 = try evalExpr(ally, rx1, .{ .names = &.{}, .values = &.{} });
-    const v2 = try evalExpr(ally, rx2, .{ .names = &.{}, .values = &.{} });
-    const v3 = try evalExpr(ally, rx3, .{ .names = &.{}, .values = &.{} });
-    try std.testing.expect(v1 == .Bool and v1.Bool);
-    try std.testing.expect(v2 == .Bool and v2.Bool);
-    try std.testing.expect(v3 == .Bool and v3.Bool);
-}
+// Removed test "eval: regex classes, negation, optional, escapes" - regex not part of GQL
 
 test "eval: empty and NULL edge cases for string predicates" {
     const ally = std.testing.allocator;
@@ -1356,12 +1338,7 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     const eq3 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &p_int, .right = &s_ident } };
     const v3b = try evalExpr(ally, eq3, env);
     try std.testing.expect(v3b == .Bool and !v3b.Bool);
-    // Regex via parameter: "Alice" =~ $pat -> true
-    var val = ast.Expr{ .String = "Alice" };
-    var pat = ast.Expr{ .Param = "pat" };
-    const rx = ast.Expr{ .RegexMatch = .{ .value = &val, .pattern = &pat } };
-    const v4 = try evalExpr(ally, rx, env);
-    try std.testing.expect(v4 == .Bool and v4.Bool);
+    // Removed regex test - not part of GQL
 }
 
 test "eval: CASE permutations with multiple WHENs and ELSE variants" {
