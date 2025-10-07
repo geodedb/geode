@@ -1,0 +1,362 @@
+name: "Geode Edge Cases and Error Handling"
+description: "Test edge cases, boundary conditions, and error handling for functions"
+version: "1.0.0"
+provider: "cli"
+
+setup:
+  - command: "shell"
+    args: []
+    stdin: |
+      CREATE SCHEMA IF NOT EXISTS test_edge_cases;
+      USE test_edge_cases;
+      CREATE NODE TestNode {
+        int_val: INTEGER,
+        decimal_val: DECIMAL(10,5),
+        string_val: STRING,
+        double_val: DOUBLE,
+        bool_val: BOOLEAN,
+        date_val: DATE,
+        time_val: TIME
+      };
+    expected_output:
+      contains:
+        - "Schema created"
+
+tests:
+  # Numeric Overflow/Underflow
+  - name: "Integer Overflow"
+    command: "query"
+    args: ["RETURN 9223372036854775807 + 1 AS result"]
+    expected_error:
+      contains:
+        - "overflow"
+  
+  - name: "Decimal Precision Limit"
+    command: "query"
+    args: ["RETURN CAST(1.123456789012345678901234567890 AS DECIMAL(30,29)) AS result"]
+    expected_output:
+      pattern: "1\\.\\d{29}"
+  
+  - name: "Very Small Decimal"
+    command: "query"
+    args: ["RETURN CAST(0.00000000000000000001 AS DECIMAL(20,20)) AS result"]
+    expected_output:
+      contains:
+        - "0.00000000000000000001"
+  
+  # String Boundary Cases
+  - name: "Empty String Length"
+    command: "query"
+    args: ["RETURN length('') AS result"]
+    expected_output:
+      contains:
+        - "0"
+  
+  - name: "Empty String Upper"
+    command: "query"
+    args: ["RETURN upper('') AS result"]
+    expected_output:
+      contains:
+        - ""
+  
+  - name: "Very Long String"
+    command: "query"
+    args: ["WITH repeat('a', 10000) AS long_str RETURN length(long_str) AS result"]
+    expected_output:
+      contains:
+        - "10000"
+  
+  - name: "Unicode String Length"
+    command: "query"
+    args: ["RETURN length('你好世界🌍') AS result"]
+    expected_output:
+      contains:
+        - "5"
+  
+  - name: "Substring with Negative Index"
+    command: "query"
+    args: ["RETURN substring('hello', -1, 2) AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "Substring with Zero Index"
+    command: "query"
+    args: ["RETURN substring('hello', 0, 2) AS result"]
+    expected_output:
+      contains:
+        - ""
+  
+  # NULL Handling
+  - name: "NULL in Math Functions"
+    command: "query"
+    args: ["RETURN abs(NULL) AS abs_null, sqrt(NULL) AS sqrt_null, pow(NULL, 2) AS pow_null"]
+    expected_output:
+      contains:
+        - "NULL"
+  
+  - name: "NULL in String Functions"
+    command: "query"
+    args: ["RETURN length(NULL) AS len_null, upper(NULL) AS upper_null, trim(NULL) AS trim_null"]
+    expected_output:
+      contains:
+        - "NULL"
+  
+  - name: "NULL in Aggregations"
+    command: "shell"
+    args: []
+    stdin: |
+      CREATE (n1:TestNode {int_val: 10})
+      CREATE (n2:TestNode {int_val: NULL})
+      CREATE (n3:TestNode {int_val: 20})
+      MATCH (n:TestNode) RETURN avg(n.int_val) AS avg_with_null, count(n.int_val) AS count_non_null
+    expected_output:
+      contains:
+        - "15"  # Average ignores NULL
+        - "2"   # Count ignores NULL
+  
+  # Special Numeric Values
+  - name: "Division by Zero - Integer"
+    command: "query"
+    args: ["RETURN 10 / 0 AS result"]
+    expected_error:
+      contains:
+        - "division by zero"
+  
+  - name: "Division by Zero - Decimal"
+    command: "query"
+    args: ["RETURN CAST(10.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) AS result"]
+    expected_error:
+      contains:
+        - "division by zero"
+  
+  - name: "MOD by Zero"
+    command: "query"
+    args: ["RETURN 10 % 0 AS result"]
+    expected_error:
+      contains:
+        - "division by zero"
+  
+  - name: "SQRT of Negative"
+    command: "query"
+    args: ["RETURN sqrt(-1) AS result"]
+    expected_error:
+      contains:
+        - "negative"
+  
+  - name: "LOG of Zero"
+    command: "query"
+    args: ["RETURN log(0) AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "LOG of Negative"
+    command: "query"
+    args: ["RETURN log(-1) AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "ASIN Out of Range"
+    command: "query"
+    args: ["RETURN asin(1.5) AS result"]
+    expected_error:
+      contains:
+        - "range"
+  
+  - name: "ACOS Out of Range"
+    command: "query"
+    args: ["RETURN acos(-1.5) AS result"]
+    expected_error:
+      contains:
+        - "range"
+  
+  # Type Conversion Edge Cases
+  - name: "Invalid Integer Cast"
+    command: "query"
+    args: ["RETURN CAST('not_a_number' AS INTEGER) AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "Invalid Decimal Cast"
+    command: "query"
+    args: ["RETURN CAST('12.34.56' AS DECIMAL(10,2)) AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "Boolean to Integer"
+    command: "query"
+    args: ["RETURN CAST(true AS INTEGER) AS true_int, CAST(false AS INTEGER) AS false_int"]
+    expected_output:
+      contains:
+        - "1"
+        - "0"
+  
+  # Date/Time Edge Cases
+  - name: "Invalid Date"
+    command: "query"
+    args: ["RETURN DATE '2024-02-30' AS result"]
+    expected_error:
+      contains:
+        - "invalid"
+  
+  - name: "Invalid Time"
+    command: "query"
+    args: ["RETURN TIME '25:00:00' AS result"]
+    expected_error:
+      contains:
+        - "invalid"
+  
+  - name: "Leap Year Date"
+    command: "query"
+    args: ["RETURN DATE '2024-02-29' AS result"]
+    expected_output:
+      contains:
+        - "2024-02-29"
+  
+  # Graph Edge Cases
+  - name: "Empty Pattern Match"
+    command: "query"
+    args: ["MATCH (n:NonExistentLabel) RETURN count(n) AS result"]
+    expected_output:
+      contains:
+        - "0"
+  
+  - name: "Self Loop"
+    command: "shell"
+    args: []
+    stdin: |
+      CREATE (n:TestNode {int_val: 42})
+      MATCH (n:TestNode {int_val: 42})
+      CREATE (n)-[:SELF_LOOP]->(n)
+      MATCH (n:TestNode)-[r:SELF_LOOP]->(n) RETURN count(r) AS self_loops
+    expected_output:
+      contains:
+        - "1"
+  
+  - name: "Zero Length Path"
+    command: "query"
+    args: ["MATCH p = (n:TestNode) RETURN length(p) AS path_length"]
+    expected_output:
+      contains:
+        - "0"
+  
+  # Aggregation Edge Cases
+  - name: "Empty Aggregation"
+    command: "query"
+    args: ["MATCH (n:NonExistentLabel) RETURN sum(n.value) AS sum_empty, avg(n.value) AS avg_empty, count(n) AS count_empty"]
+    expected_output:
+      contains:
+        - "NULL"  # sum of empty set
+        - "NULL"  # avg of empty set
+        - "0"     # count of empty set
+  
+  - name: "Single Value Aggregation"
+    command: "shell"
+    args: []
+    stdin: |
+      CREATE (n:TestNode {int_val: 42})
+      MATCH (n:TestNode) WHERE n.int_val = 42 
+      RETURN min(n.int_val) AS min_val, max(n.int_val) AS max_val, avg(n.int_val) AS avg_val
+    expected_output:
+      contains:
+        - "42"
+  
+  # String Function Edge Cases
+  - name: "TRIM with Special Characters"
+    command: "query"
+    args: ["RETURN trim('\\t\\n  hello  \\r\\n') AS result"]
+    expected_output:
+      contains:
+        - "hello"
+  
+  - name: "REPLACE with Empty String"
+    command: "query"
+    args: ["RETURN replace('hello world', 'world', '') AS result"]
+    expected_output:
+      contains:
+        - "hello "
+  
+  - name: "REPLACE Non-existent Pattern"
+    command: "query"
+    args: ["RETURN replace('hello world', 'xyz', 'abc') AS result"]
+    expected_output:
+      contains:
+        - "hello world"
+  
+  - name: "SUBSTRING Entire String"
+    command: "query"
+    args: ["RETURN substring('hello', 1, 1000) AS result"]
+    expected_output:
+      contains:
+        - "hello"
+  
+  # Complex Expression Edge Cases
+  - name: "Nested NULL Propagation"
+    command: "query"
+    args: ["RETURN abs(sqrt(pow(NULL, 2))) AS result"]
+    expected_output:
+      contains:
+        - "NULL"
+  
+  - name: "Deep Function Nesting"
+    command: "query"
+    args: ["RETURN abs(floor(ceil(round(sqrt(pow(2, 3)), 2)))) AS result"]
+    expected_output:
+      contains:
+        - "3"
+  
+  - name: "Mixed Type Operations"
+    command: "query"
+    args: ["RETURN 10 + CAST('20' AS INTEGER) + 30.5 AS result"]
+    expected_output:
+      contains:
+        - "60.5"
+  
+  # Comparison Edge Cases
+  - name: "NULL Comparisons"
+    command: "query"
+    args: ["RETURN NULL = NULL AS null_eq, NULL <> NULL AS null_neq, NULL IS NULL AS null_is"]
+    expected_output:
+      contains:
+        - "NULL"  # NULL = NULL
+        - "NULL"  # NULL <> NULL
+        - "true"  # NULL IS NULL
+  
+  - name: "String Comparison Case Sensitivity"
+    command: "query"
+    args: ["RETURN 'Hello' = 'hello' AS case_sensitive, upper('Hello') = upper('hello') AS case_insensitive"]
+    expected_output:
+      contains:
+        - "false"
+        - "true"
+  
+  # Floating Point Precision
+  - name: "Float Precision Issues"
+    command: "query"
+    args: ["RETURN 0.1 + 0.2 AS result"]
+    expected_output:
+      pattern: "0\\.3\\d*"
+  
+  - name: "Very Large Exponent"
+    command: "query"
+    args: ["RETURN pow(10, 308) AS result"]
+    expected_output:
+      pattern: "1\\.?0*e\\+?308"
+  
+  - name: "Very Small Exponent"
+    command: "query"
+    args: ["RETURN pow(10, -308) AS result"]
+    expected_output:
+      pattern: "1\\.?0*e-308"
+
+cleanup:
+  - command: "shell"
+    args: []
+    stdin: "DROP SCHEMA test_edge_cases CASCADE;"
+    expected_output:
+      contains:
+        - "dropped"

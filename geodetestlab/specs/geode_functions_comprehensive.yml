@@ -1,0 +1,401 @@
+name: "Geode Functions Comprehensive"
+description: "Comprehensive test suite for all mathematical, string, and graph functions"
+version: "1.0.0"
+provider: "cli"
+
+setup:
+  - command: "shell"
+    args: []
+    stdin: |
+      CREATE SCHEMA IF NOT EXISTS test_functions_schema;
+      USE test_functions_schema;
+      CREATE NODE Person {name: STRING, age: INTEGER, score: DECIMAL(10,2)};
+      CREATE NODE Product {name: STRING, price: DECIMAL(10,2), quantity: INTEGER};
+      CREATE EDGE PURCHASED {date: DATE, amount: DECIMAL(10,2)};
+    expected_output:
+      contains:
+        - "Schema created"
+
+tests:
+  # Mathematical Functions - Basic
+  - name: "ABS Function - Integer"
+    command: "query"
+    args: ["RETURN abs(-42) AS result"]
+    expected_output:
+      contains:
+        - "42"
+  
+  - name: "ABS Function - Decimal"
+    command: "query"
+    args: ["RETURN abs(CAST(-3.14 AS DECIMAL(10,2))) AS result"]
+    expected_output:
+      contains:
+        - "3.14"
+  
+  - name: "SQRT Function"
+    command: "query"
+    args: ["RETURN sqrt(16) AS result"]
+    expected_output:
+      contains:
+        - "4"
+  
+  - name: "POW Function"
+    command: "query"
+    args: ["RETURN pow(2, 3) AS result"]
+    expected_output:
+      contains:
+        - "8"
+  
+  # Trigonometric Functions
+  - name: "SIN Function"
+    command: "query"
+    args: ["RETURN sin(0) AS result"]
+    expected_output:
+      contains:
+        - "0"
+  
+  - name: "COS Function"
+    command: "query"
+    args: ["RETURN cos(0) AS result"]
+    expected_output:
+      contains:
+        - "1"
+  
+  - name: "TAN Function"
+    command: "query"
+    args: ["RETURN tan(0) AS result"]
+    expected_output:
+      contains:
+        - "0"
+  
+  # Logarithmic and Exponential Functions
+  - name: "LOG Function"
+    command: "query"
+    args: ["RETURN log(2.71828) AS result"]
+    expected_output:
+      contains:
+        - "1"
+  
+  - name: "EXP Function"
+    command: "query"
+    args: ["RETURN exp(0) AS result"]
+    expected_output:
+      contains:
+        - "1"
+  
+  # Rounding Functions
+  - name: "CEIL Function"
+    command: "query"
+    args: ["RETURN ceil(3.14) AS result"]
+    expected_output:
+      contains:
+        - "4"
+  
+  - name: "FLOOR Function"
+    command: "query"
+    args: ["RETURN floor(3.14) AS result"]
+    expected_output:
+      contains:
+        - "3"
+  
+  - name: "ROUND Function"
+    command: "query"
+    args: ["RETURN round(3.14159, 2) AS result"]
+    expected_output:
+      contains:
+        - "3.14"
+  
+  # String Functions - Basic
+  - name: "LENGTH Function"
+    command: "query"
+    args: ["RETURN length('hello world') AS result"]
+    expected_output:
+      contains:
+        - "11"
+  
+  - name: "SUBSTRING Function"
+    command: "query"
+    args: ["RETURN substring('hello world', 1, 5) AS result"]
+    expected_output:
+      contains:
+        - "hello"
+  
+  - name: "SUBSTRING Without Length"
+    command: "query"
+    args: ["RETURN substring('hello world', 7) AS result"]
+    expected_output:
+      contains:
+        - "world"
+  
+  - name: "UPPER Function"
+    command: "query"
+    args: ["RETURN upper('hello world') AS result"]
+    expected_output:
+      contains:
+        - "HELLO WORLD"
+  
+  - name: "LOWER Function"
+    command: "query"
+    args: ["RETURN lower('HELLO WORLD') AS result"]
+    expected_output:
+      contains:
+        - "hello world"
+  
+  - name: "TRIM Function"
+    command: "query"
+    args: ["RETURN trim('  hello  ') AS result"]
+    expected_output:
+      contains:
+        - "hello"
+  
+  - name: "REPLACE Function"
+    command: "query"
+    args: ["RETURN replace('hello world', 'world', 'geode') AS result"]
+    expected_output:
+      contains:
+        - "hello geode"
+  
+  # String Functions - Advanced
+  - name: "LEFT Function"
+    command: "query"
+    args: ["RETURN left('hello world', 5) AS result"]
+    expected_output:
+      contains:
+        - "hello"
+  
+  - name: "RIGHT Function"
+    command: "query"
+    args: ["RETURN right('hello world', 5) AS result"]
+    expected_output:
+      contains:
+        - "world"
+  
+  - name: "REVERSE Function"
+    command: "query"
+    args: ["RETURN reverse('hello') AS result"]
+    expected_output:
+      contains:
+        - "olleh"
+  
+  # Complex Nested Functions
+  - name: "Nested Math Functions"
+    command: "query"
+    args: ["RETURN sqrt(pow(3, 2) + pow(4, 2)) AS result"]
+    expected_output:
+      contains:
+        - "5"
+  
+  - name: "Nested String Functions"
+    command: "query"
+    args: ["RETURN upper(trim('  hello  ')) AS result"]
+    expected_output:
+      contains:
+        - "HELLO"
+  
+  - name: "Combined Math and String"
+    command: "query"
+    args: ["RETURN length(upper('test')) + abs(-10) AS result"]
+    expected_output:
+      contains:
+        - "14"
+  
+  # Decimal Scale Preservation
+  - name: "Decimal Scale Preservation - Addition"
+    command: "query"
+    args: ["RETURN CAST(3.14 AS DECIMAL(10,5)) + CAST(2.0 AS DECIMAL(10,5)) AS result"]
+    expected_output:
+      contains:
+        - "5.14000"
+  
+  - name: "Decimal Scale Preservation - Multiplication"
+    command: "query"
+    args: ["RETURN CAST(3.14 AS DECIMAL(10,2)) * CAST(2.0 AS DECIMAL(10,2)) AS result"]
+    expected_output:
+      contains:
+        - "6.28"
+  
+  # Graph Functions with Data
+  - name: "Create Test Graph Data"
+    command: "shell"
+    args: []
+    stdin: |
+      CREATE (p1:Person {name: 'Alice', age: 30, score: 95.5})
+      CREATE (p2:Person {name: 'Bob', age: 25, score: 87.3})
+      CREATE (p3:Person {name: 'Charlie', age: 35, score: 92.1})
+      CREATE (pr1:Product {name: 'Laptop', price: 999.99, quantity: 5})
+      CREATE (pr2:Product {name: 'Phone', price: 599.99, quantity: 10})
+      MATCH (p:Person {name: 'Alice'}), (pr:Product {name: 'Laptop'})
+      CREATE (p)-[:PURCHASED {date: DATE '2024-01-15', amount: 999.99}]->(pr)
+      MATCH (p:Person {name: 'Bob'}), (pr:Product {name: 'Phone'})
+      CREATE (p)-[:PURCHASED {date: DATE '2024-01-20', amount: 599.99}]->(pr)
+      MATCH (p:Person {name: 'Charlie'}), (pr:Product {name: 'Laptop'})
+      CREATE (p)-[:PURCHASED {date: DATE '2024-02-01', amount: 999.99}]->(pr)
+    expected_output:
+      contains:
+        - "created"
+  
+  # Aggregation Functions
+  - name: "COUNT Function"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN count(p) AS person_count"]
+    expected_output:
+      contains:
+        - "3"
+  
+  - name: "SUM Function"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN sum(p.score) AS total_score"]
+    expected_output:
+      contains:
+        - "274.9"
+  
+  - name: "AVG Function"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN avg(p.age) AS avg_age"]
+    expected_output:
+      contains:
+        - "30"
+  
+  - name: "MIN Function"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN min(p.age) AS min_age"]
+    expected_output:
+      contains:
+        - "25"
+  
+  - name: "MAX Function"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN max(p.age) AS max_age"]
+    expected_output:
+      contains:
+        - "35"
+  
+  # Graph Traversal Functions
+  - name: "Degree Centrality"
+    command: "query"
+    args: ["MATCH (p:Person)-[r]-() RETURN p.name, count(r) AS degree ORDER BY degree DESC"]
+    expected_output:
+      contains:
+        - "Alice"
+        - "1"
+  
+  - name: "Path Length"
+    command: "query"
+    args: ["MATCH path = (p1:Person)-[:PURCHASED]->(pr:Product) RETURN length(path) AS path_length"]
+    expected_output:
+      contains:
+        - "1"
+  
+  # Date/Time Functions
+  - name: "Current Date"
+    command: "query"
+    args: ["RETURN current_date() AS today"]
+    expected_output:
+      pattern: "\\d{4}-\\d{2}-\\d{2}"
+  
+  - name: "Current Time"
+    command: "query"
+    args: ["RETURN current_time() AS now"]
+    expected_output:
+      pattern: "\\d{2}:\\d{2}:\\d{2}"
+  
+  - name: "Current Timestamp"
+    command: "query"
+    args: ["RETURN current_timestamp() AS now"]
+    expected_output:
+      pattern: "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+  
+  # Type Conversion Functions
+  - name: "CAST to Integer"
+    command: "query"
+    args: ["RETURN CAST('42' AS INTEGER) AS result"]
+    expected_output:
+      contains:
+        - "42"
+  
+  - name: "CAST to Decimal"
+    command: "query"
+    args: ["RETURN CAST('3.14159' AS DECIMAL(10,2)) AS result"]
+    expected_output:
+      contains:
+        - "3.14"
+  
+  - name: "CAST to String"
+    command: "query"
+    args: ["RETURN CAST(42 AS STRING) AS result"]
+    expected_output:
+      contains:
+        - "42"
+  
+  # Complex Queries with Functions
+  - name: "Complex Math in WHERE Clause"
+    command: "query"
+    args: ["MATCH (p:Person) WHERE abs(p.score - 90) < 5 RETURN p.name"]
+    expected_output:
+      contains:
+        - "Charlie"
+  
+  - name: "String Function in WHERE Clause"
+    command: "query"
+    args: ["MATCH (p:Person) WHERE length(p.name) > 5 RETURN p.name ORDER BY p.name"]
+    expected_output:
+      contains:
+        - "Charlie"
+  
+  - name: "Functions with GROUP BY"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN substring(p.name, 1, 1) AS initial, count(p) AS count GROUP BY initial ORDER BY initial"]
+    expected_output:
+      contains:
+        - "A"
+        - "1"
+        - "B"
+        - "1"
+        - "C"
+        - "1"
+  
+  - name: "Functions in ORDER BY"
+    command: "query"
+    args: ["MATCH (p:Person) RETURN p.name ORDER BY length(p.name) DESC, p.name"]
+    expected_output:
+      contains:
+        - "Charlie"
+        - "Alice"
+        - "Bob"
+  
+  # Edge Cases and Error Handling
+  - name: "SQRT of Negative Number"
+    command: "query"
+    args: ["RETURN sqrt(-1) AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "Division by Zero"
+    command: "query"
+    args: ["RETURN 10 / 0 AS result"]
+    expected_error:
+      contains:
+        - "error"
+  
+  - name: "SUBSTRING Out of Bounds"
+    command: "query"
+    args: ["RETURN substring('hello', 10, 5) AS result"]
+    expected_output:
+      contains:
+        - ""
+  
+  - name: "NULL Handling in Functions"
+    command: "query"
+    args: ["RETURN abs(NULL) AS result"]
+    expected_output:
+      contains:
+        - "NULL"
+
+cleanup:
+  - command: "shell"
+    args: []
+    stdin: "DROP SCHEMA test_functions_schema CASCADE;"
+    expected_output:
+      contains:
+        - "dropped"
