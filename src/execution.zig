@@ -276,8 +276,36 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
             },
             };
         },
+        .Show => |s| {
+            return executeShow(allocator, s);
+        },
         else => return error.NotImplemented,
     }
+}
+
+fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionResult {
+    // For now, return empty result for all SHOW commands
+    // In the future, this would query the catalog/metadata
+    const column_list = switch (s.show_type) {
+        .indexes => &[_][]const u8{"name", "type", "table", "columns"},
+        .constraints => &[_][]const u8{"name", "type", "table", "columns"},
+        .tables => &[_][]const u8{"name", "type"},
+        .graphs => &[_][]const u8{"name"},
+        .procedures => &[_][]const u8{"name", "signature"},
+        .functions => &[_][]const u8{"name", "signature", "return_type"},
+    };
+    
+    // Allocate and copy column names
+    var columns = try allocator.alloc([]const u8, column_list.len);
+    for (column_list, 0..) |col, i| {
+        columns[i] = try allocator.dupe(u8, col);
+    }
+    
+    return ExecutionResult{
+        .columns = columns,
+        .rows = try allocator.alloc([]eval.Value, 0), // Empty for now
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
 }
 
 fn createTestGraphG1(allocator: std.mem.Allocator) !void {

@@ -82,11 +82,13 @@ pub const TokenKind = enum {
     SCAN,
     START,
     TRANSACTION,
+    BEGIN,
     COMMIT,
     ROLLBACK,
     CREATE,
     DELETE,
     MERGE,
+    SHOW,
     GRAPH,
     PROPERTY,
     DROP,
@@ -174,9 +176,9 @@ pub const TokenKind = enum {
     WALK,
     XOR,
     ZONED,
+    ZONE,
     BINDING,
     TIME,
-    ZONE,
 
     // pattern and string operators (extras)
     regex_match, // =~
@@ -261,11 +263,13 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "SCAN")) return .SCAN;
     if (std.ascii.eqlIgnoreCase(word, "START")) return .START;
     if (std.ascii.eqlIgnoreCase(word, "TRANSACTION")) return .TRANSACTION;
+    if (std.ascii.eqlIgnoreCase(word, "BEGIN")) return .BEGIN;
     if (std.ascii.eqlIgnoreCase(word, "COMMIT")) return .COMMIT;
     if (std.ascii.eqlIgnoreCase(word, "ROLLBACK")) return .ROLLBACK;
     if (std.ascii.eqlIgnoreCase(word, "CREATE")) return .CREATE;
     if (std.ascii.eqlIgnoreCase(word, "DELETE")) return .DELETE;
     if (std.ascii.eqlIgnoreCase(word, "MERGE")) return .MERGE;
+    if (std.ascii.eqlIgnoreCase(word, "SHOW")) return .SHOW;
     if (std.ascii.eqlIgnoreCase(word, "GRAPH")) return .GRAPH;
     if (std.ascii.eqlIgnoreCase(word, "PROPERTY")) return .PROPERTY;
     if (std.ascii.eqlIgnoreCase(word, "DROP")) return .DROP;
@@ -358,7 +362,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     // Temporal keywords - checked before regular TIME keyword
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
-    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
+    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .TIME;
     if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit;
 
     // Regular TIME keyword for TIME ZONE statements (after temporal literal check)

@@ -29,6 +29,7 @@ pub const Statement = union(enum) {
     // Index operations
     CreateIndex: CreateIndexStatement,
     DropIndex: DropIndexStatement,
+    Show: ShowStatement,
     // Backup operations
     Backup: BackupStatement,
     Restore: RestoreStatement,
@@ -327,6 +328,19 @@ pub const CreateIndexStatement = struct {
 pub const DropIndexStatement = struct {
     name: []const u8,
     if_exists: bool = false,
+};
+
+pub const ShowStatement = struct {
+    show_type: ShowType,
+};
+
+pub const ShowType = enum {
+    indexes,
+    constraints,
+    tables,
+    graphs,
+    procedures,
+    functions,
 };
 
 pub const IndexType = enum {

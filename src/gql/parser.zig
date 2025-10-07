@@ -290,6 +290,7 @@ pub const Parser = struct {
             .DETACH => self.parseDeleteStatement(),
             .MERGE => self.parseMergeStatement(),
             .DROP => self.parseDropStatement(),
+            .SHOW => self.parseShowStatement(),
             .USE => self.parseUseStatement(),
             .identifier => blk_ident: {
                 // Check for BACKUP and RESTORE keywords
@@ -541,12 +542,28 @@ pub const Parser = struct {
                 }
                 return error.UnexpectedToken;
             },
+            .BEGIN => {
+                self.advance();
+                // BEGIN can be standalone or followed by TRANSACTION
+                if (self.cur.kind == .TRANSACTION) {
+                    self.advance();
+                }
+                return .StartTransaction;
+            },
             .COMMIT => {
                 self.advance();
+                // COMMIT can be followed by TRANSACTION
+                if (self.cur.kind == .TRANSACTION) {
+                    self.advance();
+                }
                 return .Commit;
             },
             .ROLLBACK => {
                 self.advance();
+                // ROLLBACK can be followed by TRANSACTION
+                if (self.cur.kind == .TRANSACTION) {
+                    self.advance();
+                }
                 return .Rollback;
             },
             .CALL => blk_call: {
@@ -2220,6 +2237,43 @@ pub const Parser = struct {
         } };
     }
 
+    // Parse SHOW statement
+    fn parseShowStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.SHOW);
+        
+        // Determine what to show based on next token
+        const show_type: ast.ShowType = if (self.cur.kind == .identifier) blk: {
+            const type_str = self.cur.lexeme;
+            self.advance();
+            
+            if (std.ascii.eqlIgnoreCase(type_str, "INDEXES") or 
+                std.ascii.eqlIgnoreCase(type_str, "INDEX")) {
+                break :blk .indexes;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "CONSTRAINTS") or
+                       std.ascii.eqlIgnoreCase(type_str, "CONSTRAINT")) {
+                break :blk .constraints;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "TABLES") or
+                       std.ascii.eqlIgnoreCase(type_str, "TABLE")) {
+                break :blk .tables;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "GRAPHS") or
+                       std.ascii.eqlIgnoreCase(type_str, "GRAPH")) {
+                break :blk .graphs;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "PROCEDURES") or
+                       std.ascii.eqlIgnoreCase(type_str, "PROCEDURE")) {
+                break :blk .procedures;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "FUNCTIONS") or
+                       std.ascii.eqlIgnoreCase(type_str, "FUNCTION")) {
+                break :blk .functions;
+            } else {
+                return error.UnexpectedToken;
+            }
+        } else {
+            return error.UnexpectedToken;
+        };
+        
+        return .{ .Show = .{ .show_type = show_type } };
+    }
+
     // Parse DROP statement (DROP INDEX, DROP SCHEMA, DROP GRAPH, etc.)
     fn parseDropStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.DROP);
@@ -2815,7 +2869,7 @@ pub const Parser = struct {
             } };
         } else if (self.cur.kind == .TIME) {
             self.advance();
-            _ = try self.expect(.identifier); // expect ZONE
+            _ = try self.expect(.ZONE);
 
             // Parse time zone value
             const tz_value = if (self.cur.kind == .string_lit) blk: {
@@ -2908,7 +2962,7 @@ pub const Parser = struct {
             } };
         } else if (self.cur.kind == .TIME) {
             self.advance();
-            _ = try self.expect(.identifier); // expect ZONE
+            _ = try self.expect(.ZONE);
             return .{ .SessionReset = .{
                 .arguments = .TimeZone,
             } };
