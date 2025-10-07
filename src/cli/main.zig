@@ -567,24 +567,24 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
     defer conn.close();
 
     std.debug.print("DEBUG: Handling QUIC connection\n", .{});
-    
+
     // Import the QUIC library for direct access to handshake functions
     const QuicTransport = @import("transport/quic");
     const quic_lib = QuicTransport.quic_lib;
-    
+
     // Wait for handshake to complete
     if (conn.quic_connection) |qc| {
         var handshake_attempts: usize = 0;
         while (handshake_attempts < 50) : (handshake_attempts += 1) {
             // Poll to process handshake packets
             transport.poll(50) catch {};
-            
+
             // Check if handshake is complete
             if (quic_lib.handshakeComplete(qc)) {
                 std.debug.print("Handshake completed after {} attempts\n", .{handshake_attempts + 1});
                 break;
             }
-            
+
             std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
         }
     }
@@ -594,7 +594,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
     const stream = while (stream_attempts < 100) : (stream_attempts += 1) {
         // Poll the endpoint to process incoming packets
         transport.poll(50) catch {};
-        
+
         // Try to accept a stream
         if (conn.acceptStream()) |s| {
             std.debug.print("Stream accepted after {} attempts\n", .{stream_attempts + 1});
@@ -744,14 +744,14 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             if (rows) |r| {
                 for (r.array.items) |row| {
                     try schema_buf.appendSlice(allocator, "RESULT: ");
-                    
+
                     // Serialize the row JSON value
                     var row_writer = std.ArrayList(u8).initCapacity(allocator, 512) catch {
                         try schema_buf.appendSlice(allocator, "{}\n");
                         continue;
                     };
                     defer row_writer.deinit(allocator);
-                    
+
                     // Use a custom JSON writer that preserves decimal scales
                     const writer = row_writer.writer(allocator);
                     try writeJsonValueWithDecimalScale(writer, row, allocator);
@@ -833,12 +833,12 @@ fn writeJsonValueWithDecimalScale(writer: anytype, value: std.json.Value, alloca
             while (it.next()) |entry| {
                 if (!first) try writer.writeByte(',');
                 first = false;
-                
+
                 // Write key
                 try writer.writeByte('"');
                 try writer.writeAll(entry.key_ptr.*);
                 try writer.writeAll("\":");
-                
+
                 // Write value
                 try writeJsonValueWithDecimalScale(writer, entry.value_ptr.*, allocator);
             }
@@ -850,14 +850,14 @@ fn writeJsonValueWithDecimalScale(writer: anytype, value: std.json.Value, alloca
 // Check if a string looks like a decimal number
 fn isDecimalString(s: []const u8) bool {
     if (s.len == 0) return false;
-    
+
     var has_digit = false;
     var has_dot = false;
     var idx: usize = 0;
-    
+
     // Skip optional minus sign
     if (s[0] == '-') idx = 1;
-    
+
     while (idx < s.len) : (idx += 1) {
         const c = s[idx];
         if (c >= '0' and c <= '9') {
@@ -869,7 +869,7 @@ fn isDecimalString(s: []const u8) bool {
             return false; // Non-digit, non-dot character
         }
     }
-    
+
     return has_digit;
 }
 

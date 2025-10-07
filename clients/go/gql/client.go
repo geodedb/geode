@@ -299,7 +299,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			MaxIncomingUniStreams: 100,
 			Versions:              []quic.Version{quic.Version1}, // Force QUIC v1
 		}
-		
+
 		fmt.Printf("DEBUG: Go client attempting to connect via QUIC to %s\n", addr)
 		qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
 		if err != nil {
@@ -307,7 +307,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			return nil, err
 		}
 		fmt.Printf("DEBUG: Go client QUIC connection established\n")
-		
+
 		// Wait a moment for handshake to stabilize
 		select {
 		case <-ctx.Done():
@@ -387,7 +387,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			}
 			tlsConf.Certificates = []tls.Certificate{pair}
 		}
-		
+
 		// Use QUIC config with keep-alive and proper timeouts
 		qConfig := &quic.Config{
 			MaxIdleTimeout:        30 * time.Second,
@@ -397,7 +397,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			MaxIncomingUniStreams: 100,
 			Versions:              []quic.Version{quic.Version1}, // Force QUIC v1
 		}
-		
+
 		fmt.Printf("DEBUG: Go client attempting to connect via QUIC to %s\n", addr)
 		qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
 		if err != nil {
@@ -405,7 +405,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			return nil, err
 		}
 		fmt.Printf("DEBUG: Go client QUIC connection established\n")
-		
+
 		// Wait a moment for handshake to stabilize
 		select {
 		case <-ctx.Done():
@@ -414,7 +414,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		case <-time.After(100 * time.Millisecond):
 			// Continue after brief delay
 		}
-		
+
 		qStream, err := qConn.OpenStreamSync(ctx)
 		if err != nil {
 			_ = qConn.CloseWithError(0, "failed to open stream")
@@ -504,7 +504,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		return nil, err
 	}
 	fmt.Printf("DEBUG: Go client connected to spawned server\n")
-	
+
 	// Wait a moment for handshake to stabilize
 	select {
 	case <-ctx.Done():
