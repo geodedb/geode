@@ -620,15 +620,23 @@ pub const Parser = struct {
     }
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
-        // Optional MATCH/OPTIONAL MATCH pattern; allow RETURN-only queries too.
+        // Optional MATCH/OPTIONAL MATCH/CREATE pattern; allow RETURN-only queries too.
         var optional_match = false;
         var have_match = false;
-        if (self.cur.kind == .OPTIONAL) {
+        var have_create = false;
+        var create_pattern: ?ast.GraphPattern = null;
+        
+        // Check for CREATE at the beginning
+        if (self.cur.kind == .CREATE) {
+            have_create = true;
+            self.advance();
+            create_pattern = try self.parseGraphPattern();
+        } else if (self.cur.kind == .OPTIONAL) {
             self.advance();
             optional_match = true;
             have_match = true;
         }
-        if (self.cur.kind == .MATCH) {
+        if (self.cur.kind == .MATCH and !have_create) {
             have_match = true;
         }
         // Prepare defaults
@@ -687,47 +695,58 @@ pub const Parser = struct {
                 self.advance();
                 where_expr = try self.parseOrExpr();
             }
-            // Optional WITH projection forwarding
-            if (self.cur.kind == .WITH) {
-                self.advance();
-                var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                try self.parseProjectionItems(&witems);
-                with_clause = .{ .items = try witems.toOwnedSlice(self.arena.allocator()) };
-                // Allow an additional WHERE after WITH to filter the projected bindings
-                if (self.cur.kind == .WHERE) {
-                    self.advance();
-                    const cond2 = try self.parseOrExpr();
-                    if (where_expr) |cond1| {
-                        where_expr = try self.makeBinary(.And, cond1, cond2);
-                    } else {
-                        where_expr = cond2;
-                    }
-                }
-            }
-            // GROUP BY (optional)
-            if (self.cur.kind == .GROUP) {
-                self.advance();
-                _ = try self.expect(.BY);
-                var keys_list = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                // one or more expressions separated by commas
-                while (true) {
-                    try keys_list.append(self.arena.allocator(), try self.parseOrExpr());
-                    if (self.cur.kind != .comma) break;
-                    self.advance();
-                }
-                group_by = .{ .keys = try keys_list.toOwnedSlice(self.arena.allocator()) };
-                // Optional HAVING predicate directly after GROUP BY
-                if (self.cur.kind == .HAVING) {
-                    self.advance();
-                    having_expr = try self.parseOrExpr();
-                }
-            }
             break :blk_pat combined_gp;
+        } else if (have_create) blk_create: {
+            // CREATE pattern without MATCH: use empty pattern for match
+            self.path_aliases.clearRetainingCapacity();
+            break :blk_create .{ .chains = &.{} };
         } else blk_empty: {
-            // No MATCH: use empty pattern, and ensure no stale aliases
+            // No MATCH or CREATE: use empty pattern, and ensure no stale aliases
             self.path_aliases.clearRetainingCapacity();
             break :blk_empty .{ .chains = &.{} };
         };
+        
+        // Parse WHERE clause (for CREATE patterns or after MATCH)
+        if (!have_match and where_expr == null and self.cur.kind == .WHERE) {
+            self.advance();
+            where_expr = try self.parseOrExpr();
+        }
+        
+        // Optional WITH projection forwarding (works for both MATCH and CREATE)
+        if (self.cur.kind == .WITH) {
+            self.advance();
+            var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&witems);
+            with_clause = .{ .items = try witems.toOwnedSlice(self.arena.allocator()) };
+            // Allow an additional WHERE after WITH to filter the projected bindings
+            if (self.cur.kind == .WHERE) {
+                self.advance();
+                const cond2 = try self.parseOrExpr();
+                if (where_expr) |cond1| {
+                    where_expr = try self.makeBinary(.And, cond1, cond2);
+                } else {
+                    where_expr = cond2;
+                }
+            }
+        }
+        // GROUP BY (optional)
+        if (self.cur.kind == .GROUP) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys_list = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            // one or more expressions separated by commas
+            while (true) {
+                try keys_list.append(self.arena.allocator(), try self.parseOrExpr());
+                if (self.cur.kind != .comma) break;
+                self.advance();
+            }
+            group_by = .{ .keys = try keys_list.toOwnedSlice(self.arena.allocator()) };
+            // Optional HAVING predicate directly after GROUP BY
+            if (self.cur.kind == .HAVING) {
+                self.advance();
+                having_expr = try self.parseOrExpr();
+            }
+        }
 
         // Parse SET clauses if present (before RETURN)
         var set_clauses: []ast.SetClause = &.{};
@@ -897,6 +916,7 @@ pub const Parser = struct {
         return .{
             .optional_match = optional_match,
             .match = pat,
+            .create_pattern = create_pattern,
             .where_clause = where_expr,
             .with_clause = with_clause,
             .set_clauses = set_clauses,

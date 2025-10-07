@@ -354,6 +354,11 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     // Check for GROUP BY validation first
     try validateGroupBy(q.ret, q.group_by);
     
+    // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
+    if (q.create_pattern) |create_pattern| {
+        return executeCreateQuery(allocator, q, create_pattern);
+    }
+    
     // Check if there's a MATCH pattern
     if (q.match.chains.len > 0) {
         return executeMatchQuery(allocator, q);
@@ -373,6 +378,266 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     }
     
     return result;
+}
+
+fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+    
+    // Track created nodes by variable name for WITH/SET/RETURN clauses
+    var created_nodes = std.StringHashMap(*graph_store.Node).init(allocator);
+    defer created_nodes.deinit();
+    
+    // Create nodes from pattern
+    for (create_pattern.chains) |chain| {
+        // Handle single node creation
+        if (chain.head) |node_pattern| {
+            const node_id = try store.createNode(node_pattern.labels);
+            
+            // Set properties if present
+            if (node_pattern.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(node_id, prop.key, prop_value);
+                }
+            }
+            
+            // Track created node by variable name if present
+            if (node_pattern.name) |var_name| {
+                const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                try created_nodes.put(var_name, node);
+            }
+        }
+        
+        // Handle relationship creation
+        for (chain.hops) |hop| {
+            const left_id = try store.createNode(hop.left.labels);
+            const right_id = try store.createNode(hop.right.labels);
+            
+            // Set properties for left node
+            if (hop.left.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(left_id, prop.key, prop_value);
+                }
+            }
+            
+            // Set properties for right node  
+            if (hop.right.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(right_id, prop.key, prop_value);
+                }
+            }
+            
+            // Create the relationship
+            const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
+            const edge_id = try store.createEdge(left_id, right_id, rel_type);
+            
+            // Set relationship properties
+            if (hop.rel.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setEdgeProperty(edge_id, prop.key, prop_value);
+                }
+            }
+            
+            // Track created nodes by variable names
+            if (hop.left.name) |var_name| {
+                const node = store.nodes.getPtr(left_id) orelse return error.NodeNotFound;
+                try created_nodes.put(var_name, node);
+            }
+            if (hop.right.name) |var_name| {
+                const node = store.nodes.getPtr(right_id) orelse return error.NodeNotFound;
+                try created_nodes.put(var_name, node);
+            }
+        }
+    }
+    
+    // Apply WITH clause if present
+    var result: ExecutionResult = undefined;
+    if (q.with_clause) |with_clause| {
+        // Create result from created nodes and apply WITH transformation
+        var rows = try allocator.alloc([]eval.Value, 1);
+        var row = try allocator.alloc(eval.Value, with_clause.items.len);
+        
+        for (with_clause.items, 0..) |item, i| {
+            // Evaluate expression based on created nodes
+            if (item.expr == .Ident) {
+                const var_name = item.expr.Ident.orig;
+                if (created_nodes.get(var_name)) |node| {
+                    row[i] = eval.Value{ .Node = node };
+                } else {
+                    row[i] = eval.Value{ .Null = {} };
+                }
+            } else {
+                // Create environment with created nodes
+                var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                
+                var iter = created_nodes.iterator();
+                while (iter.next()) |entry| {
+                    try names.append(allocator, entry.key_ptr.*);
+                    try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+                }
+                
+                const env = eval.Env{
+                    .names = names.items,
+                    .values = values.items,
+                };
+                row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+        }
+        rows[0] = row;
+        
+        var columns = try allocator.alloc([]const u8, with_clause.items.len);
+        for (with_clause.items, 0..) |item, i| {
+            columns[i] = item.alias orelse switch (item.expr) {
+                .Ident => |ident| ident.orig,
+                else => "column",
+            };
+        }
+        
+        result = ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    } else {
+        // No WITH clause - created nodes are ready for SET/RETURN
+        result = ExecutionResult{
+            .columns = &.{},
+            .rows = &.{},
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+    
+    // Apply SET clauses if present
+    for (q.set_clauses) |set_clause| {
+        if (created_nodes.get(set_clause.target.object)) |node| {
+            // Create environment with created nodes
+            var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+            
+            var iter = created_nodes.iterator();
+            while (iter.next()) |entry| {
+                try names.append(allocator, entry.key_ptr.*);
+                try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+            }
+            
+            const env = eval.Env{
+                .names = names.items,
+                .values = values.items,
+            };
+            
+            const value = try eval.evalExpr(allocator, set_clause.value, env);
+            const prop_value = switch (value) {
+                .Str => |s| graph_store.PropertyValue{ .String = s },
+                .Int => |i| graph_store.PropertyValue{ .Int = i },
+                .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                else => graph_store.PropertyValue{ .Null = {} },
+            };
+            try store.setNodeProperty(node.id, set_clause.target.property, prop_value);
+        }
+    }
+    
+    // Apply REMOVE clauses if present
+    for (q.remove_clauses) |remove_clause| {
+        if (created_nodes.get(remove_clause.target.object)) |node| {
+            store.removeNodeProperty(node.id, remove_clause.target.property);
+        }
+    }
+    
+    // Execute RETURN clause
+    return executeReturnClauseWithNodes(allocator, q.ret, created_nodes);
+}
+
+fn executeReturnClauseWithNodes(allocator: std.mem.Allocator, ret: ast.ReturnClause, nodes: std.StringHashMap(*graph_store.Node)) !ExecutionResult {
+    const items = ret.items;
+    var columns = try allocator.alloc([]const u8, items.len);
+    var rows = try allocator.alloc([]eval.Value, 1);
+    var row = try allocator.alloc(eval.Value, items.len);
+    
+    // Create environment with the nodes
+    var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+    
+    var iter = nodes.iterator();
+    while (iter.next()) |entry| {
+        try names.append(allocator, entry.key_ptr.*);
+        try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+    }
+    
+    const env = eval.Env{
+        .names = names.items,
+        .values = values.items,
+    };
+    
+    for (items, 0..) |item, i| {
+        columns[i] = item.alias orelse switch (item.expr) {
+            .Ident => |ident| ident.orig,
+            .PropertyAccess => |prop| prop.property,
+            .Member => |mem| mem.field,
+            else => "column",
+        };
+        row[i] = try eval.evalExpr(allocator, item.expr, env);
+    }
+    
+    rows[0] = row;
+    
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
 }
 
 fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !ExecutionResult {
@@ -1666,8 +1931,6 @@ fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Expr, s
 }
 
 fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore) !eval.Value {
-    _ = allocator;
-    
     switch (expr) {
         .Call => |call| {
             if (call.callee.* == .Ident) {
@@ -1685,8 +1948,35 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                         
                         if (is_distinct) {
                             // COUNT(DISTINCT expr) - count unique non-null values
-                            // For now, return 1 for G2 test (all nodes have v=1)
-                            return eval.Value{ .Int = 1 };
+                            var unique_values = std.AutoHashMap(i64, void).init(allocator);
+                            defer unique_values.deinit();
+                            
+                            // Handle property access for COUNT(DISTINCT n.prop)
+                            if (call.args[0].* == .PropertyAccess) {
+                                const prop_access = call.args[0].PropertyAccess;
+                                var iter = store.nodes.iterator();
+                                while (iter.next()) |entry| {
+                                    const node = entry.value_ptr;
+                                    if (node.properties.get(prop_access.property)) |prop_val| {
+                                        if (prop_val == .Int) {
+                                            try unique_values.put(prop_val.Int, {});
+                                        }
+                                    }
+                                }
+                            } else if (call.args[0].* == .Member) {
+                                const member = call.args[0].Member;
+                                var iter = store.nodes.iterator();
+                                while (iter.next()) |entry| {
+                                    const node = entry.value_ptr;
+                                    if (node.properties.get(member.field)) |prop_val| {
+                                        if (prop_val == .Int) {
+                                            try unique_values.put(prop_val.Int, {});
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            return eval.Value{ .Int = @intCast(unique_values.count()) };
                         }
                         
                         // COUNT(n.v) - count nodes with non-null v property
@@ -2273,8 +2563,22 @@ fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClaus
     // Collect column names
     var columns = try allocator.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
-        const name = item.alias orelse "column";
-        columns[i] = try allocator.dupe(u8, name);
+        const column_name = item.alias orelse blk: {
+            // Use expression-based column name if no alias provided
+            switch (item.expr) {
+                .Ident => |ident| break :blk ident.orig,
+                .PropertyAccess => |prop| break :blk prop.property,
+                .Member => |mem| break :blk mem.field,
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        break :blk call.callee.Ident.orig;
+                    }
+                    break :blk "column";
+                },
+                else => break :blk "column",
+            }
+        };
+        columns[i] = try allocator.dupe(u8, column_name);
     }
     
     // Evaluate expressions with provided environment

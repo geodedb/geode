@@ -44,6 +44,7 @@ pub const Statement = union(enum) {
 pub const Query = struct {
     optional_match: bool,
     match: GraphPattern,
+    create_pattern: ?GraphPattern = null,  // Support CREATE in queries
     where_clause: ?Expr,
     with_clause: ?WithClause,
     set_clauses: []SetClause = &.{},
