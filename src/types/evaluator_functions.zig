@@ -885,6 +885,7 @@ pub fn replace(allocator: std.mem.Allocator, text: Value, search: Value, replace
 // Math functions
 pub fn abs_val(val: Value) EvaluatorError!Value {
     return switch (val) {
+        .Null => Value{ .Null = {} },
         .Int => |i| Value{ .Int = @intCast(@abs(i)) },
         .SmallInt => |i| Value{ .SmallInt = @intCast(@abs(i)) },
         .BigInt => |i| Value{ .BigInt = @intCast(@abs(i)) },
@@ -1043,6 +1044,11 @@ pub fn sqrt_val(val: Value) EvaluatorError!Value {
             if (d < 0) return EvaluatorError.InvalidInput;
             return Value{ .Double = @sqrt(d) };
         },
+        .Decimal128 => |d| {
+            if (d.coeff < 0) return EvaluatorError.InvalidInput;
+            const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+            return Value{ .Double = @sqrt(float_val) };
+        },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1054,6 +1060,12 @@ pub fn ceil_val(val: Value) EvaluatorError!Value {
         .BigInt => val,
         .Real => |f| Value{ .Real = @ceil(f) },
         .Double => |d| Value{ .Double = @ceil(d) },
+        .Decimal128 => |dec| blk: {
+            // Convert to float, apply ceil, convert back
+            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
+            const ceiled = @ceil(float_val);
+            break :blk Value{ .Int = @as(i64, @intFromFloat(ceiled)) };
+        },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1065,6 +1077,12 @@ pub fn floor_val(val: Value) EvaluatorError!Value {
         .BigInt => val,
         .Real => |f| Value{ .Real = @floor(f) },
         .Double => |d| Value{ .Double = @floor(d) },
+        .Decimal128 => |dec| blk: {
+            // Convert to float, apply floor, convert back
+            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
+            const floored = @floor(float_val);
+            break :blk Value{ .Int = @as(i64, @intFromFloat(floored)) };
+        },
         else => EvaluatorError.TypeMismatch,
     };
 }

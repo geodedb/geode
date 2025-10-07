@@ -570,6 +570,393 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 else => break :blk_call .{ .Null = {} }, // Not a simple function call
             };
 
+            // Handle special case string functions directly for better nesting support
+            if (std.mem.eql(u8, function_name, "substring")) {
+                if (call.args.len < 2) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(ally, call.args[0].*, env);
+                const start_arg = try evalExpr(ally, call.args[1].*, env);
+                
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                const start = switch (start_arg) {
+                    .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                if (call.args.len >= 3) {
+                    const len_arg = try evalExpr(ally, call.args[2].*, env);
+                    const len = switch (len_arg) {
+                        .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
+                        else => break :blk_call .{ .Null = {} },
+                    };
+                    
+                    if (start >= str.len) {
+                        break :blk_call .{ .Str = "" };
+                    }
+                    
+                    const end = @min(start + len, str.len);
+                    break :blk_call .{ .Str = str[start..end] };
+                } else {
+                    if (start >= str.len) {
+                        break :blk_call .{ .Str = "" };
+                    }
+                    break :blk_call .{ .Str = str[start..] };
+                }
+            }
+            
+            if (std.mem.eql(u8, function_name, "replace")) {
+                if (call.args.len != 3) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(ally, call.args[0].*, env);
+                const search_arg = try evalExpr(ally, call.args[1].*, env);
+                const replace_arg = try evalExpr(ally, call.args[2].*, env);
+                
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                const search = switch (search_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                const replacement = switch (replace_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                if (search.len == 0) {
+                    break :blk_call .{ .Str = str };
+                }
+                
+                // Count occurrences
+                var count: usize = 0;
+                var pos: usize = 0;
+                while (pos < str.len) {
+                    if (std.mem.indexOf(u8, str[pos..], search)) |idx| {
+                        count += 1;
+                        pos = pos + idx + search.len;
+                    } else {
+                        break;
+                    }
+                }
+                
+                if (count == 0) {
+                    break :blk_call .{ .Str = str };
+                }
+                
+                // Allocate new string
+                const new_len = str.len + (replacement.len * count) - (search.len * count);
+                var result = try ally.alloc(u8, new_len);
+                
+                // Perform replacement
+                var src_pos: usize = 0;
+                var dst_pos: usize = 0;
+                while (src_pos < str.len) {
+                    if (std.mem.indexOf(u8, str[src_pos..], search)) |idx| {
+                        // Copy before match
+                        @memcpy(result[dst_pos..dst_pos + idx], str[src_pos..src_pos + idx]);
+                        dst_pos += idx;
+                        // Copy replacement
+                        @memcpy(result[dst_pos..dst_pos + replacement.len], replacement);
+                        dst_pos += replacement.len;
+                        src_pos = src_pos + idx + search.len;
+                    } else {
+                        // Copy remainder
+                        const remaining = str.len - src_pos;
+                        @memcpy(result[dst_pos..dst_pos + remaining], str[src_pos..]);
+                        break;
+                    }
+                }
+                
+                break :blk_call .{ .Str = result };
+            }
+            
+            if (std.mem.eql(u8, function_name, "trim")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(ally, call.args[0].*, env);
+                
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                // Trim leading and trailing whitespace
+                const trimmed = std.mem.trim(u8, str, " \t\n\r");
+                break :blk_call .{ .Str = trimmed };
+            }
+            
+            if (std.mem.eql(u8, function_name, "upper")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(ally, call.args[0].*, env);
+                
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                var result = try ally.alloc(u8, str.len);
+                for (str, 0..) |c, i| {
+                    result[i] = std.ascii.toUpper(c);
+                }
+                break :blk_call .{ .Str = result };
+            }
+            
+            if (std.mem.eql(u8, function_name, "lower")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(ally, call.args[0].*, env);
+                
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                var result = try ally.alloc(u8, str.len);
+                for (str, 0..) |c, i| {
+                    result[i] = std.ascii.toLower(c);
+                }
+                break :blk_call .{ .Str = result };
+            }
+            
+            // Handle special case for keys() and values() functions
+            if (std.mem.eql(u8, function_name, "keys")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Map => |map| {
+                        var keys = try ally.alloc(Value, map.count());
+                        var iter = map.iterator();
+                        var i: usize = 0;
+                        while (iter.next()) |entry| : (i += 1) {
+                            keys[i] = Value{ .Str = entry.key_ptr.* };
+                        }
+                        break :blk_call Value{ .List = keys };
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            if (std.mem.eql(u8, function_name, "values")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Map => |map| {
+                        var values = try ally.alloc(Value, map.count());
+                        var iter = map.iterator();
+                        var i: usize = 0;
+                        while (iter.next()) |entry| : (i += 1) {
+                            values[i] = entry.value_ptr.*;
+                        }
+                        break :blk_call Value{ .List = values };
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            // Handle special case math functions for better nesting support
+            if (std.mem.eql(u8, function_name, "abs")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Int => |i| {
+                        const abs_val = if (i < 0) -i else i;
+                        break :blk_call .{ .Int = abs_val };
+                    },
+                    .Decimal => |d| {
+                        // For decimals, just negate the coefficient if negative
+                        if (d.coeff >= 0) {
+                            break :blk_call arg; // Return unchanged
+                        }
+                        // Create new decimal with negated coefficient
+                        break :blk_call .{ .Decimal = .{
+                            .coeff = -d.coeff,
+                            .scale = d.scale,
+                            .orig_scale = d.orig_scale,
+                            .orig_repr = d.orig_repr
+                        }};
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            if (std.mem.eql(u8, function_name, "sqrt")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Int => |i| {
+                        if (i < 0) break :blk_call .{ .Null = {} };
+                        const f = @sqrt(@as(f64, @floatFromInt(i)));
+                        break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                    },
+                    .Decimal => |d| {
+                        if (d.coeff < 0) break :blk_call .{ .Null = {} };
+                        const f = @sqrt(@as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))));
+                        break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            if (std.mem.eql(u8, function_name, "pow")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const base_arg = try evalExpr(ally, call.args[0].*, env);
+                const exp_arg = try evalExpr(ally, call.args[1].*, env);
+                
+                const base = switch (base_arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                const exponent = switch (exp_arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                
+                const result = std.math.pow(f64, base, exponent);
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+            
+            if (std.mem.eql(u8, function_name, "sin")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = @sin(val);
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+            
+            if (std.mem.eql(u8, function_name, "cos")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = @cos(val);
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+            
+            if (std.mem.eql(u8, function_name, "tan")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = @tan(val);
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+            
+            if (std.mem.eql(u8, function_name, "log")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                if (val <= 0) break :blk_call .{ .Null = {} };
+                const result = @log(val);
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+            
+            if (std.mem.eql(u8, function_name, "exp")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = @exp(val);
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+            
+            if (std.mem.eql(u8, function_name, "ceil")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Int => |i| break :blk_call .{ .Int = i },
+                    .Decimal => |d| {
+                        const divisor = std.math.pow(i128, 10, d.scale);
+                        const whole = @divTrunc(d.coeff, divisor);
+                        const frac = @rem(d.coeff, divisor);
+                        if (frac > 0) {
+                            break :blk_call .{ .Int = @intCast(whole + 1) };
+                        } else {
+                            break :blk_call .{ .Int = @intCast(whole) };
+                        }
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            if (std.mem.eql(u8, function_name, "floor")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Int => |i| break :blk_call .{ .Int = i },
+                    .Decimal => |d| {
+                        const divisor = std.math.pow(i128, 10, d.scale);
+                        const whole = @divTrunc(d.coeff, divisor);
+                        const frac = @rem(d.coeff, divisor);
+                        if (frac < 0) {
+                            break :blk_call .{ .Int = @intCast(whole - 1) };
+                        } else {
+                            break :blk_call .{ .Int = @intCast(whole) };
+                        }
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            if (std.mem.eql(u8, function_name, "round")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(ally, call.args[0].*, env);
+                switch (arg) {
+                    .Int => |i| break :blk_call .{ .Int = i },
+                    .Decimal => |d| {
+                        const divisor = std.math.pow(i128, 10, d.scale);
+                        const whole = @divTrunc(d.coeff, divisor);
+                        const frac = @rem(d.coeff, divisor);
+                        const half_divisor = @divTrunc(divisor, 2);
+                        if (frac >= half_divisor) {
+                            break :blk_call .{ .Int = @intCast(whole + 1) };
+                        } else if (frac <= -half_divisor) {
+                            break :blk_call .{ .Int = @intCast(whole - 1) };
+                        } else {
+                            break :blk_call .{ .Int = @intCast(whole) };
+                        }
+                    },
+                    else => break :blk_call .{ .Null = {} },
+                }
+            }
+            
+            // Special handling for random() with no args
+            if (std.mem.eql(u8, function_name, "random")) {
+                if (call.args.len != 0) break :blk_call .{ .Null = {} };
+                // Use current timestamp as seed for simple randomness
+                const timestamp = @as(u64, @intCast(std.time.timestamp()));
+                // Simple linear congruential generator for a random value between 0 and 1
+                const a: u64 = 1664525;
+                const c: u64 = 1013904223;
+                const m: u64 = 2147483647; // 2^31 - 1
+                const seed = timestamp % m;
+                const next = (a * seed + c) % m;
+                const value = @as(f64, @floatFromInt(next)) / @as(f64, @floatFromInt(m));
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(value * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
             // Try to use the extended function registry for advanced type functions
             const eval_ext = @import("eval_extended.zig");
 
@@ -827,7 +1214,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Int => |i| .{ .Int = i },
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
         .List => .{ .Null = {} }, // TODO: heap.Value needs List support
         .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
         .Map => .{ .Null = {} }, // TODO: heap.Value needs Map support
@@ -842,8 +1229,30 @@ fn heapValueToEvalValue(value: heap.Value) Value {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Text => |s| .{ .Str = s },
-        .Real => |f| .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } }, // Convert f32 to decimal with 6 decimal places
-        .Double => |d| .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } }, // Convert f64 to decimal with 6 decimal places
+        .Real => |f| blk: {
+            // Check for overflow when converting to decimal
+            if (!std.math.isFinite(f)) {
+                break :blk .{ .Null = {} }; // Return null for infinite or NaN
+            }
+            if (@abs(f) > 1e20) {
+                // For very large values, reduce precision to avoid overflow
+                const scale_factor = std.math.pow(f32, 10, 3);
+                break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f / scale_factor), .scale = 0 } };
+            }
+            break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } };
+        },
+        .Double => |d| blk: {
+            // Check for overflow when converting to decimal  
+            if (!std.math.isFinite(d)) {
+                break :blk .{ .Null = {} }; // Return null for infinite or NaN
+            }
+            if (@abs(d) > 1e20) {
+                // For very large values, reduce precision to avoid overflow
+                const scale_factor = std.math.pow(f64, 10, 3);
+                break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d / scale_factor), .scale = 0 } };
+            }
+            break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } };
+        },
         .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
         else => .{ .Null = {} }, // Convert unknown types to null
     };
@@ -1037,64 +1446,8 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         }
     }
     
-    // Handle math functions
-    if (std.mem.eql(u8, function_name, "round")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(ally, args[0].*, env);
-        switch (arg) {
-            .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| {
-                const divisor = std.math.pow(i128, 10, d.scale);
-                const whole = @divTrunc(d.coeff, divisor);
-                const frac = @rem(d.coeff, divisor);
-                const half_divisor = @divTrunc(divisor, 2);
-                if (frac >= half_divisor) {
-                    return Value{ .Int = @intCast(whole + 1) };
-                } else if (frac <= -half_divisor) {
-                    return Value{ .Int = @intCast(whole - 1) };
-                } else {
-                    return Value{ .Int = @intCast(whole) };
-                }
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
+    // Math functions are now handled as special cases in the Call block above
     
-    if (std.mem.eql(u8, function_name, "floor")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(ally, args[0].*, env);
-        switch (arg) {
-            .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| {
-                const divisor = std.math.pow(i128, 10, d.scale);
-                var whole = @divTrunc(d.coeff, divisor);
-                // If negative and has fractional part, round down
-                if (d.coeff < 0 and @rem(d.coeff, divisor) != 0) {
-                    whole -= 1;
-                }
-                return Value{ .Int = @intCast(whole) };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-    
-    if (std.mem.eql(u8, function_name, "ceil")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(ally, args[0].*, env);
-        switch (arg) {
-            .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| {
-                const divisor = std.math.pow(i128, 10, d.scale);
-                var whole = @divTrunc(d.coeff, divisor);
-                // If positive and has fractional part, round up
-                if (d.coeff > 0 and @rem(d.coeff, divisor) != 0) {
-                    whole += 1;
-                }
-                return Value{ .Int = @intCast(whole) };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
     
     // Handle aggregation functions (simplified for now - real implementation needs context)
     if (std.mem.eql(u8, function_name, "count")) {
@@ -1250,6 +1603,13 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} },
         }
     }
+    
+    // Handle random() function which takes no arguments
+    if (std.mem.eql(u8, function_name, "random")) {
+        if (args.len != 0) return null;
+        const result = evaluator_functions.random_val(ally) catch return null;
+        return heapValueToEvalValue(result);
+    }
 
     // Evaluate arguments first
     if (args.len == 0) return null;
@@ -1301,10 +1661,6 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "exp")) {
         const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "random")) {
-        if (args.len != 0) return null;
-        const result = evaluator_functions.random_val(ally) catch return null;
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "type")) {
         const result = evaluator_functions.type_val(heap_first_arg) catch return null;

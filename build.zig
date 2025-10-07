@@ -143,6 +143,27 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    
+    // New unit tests for recent implementations
+    const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_math_functions.zig"), .target = target, .optimize = optimize }) });
+    math_func_tests.root_module.addImport("geode", root_mod);
+    const run_math_func_tests = b.addRunArtifact(math_func_tests);
+    
+    const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_string_functions.zig"), .target = target, .optimize = optimize }) });
+    string_func_tests.root_module.addImport("geode", root_mod);
+    const run_string_func_tests = b.addRunArtifact(string_func_tests);
+    
+    const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
+    graph_algo_tests.root_module.addImport("geode", root_mod);
+    const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
+    
+    const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
+    decimal_tests.root_module.addImport("geode", root_mod);
+    const run_decimal_tests = b.addRunArtifact(decimal_tests);
+    
+    const integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_integration.zig"), .target = target, .optimize = optimize }) });
+    integration_tests.root_module.addImport("geode", root_mod);
+    const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // GQL Conformance tests
     const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
@@ -223,6 +244,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_conformance_patch_tests.step);
     test_step.dependOn(&run_custom_tests.step);
+    test_step.dependOn(&run_math_func_tests.step);
+    test_step.dependOn(&run_string_func_tests.step);
+    test_step.dependOn(&run_graph_algo_tests.step);
+    test_step.dependOn(&run_decimal_tests.step);
+    test_step.dependOn(&run_integration_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });

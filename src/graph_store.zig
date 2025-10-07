@@ -33,39 +33,70 @@ pub const GraphStore = struct {
     next_edge_id: u64,
 
     pub fn init(allocator: std.mem.Allocator) GraphStore {
-        var store = GraphStore{
+        return GraphStore{
             .allocator = allocator,
             .nodes = std.AutoHashMap(u64, Node).init(allocator),
             .edges = std.AutoHashMap(u64, Edge).init(allocator),
             .next_node_id = 1,
             .next_edge_id = 1,
         };
-        // Load persistent data on initialization
-        store.loadFromFile() catch {};
-        return store;
     }
 
     pub fn deinit(self: *GraphStore) void {
-        // Free all nodes
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            entry.value_ptr.properties.deinit();
-            self.allocator.free(entry.value_ptr.labels);
-        }
+        // Clear nodes and edges (which also frees memory)
+        self.clearNodes();
+        // Deinit the hashmaps
         self.nodes.deinit();
-        
-        // Free all edges
-        var edge_iter = self.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            entry.value_ptr.properties.deinit();
-        }
         self.edges.deinit();
     }
     
     pub fn clearNodes(self: *GraphStore) void {
-        // Clear all nodes - don't free memory since we don't know which allocator was used
+        // Free and clear all nodes
+        var node_iter = self.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            // Free each label string
+            for (entry.value_ptr.labels) |label| {
+                self.allocator.free(label);
+            }
+            // Free the labels array itself
+            self.allocator.free(entry.value_ptr.labels);
+            // Free the properties hashmap
+            var prop_iter = entry.value_ptr.properties.iterator();
+            while (prop_iter.next()) |prop_entry| {
+                // Free the key
+                self.allocator.free(prop_entry.key_ptr.*);
+                // Free string values
+                switch (prop_entry.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            entry.value_ptr.properties.deinit();
+        }
         self.nodes.clearRetainingCapacity();
+        
+        // Free and clear all edges  
+        var edge_iter = self.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            // Free the label string
+            self.allocator.free(entry.value_ptr.label);
+            // Free the properties hashmap
+            var prop_iter = entry.value_ptr.properties.iterator();
+            while (prop_iter.next()) |prop_entry| {
+                // Free the key
+                self.allocator.free(prop_entry.key_ptr.*);
+                // Free string values
+                switch (prop_entry.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            entry.value_ptr.properties.deinit();
+        }
+        self.edges.clearRetainingCapacity();
+        
         self.next_node_id = 1;
+        self.next_edge_id = 1;
     }
 
     pub fn createNode(self: *GraphStore, labels: [][]const u8) !u64 {
@@ -84,10 +115,6 @@ pub const GraphStore = struct {
         };
         
         try self.nodes.put(id, node);
-        
-        // Save to persistent storage
-        self.saveToFile() catch {};
-        
         return id;
     }
     
@@ -151,10 +178,6 @@ pub const GraphStore = struct {
         };
         
         try self.edges.put(id, edge);
-        
-        // Save to persistent storage
-        self.saveToFile() catch {};
-        
         return id;
     }
     
@@ -173,36 +196,66 @@ pub const GraphStore = struct {
     }
     
     pub fn getEdgesByType(self: *GraphStore, edge_type: []const u8) []Edge {
-        var result = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch return &.{};
+        var count: usize = 0;
         var iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
             if (std.mem.eql(u8, edge.label, edge_type)) {
-                result.append(self.allocator, edge.*) catch continue;
+                count += 1;
             }
         }
-        return result.toOwnedSlice(self.allocator) catch &.{};
+        
+        const result = self.allocator.alloc(Edge, count) catch return &.{};
+        var i: usize = 0;
+        iter = self.edges.valueIterator();
+        while (iter.next()) |edge| {
+            if (std.mem.eql(u8, edge.label, edge_type)) {
+                result[i] = edge.*;
+                i += 1;
+            }
+        }
+        return result;
     }
     
     pub fn getEdgesFrom(self: *GraphStore, node_id: u64) []Edge {
-        var result = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch return &.{};
+        var count: usize = 0;
         var iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
             if (edge.from_id == node_id) {
-                result.append(self.allocator, edge.*) catch continue;
+                count += 1;
             }
         }
-        return result.toOwnedSlice(self.allocator) catch &.{};
+        
+        const result = self.allocator.alloc(Edge, count) catch return &.{};
+        var i: usize = 0;
+        iter = self.edges.valueIterator();
+        while (iter.next()) |edge| {
+            if (edge.from_id == node_id) {
+                result[i] = edge.*;
+                i += 1;
+            }
+        }
+        return result;
     }
     
     pub fn getEdgesTo(self: *GraphStore, node_id: u64) []Edge {
-        var result = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch return &.{};
+        var count: usize = 0;
         var iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
             if (edge.to_id == node_id) {
-                result.append(self.allocator, edge.*) catch continue;
+                count += 1;
             }
         }
-        return result.toOwnedSlice(self.allocator) catch &.{};
+        
+        const result = self.allocator.alloc(Edge, count) catch return &.{};
+        var i: usize = 0;
+        iter = self.edges.valueIterator();
+        while (iter.next()) |edge| {
+            if (edge.to_id == node_id) {
+                result[i] = edge.*;
+                i += 1;
+            }
+        }
+        return result;
     }
     
     // Simple file-based persistence for testing
