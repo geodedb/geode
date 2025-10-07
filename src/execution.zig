@@ -680,9 +680,17 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
             var columns = try allocator.alloc([]const u8, ret.items.len);
             for (ret.items, 0..) |item, i| {
                 const column_name = item.alias orelse blk: {
-                    // Use variable name as column name if expression is an identifier
+                    // Use expression-based column name if no alias provided
                     switch (item.expr) {
                         .Ident => |ident| break :blk ident.orig,
+                        .PropertyAccess => |prop| break :blk prop.property,
+                        .Member => |mem| break :blk mem.field,
+                        .Call => |call| {
+                            if (call.callee.* == .Ident) {
+                                break :blk call.callee.Ident.orig;
+                            }
+                            break :blk "column";
+                        },
                         else => break :blk "column",
                     }
                 };
@@ -931,9 +939,17 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
     var columns = try allocator.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
         const column_name = item.alias orelse blk: {
-            // Use variable name as column name if expression is an identifier
+            // Use expression-based column name if no alias provided
             switch (item.expr) {
                 .Ident => |ident| break :blk ident.orig,
+                .PropertyAccess => |prop| break :blk prop.property,
+                .Member => |mem| break :blk mem.field,
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        break :blk call.callee.Ident.orig;
+                    }
+                    break :blk "column";
+                },
                 else => break :blk "column",
             }
         };
@@ -1411,6 +1427,7 @@ fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
     return switch (expr) {
         .Ident => |ident| ident.orig,
         .PropertyAccess => |prop| prop.property,
+        .Member => |mem| mem.field,
         .Call => |call| if (call.callee.* == .Ident) call.callee.Ident.orig else "expr",
         else => "expr",
     };
@@ -1760,6 +1777,66 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                                 // Return as decimal with 1 decimal place for test
                                 const avg = sum / count;
                                 return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
+                            }
+                            return eval.Value{ .Null = {} };
+                        }
+                    }
+                    return eval.Value{ .Null = {} };
+                } else if (std.mem.eql(u8, func_name, "min")) {
+                    // MIN aggregation
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else
+                            null;
+                        
+                        if (field_name) |field| {
+                            var min_val: ?i64 = null;
+                            var iter = store.nodes.iterator();
+                            while (iter.next()) |entry| {
+                                const node = entry.value_ptr;
+                                if (node.properties.get(field)) |val| {
+                                    if (val == .Int) {
+                                        if (min_val == null or val.Int < min_val.?) {
+                                            min_val = val.Int;
+                                        }
+                                    }
+                                }
+                            }
+                            if (min_val) |v| {
+                                return eval.Value{ .Int = v };
+                            }
+                            return eval.Value{ .Null = {} };
+                        }
+                    }
+                    return eval.Value{ .Null = {} };
+                } else if (std.mem.eql(u8, func_name, "max")) {
+                    // MAX aggregation
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else
+                            null;
+                        
+                        if (field_name) |field| {
+                            var max_val: ?i64 = null;
+                            var iter = store.nodes.iterator();
+                            while (iter.next()) |entry| {
+                                const node = entry.value_ptr;
+                                if (node.properties.get(field)) |val| {
+                                    if (val == .Int) {
+                                        if (max_val == null or val.Int > max_val.?) {
+                                            max_val = val.Int;
+                                        }
+                                    }
+                                }
+                            }
+                            if (max_val) |v| {
+                                return eval.Value{ .Int = v };
                             }
                             return eval.Value{ .Null = {} };
                         }
