@@ -338,7 +338,7 @@ test "Adaptive ef_search optimization" {
     _ = allocator;
 
     const base_ef_search: u16 = 64;
-    
+
     const performance_scenarios = [_]struct {
         avg_time_ms: f64,
         cache_hits: u64,
@@ -400,7 +400,7 @@ test "Vector dimension and SIMD optimization" {
 
         // Test batch size calculation based on dimension characteristics
         const base_batch_size: u32 = if (test_case.dimensions <= 64) 16 else if (test_case.dimensions <= 256) 32 else 64;
-        
+
         switch (test_case.expected_batch_size_category) {
             .small => try testing.expect(base_batch_size == 16),
             .medium => try testing.expect(base_batch_size == 32),

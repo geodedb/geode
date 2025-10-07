@@ -18,12 +18,10 @@ test "abs function with negative integer" {
 }
 
 test "abs function with positive decimal" {
-    const input = heap.Value{ 
-        .Decimal128 = .{
-            .coeff = 314,
-            .scale = 2,
-        }
-    };
+    const input = heap.Value{ .Decimal128 = .{
+        .coeff = 314,
+        .scale = 2,
+    } };
     const result = try evaluator_functions.abs_val(input);
     try testing.expect(result == .Decimal128);
     try testing.expectEqual(@as(i128, 314), result.Decimal128.coeff);
@@ -31,12 +29,10 @@ test "abs function with positive decimal" {
 }
 
 test "abs function with negative decimal" {
-    const input = heap.Value{ 
-        .Decimal128 = .{
-            .coeff = -2718,
-            .scale = 3,
-        }
-    };
+    const input = heap.Value{ .Decimal128 = .{
+        .coeff = -2718,
+        .scale = 3,
+    } };
     const result = try evaluator_functions.abs_val(input);
     try testing.expect(result == .Decimal128);
     try testing.expectEqual(@as(i128, 2718), result.Decimal128.coeff);
@@ -74,24 +70,20 @@ test "cos function" {
 }
 
 test "ceil function with decimal" {
-    const input = heap.Value{ 
-        .Decimal128 = .{
-            .coeff = 314,
-            .scale = 2,
-        }
-    };
+    const input = heap.Value{ .Decimal128 = .{
+        .coeff = 314,
+        .scale = 2,
+    } };
     const result = try evaluator_functions.ceil_val(input);
     try testing.expect(result == .Int);
     try testing.expectEqual(@as(i64, 4), result.Int);
 }
 
 test "floor function with decimal" {
-    const input = heap.Value{ 
-        .Decimal128 = .{
-            .coeff = 314,
-            .scale = 2,
-        }
-    };
+    const input = heap.Value{ .Decimal128 = .{
+        .coeff = 314,
+        .scale = 2,
+    } };
     const result = try evaluator_functions.floor_val(input);
     try testing.expect(result == .Int);
     try testing.expectEqual(@as(i64, 3), result.Int);

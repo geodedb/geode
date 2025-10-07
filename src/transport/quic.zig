@@ -109,10 +109,9 @@ pub const QuicTransport = struct {
             }
         }
 
-        // Print startup JSON exactly once (port 3141 for QUIC+TLS)
-        const port: u16 = 3141;
+        // Print startup JSON exactly once
         const tls_str = if (use_tls) "true" else "false";
-        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"{s}\",\"port\":{}}}\n", .{ tls_str, port });
+        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"{s}\",\"port\":{}}}\n", .{ tls_str, self.config.port });
 
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"server startup\",\"use_tls\":{},\"cert_exists\":{},\"key_exists\":{}}}\n", .{ use_tls, cert_exists, key_exists });
 
@@ -154,7 +153,7 @@ pub const QuicTransport = struct {
             .version = .v1,
             .allow_insecure = (!use_tls) and (self.config.ca_path == null), // allow insecure only when TLS unavailable and no CA provided
             .real_tls = use_tls, // disable real TLS if we fell back
-            .alpn = &[_][]const u8{ "h3", "http/3" },
+            .alpn = &[_][]const u8{"geode/1"},
             .cc = .newreno,
             .enable_datagram = false,
             .enable_spin_bit = false,
@@ -248,7 +247,7 @@ pub const QuicTransport = struct {
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"no endpoint available for accept\"}}\n", .{});
         return QuicError.ConnectionFailed;
     }
-    
+
     pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
         if (self.endpoint) |ep| {
             try quic_lib.poll(ep, timeout_ms);
@@ -287,7 +286,7 @@ pub const QuicConnection = struct {
         errdefer self.allocator.destroy(stream);
 
         if (self.quic_connection == null) return QuicError.StreamFailed;
-        
+
         // Accept a QUIC stream - this will check for existing streams first
         // then fall back to waiting for new ones
         const stream_id = try quic_lib.acceptStream(self.quic_connection.?);
@@ -471,7 +470,7 @@ pub const QuicClient = struct {
         const cfg = try self.allocator.create(quic_lib.QuicConfig);
         cfg.* = .{
             .version = .v1,
-            .alpn = &[_][]const u8{ "h3", "http/3" },
+            .alpn = &[_][]const u8{"geode/1"},
             .cc = .newreno,
             .enable_datagram = false,
             .enable_spin_bit = false,
@@ -524,7 +523,7 @@ pub const QuicClient = struct {
         const cfg = try self.allocator.create(quic_lib.QuicConfig);
         cfg.* = .{
             .version = .v1,
-            .alpn = &[_][]const u8{ "h3", "http/3" },
+            .alpn = &[_][]const u8{"geode/1"},
             .cc = .newreno,
             .enable_datagram = false,
             .enable_spin_bit = false,
@@ -576,7 +575,7 @@ pub const QuicClient = struct {
         const use_tls = has_ca or (cert != null and key != null);
         cfg.* = .{
             .version = .v1,
-            .alpn = &[_][]const u8{ "h3", "http/3" },
+            .alpn = &[_][]const u8{"geode/1"},
             .cc = .newreno,
             .enable_datagram = false,
             .enable_spin_bit = false,
@@ -636,7 +635,7 @@ pub const QuicClient = struct {
                 // Continue polling even if individual poll fails
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"poll error\",\"error\":\"{}\"}}\n", .{err});
             };
-            
+
             // Try to flush the endpoint to ensure packets are sent
             quic_lib.flush(self.endpoint.?, 1);
 
@@ -644,13 +643,13 @@ pub const QuicClient = struct {
             const handshake_complete = quic_lib.handshakeComplete(self.quic_connection.?);
             const handshake_confirmed = quic_lib.isHandshakeConfirmed(self.quic_connection.?);
             const handshake_done = quic_lib.handshakeDoneSeen(self.quic_connection.?);
-            
+
             if (handshake_complete or handshake_confirmed or handshake_done) {
                 const elapsed_ms = std.time.milliTimestamp() - start_time;
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake completed\",\"elapsed_ms\":{},\"poll_count\":{},\"complete\":{},\"confirmed\":{},\"done\":{}}}\n", .{ elapsed_ms, poll_count, handshake_complete, handshake_confirmed, handshake_done });
                 return;
             }
-            
+
             // Add detailed debugging for first few iterations
             if (poll_count <= 5) {
                 std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"handshake check\",\"poll_count\":{},\"complete\":{},\"confirmed\":{},\"done\":{}}}\n", .{ poll_count, handshake_complete, handshake_confirmed, handshake_done });
@@ -704,10 +703,10 @@ pub const QuicClientStream = struct {
 
     pub fn writeAll(self: *QuicClientStream, data: []const u8) !void {
         if (self.quic_stream_id) |sid| {
-            std.debug.print("DEBUG: QuicClientStream.writeAll called with {} bytes on stream {}\n", .{data.len, sid});
+            std.debug.print("DEBUG: QuicClientStream.writeAll called with {} bytes on stream {}\n", .{ data.len, sid });
             const bytes_written = try quic_lib.writeStream(self.quic_connection.?, sid, data);
             std.debug.print("DEBUG: writeStream returned {} bytes written\n", .{bytes_written});
-            
+
             // Poll multiple times to ensure data is sent
             if (self.client) |c| {
                 if (c.endpoint) |ep| {
@@ -765,7 +764,7 @@ pub const QuicClientStream = struct {
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
         var buf = try self.allocator.alloc(u8, max_size);
         errdefer self.allocator.free(buf);
-        
+
         var pos: usize = 0;
         while (pos < max_size) {
             const n = try self.read(buf[pos .. pos + 1]);

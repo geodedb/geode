@@ -40,7 +40,7 @@ pub const AnalyticsEvent = struct {
     query_id: ?u64 = null,
     properties: AutoHashMap([]const u8, AnalyticsValue),
     metadata: AnalyticsMetadata,
-    
+
     pub fn init(allocator: Allocator, event_type: AnalyticsEventType) AnalyticsEvent {
         return AnalyticsEvent{
             .id = generateEventId(),
@@ -50,16 +50,16 @@ pub const AnalyticsEvent = struct {
             .metadata = AnalyticsMetadata.init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *AnalyticsEvent) void {
         self.properties.deinit();
         self.metadata.deinit();
     }
-    
+
     pub fn setProperty(self: *AnalyticsEvent, key: []const u8, value: AnalyticsValue) !void {
         try self.properties.put(key, value);
     }
-    
+
     pub fn getProperty(self: *AnalyticsEvent, key: []const u8) ?AnalyticsValue {
         return self.properties.get(key);
     }
@@ -85,17 +85,17 @@ pub const AnalyticsMetadata = struct {
     session_id: ?u64 = null,
     user_id: ?u64 = null,
     tags: ArrayList([]const u8),
-    
+
     pub fn init(allocator: Allocator) AnalyticsMetadata {
         return AnalyticsMetadata{
             .tags = ArrayList([]const u8).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *AnalyticsMetadata) void {
         self.tags.deinit();
     }
-    
+
     pub fn addTag(self: *AnalyticsMetadata, tag: []const u8) !void {
         try self.tags.append(tag);
     }
@@ -113,7 +113,7 @@ pub const AnalyticsConfig = struct {
     embedding_update_threshold: f32 = 0.1,
     similarity_threshold: f32 = 0.8,
     anomaly_detection_window: u32 = 3600, // 1 hour in seconds
-    trend_analysis_window: u32 = 86400,   // 24 hours in seconds
+    trend_analysis_window: u32 = 86400, // 24 hours in seconds
 };
 
 /// Real-time analytics processing statistics
@@ -127,7 +127,7 @@ pub const AnalyticsStatistics = struct {
     processing_errors: u64 = 0,
     average_processing_time_ms: f64 = 0.0,
     last_update_timestamp: i64 = 0,
-    
+
     pub fn updateProcessingTime(self: *AnalyticsStatistics, processing_time_ms: f64) void {
         self.average_processing_time_ms = (self.average_processing_time_ms * @as(f64, @floatFromInt(self.events_processed)) + processing_time_ms) / @as(f64, @floatFromInt(self.events_processed + 1));
     }
@@ -138,13 +138,13 @@ pub const PatternDetector = struct {
     allocator: Allocator,
     patterns: AutoHashMap(u64, DetectedPattern),
     config: PatternDetectionConfig,
-    
+
     pub const PatternDetectionConfig = struct {
         min_pattern_frequency: u32 = 5,
         pattern_time_window_ms: i64 = 60000, // 1 minute
         max_patterns_tracked: u32 = 1000,
     };
-    
+
     pub const DetectedPattern = struct {
         pattern_id: u64,
         pattern_type: PatternType,
@@ -153,7 +153,7 @@ pub const PatternDetector = struct {
         last_occurrence: i64,
         confidence: f32,
         nodes_involved: ArrayList(u64),
-        
+
         pub fn init(allocator: Allocator, pattern_type: PatternType) DetectedPattern {
             return DetectedPattern{
                 .pattern_id = generatePatternId(),
@@ -165,12 +165,12 @@ pub const PatternDetector = struct {
                 .nodes_involved = ArrayList(u64).init(allocator),
             };
         }
-        
+
         pub fn deinit(self: *DetectedPattern) void {
             self.nodes_involved.deinit();
         }
     };
-    
+
     pub const PatternType = enum {
         frequent_connection,
         community_formation,
@@ -179,7 +179,7 @@ pub const PatternDetector = struct {
         temporal_clustering,
         behavioral_similarity,
     };
-    
+
     pub fn init(allocator: Allocator, config: PatternDetectionConfig) PatternDetector {
         return PatternDetector{
             .allocator = allocator,
@@ -187,7 +187,7 @@ pub const PatternDetector = struct {
             .config = config,
         };
     }
-    
+
     pub fn deinit(self: *PatternDetector) void {
         var pattern_iterator = self.patterns.iterator();
         while (pattern_iterator.next()) |entry| {
@@ -196,7 +196,7 @@ pub const PatternDetector = struct {
         }
         self.patterns.deinit();
     }
-    
+
     pub fn detectPattern(self: *PatternDetector, event: *const AnalyticsEvent) !?DetectedPattern {
         // Pattern detection logic based on event type and properties
         switch (event.event_type) {
@@ -214,7 +214,7 @@ pub const PatternDetector = struct {
         }
         return null;
     }
-    
+
     fn detectConnectionPattern(self: *PatternDetector, node_id: u64, event: *const AnalyticsEvent) !?DetectedPattern {
         _ = self;
         _ = node_id;
@@ -223,7 +223,7 @@ pub const PatternDetector = struct {
         // This would analyze the graph structure and identify recurring connection patterns
         return null;
     }
-    
+
     fn detectCommunityFormation(self: *PatternDetector, node_id: u64, event: *const AnalyticsEvent) !?DetectedPattern {
         _ = self;
         _ = node_id;
@@ -240,35 +240,35 @@ pub const AnomalyDetector = struct {
     baseline_stats: AutoHashMap([]const u8, AnomalyBaseline),
     config: AnomalyDetectionConfig,
     recent_events: ArrayList(AnalyticsEvent),
-    
+
     pub const AnomalyDetectionConfig = struct {
         statistical_threshold: f64 = 3.0, // Standard deviations
         minimum_baseline_samples: u32 = 100,
         baseline_update_frequency: u32 = 1000, // Events
         anomaly_cooldown_ms: i64 = 5000, // 5 seconds
     };
-    
+
     pub const AnomalyBaseline = struct {
         mean: f64,
         variance: f64,
         sample_count: u32,
         last_updated: i64,
     };
-    
+
     pub const AnomalyResult = struct {
         is_anomaly: bool,
         severity: AnomalySeverity,
         confidence: f32,
         description: []const u8,
         affected_entities: ArrayList(u64),
-        
+
         pub const AnomalySeverity = enum {
             low,
             medium,
             high,
             critical,
         };
-        
+
         pub fn init(allocator: Allocator) AnomalyResult {
             return AnomalyResult{
                 .is_anomaly = false,
@@ -278,12 +278,12 @@ pub const AnomalyDetector = struct {
                 .affected_entities = ArrayList(u64).init(allocator),
             };
         }
-        
+
         pub fn deinit(self: *AnomalyResult) void {
             self.affected_entities.deinit();
         }
     };
-    
+
     pub fn init(allocator: Allocator, config: AnomalyDetectionConfig) AnomalyDetector {
         return AnomalyDetector{
             .allocator = allocator,
@@ -292,7 +292,7 @@ pub const AnomalyDetector = struct {
             .recent_events = ArrayList(AnalyticsEvent).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *AnomalyDetector) void {
         self.baseline_stats.deinit();
         for (self.recent_events.items) |*event| {
@@ -300,18 +300,18 @@ pub const AnomalyDetector = struct {
         }
         self.recent_events.deinit();
     }
-    
+
     pub fn detectAnomaly(self: *AnomalyDetector, event: *const AnalyticsEvent) !AnomalyResult {
         var result = AnomalyResult.init(self.allocator);
-        
+
         // Statistical anomaly detection based on event patterns
         const metric_key = try self.getMetricKey(event);
         const current_value = try self.extractMetricValue(event);
-        
+
         if (self.baseline_stats.get(metric_key)) |baseline| {
             if (baseline.sample_count >= self.config.minimum_baseline_samples) {
                 const z_score = @abs(current_value - baseline.mean) / @sqrt(baseline.variance);
-                
+
                 if (z_score > self.config.statistical_threshold) {
                     result.is_anomaly = true;
                     result.confidence = @min(z_score / 10.0, 1.0); // Scale confidence
@@ -320,13 +320,13 @@ pub const AnomalyDetector = struct {
                 }
             }
         }
-        
+
         // Update baseline statistics
         try self.updateBaseline(metric_key, current_value);
-        
+
         return result;
     }
-    
+
     fn getMetricKey(self: *AnomalyDetector, event: *const AnalyticsEvent) ![]const u8 {
         _ = self;
         // Generate a key based on event type and relevant properties
@@ -337,7 +337,7 @@ pub const AnomalyDetector = struct {
             else => "general_activity",
         };
     }
-    
+
     fn extractMetricValue(self: *AnomalyDetector, event: *const AnalyticsEvent) !f64 {
         _ = self;
         _ = event;
@@ -345,14 +345,14 @@ pub const AnomalyDetector = struct {
         // This could be frequency, magnitude, or other measurable attributes
         return 1.0; // Placeholder - would extract actual metrics
     }
-    
+
     fn updateBaseline(self: *AnomalyDetector, metric_key: []const u8, value: f64) !void {
         if (self.baseline_stats.getPtr(metric_key)) |baseline| {
             // Update running statistics
             const n = @as(f64, @floatFromInt(baseline.sample_count));
             const new_mean = (baseline.mean * n + value) / (n + 1.0);
             const new_variance = (baseline.variance * n + (value - new_mean) * (value - baseline.mean)) / (n + 1.0);
-            
+
             baseline.mean = new_mean;
             baseline.variance = new_variance;
             baseline.sample_count += 1;
@@ -367,7 +367,7 @@ pub const AnomalyDetector = struct {
             });
         }
     }
-    
+
     fn classifySeverity(self: *AnomalyDetector, z_score: f64) AnomalyResult.AnomalySeverity {
         _ = self;
         if (z_score < 5.0) return .low;
@@ -389,7 +389,7 @@ pub const RealTimeAnalyticsEngine = struct {
     processing_thread: ?std.Thread = null,
     should_stop: bool = false,
     mutex: std.Thread.Mutex = .{},
-    
+
     pub fn init(allocator: Allocator, config: AnalyticsConfig) !RealTimeAnalyticsEngine {
         return RealTimeAnalyticsEngine{
             .allocator = allocator,
@@ -401,10 +401,10 @@ pub const RealTimeAnalyticsEngine = struct {
             .anomaly_detector = AnomalyDetector.init(allocator, .{}),
         };
     }
-    
+
     pub fn deinit(self: *RealTimeAnalyticsEngine) void {
         self.stop();
-        
+
         for (self.event_queue.items) |*event| {
             event.deinit();
         }
@@ -412,11 +412,11 @@ pub const RealTimeAnalyticsEngine = struct {
         self.pattern_detector.deinit();
         self.anomaly_detector.deinit();
     }
-    
+
     pub fn connectMLManager(self: *RealTimeAnalyticsEngine, ml_manager: *ml_embeddings.GraphEmbeddingsManager) void {
         self.ml_manager = ml_manager;
     }
-    
+
     pub fn start(self: *RealTimeAnalyticsEngine) !void {
         if (self.processing_thread == null) {
             self.should_stop = false;
@@ -424,7 +424,7 @@ pub const RealTimeAnalyticsEngine = struct {
             log.info("Real-time analytics engine started", .{});
         }
     }
-    
+
     pub fn stop(self: *RealTimeAnalyticsEngine) void {
         if (self.processing_thread) |thread| {
             self.should_stop = true;
@@ -433,98 +433,98 @@ pub const RealTimeAnalyticsEngine = struct {
             log.info("Real-time analytics engine stopped", .{});
         }
     }
-    
+
     pub fn queueEvent(self: *RealTimeAnalyticsEngine, event: AnalyticsEvent) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         if (self.event_queue.items.len >= self.config.max_event_queue_size) {
             // Remove oldest event to make space
             var oldest = self.event_queue.orderedRemove(0);
             oldest.deinit();
             self.statistics.events_queued -= 1;
         }
-        
+
         try self.event_queue.append(event);
         self.statistics.events_queued += 1;
     }
-    
+
     pub fn processEventsBatch(self: *RealTimeAnalyticsEngine) !void {
         const start_time = std.time.milliTimestamp();
         var events_to_process = ArrayList(AnalyticsEvent).init(self.allocator);
         defer events_to_process.deinit();
-        
+
         // Extract batch of events from queue
         {
             self.mutex.lock();
             defer self.mutex.unlock();
-            
+
             const batch_size = @min(self.config.batch_size, self.event_queue.items.len);
             if (batch_size == 0) return;
-            
+
             for (0..batch_size) |i| {
                 try events_to_process.append(self.event_queue.items[i]);
             }
-            
+
             // Remove processed events from queue
             for (0..batch_size) |_| {
                 _ = self.event_queue.orderedRemove(0);
                 self.statistics.events_queued -= 1;
             }
         }
-        
+
         // Process each event in the batch
         for (events_to_process.items) |*event| {
             try self.processEvent(event);
             self.statistics.events_processed += 1;
         }
-        
+
         // Update processing statistics
         const processing_time = @as(f64, @floatFromInt(std.time.milliTimestamp() - start_time));
         self.statistics.updateProcessingTime(processing_time);
         self.statistics.last_update_timestamp = std.time.milliTimestamp();
-        
+
         // Clean up events
         for (events_to_process.items) |*event| {
             event.deinit();
         }
     }
-    
+
     fn processEvent(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !void {
         const event_start_time = std.time.milliTimestamp();
-        
+
         // Pattern detection
         if (self.config.enable_pattern_detection) {
             if (try self.pattern_detector.detectPattern(event)) |_| {
                 self.statistics.patterns_detected += 1;
             }
         }
-        
+
         // Anomaly detection
         if (self.config.enable_anomaly_detection) {
             var anomaly_result = try self.anomaly_detector.detectAnomaly(event);
             defer anomaly_result.deinit();
-            
+
             if (anomaly_result.is_anomaly) {
                 self.statistics.anomalies_detected += 1;
                 try self.handleAnomaly(event, &anomaly_result);
             }
         }
-        
+
         // ML integration - trigger embedding updates
         if (self.config.enable_ml_integration and self.ml_manager != null) {
             try self.handleMLIntegration(event);
         }
-        
+
         // Trend analysis
         if (self.config.enable_trend_analysis) {
             try self.analyzeTrends(event);
         }
-        
+
         // Update processing metadata
         event.metadata.processing_time = std.time.milliTimestamp() - event_start_time;
     }
-    
+
     fn handleMLIntegration(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !void {
         if (self.ml_manager) |ml_mgr| {
             switch (event.event_type) {
@@ -555,42 +555,38 @@ pub const RealTimeAnalyticsEngine = struct {
             }
         }
     }
-    
+
     fn handleAnomaly(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent, anomaly: *AnomalyDetector.AnomalyResult) !void {
         _ = self;
         _ = event;
-        
+
         // Log anomaly for monitoring and alerting
-        log.warn("Anomaly detected: {s} (severity: {}, confidence: {d:.2})", .{ 
-            anomaly.description, 
-            anomaly.severity, 
-            anomaly.confidence 
-        });
-        
+        log.warn("Anomaly detected: {s} (severity: {}, confidence: {d:.2})", .{ anomaly.description, anomaly.severity, anomaly.confidence });
+
         // In a production system, this would trigger alerts, notifications,
         // or automatic response mechanisms based on severity
     }
-    
+
     fn analyzeTrends(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !void {
         _ = event;
-        
+
         // Trend analysis implementation
         // This would analyze patterns over time windows to identify trends
         // such as increasing activity, seasonal patterns, growth trends, etc.
         self.statistics.trends_identified += 1;
     }
-    
+
     pub fn getStatistics(self: *RealTimeAnalyticsEngine) AnalyticsStatistics {
         return self.statistics;
     }
-    
+
     fn processEvents(self: *RealTimeAnalyticsEngine) void {
         while (!self.should_stop) {
             self.processEventsBatch() catch |err| {
                 log.err("Error processing events batch: {}", .{err});
                 self.statistics.processing_errors += 1;
             };
-            
+
             // Sleep for configured interval
             std.time.sleep(self.config.processing_interval_ms * std.time.ns_per_ms);
         }
@@ -611,29 +607,29 @@ fn generatePatternId() u64 {
 // Integration with CDC system
 pub const CDCAnalyticsIntegration = struct {
     analytics_engine: *RealTimeAnalyticsEngine,
-    
+
     pub fn init(analytics_engine: *RealTimeAnalyticsEngine) CDCAnalyticsIntegration {
         return CDCAnalyticsIntegration{
             .analytics_engine = analytics_engine,
         };
     }
-    
+
     pub fn handleCDCEvent(self: *CDCAnalyticsIntegration, cdc_event: anytype) !void {
         // Convert CDC event to analytics event
         const analytics_event = try self.convertCDCEvent(cdc_event);
         try self.analytics_engine.queueEvent(analytics_event);
     }
-    
+
     fn convertCDCEvent(self: *CDCAnalyticsIntegration, cdc_event: anytype) !AnalyticsEvent {
         _ = cdc_event;
-        
+
         // Convert CDC event format to analytics event format
         // This would parse the CDC event structure and map it to our analytics event
         var event = AnalyticsEvent.init(self.analytics_engine.allocator, .node_creation);
-        
+
         // Set event properties based on CDC event content
         try event.setProperty("source", AnalyticsValue{ .string = "cdc" });
-        
+
         return event;
     }
 };

@@ -67,6 +67,7 @@ const COMMANDS = [_]CommandEntry{
     .{ .name = "serve", .handler = cmdServe, .description = "Start the Geode server" },
     .{ .name = "query", .handler = cmdQuery, .description = "Execute a GQL query" },
     .{ .name = "shell", .handler = cmdShell, .description = "Start interactive shell (REPL)" },
+    .{ .name = "stdio", .handler = cmdStdio, .description = "JSON protocol for process mode (Go client compatibility)" },
     .{ .name = "backup", .handler = cmdBackup, .description = "Create database backup" },
     .{ .name = "restore", .handler = cmdRestore, .description = "Restore database from backup" },
     .{ .name = "migrate", .handler = cmdMigrate, .description = "Database migration commands" },
@@ -206,7 +207,7 @@ const QuicTransportConnection = struct {
     quic_stream: ?*quic.QuicClientStream = null,
     // Interface field for the transport connection
     interface: geode.repl.repl_dispatch.TransportConnection,
-    
+
     pub fn writeAll(self: *geode.repl.repl_dispatch.TransportConnection, data: []const u8) !void {
         const quic_conn = @as(*QuicTransportConnection, @fieldParentPtr("interface", self));
         if (quic_conn.quic_stream) |stream| {
@@ -215,33 +216,33 @@ const QuicTransportConnection = struct {
             return error.NotConnected;
         }
     }
-    
+
     pub fn readLine(self: *geode.repl.repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
         const quic_conn = @as(*QuicTransportConnection, @fieldParentPtr("interface", self));
         if (quic_conn.quic_stream) |stream| {
             // Read until newline character or max size
             var result = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
             defer result.deinit(allocator);
-            
+
             var buf: [1]u8 = undefined;
             var total_read: usize = 0;
-            
+
             while (total_read < max_size) {
                 const bytes_read = try stream.read(&buf);
                 if (bytes_read == 0) break; // EOF
-                
+
                 total_read += bytes_read;
                 try result.append(allocator, buf[0]);
-                
+
                 if (buf[0] == '\n') break; // Found newline
             }
-            
+
             return result.toOwnedSlice(allocator);
         } else {
             return error.NotConnected;
         }
     }
-    
+
     pub fn deinit(self: *geode.repl.repl_dispatch.TransportConnection) void {
         const quic_conn = @as(*QuicTransportConnection, @fieldParentPtr("interface", self));
         if (quic_conn.quic_stream) |stream| {
@@ -258,14 +259,14 @@ fn quicConnectFn(allocator: std.mem.Allocator, addr: []const u8) !*geode.repl.re
     // Parse address into host and port
     const colon_idx = std.mem.lastIndexOf(u8, addr, ":") orelse return error.InvalidAddress;
     const host = addr[0..colon_idx];
-    const port_str = addr[colon_idx + 1..];
+    const port_str = addr[colon_idx + 1 ..];
     const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidAddress;
-    
+
     // Create QUIC client
     const quic_client = try allocator.create(quic.QuicClient);
     quic_client.* = quic.QuicClient.init(allocator);
     try quic_client.connect(host, port);
-    
+
     // Create wrapper
     const quic_conn = try allocator.create(QuicTransportConnection);
     quic_conn.* = QuicTransportConnection{
@@ -277,10 +278,10 @@ fn quicConnectFn(allocator: std.mem.Allocator, addr: []const u8) !*geode.repl.re
             .deinitFn = QuicTransportConnection.deinit,
         },
     };
-    
+
     // Open stream
     quic_conn.quic_stream = try quic_client.getStream();
-    
+
     return &quic_conn.interface;
 }
 
@@ -561,12 +562,12 @@ const ClientConfig = struct {
     json_params: std.StringHashMap([]const u8) = undefined,
 };
 
-// Handle a QUIC connection and process queries  
+// Handle a QUIC connection and process queries
 fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: anytype) !void {
     defer conn.close();
-    
+
     std.debug.print("DEBUG: Handling QUIC connection\n", .{});
-    
+
     // Poll and retry acceptStream until we get the stream
     var stream_attempts: usize = 0;
     const stream = while (stream_attempts < 50) : (stream_attempts += 1) {
@@ -576,7 +577,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             transport.poll(50) catch {};
             std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
         }
-        
+
         if (conn.acceptStream()) |s| {
             std.debug.print("Stream accepted after {} attempts\n", .{stream_attempts + 1});
             break s;
@@ -593,16 +594,16 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
         return error.Timeout;
     };
     defer stream.close();
-    
+
     // Read query message
     const query_msg = stream.readLine(65536) catch |err| {
         std.debug.print("Failed to read query: {}\n", .{err});
         return err;
     };
     defer allocator.free(query_msg);
-    
+
     std.debug.print("Received query message: {s}\n", .{query_msg});
-    
+
     // Parse JSON message
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, query_msg, .{}) catch {
         const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
@@ -610,56 +611,56 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
         return;
     };
     defer parsed.deinit();
-    
+
     // Check message type
     if (parsed.value != .object) {
         const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid message format\"}\n";
         try stream.writeAll(error_response);
         return;
     }
-    
+
     const obj = parsed.value.object;
     const msg_type = obj.get("type") orelse {
         const error_response = "{\"status_class\":\"58000\",\"error\":\"Missing type field\"}\n";
         try stream.writeAll(error_response);
         return;
     };
-    
+
     if (msg_type != .string or !std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
         const error_response = "{\"status_class\":\"58000\",\"error\":\"Unknown message type\"}\n";
         try stream.writeAll(error_response);
         return;
     }
-    
+
     const query_text_value = obj.get("text") orelse {
         const error_response = "{\"status_class\":\"58000\",\"error\":\"Missing text field\"}\n";
         try stream.writeAll(error_response);
         return;
     };
-    
+
     if (query_text_value != .string) {
         const error_response = "{\"status_class\":\"58000\",\"error\":\"text field must be string\"}\n";
         try stream.writeAll(error_response);
         return;
     }
-    
+
     const query_text = query_text_value.string;
     std.debug.print("Query text: {s}\n", .{query_text});
-    
+
     // For now, send a simple test response
     // In a full implementation, this would execute the query through the GQL engine
     // Combine all responses into one write to avoid timing issues
-    const full_response = 
+    const full_response =
         "SCHEMA: [{\"name\":\"test\",\"type\":\"INTEGER\"}]\n" ++
         "RESULT: {\"test\":1}\n" ++
         "STATUS: {\"status_class\":\"00000\",\"row_count\":1}\n";
-    
+
     std.debug.print("DEBUG: Writing full response\n", .{});
     stream.writeAll(full_response) catch |err| {
         std.debug.print("ERROR: Failed to write response: {}\n", .{err});
         return err;
     };
-    
+
     std.debug.print("DEBUG: Response sent successfully\n", .{});
 }
 
@@ -667,7 +668,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
 fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     // Real QUIC server implementation using transport module
     const QuicTransport = @import("transport/quic");
-    
+
     var ai: usize = 1;
     var listen_addr: []const u8 = "0.0.0.0";
     var listen_port: u16 = 3141;
@@ -686,7 +687,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             // Parse address:port
             if (std.mem.lastIndexOf(u8, addr_port, ":")) |colon_idx| {
                 listen_addr = addr_port[0..colon_idx];
-                listen_port = std.fmt.parseInt(u16, addr_port[colon_idx + 1..], 10) catch 3141;
+                listen_port = std.fmt.parseInt(u16, addr_port[colon_idx + 1 ..], 10) catch 3141;
             }
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--data_dir") and ai + 1 < args.len) {
@@ -721,7 +722,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     // Set up certificate paths
     const actual_cert_path = cert_path orelse try std.fmt.allocPrint(allocator, "{s}/server.crt", .{actual_data_dir});
     defer if (cert_path == null) allocator.free(actual_cert_path);
-    
+
     const actual_key_path = key_path orelse try std.fmt.allocPrint(allocator, "{s}/server.key", .{actual_data_dir});
     defer if (key_path == null) allocator.free(actual_key_path);
 
@@ -750,21 +751,21 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     var connection_count: u32 = 0;
     while (true) {
         if (test_exit_after_first and connection_count > 0) break;
-        
+
         const conn = quic_server.accept() catch |err| {
             std.debug.print("Accept error: {}\n", .{err});
             std.Thread.sleep(1000000000); // Sleep 1s on error
             continue;
         };
-        
+
         connection_count += 1;
         std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
-        
+
         // Handle the connection by processing queries
         handleQuicConnection(allocator, &quic_server, conn) catch |err| {
             std.debug.print("Error handling connection: {}\n", .{err});
         };
-        
+
         if (test_exit_after_first) break;
     }
 }
@@ -772,47 +773,47 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 // Direct server function (eliminates subprocess spawning)
 fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
     // Unified binary approach - direct server startup without subprocess spawning
-    
+
     // Build argument array for server main function
     var server_args = std.ArrayList([]const u8).initCapacity(ally, 16) catch return error.OutOfMemory;
     defer server_args.deinit(ally);
-    
+
     // Program name
     try server_args.append(ally, "geode-server");
-    
+
     if (config.listen_quic) |addr| {
-        try server_args.append(ally, "--listen-quic");
+        try server_args.append(ally, "--listen");
         try server_args.append(ally, addr);
     }
-    
+
     if (config.data_dir) |data_dir| {
         try server_args.append(ally, "--data_dir");
         try server_args.append(ally, data_dir);
     }
-    
+
     if (config.cert_path) |cert| {
         try server_args.append(ally, "--cert");
         try server_args.append(ally, cert);
     }
-    
+
     if (config.key_path) |key| {
         try server_args.append(ally, "--key");
         try server_args.append(ally, key);
     }
-    
+
     if (config.force_no_tls) {
         try server_args.append(ally, "--no-tls");
     }
-    
+
     if (config.result_format_txt) {
         try server_args.append(ally, "--result-format");
         try server_args.append(ally, "txt");
     }
-    
+
     // Set log level
     try server_args.append(ally, "--log-level");
     try server_args.append(ally, config.log_level);
-    
+
     // Create null-terminated strings for argv compatibility
     var argv = std.ArrayList([:0]u8).initCapacity(ally, server_args.items.len) catch return error.OutOfMemory;
     defer {
@@ -821,12 +822,12 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
         }
         argv.deinit(ally);
     }
-    
+
     for (server_args.items) |arg| {
         const null_terminated = try ally.dupeZ(u8, arg);
         try argv.append(ally, null_terminated);
     }
-    
+
     // Set up environment for server main
     std.debug.print("Geode server starting with unified binary (no subprocess spawning)\n", .{});
     if (config.listen_quic) |addr| {
@@ -835,7 +836,7 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
     if (config.data_dir) |data_dir| {
         std.debug.print("Data directory: {s}\n", .{data_dir});
     }
-    
+
     // Call server startup function directly
     try startServer(ally, argv.items);
 }
@@ -844,84 +845,84 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
 fn runEmbeddedClient(ally: std.mem.Allocator, config: ClientConfig) !void {
     // Unified binary approach - no subprocess spawning required
     // Direct function calls replace geodec subprocess spawning
-    
+
     // Build argument array for client
     var client_args = std.ArrayList([]const u8).initCapacity(ally, 16) catch return error.OutOfMemory;
     defer client_args.deinit(ally);
-    
+
     // Find geodec binary path
     const self_exe_path = try std.fs.selfExePathAlloc(ally);
     defer ally.free(self_exe_path);
-    
+
     const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
     const geodec_path = try std.fs.path.join(ally, &.{ self_dir_path, "geodec" });
     defer ally.free(geodec_path);
-    
+
     // Check if geodec exists in the same directory
     if (std.fs.accessAbsolute(geodec_path, .{})) |_| {
         try client_args.append(ally, geodec_path);
     } else |_| {
         try client_args.append(ally, "geodec");
     }
-    
+
     try client_args.append(ally, "--server");
     try client_args.append(ally, config.server);
-    
+
     try client_args.append(ally, "--format");
     try client_args.append(ally, config.format);
-    
+
     if (config.page_size != 1) {
         try client_args.append(ally, "--page-size");
         const page_size_str = try std.fmt.allocPrint(ally, "{d}", .{config.page_size});
         defer ally.free(page_size_str);
         try client_args.append(ally, page_size_str);
     }
-    
+
     if (config.pull_all) {
         try client_args.append(ally, "--pull-all");
     }
-    
+
     if (config.extra_pull > 0) {
         try client_args.append(ally, "--extra-pull");
         const extra_pull_str = try std.fmt.allocPrint(ally, "{d}", .{config.extra_pull});
         defer ally.free(extra_pull_str);
         try client_args.append(ally, extra_pull_str);
     }
-    
+
     if (config.begin) try client_args.append(ally, "--begin");
     if (config.commit) try client_args.append(ally, "--commit");
     if (config.rollback) try client_args.append(ally, "--rollback");
-    
+
     if (config.process_path) |process_path| {
         try client_args.append(ally, "--process");
         try client_args.append(ally, process_path);
     }
-    
+
     if (config.no_quic) {
         try client_args.append(ally, "--no-quic");
     }
-    
+
     // Add server arguments
     for (config.server_args) |server_arg| {
         try client_args.append(ally, "--server-arg");
         try client_args.append(ally, server_arg);
     }
-    
+
     // Add query text last
     try client_args.append(ally, config.query_text);
-    
+
     // Unified binary architecture - no subprocess spawning
     std.debug.print("Geode client executing with unified binary (no subprocess spawning)\n", .{});
     std.debug.print("Server: {s}\n", .{config.server});
     std.debug.print("Query: {s}\n", .{config.query_text});
     std.debug.print("Format: {s}\n", .{config.format});
-    
+
     // Direct function call approach (eliminates subprocess)
     // In production, this would call the client main function directly
     // For now, simulate successful query execution
     std.debug.print("✅ Query execution simulation complete (unified binary)\n", .{});
     std.debug.print("{{\"message\":\"Query executed via unified binary\", \"query\":\"{s}\", \"server\":\"{s}\"}}\n", .{ config.query_text, config.server });
-    
+
     // Exit successfully to demonstrate subprocess elimination
     std.process.exit(@intFromEnum(ExitCode.success));
 }
@@ -1222,6 +1223,123 @@ fn printRevokeUsage() void {
 }
 
 // Subcommand implementations
+
+// JSON protocol handler for Go client compatibility (process/stdio mode)
+fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = argv;
+    _ = start_idx;
+
+    // This implements the JSON protocol expected by the Go client
+    // Protocol: read JSON requests from stdin, write JSON responses to stdout
+    // Format: {"type": "RUN_GQL", "text": "query", "params": {...}}
+
+    const stdin_file = std.fs.File{ .handle = 0 }; // stdin
+    const stdout_fd = std.fs.File{ .handle = 1 }; // stdout
+
+    // Use the geode module to execute queries
+    const geode_lib = @import("geode");
+
+    // Read line by line from stdin
+    var line_buf: [65536]u8 = undefined;
+
+    while (true) {
+        // Read input byte by byte until we get a newline
+        var line_len: usize = 0;
+
+        while (line_len < line_buf.len) {
+            var one: [1]u8 = undefined;
+            const bytes_read = stdin_file.read(&one) catch |err| {
+                if (err == error.EndOfStream) break;
+                return err;
+            };
+            if (bytes_read == 0) break;
+
+            if (one[0] == '\n') break;
+            line_buf[line_len] = one[0];
+            line_len += 1;
+        }
+
+        if (line_len == 0) break;
+        const line = line_buf[0..line_len];
+
+        // Parse JSON request
+        const json = std.json;
+        const parsed = try json.parseFromSlice(json.Value, ally, line, .{});
+        defer parsed.deinit();
+
+        const obj = parsed.value.object;
+        const msg_type = obj.get("type") orelse continue;
+
+        if (std.mem.eql(u8, msg_type.string, "HELLO")) {
+            // Respond to HELLO (handshake) - just acknowledge
+            continue;
+        } else if (std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
+            // Execute GQL query
+            const text = obj.get("text") orelse continue;
+            const query_text = text.string;
+
+            // Execute query using embedded server
+            const options = geode_lib.test_harness.QueryOptions{
+                .token = null,
+                .user = null,
+            };
+
+            var mut_ally = ally;
+            const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
+                // Send error response
+                const error_resp = try std.fmt.allocPrint(ally, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"{s}\"}}}}\n", .{@errorName(err)});
+                defer ally.free(error_resp);
+                _ = try stdout_fd.writeAll(error_resp);
+                continue;
+            };
+            // Parse the result JSON to extract columns and rows
+            const result_parsed = try json.parseFromSlice(json.Value, ally, result, .{});
+            defer result_parsed.deinit();
+
+            const result_obj = result_parsed.value.object;
+            const columns = result_obj.get("columns") orelse continue;
+            _ = result_obj.get("rows") orelse continue; // We'll use this for PULL
+
+            // Send SCHEMA response first
+            _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
+
+            // Write column definitions
+            for (columns.array.items, 0..) |col, idx| {
+                if (idx > 0) _ = try stdout_fd.writeAll(",");
+                const col_str = try std.fmt.allocPrint(ally, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
+                defer ally.free(col_str);
+                _ = try stdout_fd.writeAll(col_str);
+            }
+
+            _ = try stdout_fd.writeAll("]}}\n");
+
+            // DON'T send DATA yet - wait for PULL request
+            // The Go client will send a PULL request to get the data
+
+        } else if (std.mem.eql(u8, msg_type.string, "PULL")) {
+            // Handle PULL request - send DATA rows
+            const request_id = if (obj.get("request_id")) |rid| rid.integer else 1;
+            const page_size = if (obj.get("page_size")) |ps| ps.integer else 1000;
+            _ = request_id;
+            _ = page_size;
+
+            // For now, just send empty data and END
+            // In a real implementation, we'd need to store the query results
+            // and send them here
+            _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
+        } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
+            // Transaction begin - not implemented yet
+            continue;
+        } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
+            // Transaction commit - not implemented yet
+            continue;
+        } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
+            // Transaction rollback - not implemented yet
+            continue;
+        }
+    }
+}
+
 fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -1258,7 +1376,6 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var listen_addr: []const u8 = "0.0.0.0:3141";
     var log_level: []const u8 = "info";
     var use_stdio = false;
-    var override_listen = false;
 
     i = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -1284,9 +1401,6 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             i += 1;
         } else {
             // passthrough unknown flags (and their value if present)
-            if (std.mem.eql(u8, arg, "--listen-quic")) {
-                override_listen = true;
-            }
             try passthrough.append(ally, arg);
             if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
                 try passthrough.append(ally, argv[i + 1]);
@@ -1298,8 +1412,9 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     try server_args.append(ally, "--data_dir");
     try server_args.append(ally, data_dir);
 
-    if (!use_stdio and !override_listen) {
-        try server_args.append(ally, "--listen-quic");
+    // Always use --listen with the address from --listen
+    if (!use_stdio) {
+        try server_args.append(ally, "--listen");
         try server_args.append(ally, listen_addr);
     }
 
@@ -1318,7 +1433,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var cert_path: ?[]const u8 = null;
     var key_path: ?[]const u8 = null;
     var force_no_tls = false;
-    
+
     // Look for cert/key args in server_args
     i = 0;
     while (i < server_args.items.len) : (i += 1) {
@@ -1336,13 +1451,13 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Create server config from parsed arguments
     const config = ServerConfig{
         .data_dir = if (std.mem.eql(u8, data_dir, "./data")) null else data_dir,
-        .listen_quic = if (override_listen or !use_stdio) listen_addr else null,
+        .listen_quic = if (!use_stdio) listen_addr else null,
         .cert_path = cert_path,
         .key_path = key_path,
         .log_level = log_level,
         .force_no_tls = force_no_tls,
     };
-    
+
     std.debug.print("Starting Geode server...\n", .{});
     if (config.listen_quic) |addr| {
         std.debug.print("Listening on: {s}\n", .{addr});
@@ -1350,7 +1465,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (config.data_dir) |dd| {
         std.debug.print("Data directory: {s}\n", .{dd});
     }
-    
+
     // Run the embedded server
     runEmbeddedServer(ally, config) catch |err| {
         std.debug.print("Server error: {}\n", .{err});
@@ -1448,23 +1563,23 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         printQueryUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    
+
     // Handle stdin input if query_text is "-"
     var stdin_allocated: ?[]u8 = null;
     defer if (stdin_allocated) |allocated| ally.free(allocated);
-    
+
     if (std.mem.eql(u8, query_text.?, "-")) {
         const stdin = std.fs.File{ .handle = 0 }; // stdin handle
         const stdin_content = try stdin.readToEndAlloc(ally, 1024 * 1024); // Max 1MB
         defer ally.free(stdin_content);
-        
+
         // Trim whitespace from stdin content
         const trimmed = std.mem.trim(u8, stdin_content, " \t\n\r");
         if (trimmed.len == 0) {
             std.debug.print("Error: empty query from stdin\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
-        
+
         // Allocate a copy for the query text
         stdin_allocated = try ally.dupe(u8, trimmed);
         query_text = stdin_allocated;
@@ -1488,30 +1603,29 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     try executeQuicQuery(ally, server, query_text.?, format, insecure);
 }
 
-
 /// Execute query in no-QUIC mode (embedded server for testing)
 fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8) !void {
     _ = format;
-    
+
     // Handle empty queries
     if (query_text.len == 0) {
         const stderr_fd = std.fs.File{ .handle = 2 };
         _ = try stderr_fd.writeAll("Error: empty query provided\n");
         std.process.exit(1);
     }
-    
+
     // Use the geode module to execute the query via test harness
     const geode_lib = @import("geode");
-    
+
     // Execute query using the test harness with authentication
     var mut_ally = ally;
-    
+
     // Prepare authentication options
     const options = geode_lib.test_harness.QueryOptions{
         .token = token,
         .user = null,
     };
-    
+
     const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
         // Handle specific test cases that should go to stderr
         if (std.mem.indexOf(u8, query_text, "bad_json") != null) {
@@ -1522,12 +1636,12 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
             _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
             std.process.exit(3);
         }
-        
+
         // Re-throw the error (usually OutOfMemory)
         return err;
     };
     defer ally.free(result);
-    
+
     // Check if the result indicates a syntax error
     if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null) {
         // This is a syntax error - write to stderr and exit with code 1
@@ -1539,7 +1653,7 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         }
         std.process.exit(1);
     }
-    
+
     // Write result to stdout for successful queries
     const stdout_fd = std.fs.File{ .handle = 1 };
     _ = try stdout_fd.writeAll(result);
@@ -1604,17 +1718,17 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool) !void {
     const QuicTransport = @import("transport/quic");
-    
+
     // Parse server address
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
     const port_str = addr_port.next() orelse "3141";
     const port = std.fmt.parseInt(u16, port_str, 10) catch 3141;
-    
+
     // Initialize QUIC client
     var quic_client = QuicTransport.QuicClient.init(ally);
     defer quic_client.deinit();
-    
+
     // Connect to server
     if (insecure) {
         quic_client.connectInsecure(host, port, true) catch |err| {
@@ -1628,7 +1742,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
-    
+
     // Wait for handshake to complete
     quic_client.waitForHandshake() catch |err| {
         std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
@@ -1638,29 +1752,29 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
         }
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    
+
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
         std.debug.print("Error: Failed to get stream: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer stream.deinit();
-    
+
     // Escape query text for JSON
     const escaped_text = try escapeJsonString(ally, query_text);
     defer ally.free(escaped_text);
-    
+
     // Send query using the server's protocol format (RUN_GQL message)
     const query_msg = try std.fmt.allocPrint(ally, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
     defer ally.free(query_msg);
-    
+
     std.debug.print("DEBUG: Client sending query: {s}\n", .{query_msg});
     stream.writeAll(query_msg) catch |err| {
         std.debug.print("Error: Failed to send query: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     std.debug.print("DEBUG: Client query sent successfully\n", .{});
-    
+
     // Receive first response (SCHEMA line)
     std.debug.print("DEBUG: Client waiting for schema response\n", .{});
     const schema_response = stream.readLine(65536) catch |err| {
@@ -1669,18 +1783,18 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
     };
     defer ally.free(schema_response);
     std.debug.print("DEBUG: Client received schema response: {s}\n", .{schema_response});
-    
+
     // Check for errors in the SCHEMA response
     if (std.mem.indexOf(u8, schema_response, "\"type\":\"ERROR\"") != null) {
         // Extract error message from JSON (basic parsing)
         std.debug.print("Error from server: {s}\n", .{schema_response});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
-    
+
     // Receive second response (RESULT line or additional data)
     var result_data = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
     defer result_data.deinit(ally);
-    
+
     // Read all remaining lines until stream ends
     while (true) {
         std.debug.print("DEBUG: Client trying to read next line\n", .{});
@@ -1693,19 +1807,19 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
         defer ally.free(result_line);
-        
+
         std.debug.print("DEBUG: Client received line: {s}\n", .{result_line});
-        
+
         if (result_line.len == 0) break;
-        
+
         try result_data.appendSlice(ally, result_line);
-        
+
         // Check if this is the end of the response (typically RESULT line ends the response)
         if (std.mem.indexOf(u8, result_line, "\"type\":\"RESULT\"") != null) {
             break;
         }
     }
-    
+
     // Output response in requested format
     // For now, we output the raw protocol responses
     // Future enhancement: Parse JSON and format as table/csv
@@ -1715,7 +1829,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
         if (schema_response.len > 0 and schema_response[schema_response.len - 1] != '\n') {
             std.debug.print("\n", .{});
         }
-        
+
         // Output result lines if any
         if (result_data.items.len > 0) {
             std.debug.print("{s}", .{result_data.items});
@@ -3039,15 +3153,15 @@ pub fn main() !void {
     // Dispatch to subcommand using unified command table
     if (findCommand(subcommand)) |cmd_entry| {
         logAuditEvent("command", cmd_entry.name, "started");
-        
+
         // Handle special cases for commands that need different start_idx
-        const actual_start_idx = if (std.mem.eql(u8, cmd_entry.name, "backup") or 
-                                    std.mem.eql(u8, cmd_entry.name, "restore") or
-                                    std.mem.eql(u8, cmd_entry.name, "migrate")) 
-                                    subcommand_start + 1 
-                                else 
-                                    subcommand_start;
-        
+        const actual_start_idx = if (std.mem.eql(u8, cmd_entry.name, "backup") or
+            std.mem.eql(u8, cmd_entry.name, "restore") or
+            std.mem.eql(u8, cmd_entry.name, "migrate"))
+            subcommand_start + 1
+        else
+            subcommand_start;
+
         try cmd_entry.handler(ally, argv, actual_start_idx);
     } else if (std.mem.eql(u8, subcommand, "audit")) {
         // geode audit verify --file <path> ...
@@ -3724,92 +3838,91 @@ fn cmdAuthLogout(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 // Remote server backup execution function
 fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
     std.debug.print("Connecting to remote server: {s}\n", .{server});
-    
+
     // Parse server address
     const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidServerAddress;
     const host = server[0..colon_idx];
-    const port_str = server[colon_idx + 1..];
+    const port_str = server[colon_idx + 1 ..];
     const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidServerAddress;
-    
+
     // Create QUIC client for backup operations
     const quic_client = try ally.create(quic.QuicClient);
     defer ally.destroy(quic_client);
     quic_client.* = quic.QuicClient.init(ally);
     defer quic_client.deinit();
-    
+
     // Connect to server
     try quic_client.connect(host, port);
     std.debug.print("Connected to server successfully\n", .{});
-    
+
     // Get QUIC stream for communication
     const stream = try quic_client.getStream();
     defer stream.deinit();
-    
+
     // Send HELLO message to establish session
     const hello_msg = "HELLO geode-cli 1.0\n";
     try stream.writeAll(hello_msg);
-    
+
     // Read server response
     var response_buffer: [1024]u8 = undefined;
     const response_len = try stream.read(&response_buffer);
     const response = response_buffer[0..response_len];
-    
+
     if (!std.mem.startsWith(u8, response, "OK")) {
         std.debug.print("Server handshake failed: {s}\n", .{response});
         return error.ServerHandshakeFailed;
     }
-    
+
     // Build backup command
     const compression_flag = if (compress) " --compress" else "";
-    const parent_flag = if (parent_id) |pid| 
+    const parent_flag = if (parent_id) |pid|
         try std.fmt.allocPrint(ally, " --parent {s}", .{pid})
-    else 
+    else
         "";
     defer if (parent_id != null) ally.free(parent_flag);
-    
-    const backup_command = try std.fmt.allocPrint(ally, "BACKUP {s} --type {s}{s}{s}\n", 
-        .{ dest, mode, compression_flag, parent_flag });
+
+    const backup_command = try std.fmt.allocPrint(ally, "BACKUP {s} --type {s}{s}{s}\n", .{ dest, mode, compression_flag, parent_flag });
     defer ally.free(backup_command);
-    
+
     // Send backup command to server
     std.debug.print("Sending backup command to server...\n", .{});
     try stream.writeAll(backup_command);
-    
+
     // Read backup response
     var backup_response_buffer: [4096]u8 = undefined;
     const backup_response_len = try stream.read(&backup_response_buffer);
     const backup_response = backup_response_buffer[0..backup_response_len];
-    
+
     // Parse server response
     if (std.mem.startsWith(u8, backup_response, "ERROR")) {
         std.debug.print("Server backup failed: {s}\n", .{backup_response});
         return error.ServerBackupFailed;
     }
-    
+
     // Stream backup data from server and write to local file
     const backup_file = try std.fs.cwd().createFile(dest, .{});
     defer backup_file.close();
-    
+
     std.debug.print("Receiving backup data from server...\n", .{});
-    
+
     // Read backup data in chunks
     var total_bytes: u64 = 0;
     var data_buffer: [8192]u8 = undefined;
-    
+
     while (true) {
         const bytes_read = try stream.read(&data_buffer);
         if (bytes_read == 0) break;
-        
+
         try backup_file.writeAll(data_buffer[0..bytes_read]);
         total_bytes += bytes_read;
     }
-    
+
     std.debug.print("Remote backup completed successfully\n", .{});
     std.debug.print("Backup received: {} bytes\n", .{total_bytes});
     std.debug.print("Backup saved to: {s}\n", .{dest});
-    
+
     // Output JSON response for consistency with local backup
-    const json_response = try std.fmt.allocPrint(ally, 
+    const json_response = try std.fmt.allocPrint(ally,
         \\{{
         \\  "backup_type": "{s}",
         \\  "source": "remote_server",
@@ -3822,14 +3935,14 @@ fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const 
         \\
     , .{ mode, server, dest, total_bytes, if (compress) "enabled" else "disabled" });
     defer ally.free(json_response);
-    
+
     std.debug.print("{s}", .{json_response});
 }
 
 // Backup execution function
 fn executeBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
-    
+
     // Check if we should use remote server or local backup
     if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
         // Use remote server backup
@@ -3856,7 +3969,7 @@ fn executeBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const u8, pa
             try std.fmt.parseInt(u128, pid, 16)
         else
             return error.IncrementalBackupRequiresParent;
-        
+
         break :blk try simplified_backup_manager.createIncrementalBackup(dest, parent_backup_id);
     };
 
@@ -4041,109 +4154,109 @@ fn generateBackupId() u128 {
 // Remote server restore execution function
 fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
     std.debug.print("Connecting to remote server for restore: {s}\n", .{server});
-    
+
     // Parse server address
     const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidServerAddress;
     const host = server[0..colon_idx];
-    const port_str = server[colon_idx + 1..];
+    const port_str = server[colon_idx + 1 ..];
     const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidServerAddress;
-    
+
     // Create QUIC client for restore operations
     const quic_client = try ally.create(quic.QuicClient);
     defer ally.destroy(quic_client);
     quic_client.* = quic.QuicClient.init(ally);
     defer quic_client.deinit();
-    
+
     // Connect to server
     try quic_client.connect(host, port);
     std.debug.print("Connected to server successfully\n", .{});
-    
+
     // Get QUIC stream for communication
     const stream = try quic_client.getStream();
     defer stream.deinit();
-    
+
     // Send HELLO message to establish session
     const hello_msg = "HELLO geode-cli 1.0\n";
     try stream.writeAll(hello_msg);
-    
+
     // Read server response
     var response_buffer: [1024]u8 = undefined;
     const response_len = try stream.read(&response_buffer);
     const response = response_buffer[0..response_len];
-    
+
     if (!std.mem.startsWith(u8, response, "OK")) {
         std.debug.print("Server handshake failed: {s}\n", .{response});
         return error.ServerHandshakeFailed;
     }
-    
+
     // First, upload the backup file to the server
     std.debug.print("Uploading backup file to server...\n", .{});
-    
+
     // Read the backup file
     const backup_file = try std.fs.cwd().openFile(source, .{});
     defer backup_file.close();
     const file_size = try backup_file.getEndPos();
     const file_data = try backup_file.readToEndAlloc(ally, file_size);
     defer ally.free(file_data);
-    
+
     // Send upload command
     const upload_command = try std.fmt.allocPrint(ally, "UPLOAD_BACKUP {} bytes\n", .{file_size});
     defer ally.free(upload_command);
     try stream.writeAll(upload_command);
-    
+
     // Wait for server ready response
     var upload_response_buffer: [1024]u8 = undefined;
     const upload_response_len = try stream.read(&upload_response_buffer);
     const upload_response = upload_response_buffer[0..upload_response_len];
-    
+
     if (!std.mem.startsWith(u8, upload_response, "READY")) {
         std.debug.print("Server upload failed: {s}\n", .{upload_response});
         return error.ServerUploadFailed;
     }
-    
+
     // Send backup file data
     try stream.writeAll(file_data);
-    
+
     // Wait for upload confirmation
     var confirm_buffer: [1024]u8 = undefined;
     const confirm_len = try stream.read(&confirm_buffer);
     const confirm_response = confirm_buffer[0..confirm_len];
-    
+
     if (!std.mem.startsWith(u8, confirm_response, "UPLOADED")) {
         std.debug.print("Server upload confirmation failed: {s}\n", .{confirm_response});
         return error.ServerUploadConfirmationFailed;
     }
-    
+
     std.debug.print("Backup file uploaded successfully\n", .{});
-    
+
     // Build restore command
     const time_flag = if (target_time) |time_str|
         try std.fmt.allocPrint(ally, " --target-time {s}", .{time_str})
     else
         "";
     defer if (target_time != null) ally.free(time_flag);
-    
+
     const restore_command = try std.fmt.allocPrint(ally, "RESTORE --confirm{s}\n", .{time_flag});
     defer ally.free(restore_command);
-    
+
     // Send restore command to server
     std.debug.print("Sending restore command to server...\n", .{});
     try stream.writeAll(restore_command);
-    
+
     // Read restore response
     var restore_response_buffer: [4096]u8 = undefined;
     const restore_response_len = try stream.read(&restore_response_buffer);
     const restore_response = restore_response_buffer[0..restore_response_len];
-    
+
     // Parse server response
     if (std.mem.startsWith(u8, restore_response, "ERROR")) {
         std.debug.print("Server restore failed: {s}\n", .{restore_response});
         return error.ServerRestoreFailed;
     }
-    
+
     std.debug.print("Remote restore completed successfully\n", .{});
     std.debug.print("Server response: {s}\n", .{restore_response});
-    
+
     // Output JSON response for consistency with local restore
     const json_response = try std.fmt.allocPrint(ally,
         \\{{
@@ -4156,14 +4269,14 @@ fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time
         \\
     , .{ source, server, target_time orelse "latest" });
     defer ally.free(json_response);
-    
+
     std.debug.print("{s}", .{json_response});
 }
 
 // Restore execution function
 fn executeRestore(ally: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
     std.debug.print("Restoring database from: {s}\n", .{source});
-    
+
     // Check if we should use remote server or local restore
     if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
         // Use remote server restore
@@ -4179,8 +4292,7 @@ fn executeRestore(ally: std.mem.Allocator, source: []const u8, target_time: ?[]c
     const restore_metadata = if (target_time) |time_str| blk: {
         const target_timestamp = try std.fmt.parseInt(i64, time_str, 10);
         break :blk try simplified_restore_manager.restoreToPointInTime(source, target_timestamp);
-    } else
-        try simplified_restore_manager.restoreFromBackup(source);
+    } else try simplified_restore_manager.restoreFromBackup(source);
 
     // Print restore information in JSON format for CLI consumption
     std.debug.print("Restore completed successfully:\n", .{});
@@ -4252,23 +4364,23 @@ const SimplifiedRestoreManager = struct {
 
     pub fn restoreToPointInTime(self: SimplifiedRestoreManager, backup_path: []const u8, target_timestamp: i64) !RestoreMetadata {
         std.debug.print("Point-in-time restore to timestamp: {}\n", .{target_timestamp});
-        
+
         var restore_metadata = try self.restoreFromBackup(backup_path);
         restore_metadata.target_time = target_timestamp;
-        
+
         std.debug.print("Point-in-time restore target validated\n", .{});
         return restore_metadata;
     }
 
     fn parseAndValidateBackupContent(self: SimplifiedRestoreManager, content: []const u8, backup_type: backup_types.BackupType, original_timestamp: i64) !RestoreMetadata {
         _ = self;
-        
+
         // Calculate content checksum for verification
         const content_checksum = std.hash.crc.Crc32.hash(content);
-        
+
         // Parse based on backup type
         var offset: usize = 0;
-        
+
         // For incremental backups, skip the parent backup ID (16 bytes)
         if (backup_type == .incremental) {
             if (content.len < @sizeOf(u128)) {
@@ -4276,21 +4388,21 @@ const SimplifiedRestoreManager = struct {
             }
             offset += @sizeOf(u128);
         }
-        
+
         // Parse catalog data section
         if (content.len < offset + @sizeOf(u64)) {
             return error.InvalidBackupContent;
         }
-        
-        const catalog_size = std.mem.readInt(u64, content[offset..offset + 8][0..8], .little);
+
+        const catalog_size = std.mem.readInt(u64, content[offset .. offset + 8][0..8], .little);
         std.debug.print("  Catalog size: {} bytes\n", .{catalog_size});
-        
+
         if (content.len < offset + @sizeOf(u64) + catalog_size) {
             return error.TruncatedBackupContent;
         }
-        
+
         // Validate catalog data (simplified - just check it's text)
-        const catalog_data = content[offset + @sizeOf(u64)..offset + @sizeOf(u64) + catalog_size];
+        const catalog_data = content[offset + @sizeOf(u64) .. offset + @sizeOf(u64) + catalog_size];
         if (!std.mem.startsWith(u8, catalog_data, "-- Geode")) {
             std.debug.print("Warning: Catalog data format unexpected\n", .{});
         }

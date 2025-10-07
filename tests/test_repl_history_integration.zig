@@ -35,7 +35,7 @@ const MockClientSession = struct {
     pub fn runGql(self: *MockClientSession, gql: []const u8) !void {
         const query_copy = try self.allocator.dupe(u8, gql);
         try self.executed_queries.append(self.allocator, query_copy);
-        
+
         // Generate appropriate mock response based on query type
         const mock_response = if (std.mem.indexOf(u8, gql, "MATCH")) |_|
             try self.allocator.dupe(u8, "{\"columns\":[\"name\"],\"data\":[[\"Alice\"],[\"Bob\"]]}")
@@ -47,7 +47,7 @@ const MockClientSession = struct {
             try self.allocator.dupe(u8, "{\"columns\":[\"count\"],\"data\":[[42]]}")
         else
             try self.allocator.dupe(u8, "{\"columns\":[\"result\"],\"data\":[[\"Mock result\"]]}");
-            
+
         try self.mock_responses.append(self.allocator, mock_response);
     }
 };
@@ -220,20 +220,20 @@ fn isComplete(input: []const u8) bool {
 
 // Simulate complete REPL workflow with history tracking
 fn simulateReplSessionWithHistory(writer: anytype, state: *MockReplState, commands: []const []const u8) !void {
-    
+
     // Load existing history
     try state.history.load();
-    
+
     for (commands) |command| {
         // Render prompt
         const prompt = if (state.is_continuation)
             if (state.in_txn) "geode(txn)-> " else "geode-> "
         else if (state.in_txn) "geode(txn)> " else "geode> ";
-        
+
         try writer.writeAll(prompt);
         try writer.writeAll(command);
         try writer.writeAll("\n");
-        
+
         // Process input like REPL would
         if (command.len > 0) {
             if (command[0] == '\\') {
@@ -243,7 +243,7 @@ fn simulateReplSessionWithHistory(writer: anytype, state: *MockReplState, comman
                     try writer.writeAll("History entries:\n");
                     for (state.history.entries.items, 0..) |entry, i| {
                         var buf: [64]u8 = undefined;
-                        const line_info = try std.fmt.bufPrint(&buf, "  {d}: {s}\n", .{i + 1, entry});
+                        const line_info = try std.fmt.bufPrint(&buf, "  {d}: {s}\n", .{ i + 1, entry });
                         try writer.writeAll(line_info);
                     }
                 } else if (std.mem.startsWith(u8, command, "\\search ")) {
@@ -270,23 +270,23 @@ fn simulateReplSessionWithHistory(writer: anytype, state: *MockReplState, comman
                     state.multi_line_buffer.clearRetainingCapacity();
                     try state.multi_line_buffer.appendSlice(state.allocator, command);
                 }
-                
+
                 // Check if complete
                 const complete_input = state.multi_line_buffer.items;
                 if (isComplete(complete_input)) {
                     // Add to history before execution
                     try state.history.append(complete_input);
-                    
+
                     // Execute query
                     try state.session.runGql(complete_input);
-                    
+
                     // Show response
                     if (state.session.mock_responses.items.len > 0) {
                         const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
                         try writer.writeAll(response);
                         try writer.writeAll("\n");
                     }
-                    
+
                     // Reset state
                     state.is_continuation = false;
                     state.multi_line_buffer.clearRetainingCapacity();
@@ -303,10 +303,10 @@ fn simulateReplSessionWithHistory(writer: anytype, state: *MockReplState, comman
 
 test "Complete REPL session with history persistence" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_integration_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     var state = MockReplState.init(allocator, history_path);
     defer state.deinit();
 
@@ -314,38 +314,38 @@ test "Complete REPL session with history persistence" {
     defer output.deinit(allocator);
 
     const commands = [_][]const u8{
-        "RETURN 1;",              // Single line
-        "MATCH (n:Person)",       // Multi-line start
-        "WHERE n.age > 25",       // Continuation
-        "RETURN n.name;",         // Multi-line end
+        "RETURN 1;", // Single line
+        "MATCH (n:Person)", // Multi-line start
+        "WHERE n.age > 25", // Continuation
+        "RETURN n.name;", // Multi-line end
         "CREATE (p:Person {name: 'Alice'});", // Single line
     };
-    
+
     try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands);
-    
+
     // Should have executed 3 queries
     try testing.expect(state.session.executed_queries.items.len == 3);
-    
+
     // Should have 3 entries in history
     try testing.expect(state.history.entries.items.len == 3);
     try testing.expectEqualStrings("RETURN 1;", state.history.entries.items[0]);
     try testing.expectEqualStrings("MATCH (n:Person)\nWHERE n.age > 25\nRETURN n.name;", state.history.entries.items[1]);
     try testing.expectEqualStrings("CREATE (p:Person {name: 'Alice'});", state.history.entries.items[2]);
-    
+
     // Verify file was created and contains entries
     const file = try std.fs.cwd().openFile(history_path, .{});
     defer file.close();
-    
+
     const file_size = try file.getEndPos();
     try testing.expect(file_size > 0);
 }
 
 test "History persistence across REPL sessions" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_session_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     // First session
     {
         var state = MockReplState.init(allocator, history_path);
@@ -358,11 +358,11 @@ test "History persistence across REPL sessions" {
             "MATCH (n:Person) RETURN n.name;",
             "CREATE (p:Person {name: 'Bob'});",
         };
-        
+
         try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands1);
         try testing.expect(state.history.entries.items.len == 2);
     }
-    
+
     // Second session - should load previous history
     {
         var state = MockReplState.init(allocator, history_path);
@@ -374,9 +374,9 @@ test "History persistence across REPL sessions" {
         const commands2 = [_][]const u8{
             "DELETE n WHERE n.inactive = true;",
         };
-        
+
         try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands2);
-        
+
         // Should have 3 total entries (2 from previous + 1 new)
         try testing.expect(state.history.entries.items.len == 3);
         try testing.expectEqualStrings("MATCH (n:Person) RETURN n.name;", state.history.entries.items[0]);
@@ -387,10 +387,10 @@ test "History persistence across REPL sessions" {
 
 test "History search functionality in REPL" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_search_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     var state = MockReplState.init(allocator, history_path);
     defer state.deinit();
 
@@ -399,33 +399,33 @@ test "History search functionality in REPL" {
 
     const commands = [_][]const u8{
         "MATCH (n:Person) RETURN n.name;",
-        "CREATE (p:Person {name: 'Charlie'});", 
+        "CREATE (p:Person {name: 'Charlie'});",
         "MATCH (n:Company) RETURN n.name;",
         "\\search MATCH",
         "\\search CREATE",
         "\\search NONEXISTENT",
     };
-    
+
     try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands);
-    
+
     const output_str = output.items;
-    
+
     // Should find the last MATCH query
     try testing.expect(std.mem.indexOf(u8, output_str, "Found: MATCH (n:Company) RETURN n.name;") != null);
-    
+
     // Should find the CREATE query
     try testing.expect(std.mem.indexOf(u8, output_str, "Found: CREATE (p:Person {name: 'Charlie'});") != null);
-    
+
     // Should show "Not found" for non-existent pattern
     try testing.expect(std.mem.indexOf(u8, output_str, "Not found") != null);
 }
 
 test "History display command" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_display_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     var state = MockReplState.init(allocator, history_path);
     defer state.deinit();
 
@@ -434,14 +434,14 @@ test "History display command" {
 
     const commands = [_][]const u8{
         "MATCH (n:Person) RETURN n.name;",
-        "CREATE (p:Person {name: 'Dave'});", 
+        "CREATE (p:Person {name: 'Dave'});",
         "\\history",
     };
-    
+
     try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands);
-    
+
     const output_str = output.items;
-    
+
     // Should show history entries with line numbers
     try testing.expect(std.mem.indexOf(u8, output_str, "History entries:") != null);
     try testing.expect(std.mem.indexOf(u8, output_str, "  1: MATCH (n:Person) RETURN n.name;") != null);
@@ -450,13 +450,13 @@ test "History display command" {
 
 test "History with transaction mode" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_txn_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     var state = MockReplState.init(allocator, history_path);
     defer state.deinit();
-    
+
     // Simulate being in transaction mode
     state.in_txn = true;
 
@@ -468,14 +468,14 @@ test "History with transaction mode" {
         "SET n.updated = true",
         "RETURN n.name;",
     };
-    
+
     try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands);
-    
+
     // Should show transaction prompts
     const output_str = output.items;
     try testing.expect(std.mem.indexOf(u8, output_str, "geode(txn)> ") != null);
     try testing.expect(std.mem.indexOf(u8, output_str, "geode(txn)-> ") != null);
-    
+
     // Should record multi-line query in history
     try testing.expect(state.history.entries.items.len == 1);
     try testing.expectEqualStrings("MATCH (n:Person)\nSET n.updated = true\nRETURN n.name;", state.history.entries.items[0]);
@@ -483,10 +483,10 @@ test "History with transaction mode" {
 
 test "History duplicate suppression in sessions" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_duplicate_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     var state = MockReplState.init(allocator, history_path);
     defer state.deinit();
 
@@ -499,9 +499,9 @@ test "History duplicate suppression in sessions" {
         "CREATE (p:Person {name: 'Eve'});",
         "CREATE (p:Person {name: 'Eve'});", // Duplicate
     };
-    
+
     try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands);
-    
+
     // Should only have 2 unique entries
     try testing.expect(state.history.entries.items.len == 2);
     try testing.expectEqualStrings("MATCH (n:Person) RETURN n.name;", state.history.entries.items[0]);
@@ -510,13 +510,13 @@ test "History duplicate suppression in sessions" {
 
 test "History with disabled mode" {
     const allocator = testing.allocator;
-    
+
     const history_path = "test_disabled_history.tmp";
     defer std.fs.cwd().deleteFile(history_path) catch {};
-    
+
     var state = MockReplState.init(allocator, history_path);
     defer state.deinit();
-    
+
     // Disable history
     state.history.enabled = false;
 
@@ -528,18 +528,18 @@ test "History with disabled mode" {
         "CREATE (p:Person {name: 'Frank'});",
         "\\history",
     };
-    
+
     try simulateReplSessionWithHistory(output.writer(allocator), &state, &commands);
-    
+
     // Should have no history entries
     try testing.expect(state.history.entries.items.len == 0);
-    
+
     // Should show empty history
     const output_str = output.items;
     try testing.expect(std.mem.indexOf(u8, output_str, "History entries:") != null);
     // No numbered entries should appear
     try testing.expect(std.mem.indexOf(u8, output_str, "  1: ") == null);
-    
+
     // Verify no file was created
     const file_result = std.fs.cwd().openFile(history_path, .{});
     try testing.expectError(error.FileNotFound, file_result);

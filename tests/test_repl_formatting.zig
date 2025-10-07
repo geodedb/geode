@@ -81,7 +81,7 @@ fn formatResultAsCsv(writer: anytype, allocator: std.mem.Allocator, response: []
             return;
         }
     }
-    
+
     // Fallback: output as-is
     try writer.writeAll(response);
 }
@@ -116,7 +116,7 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
                     const width: usize = switch (cell) {
                         .string => |s| s.len,
                         .integer => 10, // rough estimate
-                        .float => 10,   // rough estimate
+                        .float => 10, // rough estimate
                         .bool => 5,
                         .null => 4,
                         else => 0,
@@ -188,7 +188,7 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
             return;
         }
     }
-    
+
     // Fallback: output as-is
     try writer.writeAll(response);
 }
@@ -201,7 +201,7 @@ test "JSON format output - single column" {
 
     const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .json);
-    
+
     try testing.expectEqualStrings(response, output.items);
 }
 
@@ -211,7 +211,7 @@ test "CSV format output - single column" {
 
     const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     const expected = "\"name\"\n\"Alice\"\n";
     try testing.expectEqualStrings(expected, output.items);
 }
@@ -222,7 +222,7 @@ test "CSV format output - multiple columns and rows" {
 
     const response = "{\"columns\":[\"name\",\"age\"],\"data\":[[\"Alice\",30],[\"Bob\",25]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     const expected = "\"name\",\"age\"\n\"Alice\",30\n\"Bob\",25\n";
     try testing.expectEqualStrings(expected, output.items);
 }
@@ -233,7 +233,7 @@ test "CSV format output - mixed data types" {
 
     const response = "{\"columns\":[\"name\",\"age\",\"active\",\"score\"],\"data\":[[\"Alice\",30,true,95.5],[\"Bob\",null,false,87.2]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     const expected = "\"name\",\"age\",\"active\",\"score\"\n\"Alice\",30,true,95.5\n\"Bob\",NULL,false,87.2\n";
     try testing.expectEqualStrings(expected, output.items);
 }
@@ -244,7 +244,7 @@ test "Table format output - single column" {
 
     const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .table);
-    
+
     // Check for key table components rather than exact formatting
     try testing.expect(std.mem.indexOf(u8, output.items, "| name") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "| Alice") != null);
@@ -257,7 +257,7 @@ test "Table format output - multiple columns" {
 
     const response = "{\"columns\":[\"name\",\"age\"],\"data\":[[\"Alice\",30],[\"Bob\",25]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .table);
-    
+
     // Note: Table output has dynamic column sizing, so we check for key components
     try testing.expect(std.mem.indexOf(u8, output.items, "| name") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "| age") != null);
@@ -272,7 +272,7 @@ test "Malformed JSON fallback" {
 
     const response = "{invalid json";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     // Should fallback to raw output
     try testing.expectEqualStrings(response, output.items);
 }
@@ -283,7 +283,7 @@ test "Missing columns field fallback" {
 
     const response = "{\"data\":[[\"Alice\"]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     // Should fallback to raw output
     try testing.expectEqualStrings(response, output.items);
 }
@@ -294,7 +294,7 @@ test "Missing data field fallback" {
 
     const response = "{\"columns\":[\"name\"]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     // Should fallback to raw output
     try testing.expectEqualStrings(response, output.items);
 }
@@ -305,7 +305,7 @@ test "Status message format detection" {
 
     const response = "{\"status\":\"success\",\"message\":\"Transaction committed\"}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     // Should output as-is for status messages
     try testing.expectEqualStrings(response, output.items);
 }
@@ -316,7 +316,7 @@ test "Empty data array" {
 
     const response = "{\"columns\":[\"name\"],\"data\":[]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
-    
+
     const expected = "\"name\"\n";
     try testing.expectEqualStrings(expected, output.items);
 }
@@ -327,7 +327,7 @@ test "Multiple columns with varying widths" {
 
     const response = "{\"columns\":[\"id\",\"name\",\"description\"],\"data\":[[1,\"Alice\",\"Short\"],[2,\"Bob\",\"A much longer description\"]]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .table);
-    
+
     // Check that all content is present and properly formatted
     try testing.expect(std.mem.indexOf(u8, output.items, "Alice") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "A much longer description") != null);

@@ -7,7 +7,7 @@ pub fn compute(allocator: std.mem.Allocator, graph: [][]u32) ![]u32 {
     for (components, 0..) |*comp, i| {
         comp.* = @intCast(i);
     }
-    
+
     // TODO: Implement actual SCC algorithm (Tarjan or Kosaraju)
     return components;
 }

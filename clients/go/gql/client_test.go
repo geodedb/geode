@@ -17,9 +17,9 @@ func ensureServer(t *testing.T) string {
 	root := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
 
 	// Add .exe extension on Windows
-	serverName := "geoded"
+	serverName := "geode"
 	if runtime.GOOS == "windows" {
-		serverName = "geoded.exe"
+		serverName = "geode.exe"
 	}
 
 	path := filepath.Join(root, "zig-out", "bin", serverName)
@@ -42,7 +42,7 @@ func ensureServer(t *testing.T) string {
 		return ""
 	}
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("geoded not found after build: %v, skipping test", err)
+		t.Skipf("geode not found after build: %v, skipping test", err)
 		return ""
 	}
 	return path

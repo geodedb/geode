@@ -424,34 +424,34 @@ fn evaluateExpressionInBinding(
         .Call => |call| blk_call: {
             // Handle function calls in binding context
             // This enables toString(n.name), type(n.property), etc.
-            
+
             if (call.callee.* != .Ident) break :blk_call .Null;
             const function_name = call.callee.Ident.orig;
-            
+
             // Try to use the extended function registry (like eval.zig does)
             const eval_ext = geode.eval_ext;
-            
+
             // Initialize function registry
             var registry = eval_ext.initFunctionRegistry(allocator) catch break :blk_call .Null;
             defer registry.deinit();
-            
+
             // Convert function name to lowercase for lookup
             var lowercase_name = allocator.alloc(u8, function_name.len) catch break :blk_call .Null;
             defer allocator.free(lowercase_name);
-            
+
             for (function_name, 0..) |c, i| {
                 lowercase_name[i] = std.ascii.toLower(c);
             }
-            
+
             // Look up function in extended registry
             if (registry.get(lowercase_name)) |func| {
                 // Convert arguments from binding context to ExtValue
                 var args = allocator.alloc(eval_ext.ExtValue, call.args.len) catch break :blk_call .Null;
                 defer allocator.free(args);
-                
+
                 for (call.args, 0..) |arg, i| {
                     const arg_result = evaluateExpressionInBinding(allocator, arg.*, binding) catch break :blk_call .Null;
-                    
+
                     // Convert BindingValue to ExtValue
                     args[i] = switch (arg_result) {
                         .Value => |v| switch (v) {
@@ -471,12 +471,12 @@ fn evaluateExpressionInBinding(
                             .VectorF32 => |vec| eval_ext.ExtValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
                         },
                         .Node => eval_ext.ExtValue{ .Null = {} }, // Can't convert node to function arg
-                        .Edge => eval_ext.ExtValue{ .Null = {} }, // Can't convert edge to function arg  
+                        .Edge => eval_ext.ExtValue{ .Null = {} }, // Can't convert edge to function arg
                         .Path => eval_ext.ExtValue{ .Null = {} }, // Can't convert path to function arg
                         .Null => eval_ext.ExtValue{ .Null = {} },
                     };
                 }
-                
+
                 // Call the extended function
                 if (func(allocator, args)) |result| {
                     // Convert ExtValue result back to PropertyValue for BindingValue
@@ -496,14 +496,14 @@ fn evaluateExpressionInBinding(
             } else {
                 // Try basic function fallback (like toString, toInteger from evaluator_functions.zig)
                 const eval_functions = geode.types.evaluator_functions;
-                
+
                 // Convert arguments to eval.Value format for basic functions
                 var eval_args = allocator.alloc(geode.eval.Value, call.args.len) catch break :blk_call .Null;
                 defer allocator.free(eval_args);
-                
+
                 for (call.args, 0..) |arg, i| {
                     const arg_result = evaluateExpressionInBinding(allocator, arg.*, binding) catch break :blk_call .Null;
-                    
+
                     eval_args[i] = switch (arg_result) {
                         .Value => |v| switch (v) {
                             .String => |s| geode.eval.Value{ .Str = s },
@@ -527,7 +527,7 @@ fn evaluateExpressionInBinding(
                         .Null => geode.eval.Value{ .Null = {} },
                     };
                 }
-                
+
                 // Convert eval.Value to heap.Value for function calls
                 const convertEvalToHeap = struct {
                     fn convert(val: eval.Value) geode.storage.heap.Value {
@@ -591,7 +591,7 @@ fn evaluateExpressionInBinding(
                         break :blk_call .{ .Value = property_value };
                     } else |_| {}
                 }
-                
+
                 // Function not found or failed
                 break :blk_call .Null;
             }

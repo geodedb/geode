@@ -307,7 +307,7 @@ pub const MVCCManager = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn enablePhantomReadPrevention(self: *MVCCManager) !void {
         if (self.phantom_prevention == null) {
             const phantom_prev = try self.allocator.create(phantom_prevention.PhantomReadPrevention);
@@ -325,7 +325,7 @@ pub const MVCCManager = struct {
             entry.value_ptr.deinit();
         }
         self.versions.deinit();
-        
+
         if (self.phantom_prevention) |phantom_prev| {
             phantom_prev.deinit();
             self.allocator.destroy(phantom_prev);
@@ -345,8 +345,8 @@ pub const MVCCManager = struct {
 
     /// Read with optional query tracking for phantom read prevention
     pub fn readWithQuery(
-        self: *MVCCManager, 
-        txn: *Transaction, 
+        self: *MVCCManager,
+        txn: *Transaction,
         resource_id: u64,
         label: ?[]const u8,
         conditions: ?[]phantom_prevention.QueryCondition,
@@ -360,17 +360,17 @@ pub const MVCCManager = struct {
                         if (!try phantom_prev.acquirePredicateLock(txn.id, lbl, conds, txn.snapshot_timestamp)) {
                             return error.PhantomReadConflict;
                         }
-                        
+
                         // Record the query for later validation
                         try phantom_prev.recordReadQuery(txn.id, lbl, conds, 1, txn.snapshot_timestamp);
                     }
                 }
             }
         }
-        
+
         return self.read(txn, resource_id);
     }
-    
+
     pub fn read(self: *MVCCManager, txn: *Transaction, resource_id: u64) !?[]const u8 {
         // Acquire shared lock for repeatable read
         if (txn.isolation_level == .RepeatableRead or txn.isolation_level == .Serializable) {
@@ -405,9 +405,9 @@ pub const MVCCManager = struct {
 
     /// Write with phantom read conflict detection
     pub fn writeWithMetadata(
-        self: *MVCCManager, 
-        txn: *Transaction, 
-        resource_id: u64, 
+        self: *MVCCManager,
+        txn: *Transaction,
+        resource_id: u64,
         data: []const u8,
         label: ?[]const u8,
         properties: ?[]phantom_prevention.PropertyBinding,
@@ -425,10 +425,10 @@ pub const MVCCManager = struct {
                 }
             }
         }
-        
+
         return self.write(txn, resource_id, data);
     }
-    
+
     pub fn write(self: *MVCCManager, txn: *Transaction, resource_id: u64, data: []const u8) !void {
         // Acquire exclusive lock
         if (!try self.lock_manager.requestLock(txn, resource_id, .Exclusive)) {
@@ -500,7 +500,7 @@ pub const MVCCManager = struct {
 
         // Release locks
         try self.lock_manager.releaseLocks(txn);
-        
+
         // Release predicate locks for phantom read prevention
         if (self.phantom_prevention) |phantom_prev| {
             phantom_prev.releasePredicateLocks(txn.id);
@@ -515,7 +515,7 @@ pub const MVCCManager = struct {
 
         // Release all locks
         try self.lock_manager.releaseLocks(txn);
-        
+
         // Release predicate locks for phantom read prevention
         if (self.phantom_prevention) |phantom_prev| {
             phantom_prev.releasePredicateLocks(txn.id);
@@ -671,27 +671,28 @@ pub const MVCCManager = struct {
                 // Get all writes since transaction snapshot
                 var writes_since_snapshot = std.ArrayList(phantom_prevention.WriteOperation).init(self.allocator);
                 defer writes_since_snapshot.deinit();
-                
+
                 // Collect writes from other committed transactions
                 var iter = self.versions.iterator();
                 while (iter.next()) |entry| {
                     for (entry.value_ptr.items) |version| {
-                        if (version.timestamp > txn.snapshot_timestamp and 
+                        if (version.timestamp > txn.snapshot_timestamp and
                             version.timestamp < self.current_timestamp and
-                            version.txn_id != txn.id) {
+                            version.txn_id != txn.id)
+                        {
                             // This is a write that occurred after our snapshot
                             // In a real implementation, we'd need to reconstruct the label and properties
                             // For now, we'll use a placeholder validation
                         }
                     }
                 }
-                
+
                 // Validate that no phantom reads occurred
                 if (!try phantom_prev.validateReadSet(txn.id, writes_since_snapshot.items)) {
                     // Phantom read detected
                     const conflict = ConflictInfo{
                         .conflicting_txn = 0, // Unknown conflicting transaction
-                        .resource_id = 0,     // Predicate-based conflict
+                        .resource_id = 0, // Predicate-based conflict
                         .conflict_type = .PhantomRead,
                         .timestamp = self.current_timestamp,
                     };

@@ -131,16 +131,16 @@ pub fn isIncompleteGqlStatement(input: []const u8) bool {
     // Convert to uppercase for case-insensitive matching
     var upper_input: [1024]u8 = undefined;
     if (input.len >= upper_input.len) return false;
-    
+
     for (input, 0..) |c, i| {
         upper_input[i] = std.ascii.toUpper(c);
     }
     const upper_slice = upper_input[0..input.len];
-    
+
     // Common GQL statement patterns that need continuation
     const incomplete_patterns = [_][]const u8{
         "MATCH",
-        "CREATE", 
+        "CREATE",
         "DELETE",
         "SET",
         "REMOVE",
@@ -157,29 +157,30 @@ pub fn isIncompleteGqlStatement(input: []const u8) bool {
         "ALTER",
         "START",
     };
-    
+
     // Check if input ends with an incomplete GQL keyword
     for (incomplete_patterns) |pattern| {
         if (std.mem.endsWith(u8, upper_slice, pattern)) {
             return true;
         }
-        
+
         // Also check for keyword followed by whitespace but no semicolon
         var pattern_with_space: [64]u8 = undefined;
         const pattern_space = std.fmt.bufPrint(&pattern_with_space, "{s} ", .{pattern}) catch continue;
-        if (std.mem.indexOf(u8, upper_slice, pattern_space) != null and 
-            std.mem.indexOf(u8, input, ";") == null) {
+        if (std.mem.indexOf(u8, upper_slice, pattern_space) != null and
+            std.mem.indexOf(u8, input, ";") == null)
+        {
             // Check if there's meaningful content after the keyword
             const keyword_end = std.mem.indexOf(u8, upper_slice, pattern_space).? + pattern_space.len;
             const remaining = std.mem.trim(u8, input[keyword_end..], " \t\n\r");
-            
+
             // If there's some content but no semicolon, likely needs continuation
             if (remaining.len > 0 and remaining.len < 20) {
                 return true;
             }
         }
     }
-    
+
     return false;
 }
 
@@ -194,7 +195,7 @@ test "parser balance" {
 
 test "multi-line parsing" {
     const testing = std.testing;
-    
+
     // Test continuation detection
     try testing.expect(needsContinuation("MATCH"));
     try testing.expect(needsContinuation("MATCH (n)"));
@@ -202,7 +203,7 @@ test "multi-line parsing" {
     try testing.expect(needsContinuation("CREATE ("));
     try testing.expect(!needsContinuation("RETURN 1;"));
     try testing.expect(!needsContinuation(""));
-    
+
     // Test incomplete statement detection
     try testing.expect(isIncompleteGqlStatement("MATCH"));
     try testing.expect(isIncompleteGqlStatement("CREATE"));
@@ -210,7 +211,7 @@ test "multi-line parsing" {
     try testing.expect(isIncompleteGqlStatement("MATCH (n) WHERE n.age"));
     try testing.expect(!isIncompleteGqlStatement("RETURN 1;"));
     try testing.expect(!isIncompleteGqlStatement("SELECT * FROM table;"));
-    
+
     // Test complete multi-line statements
     try testing.expect(isComplete("MATCH (n)\nRETURN n;"));
     try testing.expect(isComplete("MATCH (n)\nWHERE n.age > 25\nRETURN n.name;"));

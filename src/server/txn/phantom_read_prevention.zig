@@ -13,13 +13,13 @@ pub const PredicateLock = struct {
     range: ?PropertyRange = null,
     condition: QueryCondition,
     timestamp: mvcc.Timestamp,
-    
+
     pub fn overlaps(self: PredicateLock, other: PredicateLock) bool {
         // Check if two predicate locks overlap
         if (!std.mem.eql(u8, self.label, other.label)) {
             return false;
         }
-        
+
         // Property-specific overlap check
         if (self.property) |prop1| {
             if (other.property) |prop2| {
@@ -28,14 +28,14 @@ pub const PredicateLock = struct {
                 }
             }
         }
-        
+
         // Range overlap check
         if (self.range) |range1| {
             if (other.range) |range2| {
                 return range1.overlaps(range2);
             }
         }
-        
+
         return self.condition.overlaps(other.condition);
     }
 };
@@ -46,7 +46,7 @@ pub const PropertyRange = struct {
     max_value: ?PropertyValue = null,
     min_inclusive: bool = true,
     max_inclusive: bool = true,
-    
+
     pub fn overlaps(self: PropertyRange, other: PropertyRange) bool {
         // Check if two ranges overlap
         if (self.max_value) |max1| {
@@ -57,7 +57,7 @@ pub const PropertyRange = struct {
                 }
             }
         }
-        
+
         if (self.min_value) |min1| {
             if (other.max_value) |max2| {
                 const cmp = comparePropertyValues(min1, max2);
@@ -66,10 +66,10 @@ pub const PropertyRange = struct {
                 }
             }
         }
-        
+
         return true;
     }
-    
+
     pub fn contains(self: PropertyRange, value: PropertyValue) bool {
         if (self.min_value) |min_val| {
             const cmp = comparePropertyValues(value, min_val);
@@ -77,14 +77,14 @@ pub const PropertyRange = struct {
                 return false;
             }
         }
-        
+
         if (self.max_value) |max_val| {
             const cmp = comparePropertyValues(value, max_val);
             if (cmp > 0 or (cmp == 0 and !self.max_inclusive)) {
                 return false;
             }
         }
-        
+
         return true;
     }
 };
@@ -103,27 +103,27 @@ pub const QueryCondition = struct {
     type: ConditionType,
     property: ?[]const u8 = null,
     value: ?PropertyValue = null,
-    
+
     pub const ConditionType = enum {
-        LabelScan,        // MATCH (n:Label)
-        PropertyEqual,    // WHERE n.prop = value
-        PropertyRange,    // WHERE n.prop > value, n.prop BETWEEN x AND y
-        PropertyExists,   // WHERE EXISTS(n.prop)
-        Complex,          // Complex conditions requiring conservative locking
+        LabelScan, // MATCH (n:Label)
+        PropertyEqual, // WHERE n.prop = value
+        PropertyRange, // WHERE n.prop > value, n.prop BETWEEN x AND y
+        PropertyExists, // WHERE EXISTS(n.prop)
+        Complex, // Complex conditions requiring conservative locking
     };
-    
+
     pub fn overlaps(self: QueryCondition, other: QueryCondition) bool {
         // Conservative approach: overlapping if same type and property
         if (self.type != other.type) {
             return self.type == .Complex or other.type == .Complex;
         }
-        
+
         if (self.property) |prop1| {
             if (other.property) |prop2| {
                 return std.mem.eql(u8, prop1, prop2);
             }
         }
-        
+
         return true; // Conservative: assume overlap if uncertain
     }
 };
@@ -133,12 +133,12 @@ pub const PhantomReadPrevention = struct {
     allocator: std.mem.Allocator,
     predicate_locks: std.ArrayList(PredicateLock),
     query_tracker: QueryTracker,
-    
+
     /// Track read queries to detect potential phantom reads
     pub const QueryTracker = struct {
         queries: std.AutoHashMap(mvcc.TxnId, std.ArrayList(ReadQuery)),
         allocator: std.mem.Allocator,
-        
+
         pub const ReadQuery = struct {
             txn_id: mvcc.TxnId,
             label: []const u8,
@@ -146,14 +146,14 @@ pub const PhantomReadPrevention = struct {
             result_count: u32,
             timestamp: mvcc.Timestamp,
         };
-        
+
         pub fn init(allocator: std.mem.Allocator) QueryTracker {
             return QueryTracker{
                 .queries = std.AutoHashMap(mvcc.TxnId, std.ArrayList(ReadQuery)).init(allocator),
                 .allocator = allocator,
             };
         }
-        
+
         pub fn deinit(self: *QueryTracker) void {
             var iter = self.queries.iterator();
             while (iter.next()) |entry| {
@@ -161,7 +161,7 @@ pub const PhantomReadPrevention = struct {
             }
             self.queries.deinit();
         }
-        
+
         pub fn recordQuery(self: *QueryTracker, query: ReadQuery) !void {
             var txn_queries = self.queries.get(query.txn_id) orelse blk: {
                 const list = std.ArrayList(ReadQuery).init(self.allocator);
@@ -170,14 +170,14 @@ pub const PhantomReadPrevention = struct {
             };
             try txn_queries.append(query);
         }
-        
+
         pub fn getQueries(self: *QueryTracker, txn_id: mvcc.TxnId) ?[]ReadQuery {
             if (self.queries.get(txn_id)) |queries| {
                 return queries.items;
             }
             return null;
         }
-        
+
         pub fn clearTransaction(self: *QueryTracker, txn_id: mvcc.TxnId) void {
             if (self.queries.getPtr(txn_id)) |queries| {
                 queries.deinit();
@@ -185,7 +185,7 @@ pub const PhantomReadPrevention = struct {
             }
         }
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) PhantomReadPrevention {
         return PhantomReadPrevention{
             .allocator = allocator,
@@ -193,12 +193,12 @@ pub const PhantomReadPrevention = struct {
             .query_tracker = QueryTracker.init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *PhantomReadPrevention) void {
         self.predicate_locks.deinit();
         self.query_tracker.deinit();
     }
-    
+
     /// Acquire a predicate lock for a query
     pub fn acquirePredicateLock(
         self: *PhantomReadPrevention,
@@ -217,7 +217,7 @@ pub const PhantomReadPrevention = struct {
                 .condition = condition,
                 .timestamp = timestamp,
             };
-            
+
             // Check for conflicts with existing predicate locks
             for (self.predicate_locks.items) |existing| {
                 if (existing.txn_id != txn_id and existing.overlaps(pred_lock)) {
@@ -225,13 +225,13 @@ pub const PhantomReadPrevention = struct {
                     return false;
                 }
             }
-            
+
             try self.predicate_locks.append(pred_lock);
         }
-        
+
         return true;
     }
-    
+
     /// Check if a write operation would violate existing predicate locks
     pub fn checkWriteConflict(
         self: *PhantomReadPrevention,
@@ -241,7 +241,7 @@ pub const PhantomReadPrevention = struct {
     ) !?mvcc.ConflictInfo {
         for (self.predicate_locks.items) |pred_lock| {
             if (pred_lock.txn_id == txn_id) continue;
-            
+
             // Check if write would make this tuple visible to the predicate
             if (std.mem.eql(u8, pred_lock.label, label)) {
                 if (wouldSatisfyPredicate(pred_lock, properties)) {
@@ -254,10 +254,10 @@ pub const PhantomReadPrevention = struct {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     /// Validate that read queries haven't been affected by phantom reads
     pub fn validateReadSet(
         self: *PhantomReadPrevention,
@@ -265,7 +265,7 @@ pub const PhantomReadPrevention = struct {
         writes_since_snapshot: []WriteOperation,
     ) !bool {
         const queries = self.query_tracker.getQueries(txn_id) orelse return true;
-        
+
         for (queries) |query| {
             // Check if any writes since snapshot would have affected this query
             for (writes_since_snapshot) |write| {
@@ -278,10 +278,10 @@ pub const PhantomReadPrevention = struct {
                 }
             }
         }
-        
+
         return true;
     }
-    
+
     /// Release predicate locks for a transaction
     pub fn releasePredicateLocks(self: *PhantomReadPrevention, txn_id: mvcc.TxnId) void {
         var i: usize = 0;
@@ -296,10 +296,10 @@ pub const PhantomReadPrevention = struct {
                 i += 1;
             }
         }
-        
+
         self.query_tracker.clearTransaction(txn_id);
     }
-    
+
     /// Record a read query for later validation
     pub fn recordReadQuery(
         self: *PhantomReadPrevention,
@@ -316,21 +316,21 @@ pub const PhantomReadPrevention = struct {
             .result_count = result_count,
             .timestamp = timestamp,
         };
-        
+
         try self.query_tracker.recordQuery(query);
     }
-    
+
     /// Get phantom read statistics for monitoring
     pub fn getStatistics(self: *PhantomReadPrevention) PhantomReadStats {
         var active_predicate_locks: u32 = 0;
         var active_transactions: u32 = 0;
-        
+
         // Count active predicate locks
         active_predicate_locks = @intCast(self.predicate_locks.items.len);
-        
+
         // Count active transactions with queries
         active_transactions = @intCast(self.query_tracker.queries.count());
-        
+
         return PhantomReadStats{
             .active_predicate_locks = active_predicate_locks,
             .active_transactions_with_queries = active_transactions,
@@ -421,7 +421,7 @@ fn wouldSatisfyConditions(conditions: []QueryCondition, properties: []PropertyBi
             .condition = condition,
             .timestamp = 0,
         };
-        
+
         if (wouldSatisfyPredicate(temp_pred, properties)) {
             return true;
         }
@@ -475,16 +475,16 @@ fn computePredicateId(pred_lock: PredicateLock) u64 {
 
 test "TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention" {
     const allocator = std.testing.allocator;
-    
+
     var phantom_prev = PhantomReadPrevention.init(allocator);
     defer phantom_prev.deinit();
-    
+
     // Transaction 1 reads all Person nodes
     const txn1_id: mvcc.TxnId = 1;
     const conditions = [_]QueryCondition{
         .{ .type = .LabelScan },
     };
-    
+
     // Acquire predicate lock for label scan
     const acquired = try phantom_prev.acquirePredicateLock(
         txn1_id,
@@ -493,14 +493,14 @@ test "TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention" {
         100,
     );
     try std.testing.expect(acquired);
-    
+
     // Transaction 2 tries to insert a new Person
     const txn2_id: mvcc.TxnId = 2;
     const properties = [_]PropertyBinding{
         .{ .name = "name", .value = .{ .String = "Alice" } },
         .{ .name = "age", .value = .{ .Int = 30 } },
     };
-    
+
     // Check for write conflict
     const conflict = try phantom_prev.checkWriteConflict(txn2_id, "Person", &properties);
     try std.testing.expect(conflict != null);
@@ -510,20 +510,20 @@ test "TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention" {
 
 test "TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks" {
     const allocator = std.testing.allocator;
-    
+
     var phantom_prev = PhantomReadPrevention.init(allocator);
     defer phantom_prev.deinit();
-    
+
     // Transaction reads Person nodes with age > 25
     const txn_id: mvcc.TxnId = 1;
     const conditions = [_]QueryCondition{
-        .{ 
-            .type = .PropertyRange, 
+        .{
+            .type = .PropertyRange,
             .property = "age",
             .value = .{ .Int = 25 },
         },
     };
-    
+
     const acquired = try phantom_prev.acquirePredicateLock(
         txn_id,
         "Person",
@@ -531,17 +531,17 @@ test "TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks" {
         100,
     );
     try std.testing.expect(acquired);
-    
+
     // Test overlapping predicate lock conflict
     const other_txn_id: mvcc.TxnId = 2;
     const overlapping_conditions = [_]QueryCondition{
-        .{ 
-            .type = .PropertyRange, 
+        .{
+            .type = .PropertyRange,
             .property = "age",
             .value = .{ .Int = 30 },
         },
     };
-    
+
     const overlapping_acquired = try phantom_prev.acquirePredicateLock(
         other_txn_id,
         "Person",
@@ -549,12 +549,12 @@ test "TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks" {
         101,
     );
     try std.testing.expect(!overlapping_acquired); // Should conflict
-    
+
     // Non-overlapping predicate should succeed
     const non_overlapping_conditions = [_]QueryCondition{
         .{ .type = .LabelScan },
     };
-    
+
     const non_overlap_acquired = try phantom_prev.acquirePredicateLock(
         other_txn_id,
         "Company", // Different label
@@ -566,20 +566,20 @@ test "TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks" {
 
 test "TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation" {
     const allocator = std.testing.allocator;
-    
+
     var phantom_prev = PhantomReadPrevention.init(allocator);
     defer phantom_prev.deinit();
-    
+
     // Record a range query
     const txn_id: mvcc.TxnId = 1;
     const conditions = [_]QueryCondition{
-        .{ 
-            .type = .PropertyRange, 
+        .{
+            .type = .PropertyRange,
             .property = "score",
             .value = .{ .Float = 85.0 },
         },
     };
-    
+
     try phantom_prev.recordReadQuery(
         txn_id,
         "Student",
@@ -587,7 +587,7 @@ test "TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation" {
         5, // Found 5 students
         100,
     );
-    
+
     // Simulate writes that occurred after the query snapshot
     const writes = [_]WriteOperation{
         .{
@@ -599,7 +599,7 @@ test "TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation" {
             .timestamp = 105,
         },
         .{
-            .label = "Student", 
+            .label = "Student",
             .properties = &[_]PropertyBinding{
                 .{ .name = "score", .value = .{ .Float = 70.0 } }, // Would not satisfy query
                 .{ .name = "name", .value = .{ .String = "Charlie" } },
@@ -607,7 +607,7 @@ test "TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation" {
             .timestamp = 106,
         },
     };
-    
+
     // Validation should fail due to phantom read
     const is_valid = try phantom_prev.validateReadSet(txn_id, &writes);
     try std.testing.expect(!is_valid);
@@ -618,17 +618,17 @@ test "Property range overlap detection" {
         .min_value = .{ .Int = 10 },
         .max_value = .{ .Int = 20 },
     };
-    
+
     const range2 = PropertyRange{
         .min_value = .{ .Int = 15 },
         .max_value = .{ .Int = 25 },
     };
-    
+
     const range3 = PropertyRange{
         .min_value = .{ .Int = 25 },
         .max_value = .{ .Int = 30 },
     };
-    
+
     try std.testing.expect(range1.overlaps(range2)); // [10,20] overlaps [15,25]
     try std.testing.expect(!range1.overlaps(range3)); // [10,20] doesn't overlap [25,30]
     try std.testing.expect(range2.overlaps(range3)); // [15,25] overlaps [25,30] at boundary
@@ -638,14 +638,14 @@ test "Property value comparison" {
     const val1 = PropertyValue{ .Int = 10 };
     const val2 = PropertyValue{ .Int = 20 };
     const val3 = PropertyValue{ .Int = 10 };
-    
+
     try std.testing.expect(comparePropertyValues(val1, val2) < 0);
     try std.testing.expect(comparePropertyValues(val2, val1) > 0);
     try std.testing.expect(comparePropertyValues(val1, val3) == 0);
-    
+
     const str1 = PropertyValue{ .String = "apple" };
     const str2 = PropertyValue{ .String = "banana" };
-    
+
     try std.testing.expect(comparePropertyValues(str1, str2) < 0);
     try std.testing.expect(comparePropertyValues(str2, str1) > 0);
 }

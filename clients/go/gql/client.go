@@ -118,9 +118,9 @@ type dsnConfig struct {
 
 func parseDSN(dsn string) dsnConfig {
 	// Default path depends on OS
-	defaultPath := "./zig-out/bin/geoded"
+	defaultPath := "./zig-out/bin/geode"
 	if runtime.GOOS == "windows" {
-		defaultPath = "./zig-out/bin/geoded.exe"
+		defaultPath = "./zig-out/bin/geode.exe"
 	}
 
 	cfg := dsnConfig{Mode: "process", Path: defaultPath, PageSize: 1000, HelloName: "gql-go", HelloVer: "0.1", Conformance: "min", UseQUIC: false}
@@ -414,34 +414,81 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		if buildErr := buildCmd.Run(); buildErr == nil {
 			// Check again after build
 			if _, err := os.Stat(path); os.IsNotExist(err) {
-				return nil, fmt.Errorf("geoded not found after build: %w", err)
+				return nil, fmt.Errorf("geode not found after build: %w", err)
 			}
 		} else {
-			return nil, fmt.Errorf("geoded not found and build failed: %w", err)
+			return nil, fmt.Errorf("geode not found and build failed: %w", err)
 		}
 	}
 
-	cmd := exec.Command(path)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
+	// Start server in QUIC mode on a random port
+	port := 8443 + (os.Getpid() % 1000) // Use a semi-random port
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	cmd := exec.Command(path, "serve", "--listen", addr)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := &Conn{cmd: cmd, inW: stdin, outR: stdout, bufRd: bufio.NewReaderSize(stdout, 64<<10)}
-	c.cancel = func() { _ = cmd.Process.Kill() }
+
+	// Wait a bit for server to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Now connect via QUIC to the spawned server
+	tlsConf := &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"geode/1"},
+		MinVersion:         tls.VersionTLS13,
+	}
+
+	qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return nil, err
+	}
+
+	qStream, err := qConn.OpenStreamSync(ctx)
+	if err != nil {
+		_ = qConn.CloseWithError(0, "failed to open stream")
+		_ = cmd.Process.Kill()
+		return nil, err
+	}
+
+	c := &Conn{
+		cmd:     cmd,
+		qConn:   qConn,
+		qStream: &qStream,
+		bufRd:   bufio.NewReaderSize(qStream, 64<<10),
+		useQUIC: true,
+	}
+	c.cancel = func() {
+		if stream := c.qStream; stream != nil {
+			if s, ok := stream.(*quic.Stream); ok {
+				_ = (*s).Close()
+			}
+		}
+		if conn := c.qConn; conn != nil {
+			if qc, ok := conn.(interface {
+				CloseWithError(quic.ApplicationErrorCode, string) error
+			}); ok {
+				_ = qc.CloseWithError(0, "closing")
+			}
+		}
+		_ = cmd.Process.Kill()
+	}
+
 	hello := map[string]any{"type": "HELLO", "client_name": db.helloName, "client_ver": db.helloVer, "wanted_conformance": db.conf}
 	if err := c.writeJSON(hello); err != nil {
 		_ = c.Close()
 		return nil, err
 	}
-	// Note: process mode (stdio) doesn't send HELLO response
+
+	// Read HELLO response
+	if _, err := c.readLine(ctx); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+
 	return c, nil
 }
 
@@ -458,6 +505,11 @@ func (c *Conn) Close() error {
 			}); ok {
 				_ = qc.CloseWithError(0, "closing")
 			}
+		}
+		// Kill the process if we spawned it
+		if c.cmd != nil {
+			_ = c.cmd.Process.Kill()
+			_ = c.cmd.Wait()
 		}
 		return nil
 	}
@@ -476,9 +528,8 @@ func (c *Conn) Close() error {
 		_ = c.nc.Close()
 		return nil
 	}
-	_ = c.inW.Close()
-	_ = c.outR.Close()
-	return c.cmd.Wait()
+	// Should not reach here anymore
+	return nil
 }
 
 func (c *Conn) writeJSON(v any) error {
@@ -500,8 +551,7 @@ func (c *Conn) writeJSON(v any) error {
 		_, e = c.nc.Write(b)
 		return e
 	}
-	_, e = c.inW.Write(b)
-	return e
+	return fmt.Errorf("no connection available")
 }
 
 func (c *Conn) readLine(ctx context.Context) ([]byte, error) {

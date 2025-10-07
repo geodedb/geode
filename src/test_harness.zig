@@ -21,7 +21,7 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
 // Query execution with authentication context
 pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, options: QueryOptions) ![]u8 {
     @setEvalBranchQuota(2000);
-    
+
     // Check for double-hyphen comments (special case)
     if (std.mem.indexOf(u8, query, "--") != null) {
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
@@ -31,13 +31,13 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     const parse_result = gql.parse(allocator.*, query, .{}) catch |err| {
         // Return syntax error for parse failures
         if (err == error.OutOfMemory) return err;
-        
+
         // Special cases for transaction errors
         const trimmed = std.mem.trim(u8, query, " \t\n\r");
         if (std.mem.eql(u8, trimmed, "COMMIT") or std.mem.eql(u8, trimmed, "ROLLBACK")) {
             return error.TransactionError;
         }
-        
+
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"error\":\"Syntax error in query\",\"additional_statuses\":[]}}", .{});
     };
     defer {
@@ -50,7 +50,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         .user = if (options.token != null) "authenticated_user" else null,
         .token = options.token,
     };
-    
+
     // Execute the parsed program using Geode's execution engine
     const exec_result = execution.executeProgramWithContext(allocator.*, &parse_result.program, exec_context) catch |err| {
         // Return appropriate error for execution failures
@@ -72,11 +72,11 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         var mut_result = exec_result;
         mut_result.deinit(allocator.*);
     }
-    
+
     // Check if we set a graph and add flag
     var flags = try std.ArrayList([]const u8).initCapacity(allocator.*, 0);
     defer flags.deinit(allocator.*);
-    
+
     // Check if query contains SESSION SET PROPERTY GRAPH (with or without quotes)
     // Add flag only for quoted graph names and NewG (T11, T13)
     // T12 expects the flag but uses G2 without quotes, T18 doesn't expect it
@@ -88,12 +88,12 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             try flags.append(allocator.*, "I:GraphCatalog=memory");
         }
     }
-    
+
     // Check if the query used // comments
     if (parse_result.has_double_solidus_comment) {
         try flags.append(allocator.*, "GB03:DoubleSolidusComment");
     }
-    
+
     // Convert execution result to JSON
     if (flags.items.len > 0) {
         return try exec_result.toJsonWithFlags(allocator.*, flags.items);

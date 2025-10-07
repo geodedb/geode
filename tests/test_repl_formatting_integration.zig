@@ -35,7 +35,7 @@ const MockClientSession = struct {
             try self.allocator.dupe(u8, "{\"columns\":[\"result\"],\"data\":[[\"Mock query result\"]]}")
         else
             try self.allocator.dupe(u8, "{\"status\":\"success\",\"message\":\"Query executed\"}");
-        
+
         try self.mock_responses.append(self.allocator, mock_response);
     }
 };
@@ -69,7 +69,7 @@ fn executeGqlForTest(writer: anytype, state: *MockReplState, gql: []const u8) !v
     // Format and output the response based on the current format setting
     if (state.session.mock_responses.items.len > 0) {
         const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
-        
+
         // Check if this is a query result that should be formatted
         if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response, "\"data\":") != null) {
             // Format and display query results based on current format setting
@@ -193,7 +193,7 @@ test "REPL integration - JSON format query execution" {
     defer output.deinit(testing.allocator);
 
     try executeGqlForTest(output.writer(testing.allocator), &state, "RETURN 'hello' AS greeting");
-    
+
     const expected = "{\"columns\":[\"result\"],\"data\":[[\"Mock query result\"]]}";
     try testing.expectEqualStrings(expected, output.items);
 }
@@ -206,7 +206,7 @@ test "REPL integration - CSV format query execution" {
     defer output.deinit(testing.allocator);
 
     try executeGqlForTest(output.writer(testing.allocator), &state, "RETURN 'hello' AS greeting");
-    
+
     const expected = "\"result\"\n\"Mock query result\"\n";
     try testing.expectEqualStrings(expected, output.items);
 }
@@ -219,7 +219,7 @@ test "REPL integration - Table format query execution" {
     defer output.deinit(testing.allocator);
 
     try executeGqlForTest(output.writer(testing.allocator), &state, "RETURN 'hello' AS greeting");
-    
+
     // Check for table structure elements
     try testing.expect(std.mem.indexOf(u8, output.items, "| result |") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "| Mock query result |") != null);
@@ -233,7 +233,7 @@ test "REPL integration - Status message handling" {
     defer output.deinit(testing.allocator);
 
     try executeGqlForTest(output.writer(testing.allocator), &state, "CREATE (n:Person {name: 'Alice'})");
-    
+
     // Status messages should be output as-is regardless of format
     const expected = "{\"status\":\"success\",\"message\":\"Node created\"}";
     try testing.expectEqualStrings(expected, output.items);
@@ -256,7 +256,7 @@ test "REPL integration - Multiple query execution with format switching" {
 
     // Verify JSON output for first query
     try testing.expect(std.mem.indexOf(u8, output1.items, "{\"columns\"") != null);
-    
+
     // Verify CSV output for second query
     try testing.expect(std.mem.indexOf(u8, output2.items, "\"count\"") != null);
     try testing.expect(std.mem.indexOf(u8, output2.items, "42") != null);
@@ -326,10 +326,10 @@ test "REPL integration - Memory management verification" {
     for (0..10) |i| {
         var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
         defer output.deinit(testing.allocator);
-        
+
         const query = if (i % 2 == 0) "RETURN 'test'" else "CREATE (n:Test)";
         try executeGqlForTest(output.writer(testing.allocator), &state, query);
-        
+
         // Verify output is reasonable
         try testing.expect(output.items.len > 0);
     }

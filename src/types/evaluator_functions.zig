@@ -907,7 +907,7 @@ pub fn pow_val(allocator: std.mem.Allocator, base: Value, exp: Value) EvaluatorE
         .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
         else => return EvaluatorError.TypeMismatch,
     };
-    
+
     const exp_f = switch (exp) {
         .Int => |i| @as(f64, @floatFromInt(i)),
         .SmallInt => |i| @as(f64, @floatFromInt(i)),
@@ -917,11 +917,11 @@ pub fn pow_val(allocator: std.mem.Allocator, base: Value, exp: Value) EvaluatorE
         .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
         else => return EvaluatorError.TypeMismatch,
     };
-    
+
     const result = std.math.pow(f64, base_f, exp_f);
     if (std.math.isNan(result)) return EvaluatorError.FloatNaN;
     if (std.math.isInf(result)) return EvaluatorError.Overflow;
-    
+
     return Value{ .Double = result };
 }
 
@@ -1091,7 +1091,7 @@ pub fn floor_val(val: Value) EvaluatorError!Value {
 pub fn type_val(val: Value) EvaluatorError!Value {
     const type_name = switch (val) {
         .Null => "NULL",
-        .Bool => "BOOLEAN", 
+        .Bool => "BOOLEAN",
         .Int => "INTEGER",
         .SmallInt => "INTEGER",
         .BigInt => "INTEGER",
@@ -1108,7 +1108,7 @@ pub fn type_val(val: Value) EvaluatorError!Value {
         .Timestamp => "TIMESTAMP",
         .TimestampTZ => "TIMESTAMP WITH TIME ZONE",
         .Bytea => "BINARY",
-        .VarBit => "VARBINARY", 
+        .VarBit => "VARBINARY",
         .Jsonb => "JSON",
         .Xml => "XML",
         .Url => "URL",

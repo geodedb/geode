@@ -514,38 +514,38 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         const btv = obj.get("backup_type") orelse return error.Invalid;
         if (btv != .string) return error.Invalid;
         const backup_type = try ally.dupe(u8, btv.string);
-        
+
         const parent_id = if (obj.get("parent_id")) |pv| blk: {
             if (pv != .string) return error.Invalid;
             break :blk try ally.dupe(u8, pv.string);
         } else null;
-        
+
         const compress = if (obj.get("compress")) |cv|
             cv == .bool and cv.bool
         else
             false;
-            
+
         return .{ .BACKUP = .{ .backup_type = backup_type, .parent_id = parent_id, .compress = compress } };
     } else if (std.mem.eql(u8, typ, "RESTORE")) {
         const target_time = if (obj.get("target_time")) |tv| blk: {
             if (tv != .string) return error.Invalid;
             break :blk try ally.dupe(u8, tv.string);
         } else null;
-        
+
         const confirm = if (obj.get("confirm")) |cv|
             cv == .bool and cv.bool
         else
             false;
-            
+
         return .{ .RESTORE = .{ .target_time = target_time, .confirm = confirm } };
     } else if (std.mem.eql(u8, typ, "UPLOAD_BACKUP")) {
         const sbv = obj.get("size_bytes") orelse return error.Invalid;
         const csv = obj.get("checksum") orelse return error.Invalid;
         if (sbv != .integer or csv != .string) return error.Invalid;
-        
+
         const size_bytes = @as(u64, @intCast(sbv.integer));
         const checksum = try ally.dupe(u8, csv.string);
-        
+
         return .{ .UPLOAD_BACKUP = .{ .size_bytes = size_bytes, .checksum = checksum } };
     }
     return error.Invalid;

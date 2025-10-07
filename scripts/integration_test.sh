@@ -45,9 +45,9 @@ echo
 
 # Test 1: Process mode (stdio)
 echo "=== Process Mode Tests ==="
-run_test "Basic query" "./zig-out/bin/geodec 'RETURN 1 AS x ORDER BY x LIMIT 1' --no-quic"
-run_test "Error handling" "./zig-out/bin/geodec 'RETURN 1 LIMIT 10 OFFSET 5' --no-quic 2>&1 | grep -q US001"
-run_test "Set operations" "./zig-out/bin/geodec 'RETURN 1 AS x UNION RETURN 1 AS x' --no-quic"
+run_test "Basic query" "./zig-out/bin/geode query 'RETURN 1 AS x ORDER BY x LIMIT 1' --no-quic"
+run_test "Error handling" "./zig-out/bin/geode query 'RETURN 1 LIMIT 10 OFFSET 5' --no-quic 2>&1 | grep -q US001"
+run_test "Set operations" "./zig-out/bin/geode query 'RETURN 1 AS x UNION RETURN 1 AS x' --no-quic"
 echo
 
 # Test 2: QUIC mode (temporarily disabled due to certificate validation issues)

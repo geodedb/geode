@@ -11,26 +11,26 @@ const platform = @import("platform.zig");
 /// Transport interface for REPL communication
 pub const Transport = struct {
     connectFn: *const fn (allocator: std.mem.Allocator, addr: []const u8) anyerror!*TransportConnection,
-    
+
     pub fn connect(self: *const Transport, allocator: std.mem.Allocator, addr: []const u8) !*TransportConnection {
         return self.connectFn(allocator, addr);
     }
 };
 
-/// Transport connection interface  
+/// Transport connection interface
 pub const TransportConnection = struct {
     writeAllFn: *const fn (self: *TransportConnection, data: []const u8) anyerror!void,
     readLineFn: *const fn (self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) anyerror![]u8,
     deinitFn: *const fn (self: *TransportConnection) void,
-    
+
     pub fn writeAll(self: *TransportConnection, data: []const u8) !void {
         return self.writeAllFn(self, data);
     }
-    
+
     pub fn readLine(self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
         return self.readLineFn(self, allocator, max_size);
     }
-    
+
     pub fn deinit(self: *TransportConnection) void {
         return self.deinitFn(self);
     }
@@ -39,20 +39,20 @@ pub const TransportConnection = struct {
 /// Mock transport connection for testing/fallback
 const MockTransportConnection = struct {
     allocator: std.mem.Allocator,
-    
+
     pub fn writeAll(self: *TransportConnection, data: []const u8) !void {
         _ = self;
         _ = data;
         // Mock implementation - do nothing
     }
-    
+
     pub fn readLine(self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
         _ = self;
         _ = max_size;
         // Mock implementation - return simple JSON response
         return allocator.dupe(u8, "{\"type\":\"MOCK_RESPONSE\"}");
     }
-    
+
     pub fn deinit(self: *TransportConnection) void {
         _ = self;
         // Mock implementation - do nothing
@@ -63,7 +63,7 @@ fn mockConnectFn(allocator: std.mem.Allocator, addr: []const u8) !*TransportConn
     _ = addr;
     const mock = try allocator.create(MockTransportConnection);
     mock.* = MockTransportConnection{ .allocator = allocator };
-    
+
     // Return as TransportConnection interface
     const transport_conn = try allocator.create(TransportConnection);
     transport_conn.* = TransportConnection{
@@ -175,11 +175,11 @@ pub const ClientSession = struct {
 
     pub fn hello(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
-        
+
         // Send HELLO handshake
         const hello_msg = "{{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}}\n";
         try self.connection.?.writeAll(hello_msg);
-        
+
         // Read and discard HELLO acknowledgment
         const hello_ack = try self.connection.?.readLine(self.allocator, 1 << 16);
         defer self.allocator.free(hello_ack);
@@ -187,16 +187,16 @@ pub const ClientSession = struct {
 
     pub fn runGql(self: *ClientSession, gql: []const u8) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
-        
+
         // Escape GQL text for JSON
         const escaped_text = try escapeJsonString(self.allocator, gql);
         defer self.allocator.free(escaped_text);
-        
+
         // Send RUN_GQL message
         const msg = try std.fmt.allocPrint(self.allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
         defer self.allocator.free(msg);
         try self.connection.?.writeAll(msg);
-        
+
         // Read SCHEMA response and store it
         if (self.last_response) |resp| {
             self.allocator.free(resp);
@@ -206,13 +206,13 @@ pub const ClientSession = struct {
 
     pub fn begin(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
-        
+
         try self.connection.?.writeAll("{{\"type\":\"BEGIN\"}}\n");
-        
+
         // Read and check response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
         defer self.allocator.free(response);
-        
+
         if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
             return error.TransactionError;
         }
@@ -220,13 +220,13 @@ pub const ClientSession = struct {
 
     pub fn commit(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
-        
+
         try self.connection.?.writeAll("{{\"type\":\"COMMIT\"}}\n");
-        
+
         // Read and check response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
         defer self.allocator.free(response);
-        
+
         if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
             return error.TransactionError;
         }
@@ -234,13 +234,13 @@ pub const ClientSession = struct {
 
     pub fn rollback(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
-        
+
         try self.connection.?.writeAll("{{\"type\":\"ROLLBACK\"}}\n");
-        
+
         // Read and check response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
         defer self.allocator.free(response);
-        
+
         if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
             return error.TransactionError;
         }
@@ -248,15 +248,15 @@ pub const ClientSession = struct {
 
     pub fn pullAll(self: *ClientSession, sink: anytype) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
-        
+
         // Send PULL request for results
         const pull_msg = "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}}\n";
         try self.connection.?.writeAll(pull_msg);
-        
+
         // Read BINDINGS response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
         defer self.allocator.free(response);
-        
+
         try sink.appendSlice(self.allocator, response);
     }
 };
@@ -537,17 +537,17 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 
     // Start timing the query execution
     var timer = try std.time.Timer.start();
-    
+
     // Execute query via QUIC
     try state.session.runGql(gql);
-    
+
     // Get response data from QUIC client
     var response_data = std.ArrayList(u8).initCapacity(state.allocator, 0) catch unreachable;
     defer response_data.deinit(state.allocator);
-    
+
     // Use pullAll to get the complete response
     try state.session.pullAll(&response_data);
-    
+
     // Stop timing and calculate duration
     const duration_ns = timer.read();
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
@@ -562,7 +562,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             try stderr.writeAll("\n");
             return;
         }
-        
+
         // Display schema (don't format, just show as JSON for now)
         try stdout.writeAll(schema_response);
         try stdout.writeAll("\n");
@@ -571,7 +571,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // Format and output the response data based on the current format setting
     if (response_data.items.len > 0) {
         const response = response_data.items;
-        
+
         // Check if this is a query result that should be formatted
         if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response, "\"data\":") != null) {
             // Format and display query results based on current format setting
@@ -582,7 +582,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         }
         try stdout.writeAll("\n");
     }
-    
+
     // Display timing information
     if (state.show_timing) {
         var buf: [256]u8 = undefined;
@@ -667,7 +667,7 @@ fn formatResultAsCsv(stdout: anytype, allocator: std.mem.Allocator, response: []
             return;
         }
     }
-    
+
     // Fallback: output as-is
     try stdout.writeAll(response);
 }
@@ -702,7 +702,7 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
                     const width: usize = switch (cell) {
                         .string => |s| s.len,
                         .integer => 10, // rough estimate
-                        .float => 10,   // rough estimate
+                        .float => 10, // rough estimate
                         .bool => 5,
                         .null => 4,
                         else => 0,
@@ -774,7 +774,7 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
             return;
         }
     }
-    
+
     // Fallback: output as-is
     try stdout.writeAll(response);
 }

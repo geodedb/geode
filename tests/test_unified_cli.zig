@@ -19,7 +19,7 @@ test "ServerConfig initialization with defaults" {
     };
 
     const config = ServerConfig{};
-    
+
     try testing.expect(config.data_dir == null);
     try testing.expect(config.listen_quic == null);
     try testing.expectEqualStrings("info", config.log_level);
@@ -47,7 +47,7 @@ test "ClientConfig initialization with defaults" {
     const config = ClientConfig{
         .query_text = "RETURN 1 AS x",
     };
-    
+
     try testing.expectEqualStrings("RETURN 1 AS x", config.query_text);
     try testing.expectEqualStrings("127.0.0.1:3141", config.server);
     try testing.expectEqualStrings("json", config.format);
@@ -95,7 +95,7 @@ test "Legacy binary name compatibility detection" {
         const basename = std.fs.path.basename(case.binary_name);
         const is_legacy = std.mem.eql(u8, basename, "geodec") or std.mem.eql(u8, basename, "geoded");
         try testing.expect(is_legacy == case.is_legacy);
-        
+
         if (is_legacy) {
             if (std.mem.eql(u8, basename, "geodec")) {
                 try testing.expectEqualStrings("client", case.expected_mode);
@@ -111,7 +111,7 @@ test "Server configuration validation" {
         data_dir: ?[]const u8 = null,
         listen_quic: ?[]const u8 = null,
         log_level: []const u8 = "info",
-        
+
         fn validate(self: @This()) !void {
             // Validate log level
             const valid_levels = [_][]const u8{ "debug", "info", "warn", "error" };
@@ -123,7 +123,7 @@ test "Server configuration validation" {
                 }
             }
             if (!valid) return error.InvalidLogLevel;
-            
+
             // Validate listen address format if provided
             if (self.listen_quic) |addr| {
                 if (addr.len == 0) return error.EmptyListenAddress;
@@ -135,17 +135,17 @@ test "Server configuration validation" {
     // Valid configurations
     var config1 = ServerConfig{ .log_level = "debug" };
     try config1.validate();
-    
+
     var config2 = ServerConfig{ .listen_quic = "127.0.0.1:3141" };
     try config2.validate();
-    
+
     // Invalid configurations
     var config3 = ServerConfig{ .log_level = "invalid" };
     try testing.expectError(error.InvalidLogLevel, config3.validate());
-    
+
     var config4 = ServerConfig{ .listen_quic = "" };
     try testing.expectError(error.EmptyListenAddress, config4.validate());
-    
+
     var config5 = ServerConfig{ .listen_quic = "127.0.0.1" };
     try testing.expectError(error.MissingPort, config5.validate());
 }
@@ -155,11 +155,11 @@ test "Client configuration validation" {
         query_text: []const u8,
         server: []const u8 = "127.0.0.1:3141",
         format: []const u8 = "json",
-        
+
         fn validate(self: @This()) !void {
             // Validate query text
             if (self.query_text.len == 0) return error.EmptyQuery;
-            
+
             // Validate format
             const valid_formats = [_][]const u8{ "json", "txt", "csv" };
             var valid = false;
@@ -170,7 +170,7 @@ test "Client configuration validation" {
                 }
             }
             if (!valid) return error.InvalidFormat;
-            
+
             // Validate server address
             if (self.server.len == 0) return error.EmptyServer;
             if (std.mem.indexOf(u8, self.server, ":") == null) return error.MissingPort;
@@ -180,17 +180,17 @@ test "Client configuration validation" {
     // Valid configurations
     var config1 = ClientConfig{ .query_text = "RETURN 1" };
     try config1.validate();
-    
+
     var config2 = ClientConfig{ .query_text = "MATCH (n) RETURN n", .format = "csv" };
     try config2.validate();
-    
+
     // Invalid configurations
     var config3 = ClientConfig{ .query_text = "" };
     try testing.expectError(error.EmptyQuery, config3.validate());
-    
+
     var config4 = ClientConfig{ .query_text = "RETURN 1", .format = "xml" };
     try testing.expectError(error.InvalidFormat, config4.validate());
-    
+
     var config5 = ClientConfig{ .query_text = "RETURN 1", .server = "localhost" };
     try testing.expectError(error.MissingPort, config5.validate());
 }
@@ -206,7 +206,7 @@ test "Command dispatch logic" {
         help,
         unknown,
     };
-    
+
     const fromString = struct {
         fn call(s: []const u8) CommandType {
             if (std.mem.eql(u8, s, "serve")) return .serve;
@@ -248,7 +248,7 @@ test "Process argument building" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    
+
     // Build server arguments
     var server_args = try std.ArrayList([]const u8).initCapacity(allocator, 5);
     try server_args.append(allocator, "./zig-out/bin/geoded");
@@ -256,13 +256,13 @@ test "Process argument building" {
     try server_args.append(allocator, "./test_data");
     try server_args.append(allocator, "--listen-quic");
     try server_args.append(allocator, "127.0.0.1:3141");
-    
+
     const server_argv = try server_args.toOwnedSlice(allocator);
     try testing.expect(server_argv.len == 5);
     try testing.expectEqualStrings("./zig-out/bin/geoded", server_argv[0]);
     try testing.expectEqualStrings("--data-dir", server_argv[1]);
     try testing.expectEqualStrings("./test_data", server_argv[2]);
-    
+
     // Build client arguments
     var client_args = try std.ArrayList([]const u8).initCapacity(allocator, 5);
     try client_args.append(allocator, "./zig-out/bin/geodec");
@@ -270,7 +270,7 @@ test "Process argument building" {
     try client_args.append(allocator, "--no-quic");
     try client_args.append(allocator, "--format");
     try client_args.append(allocator, "json");
-    
+
     const client_argv = try client_args.toOwnedSlice(allocator);
     try testing.expect(client_argv.len == 5);
     try testing.expectEqualStrings("./zig-out/bin/geodec", client_argv[0]);

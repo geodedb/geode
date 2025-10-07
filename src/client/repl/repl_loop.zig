@@ -170,7 +170,7 @@ fn renderPrompt(state: *ReplState) !void {
     const prompt = if (state.is_continuation)
         if (state.in_txn) "geode(txn)-> " else "geode-> "
     else if (state.in_txn) "geode(txn)> " else "geode> ";
-    
+
     try stdout_file.writeAll(prompt);
     try stdout_file.writeAll(state.buffer.items);
 
@@ -224,7 +224,7 @@ fn processInput(state: *ReplState) !void {
                         state.multi_line_buffer.clearRetainingCapacity();
                         try state.multi_line_buffer.appendSlice(state.allocator, input);
                     }
-                    
+
                     // Check if the complete multi-line input is ready to execute
                     const complete_input = state.multi_line_buffer.items;
                     if (repl_parse.isComplete(complete_input)) {
@@ -240,7 +240,7 @@ fn processInput(state: *ReplState) !void {
                             stderr.writeAll(@errorName(err)) catch {};
                             stderr.writeAll("\n") catch {};
                         };
-                        
+
                         // Reset for next input
                         state.buffer.clearRetainingCapacity();
                         state.cursor = 0;

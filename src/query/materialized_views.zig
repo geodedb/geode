@@ -51,7 +51,7 @@ pub const MaterializedViewMetadata = struct {
     dependencies: ArrayList([]const u8),
     indexes: ArrayList(ViewIndex),
     statistics: ViewStatistics,
-    
+
     pub fn deinit(self: *MaterializedViewMetadata, allocator: Allocator) void {
         allocator.free(self.view_name);
         allocator.free(self.source_query);
@@ -72,7 +72,7 @@ pub const ViewIndex = struct {
     column_names: ArrayList([]const u8),
     is_unique: bool,
     creation_timestamp: i64,
-    
+
     pub fn deinit(self: *ViewIndex, allocator: Allocator) void {
         allocator.free(self.index_name);
         for (self.column_names.items) |col| {
@@ -101,7 +101,7 @@ pub const MaterializedViewData = struct {
     schema: ArrayList(graph_storage.Column),
     creation_timestamp: i64,
     refresh_timestamp: i64,
-    
+
     pub fn init(allocator: Allocator) MaterializedViewData {
         return .{
             .allocator = allocator,
@@ -111,16 +111,16 @@ pub const MaterializedViewData = struct {
             .refresh_timestamp = std.time.milliTimestamp(),
         };
     }
-    
+
     pub fn deinit(self: *MaterializedViewData) void {
         self.rows.deinit();
         self.schema.deinit();
     }
-    
+
     pub fn addRow(self: *MaterializedViewData, binding: graph_storage.Binding) !void {
         try self.rows.append(binding);
     }
-    
+
     pub fn updateRefreshTimestamp(self: *MaterializedViewData) void {
         self.refresh_timestamp = std.time.milliTimestamp();
     }
@@ -148,7 +148,7 @@ pub const DependencyTracker = struct {
     allocator: Allocator,
     view_dependencies: AutoHashMap([]const u8, ArrayList([]const u8)),
     change_log: ArrayList(ChangeLogEntry),
-    
+
     pub fn init(allocator: Allocator) DependencyTracker {
         return .{
             .allocator = allocator,
@@ -156,7 +156,7 @@ pub const DependencyTracker = struct {
             .change_log = ArrayList(ChangeLogEntry).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *DependencyTracker) void {
         var it = self.view_dependencies.iterator();
         while (it.next()) |entry| {
@@ -169,18 +169,18 @@ pub const DependencyTracker = struct {
         self.view_dependencies.deinit();
         self.change_log.deinit();
     }
-    
+
     pub fn addDependency(self: *DependencyTracker, view_name: []const u8, dependency: []const u8) !void {
         const owned_view = try self.allocator.dupe(u8, view_name);
         const owned_dep = try self.allocator.dupe(u8, dependency);
-        
+
         const result = try self.view_dependencies.getOrPut(owned_view);
         if (!result.found_existing) {
             result.value_ptr.* = ArrayList([]const u8).init(self.allocator);
         }
         try result.value_ptr.append(owned_dep);
     }
-    
+
     pub fn recordChange(self: *DependencyTracker, table_name: []const u8, change_type: ChangeType) !void {
         const entry = ChangeLogEntry{
             .table_name = try self.allocator.dupe(u8, table_name),
@@ -218,7 +218,7 @@ pub const MaterializedViewManager = struct {
     mvcc_manager: ?*mvcc.MVCCManager,
     config: ViewManagerConfig,
     statistics: ManagerStatistics,
-    
+
     pub const ViewManagerConfig = struct {
         max_views: u32 = 1000,
         max_view_size_mb: u64 = 1024,
@@ -228,7 +228,7 @@ pub const MaterializedViewManager = struct {
         max_concurrent_refreshes: u32 = 4,
         refresh_timeout_seconds: u64 = 1800,
     };
-    
+
     pub const ManagerStatistics = struct {
         total_views: u64 = 0,
         active_refreshes: u64 = 0,
@@ -238,7 +238,7 @@ pub const MaterializedViewManager = struct {
         average_view_size_mb: f64 = 0.0,
         refresh_success_rate: f64 = 0.0,
     };
-    
+
     pub fn init(allocator: Allocator, config: ViewManagerConfig) !MaterializedViewManager {
         return .{
             .allocator = allocator,
@@ -253,7 +253,7 @@ pub const MaterializedViewManager = struct {
             .statistics = .{},
         };
     }
-    
+
     pub fn deinit(self: *MaterializedViewManager) void {
         var view_it = self.views.iterator();
         while (view_it.next()) |entry| {
@@ -261,18 +261,18 @@ pub const MaterializedViewManager = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.views.deinit();
-        
+
         var data_it = self.view_data.iterator();
         while (data_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             entry.value_ptr.deinit();
         }
         self.view_data.deinit();
-        
+
         self.refresh_scheduler.deinit();
         self.dependency_tracker.deinit();
     }
-    
+
     /// Create a new materialized view
     pub fn createView(
         self: *MaterializedViewManager,
@@ -284,14 +284,14 @@ pub const MaterializedViewManager = struct {
         if (self.views.contains(view_name)) {
             return error.ViewAlreadyExists;
         }
-        
+
         if (self.statistics.total_views >= self.config.max_views) {
             return error.MaxViewsExceeded;
         }
-        
+
         const owned_name = try self.allocator.dupe(u8, view_name);
         const owned_query = try self.allocator.dupe(u8, source_query);
-        
+
         const metadata = MaterializedViewMetadata{
             .view_name = owned_name,
             .source_query = owned_query,
@@ -316,101 +316,101 @@ pub const MaterializedViewManager = struct {
                 .storage_efficiency = 0.0,
             },
         };
-        
+
         try self.views.put(owned_name, metadata);
-        
+
         const view_data = MaterializedViewData.init(self.allocator);
         try self.view_data.put(try self.allocator.dupe(u8, owned_name), view_data);
-        
+
         // Schedule initial refresh
         try self.scheduleRefresh(owned_name, refresh_strategy, refresh_interval_seconds);
-        
+
         // Parse dependencies from source query
         try self.extractDependencies(owned_name, owned_query);
-        
+
         self.statistics.total_views += 1;
     }
-    
+
     /// Drop a materialized view
     pub fn dropView(self: *MaterializedViewManager, view_name: []const u8) !void {
         const metadata_ptr = self.views.getPtr(view_name) orelse return error.ViewNotFound;
         metadata_ptr.state = .dropping;
-        
+
         // Remove from scheduler
         try self.refresh_scheduler.removeJob(view_name);
-        
+
         // Clean up data
         if (self.view_data.getPtr(view_name)) |data_ptr| {
             data_ptr.deinit();
             _ = self.view_data.remove(view_name);
         }
-        
+
         // Clean up metadata
         metadata_ptr.deinit(self.allocator);
         _ = self.views.remove(view_name);
-        
+
         self.statistics.total_views -= 1;
     }
-    
+
     /// Refresh a materialized view
     pub fn refreshView(self: *MaterializedViewManager, view_name: []const u8) !void {
         const metadata_ptr = self.views.getPtr(view_name) orelse return error.ViewNotFound;
         const data_ptr = self.view_data.getPtr(view_name) orelse return error.ViewDataNotFound;
-        
+
         metadata_ptr.state = .refreshing;
         const start_time = std.time.milliTimestamp();
-        
+
         errdefer {
             metadata_ptr.state = .failed;
             metadata_ptr.statistics.failed_refreshes += 1;
         }
-        
+
         // Execute source query
         const result = try self.executeSourceQuery(metadata_ptr.source_query);
         defer self.freeQueryResult(result);
-        
+
         // Clear existing data
         data_ptr.rows.clearRetainingCapacity();
         data_ptr.schema.clearRetainingCapacity();
-        
+
         // Store new data
         for (result.rows) |row| {
             try data_ptr.addRow(row);
         }
-        
+
         for (result.schema) |col| {
             try data_ptr.schema.append(col);
         }
-        
+
         data_ptr.updateRefreshTimestamp();
-        
+
         // Update metadata
         const end_time = std.time.milliTimestamp();
         const refresh_time = @as(f64, @floatFromInt(end_time - start_time));
-        
+
         metadata_ptr.last_refresh_timestamp = end_time;
         metadata_ptr.state = .ready;
         metadata_ptr.row_count = data_ptr.rows.items.len;
         metadata_ptr.storage_size_bytes = self.calculateStorageSize(data_ptr.*);
         metadata_ptr.statistics.total_refreshes += 1;
         metadata_ptr.statistics.successful_refreshes += 1;
-        
+
         // Update average refresh time
         const total_refreshes = @as(f64, @floatFromInt(metadata_ptr.statistics.total_refreshes));
-        metadata_ptr.statistics.average_refresh_time_ms = 
+        metadata_ptr.statistics.average_refresh_time_ms =
             (metadata_ptr.statistics.average_refresh_time_ms * (total_refreshes - 1.0) + refresh_time) / total_refreshes;
-        
+
         // Schedule next refresh if auto-scheduled
         if (metadata_ptr.refresh_strategy == .auto_scheduled and metadata_ptr.refresh_interval_seconds != null) {
             const next_time = end_time + (@as(i64, @intCast(metadata_ptr.refresh_interval_seconds.?)) * 1000);
             metadata_ptr.next_refresh_timestamp = next_time;
             try self.refresh_scheduler.scheduleJob(view_name, next_time, .normal);
         }
-        
+
         self.statistics.total_refreshes_completed += 1;
         self.updateRefreshSuccessRate();
     }
-    
+
     /// Query a materialized view
     pub fn queryView(
         self: *MaterializedViewManager,
@@ -420,35 +420,35 @@ pub const MaterializedViewManager = struct {
     ) !QueryResult {
         const metadata_ptr = self.views.getPtr(view_name) orelse return error.ViewNotFound;
         const data_ptr = self.view_data.getPtr(view_name) orelse return error.ViewDataNotFound;
-        
+
         if (metadata_ptr.state != .ready) {
             return error.ViewNotReady;
         }
-        
+
         // Update statistics
         metadata_ptr.statistics.total_query_hits += 1;
         metadata_ptr.statistics.last_query_hit_timestamp = std.time.milliTimestamp();
         self.statistics.total_query_hits += 1;
-        
+
         // Apply filter and limit
         var result_rows = ArrayList(graph_storage.Binding).init(self.allocator);
         errdefer result_rows.deinit();
-        
+
         var count: u64 = 0;
         const max_rows = limit orelse data_ptr.rows.items.len;
-        
+
         for (data_ptr.rows.items) |row| {
             if (count >= max_rows) break;
-            
+
             // Apply filter if provided
             if (filter_predicate) |filter| {
                 if (!self.evaluateFilter(row, filter)) continue;
             }
-            
+
             try result_rows.append(row);
             count += 1;
         }
-        
+
         return QueryResult{
             .rows = try result_rows.toOwnedSlice(),
             .schema = try self.allocator.dupe(graph_storage.Column, data_ptr.schema.items),
@@ -456,7 +456,7 @@ pub const MaterializedViewManager = struct {
             .row_count = result_rows.items.len,
         };
     }
-    
+
     /// Check if a view can satisfy a query
     pub fn canSatisfyQuery(self: *MaterializedViewManager, query: []const u8) ?[]const u8 {
         var it = self.views.iterator();
@@ -468,18 +468,18 @@ pub const MaterializedViewManager = struct {
         }
         return null;
     }
-    
+
     /// Get view statistics
     pub fn getViewStatistics(self: *MaterializedViewManager, view_name: []const u8) !ViewStatistics {
         const metadata = self.views.get(view_name) orelse return error.ViewNotFound;
         return metadata.statistics;
     }
-    
+
     /// Get manager statistics
     pub fn getManagerStatistics(self: *MaterializedViewManager) ManagerStatistics {
         return self.statistics;
     }
-    
+
     // Private helper methods
     fn scheduleRefresh(
         self: *MaterializedViewManager,
@@ -499,7 +499,7 @@ pub const MaterializedViewManager = struct {
             else => {}, // Manual or other strategies don't need scheduling
         }
     }
-    
+
     fn extractDependencies(self: *MaterializedViewManager, view_name: []const u8, query: []const u8) !void {
         // Simplified dependency extraction - in practice would parse the query AST
         _ = self;
@@ -507,7 +507,7 @@ pub const MaterializedViewManager = struct {
         _ = query;
         // TODO: Parse query AST and extract table/view dependencies
     }
-    
+
     fn executeSourceQuery(self: *MaterializedViewManager, query: []const u8) !QueryResult {
         // Execute query using distributed query coordinator if available
         if (self.query_coordinator) |coordinator| {
@@ -516,7 +516,7 @@ pub const MaterializedViewManager = struct {
             _ = query;
             // TODO: Execute via query coordinator
         }
-        
+
         // Fallback to mock result for now
         return QueryResult{
             .rows = try self.allocator.alloc(graph_storage.Binding, 0),
@@ -525,19 +525,19 @@ pub const MaterializedViewManager = struct {
             .row_count = 0,
         };
     }
-    
+
     fn freeQueryResult(self: *MaterializedViewManager, result: QueryResult) void {
         self.allocator.free(result.rows);
         self.allocator.free(result.schema);
     }
-    
+
     fn calculateStorageSize(self: *MaterializedViewManager, data: MaterializedViewData) u64 {
         _ = self;
         _ = data;
         // TODO: Calculate actual storage size
         return 1024; // Placeholder
     }
-    
+
     fn evaluateFilter(self: *MaterializedViewManager, row: graph_storage.Binding, filter: []const u8) bool {
         _ = self;
         _ = row;
@@ -545,24 +545,24 @@ pub const MaterializedViewManager = struct {
         // TODO: Evaluate filter predicate
         return true; // Placeholder
     }
-    
+
     fn isQueryCompatible(self: *MaterializedViewManager, query1: []const u8, query2: []const u8) bool {
         _ = self;
         // Simple string comparison for now - in practice would use semantic analysis
         return std.mem.eql(u8, query1, query2);
     }
-    
+
     fn updateRefreshSuccessRate(self: *MaterializedViewManager) void {
         var total_refreshes: u64 = 0;
         var successful_refreshes: u64 = 0;
-        
+
         var it = self.views.iterator();
         while (it.next()) |entry| {
             const stats = entry.value_ptr.statistics;
             total_refreshes += stats.total_refreshes;
             successful_refreshes += stats.successful_refreshes;
         }
-        
+
         if (total_refreshes > 0) {
             self.statistics.refresh_success_rate = @as(f64, @floatFromInt(successful_refreshes)) / @as(f64, @floatFromInt(total_refreshes));
         }
@@ -582,7 +582,7 @@ pub const RefreshScheduler = struct {
     allocator: Allocator,
     scheduled_jobs: ArrayList(RefreshJob),
     job_counter: u64,
-    
+
     pub fn init(allocator: Allocator) RefreshScheduler {
         return .{
             .allocator = allocator,
@@ -590,14 +590,14 @@ pub const RefreshScheduler = struct {
             .job_counter = 0,
         };
     }
-    
+
     pub fn deinit(self: *RefreshScheduler) void {
         for (self.scheduled_jobs.items) |job| {
             self.allocator.free(job.view_name);
         }
         self.scheduled_jobs.deinit();
     }
-    
+
     pub fn scheduleJob(
         self: *RefreshScheduler,
         view_name: []const u8,
@@ -612,14 +612,14 @@ pub const RefreshScheduler = struct {
             .job_id = self.job_counter,
             .priority = priority,
         };
-        
+
         try self.scheduled_jobs.append(job);
         self.job_counter += 1;
-        
+
         // Sort by scheduled time
         std.sort.heap(RefreshJob, self.scheduled_jobs.items, {}, compareJobs);
     }
-    
+
     pub fn removeJob(self: *RefreshScheduler, view_name: []const u8) !void {
         var i: usize = 0;
         while (i < self.scheduled_jobs.items.len) {
@@ -631,18 +631,18 @@ pub const RefreshScheduler = struct {
             i += 1;
         }
     }
-    
+
     pub fn getNextJob(self: *RefreshScheduler, current_time: i64) ?RefreshJob {
         if (self.scheduled_jobs.items.len == 0) return null;
-        
+
         const job = self.scheduled_jobs.items[0];
         if (job.scheduled_time <= current_time) {
             return self.scheduled_jobs.swapRemove(0);
         }
-        
+
         return null;
     }
-    
+
     fn compareJobs(context: void, a: RefreshJob, b: RefreshJob) bool {
         _ = context;
         return a.scheduled_time < b.scheduled_time;

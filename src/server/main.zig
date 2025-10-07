@@ -18,7 +18,7 @@ const conn_mod = @import("../vendor/quic/src/quic/conn.zig");
 // const cert_gen = @import("tools/cert_gen.zig");
 // Note: Some imports commented out to avoid missing dependency issues for CLI integration
 // const mvcc = @import("server/txn/mvcc.zig");
-// const logger = @import("log/logger.zig"); 
+// const logger = @import("log/logger.zig");
 // const query_plan_cache = @import("query_plan_cache.zig");
 
 // Basic logger stub for CLI integration
@@ -884,7 +884,7 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
                 .Int => |iv| std.fmt.format(nodes_content.writer(ally), "{d}", .{iv}) catch {},
                 .String => |s| std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{s}) catch {},
                 .Decimal => nodes_content.appendSlice(ally, "null") catch {},
-                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(ally), "\"[vector:{d}x{d}]\"", .{vec.dim, vec.data.len}) catch {},
+                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(ally), "\"[vector:{d}x{d}]\"", .{ vec.dim, vec.data.len }) catch {},
             }
         }
         nodes_content.appendSlice(ally, "}}\n") catch {};
@@ -2819,19 +2819,19 @@ fn handleQuicConnection(
 // QUIC backup protocol handlers
 fn handleBackupRequest(gpa: std.mem.Allocator, state: *ServerState, backup_req: protocol.Backup) ![]u8 {
     _ = state; // For now, we don't use server state
-    
+
     // Create simplified backup manager for server-side backup
     const backup_config = BackupConfig{
         .compression = if (backup_req.compress) .zstd else .none,
         .encryption = false,
         .retention_days = 30,
     };
-    
+
     var simplified_backup_manager = SimplifiedBackupManager.init(gpa, "./server_backups", backup_config) catch {
         return std.fmt.allocPrint(gpa, "BACKUP_ERROR: Failed to initialize backup manager\n", .{});
     };
     defer simplified_backup_manager.deinit();
-    
+
     // Execute backup based on type
     const backup_metadata = if (std.mem.eql(u8, backup_req.backup_type, "full"))
         simplified_backup_manager.createFullBackup()
@@ -2841,28 +2841,28 @@ fn handleBackupRequest(gpa: std.mem.Allocator, state: *ServerState, backup_req: 
         else {
             return std.fmt.allocPrint(gpa, "BACKUP_ERROR: Incremental backup requires parent ID\n", .{});
         };
-        
+
         break :blk simplified_backup_manager.createIncrementalBackup(parent_lsn);
     };
-    
+
     const metadata = backup_metadata catch |err| {
         return std.fmt.allocPrint(gpa, "BACKUP_ERROR: {s}\n", .{@errorName(err)});
     };
-    
+
     // Generate backup file path based on metadata
     const backup_filename = try std.fmt.allocPrint(gpa, "./server_backups/{s}_{x}.backup", .{ @tagName(metadata.backup_type), metadata.backup_id });
     defer gpa.free(backup_filename);
-    
+
     // Read backup file to send to client
     const backup_file = std.fs.cwd().openFile(backup_filename, .{}) catch {
         return std.fmt.allocPrint(gpa, "BACKUP_ERROR: Failed to read backup file\n", .{});
     };
     defer backup_file.close();
-    
+
     const file_size = backup_file.getEndPos() catch metadata.size_bytes;
-    
+
     // Send success response with metadata
-    return std.fmt.allocPrint(gpa, 
+    return std.fmt.allocPrint(gpa,
         \\BACKUP_SUCCESS
         \\backup_id: {x}
         \\type: {s}
@@ -2875,15 +2875,15 @@ fn handleBackupRequest(gpa: std.mem.Allocator, state: *ServerState, backup_req: 
 
 fn handleRestoreRequest(gpa: std.mem.Allocator, state: *ServerState, restore_req: protocol.Restore) ![]u8 {
     _ = state; // For now, we don't use server state
-    
+
     if (!restore_req.confirm) {
         return std.fmt.allocPrint(gpa, "RESTORE_ERROR: Restore requires confirmation\n", .{});
     }
-    
+
     // In a real implementation, this would restore from the uploaded backup
     // For now, we'll simulate a successful restore
     const restore_timestamp = std.time.milliTimestamp();
-    
+
     return std.fmt.allocPrint(gpa,
         \\RESTORE_SUCCESS
         \\restore_timestamp: {d}
@@ -2895,26 +2895,26 @@ fn handleRestoreRequest(gpa: std.mem.Allocator, state: *ServerState, restore_req
 
 fn handleUploadBackupRequest(gpa: std.mem.Allocator, state: *ServerState, upload_req: protocol.UploadBackup) ![]u8 {
     _ = state; // For now, we don't use server state
-    
+
     // Validate upload request
     if (upload_req.size_bytes == 0) {
         return std.fmt.allocPrint(gpa, "UPLOAD_ERROR: Invalid backup size\n", .{});
     }
-    
+
     if (upload_req.checksum.len == 0) {
         return std.fmt.allocPrint(gpa, "UPLOAD_ERROR: Missing checksum\n", .{});
     }
-    
+
     // Create directory for uploaded backups
     std.fs.cwd().makePath("./uploaded_backups") catch {};
-    
+
     // Generate filename for uploaded backup
     const timestamp = std.time.milliTimestamp();
     const upload_filename = try std.fmt.allocPrint(gpa, "./uploaded_backups/uploaded_{d}.gql", .{timestamp});
     defer gpa.free(upload_filename);
-    
+
     // Indicate readiness to receive backup data
-    return std.fmt.allocPrint(gpa, 
+    return std.fmt.allocPrint(gpa,
         \\READY
         \\expected_size: {d}
         \\expected_checksum: {s}
@@ -3318,7 +3318,6 @@ fn processMessage(
         },
     }
 }
-
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
@@ -6146,12 +6145,12 @@ test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
 /// Detect vector dimension from existing data in the graph
 fn detectVectorDimension(allocator: std.mem.Allocator, label: []const u8, property_name: []const u8) !u16 {
     const graph = getOrCreateGraphStorage(allocator);
-    
+
     // Scan existing nodes to find vector properties and detect dimension
     var node_iterator = graph.nodes.iterator();
     while (node_iterator.next()) |entry| {
         const node = entry.value_ptr;
-        
+
         // Check if node has the required label
         var has_label = false;
         for (node.labels) |node_label| {
@@ -6160,7 +6159,7 @@ fn detectVectorDimension(allocator: std.mem.Allocator, label: []const u8, proper
                 break;
             }
         }
-        
+
         if (has_label) {
             // Check if node has the vector property
             if (node.properties.get(property_name)) |prop_value| {
@@ -6178,7 +6177,7 @@ fn detectVectorDimension(allocator: std.mem.Allocator, label: []const u8, proper
             }
         }
     }
-    
+
     // No vector data found - return error to use default
     return error.NoVectorDataFound;
 }
@@ -6342,11 +6341,11 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                                         continue;
                                     };
                                     defer allocator.free(f32_data);
-                                    
+
                                     for (0..vector.dim) |i| {
                                         f32_data[i] = @floatFromInt(vector.data[i]);
                                     }
-                                    
+
                                     if (index_type == .vector_f32) {
                                         // Convert to VectorF32 for advanced vector index
                                         const f32_vector = vector_types.VectorF32.fromSlice(f32_data);

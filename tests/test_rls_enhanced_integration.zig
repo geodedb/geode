@@ -79,7 +79,7 @@ test "test_end_to_end_policy_evaluation" {
     };
 
     // Create comprehensive policies for testing
-    
+
     // Policy 1: Department-based access
     var dept_expr = geode.rls.RLSEngine.Expression{
         .raw = "department = 'engineering'",
@@ -263,12 +263,12 @@ test "test_complex_query_rewriting" {
     };
 
     // Test various query scenarios
-    
+
     // Simple SELECT query
     const simple_query = "SELECT revenue, profit FROM financial_reports";
     const rewritten_simple = try engine.rewriteQueryEnhanced(simple_query, &context, "financial_db");
     defer allocator.free(rewritten_simple);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, rewritten_simple, "SELECT revenue, profit FROM financial_reports") != null);
     try std.testing.expect(std.mem.indexOf(u8, rewritten_simple, "WHERE") != null);
 
@@ -276,12 +276,12 @@ test "test_complex_query_rewriting" {
     const query_with_where = "SELECT * FROM transactions WHERE amount > 1000";
     const rewritten_where = try engine.rewriteQueryEnhanced(query_with_where, &context, "financial_db");
     defer allocator.free(rewritten_where);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, rewritten_where, "amount > 1000") != null);
     try std.testing.expect(std.mem.indexOf(u8, rewritten_where, "AND") != null);
 
     // Complex query with joins
-    const complex_query = 
+    const complex_query =
         \\SELECT u.name, t.amount, t.date 
         \\FROM users u 
         \\JOIN transactions t ON u.id = t.user_id 
@@ -289,20 +289,20 @@ test "test_complex_query_rewriting" {
     ;
     const rewritten_complex = try engine.rewriteQueryEnhanced(complex_query, &context, "financial_db");
     defer allocator.free(rewritten_complex);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, rewritten_complex, "users u") != null);
     try std.testing.expect(std.mem.indexOf(u8, rewritten_complex, "transactions t") != null);
     try std.testing.expect(std.mem.indexOf(u8, rewritten_complex, "t.status = 'completed'") != null);
     try std.testing.expect(std.mem.indexOf(u8, rewritten_complex, "AND") != null);
 
     // Query with subselects
-    const subquery = 
+    const subquery =
         \\SELECT * FROM reports 
         \\WHERE id IN (SELECT report_id FROM permissions WHERE user_id = 42)
     ;
     const rewritten_subquery = try engine.rewriteQueryEnhanced(subquery, &context, "financial_db");
     defer allocator.free(rewritten_subquery);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, rewritten_subquery, "SELECT report_id FROM permissions") != null);
     try std.testing.expect(std.mem.indexOf(u8, rewritten_subquery, "WHERE") != null);
 
@@ -365,7 +365,7 @@ test "test_performance_optimization_integration" {
 
     // Create multiple policies for optimization testing
     var policies: [10]geode.rls.RLSEngine.Policy = undefined;
-    
+
     for (&policies, 0..) |*policy, i| {
         var expr = geode.rls.RLSEngine.Expression{
             .raw = if (i % 2 == 0) "user_id = current_user()" else "status = 'active'",
@@ -401,30 +401,30 @@ test "test_performance_optimization_integration" {
 
     // Test performance with multiple policy evaluations
     const start_time = std.time.nanoTimestamp();
-    
+
     // Evaluate each policy multiple times to test caching
     for (&policies) |*policy| {
         // First evaluation (cache miss)
         const result1 = try engine.evaluatePolicy(policy.*, &row_data, &context);
-        
+
         // Second evaluation (should hit cache)
         const result2 = try engine.evaluatePolicy(policy.*, &row_data, &context);
-        
+
         // Results should be consistent
         try std.testing.expect(result1 == result2);
     }
-    
+
     const end_time = std.time.nanoTimestamp();
     const duration_ns = @as(u64, @intCast(end_time - start_time));
-    
+
     // Performance should be reasonable for multiple policy evaluations
     try std.testing.expect(duration_ns < 10_000_000); // Less than 10ms
-    
+
     // Test cache effectiveness
     const global_stats = engine.statistics_collector.getGlobalStatistics();
     try std.testing.expect(global_stats.total_evaluations >= 20); // At least 20 evaluations
     try std.testing.expect(global_stats.total_cache_hits > 0); // Some cache hits should occur
-    
+
     const cache_hit_ratio = engine.statistics_collector.getCacheHitRatio();
     try std.testing.expect(cache_hit_ratio > 0.0); // Some caching should have occurred
 }
@@ -570,17 +570,17 @@ test "test_multi_tenant_scenario" {
 
     // Test query rewriting for both tenants
     const query = "SELECT * FROM shared_data";
-    
+
     const tenant_a_rewritten = try engine.rewriteQueryEnhanced(query, &context_a, "multi_tenant_db");
     defer allocator.free(tenant_a_rewritten);
-    
+
     const tenant_b_rewritten = try engine.rewriteQueryEnhanced(query, &context_b, "multi_tenant_db");
     defer allocator.free(tenant_b_rewritten);
-    
+
     // Both should be rewritten with security predicates
     try std.testing.expect(std.mem.indexOf(u8, tenant_a_rewritten, "WHERE") != null);
     try std.testing.expect(std.mem.indexOf(u8, tenant_b_rewritten, "WHERE") != null);
-    
+
     // Both should contain the original query
     try std.testing.expect(std.mem.indexOf(u8, tenant_a_rewritten, "SELECT * FROM shared_data") != null);
     try std.testing.expect(std.mem.indexOf(u8, tenant_b_rewritten, "SELECT * FROM shared_data") != null);
@@ -835,7 +835,7 @@ test "test_error_handling_robustness" {
     const empty_query = "";
     const rewritten_empty = try engine.rewriteQueryEnhanced(empty_query, &context, "");
     defer allocator.free(rewritten_empty);
-    
+
     // Should handle empty query gracefully
     try std.testing.expect(rewritten_empty.len >= 0);
 
@@ -843,7 +843,7 @@ test "test_error_handling_robustness" {
     const long_query = "SELECT " ++ "column1, " ** 1000 ++ "id FROM very_long_table_name_that_goes_on_and_on";
     const rewritten_long = try engine.rewriteQueryEnhanced(long_query, &context, "test_graph");
     defer allocator.free(rewritten_long);
-    
+
     // Should handle long queries without errors
     try std.testing.expect(rewritten_long.len > long_query.len);
 }

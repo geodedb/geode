@@ -14,20 +14,20 @@ const backup_types = struct {
         encryption: bool = false,
         retention_days: u32 = 30,
     };
-    
+
     pub const CompressionType = enum(u32) {
         none = 0,
         zstd = 1,
         lz4 = 2,
         gzip = 3,
     };
-    
+
     pub const BackupType = enum(u32) {
         full = 0,
         incremental = 1,
         differential = 2,
     };
-    
+
     pub const BackupMetadata = struct {
         backup_id: u128,
         timestamp: i64,
@@ -218,7 +218,7 @@ test "BackupHeader structure and magic number" {
         .timestamp = 1234567890,
         .compression = .none,
     };
-    
+
     try expectEqual(@as(u32, 0x47454F42), header.magic);
     try expectEqual(@as(u16, 1), header.version);
     try expectEqual(backup_types.BackupType.full, header.backup_type);
@@ -325,7 +325,7 @@ test "BackupHeader extern struct size and alignment" {
     // Verify the extern struct has expected size and alignment
     try expect(@sizeOf(BackupHeader) >= 32); // At least header + timestamp + padding
     try expect(@alignOf(BackupHeader) >= 1);
-    
+
     // Verify that we can safely cast to bytes
     const header = BackupHeader{
         .magic = BACKUP_MAGIC,
@@ -334,7 +334,7 @@ test "BackupHeader extern struct size and alignment" {
         .timestamp = 1234567890,
         .compression = .none,
     };
-    
+
     const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
     try expect(header_bytes.len == @sizeOf(BackupHeader));
 }

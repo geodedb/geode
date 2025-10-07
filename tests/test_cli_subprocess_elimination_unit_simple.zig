@@ -37,9 +37,9 @@ test "no-quic flag returns success exit code" {
         .query_text = "RETURN 1 AS test",
         .no_quic = true,
     };
-    
+
     const result = mockCliHandler(config);
-    
+
     try expect(result.exit_code == 0);
     try expect(result.is_json_response == true);
     try expect(result.contains_query == true);
@@ -51,9 +51,9 @@ test "quic mode returns usage error exit code" {
         .query_text = "RETURN 2 AS test",
         .no_quic = false,
     };
-    
+
     const result = mockCliHandler(config);
-    
+
     try expect(result.exit_code == 2);
     try expect(result.is_json_response == false);
     try expect(result.contains_query == false);
@@ -66,16 +66,16 @@ test "configuration flags affect behavior correctly" {
         .query_text = "TEST QUERY",
         .no_quic = true,
     };
-    
+
     const no_quic_result = mockCliHandler(no_quic_config);
     try expect(no_quic_result.exit_code == 0);
-    
-    // Test --no-quic disabled  
+
+    // Test --no-quic disabled
     const quic_config = ClientConfig{
         .query_text = "TEST QUERY",
         .no_quic = false,
     };
-    
+
     const quic_result = mockCliHandler(quic_config);
     try expect(quic_result.exit_code == 2);
 }
@@ -88,16 +88,16 @@ test "query text configuration preserved" {
         "CREATE (p:Person)",
         "COMPLEX 'query' WITH symbols!@#",
     };
-    
+
     for (test_queries) |query| {
         const config = ClientConfig{
             .query_text = query,
             .no_quic = true,
         };
-        
+
         // Verify query text is preserved in config
         try expect(std.mem.eql(u8, config.query_text, query));
-        
+
         // Verify mock handler processes it correctly
         const result = mockCliHandler(config);
         try expect(result.exit_code == 0);
@@ -112,17 +112,17 @@ test "server configuration handling" {
         "localhost:3141",
         "custom.host:9000",
     };
-    
+
     for (test_servers) |server| {
         const config = ClientConfig{
             .query_text = "RETURN 1",
             .server = server,
             .no_quic = false, // Test error path includes server
         };
-        
+
         // Verify server is preserved in config
         try expect(std.mem.eql(u8, config.server, server));
-        
+
         // Verify error handling processes server correctly
         const result = mockCliHandler(config);
         try expect(result.exit_code == 2);
@@ -136,17 +136,17 @@ test "edge case handling" {
         .query_text = "",
         .no_quic = true,
     };
-    
+
     const empty_result = mockCliHandler(empty_config);
     try expect(empty_result.exit_code == 0);
-    
+
     // Very long query
     const long_query = "MATCH " ++ "a" ** 100 ++ " RETURN " ++ "b" ** 100;
     const long_config = ClientConfig{
         .query_text = long_query,
         .no_quic = true,
     };
-    
+
     const long_result = mockCliHandler(long_config);
     try expect(long_result.exit_code == 0);
 }
@@ -157,7 +157,7 @@ test "behavior consistency across multiple calls" {
         .query_text = "CONSISTENCY TEST",
         .no_quic = true,
     };
-    
+
     // Call multiple times and verify consistent behavior
     for (0..10) |_| {
         const result = mockCliHandler(config);
@@ -175,10 +175,10 @@ test "default configuration values" {
         // no_quic defaults to false
         // server defaults to "127.0.0.1:3141"
     };
-    
+
     try expect(std.mem.eql(u8, minimal_config.server, "127.0.0.1:3141"));
     try expect(minimal_config.no_quic == false);
-    
+
     const result = mockCliHandler(minimal_config);
     try expect(result.exit_code == 2); // Should get error without --no-quic
 }
@@ -187,20 +187,20 @@ test "default configuration values" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_UNIT_002" {
     // CANARY: This test verifies CLI subprocess elimination unit functionality
     // as specified in REQ-CLI-SUBPROCESS-UNIT-002
-    
+
     const config = ClientConfig{
         .query_text = "CANARY UNIT TEST",
         .no_quic = true,
     };
-    
+
     const result = mockCliHandler(config);
-    
+
     // Verify the unit test passes - this confirms CLI subprocess elimination
     // behavior is correct at the unit level
     try expect(result.exit_code == 0);
     try expect(result.is_json_response == true);
     try expect(result.contains_query == true);
-    
+
     // Log successful CANARY test completion
     std.log.info("CANARY unit test passed: CLI subprocess elimination unit logic working", .{});
 }

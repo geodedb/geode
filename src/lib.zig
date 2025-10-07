@@ -250,7 +250,7 @@ pub const audit = struct {
 pub const tde_stub = @import("security/tde.zig");
 pub const mfa_stub = @import("security/mfa.zig");
 
-// Security modules for enhanced RLS and compliance features  
+// Security modules for enhanced RLS and compliance features
 pub const security = struct {
     pub const rls_enhanced = @import("security/rls_enhanced.zig");
     pub const auth = @import("security/auth.zig");

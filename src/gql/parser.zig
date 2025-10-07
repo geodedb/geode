@@ -40,15 +40,15 @@ pub const Parser = struct {
         const saved_idx = self.lx.idx;
         const saved_line = self.lx.line;
         const saved_col = self.lx.col;
-        
+
         // Get next token
         const next_token = self.lx.next();
-        
+
         // Restore lexer state
         self.lx.idx = saved_idx;
         self.lx.line = saved_line;
         self.lx.col = saved_col;
-        
+
         return next_token.kind;
     }
 
@@ -642,7 +642,7 @@ pub const Parser = struct {
         var have_match = false;
         var have_create = false;
         var create_pattern: ?ast.GraphPattern = null;
-        
+
         // Check for CREATE at the beginning
         if (self.cur.kind == .CREATE) {
             have_create = true;
@@ -722,13 +722,13 @@ pub const Parser = struct {
             self.path_aliases.clearRetainingCapacity();
             break :blk_empty .{ .chains = &.{} };
         };
-        
+
         // Parse WHERE clause (for CREATE patterns or after MATCH)
         if (!have_match and where_expr == null and self.cur.kind == .WHERE) {
             self.advance();
             where_expr = try self.parseOrExpr();
         }
-        
+
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
         if (self.cur.kind == .WITH) {
             self.advance();
@@ -2230,29 +2230,35 @@ pub const Parser = struct {
     // Parse SHOW statement
     fn parseShowStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.SHOW);
-        
+
         // Determine what to show based on next token
         const show_type: ast.ShowType = if (self.cur.kind == .identifier) blk: {
             const type_str = self.cur.lexeme;
             self.advance();
-            
-            if (std.ascii.eqlIgnoreCase(type_str, "INDEXES") or 
-                std.ascii.eqlIgnoreCase(type_str, "INDEX")) {
+
+            if (std.ascii.eqlIgnoreCase(type_str, "INDEXES") or
+                std.ascii.eqlIgnoreCase(type_str, "INDEX"))
+            {
                 break :blk .indexes;
             } else if (std.ascii.eqlIgnoreCase(type_str, "CONSTRAINTS") or
-                       std.ascii.eqlIgnoreCase(type_str, "CONSTRAINT")) {
+                std.ascii.eqlIgnoreCase(type_str, "CONSTRAINT"))
+            {
                 break :blk .constraints;
             } else if (std.ascii.eqlIgnoreCase(type_str, "TABLES") or
-                       std.ascii.eqlIgnoreCase(type_str, "TABLE")) {
+                std.ascii.eqlIgnoreCase(type_str, "TABLE"))
+            {
                 break :blk .tables;
             } else if (std.ascii.eqlIgnoreCase(type_str, "GRAPHS") or
-                       std.ascii.eqlIgnoreCase(type_str, "GRAPH")) {
+                std.ascii.eqlIgnoreCase(type_str, "GRAPH"))
+            {
                 break :blk .graphs;
             } else if (std.ascii.eqlIgnoreCase(type_str, "PROCEDURES") or
-                       std.ascii.eqlIgnoreCase(type_str, "PROCEDURE")) {
+                std.ascii.eqlIgnoreCase(type_str, "PROCEDURE"))
+            {
                 break :blk .procedures;
             } else if (std.ascii.eqlIgnoreCase(type_str, "FUNCTIONS") or
-                       std.ascii.eqlIgnoreCase(type_str, "FUNCTION")) {
+                std.ascii.eqlIgnoreCase(type_str, "FUNCTION"))
+            {
                 break :blk .functions;
             } else {
                 return error.UnexpectedToken;
@@ -2260,7 +2266,7 @@ pub const Parser = struct {
         } else {
             return error.UnexpectedToken;
         };
-        
+
         return .{ .Show = .{ .show_type = show_type } };
     }
 

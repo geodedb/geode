@@ -235,7 +235,7 @@ pub const EnhancedRLSEngine = struct {
         context: *auth.SecurityContext,
     ) ![]const u8 {
         _ = context;
-        
+
         var result = std.ArrayList(u8).init(self.allocator);
         errdefer result.deinit();
 
@@ -407,7 +407,7 @@ pub const ExpressionCompiler = struct {
         context: *auth.SecurityContext,
     ) !bool {
         // Simple expression evaluation for common patterns
-        
+
         // Check for user ID comparison
         if (std.mem.indexOf(u8, expression, "user_id")) |_| {
             if (std.mem.indexOf(u8, expression, "current_user()")) |_| {
@@ -424,7 +424,7 @@ pub const ExpressionCompiler = struct {
             // Extract role name (simplified parsing)
             if (std.mem.indexOf(u8, expression, "'")) |start| {
                 if (std.mem.indexOfPos(u8, expression, start + 1, "'")) |end| {
-                    const role_name = expression[start + 1..end];
+                    const role_name = expression[start + 1 .. end];
                     return self.userHasRole(context, role_name);
                 }
             }
@@ -445,7 +445,7 @@ pub const ExpressionCompiler = struct {
 
     fn compareValues(self: *ExpressionCompiler, a: rls.Value, b: rls.Value) !bool {
         _ = self;
-        
+
         return switch (a) {
             .integer => |a_int| switch (b) {
                 .integer => |b_int| a_int == b_int,
@@ -469,7 +469,7 @@ pub const ExpressionCompiler = struct {
 
     fn userHasRole(self: *ExpressionCompiler, context: *auth.SecurityContext, role_name: []const u8) bool {
         _ = self;
-        
+
         for (context.roles) |role| {
             if (std.mem.eql(u8, role.name, role_name)) {
                 return true;
@@ -570,13 +570,13 @@ pub const ExpressionCompiler = struct {
 
         // Enhanced IP range checking with CIDR support
         const user_ip = context.environment.ip_address;
-        
+
         if (std.mem.indexOf(u8, range, "/")) |slash_pos| {
             // CIDR notation
             const network = range[0..slash_pos];
-            const prefix_len_str = range[slash_pos + 1..];
+            const prefix_len_str = range[slash_pos + 1 ..];
             const prefix_len = std.fmt.parseInt(u8, prefix_len_str, 10) catch return rls.Value{ .boolean = false };
-            
+
             return rls.Value{ .boolean = ipInCidr(user_ip, network, prefix_len) };
         } else {
             // Simple prefix match
@@ -599,22 +599,22 @@ pub const ExpressionCompiler = struct {
         };
 
         // Check data classification levels
-        const required_level = if (std.mem.eql(u8, classification, "public")) 
+        const required_level = if (std.mem.eql(u8, classification, "public"))
             @intFromEnum(rls.RLSEngine.DataClassification.public)
-        else if (std.mem.eql(u8, classification, "internal")) 
+        else if (std.mem.eql(u8, classification, "internal"))
             @intFromEnum(rls.RLSEngine.DataClassification.internal)
-        else if (std.mem.eql(u8, classification, "confidential")) 
+        else if (std.mem.eql(u8, classification, "confidential"))
             @intFromEnum(rls.RLSEngine.DataClassification.confidential)
-        else if (std.mem.eql(u8, classification, "restricted")) 
+        else if (std.mem.eql(u8, classification, "restricted"))
             @intFromEnum(rls.RLSEngine.DataClassification.restricted)
-        else if (std.mem.eql(u8, classification, "top_secret")) 
+        else if (std.mem.eql(u8, classification, "top_secret"))
             @intFromEnum(rls.RLSEngine.DataClassification.top_secret)
-        else 
+        else
             @intFromEnum(rls.RLSEngine.DataClassification.internal);
 
         // In real implementation, would check user's clearance level
         const user_clearance = @intFromEnum(rls.RLSEngine.DataClassification.internal);
-        
+
         return rls.Value{ .boolean = user_clearance >= required_level };
     }
 
@@ -653,7 +653,7 @@ pub const ExpressionCompiler = struct {
     fn ipInCidr(ip: []const u8, network: []const u8, prefix_len: u8) bool {
         // Simplified CIDR checking - in production would use proper IP parsing
         if (prefix_len == 0) return true; // 0.0.0.0/0 matches everything
-        
+
         // Simple prefix matching for demonstration
         const prefix_bytes = @min(prefix_len / 8, @min(ip.len, network.len));
         return std.mem.eql(u8, ip[0..prefix_bytes], network[0..prefix_bytes]);
@@ -693,7 +693,7 @@ pub const PolicyOptimizer = struct {
     ) !std.ArrayList(rls.RLSEngine.Policy) {
         // Calculate hash for caching
         const policies_hash = self.calculatePoliciesHash(policies);
-        
+
         if (self.optimization_cache.get(policies_hash)) |cached| {
             var result = std.ArrayList(rls.RLSEngine.Policy).init(self.allocator);
             try result.appendSlice(cached.policies);
@@ -713,19 +713,19 @@ pub const PolicyOptimizer = struct {
     fn calculatePoliciesHash(self: *PolicyOptimizer, policies: []const rls.RLSEngine.Policy) u64 {
         _ = self;
         var hasher = std.hash.Wyhash.init(0);
-        
+
         for (policies) |policy| {
             hasher.update(std.mem.asBytes(&policy.id));
             hasher.update(std.mem.asBytes(&policy.enabled));
             hasher.update(std.mem.asBytes(&policy.permissive));
         }
-        
+
         return hasher.final();
     }
 
     fn policyCompareFn(context: void, a: rls.RLSEngine.Policy, b: rls.RLSEngine.Policy) bool {
         _ = context;
-        
+
         // Prioritize enabled policies
         if (a.enabled != b.enabled) {
             return a.enabled;
@@ -734,7 +734,7 @@ pub const PolicyOptimizer = struct {
         // Prioritize simpler expressions (faster evaluation)
         const a_complexity = if (a.using_expr) |expr| expr.raw.len else 0;
         const b_complexity = if (b.using_expr) |expr| expr.raw.len else 0;
-        
+
         return a_complexity < b_complexity;
     }
 };
@@ -848,9 +848,9 @@ pub const EnhancedCacheManager = struct {
             }
 
             pub fn eql(_: @This(), a: CacheKey, b: CacheKey) bool {
-                return a.policy_id == b.policy_id and 
-                       a.user_id == b.user_id and 
-                       a.row_hash == b.row_hash;
+                return a.policy_id == b.policy_id and
+                    a.user_id == b.user_id and
+                    a.row_hash == b.row_hash;
             }
         };
     };
@@ -883,7 +883,7 @@ pub const EnhancedCacheManager = struct {
         row: *const std.StringHashMap(rls.Value),
     ) !CacheKey {
         _ = self;
-        
+
         // Generate hash of row data for cache key
         var hasher = std.hash.Wyhash.init(0);
         var it = row.iterator();
@@ -908,7 +908,7 @@ pub const EnhancedCacheManager = struct {
     pub fn get(self: *EnhancedCacheManager, key: CacheKey) ?bool {
         if (self.cache.getPtr(key)) |entry| {
             const now = std.time.milliTimestamp();
-            
+
             // Check TTL
             if (now - entry.timestamp > self.default_ttl_ms) {
                 _ = self.cache.remove(key);
@@ -919,7 +919,7 @@ pub const EnhancedCacheManager = struct {
             // Update access statistics
             entry.access_count += 1;
             self.updateAccessOrder(key) catch {};
-            
+
             return entry.result;
         }
 

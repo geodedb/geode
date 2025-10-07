@@ -370,7 +370,7 @@ pub const S3BackupManager = struct {
 
         var process = std.process.Child.init(&[_][]const u8{ "sh", "-c", tar_cmd }, self.allocator);
         const result = try process.spawnAndWait();
-        
+
         if (result != .Exited or result.Exited != 0) {
             return error.ArchiveCreationFailed;
         }
@@ -396,7 +396,7 @@ pub const S3BackupManager = struct {
         for (wal_segments, 0..) |segment_path, i| {
             const dest_path = try std.fmt.allocPrint(self.allocator, "{s}/wal_{d}.log", .{ tmp_dir, i });
             defer self.allocator.free(dest_path);
-            
+
             try std.fs.cwd().copyFile(segment_path, std.fs.cwd(), dest_path, .{});
         }
 
@@ -410,7 +410,7 @@ pub const S3BackupManager = struct {
 
         var process = std.process.Child.init(&[_][]const u8{ "sh", "-c", tar_cmd }, self.allocator);
         const result = try process.spawnAndWait();
-        
+
         if (result != .Exited or result.Exited != 0) {
             return error.WALArchiveCreationFailed;
         }
@@ -435,7 +435,7 @@ pub const S3BackupManager = struct {
 
         var process = std.process.Child.init(&[_][]const u8{ "sh", "-c", tar_cmd }, self.allocator);
         const result = try process.spawnAndWait();
-        
+
         if (result != .Exited or result.Exited != 0) {
             return error.ArchiveExtractionFailed;
         }
@@ -461,7 +461,7 @@ pub const S3BackupManager = struct {
             if (entry.kind == .file and std.mem.startsWith(u8, entry.name, "wal_")) {
                 const wal_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ tmp_dir, entry.name });
                 defer self.allocator.free(wal_path);
-                
+
                 try wal_manager.replayWAL(wal_path);
             }
         }
@@ -509,7 +509,7 @@ pub const S3BackupManager = struct {
         return try chain.toOwnedSlice();
     }
 
-    // S3 API operations 
+    // S3 API operations
     fn initiateMultipartUpload(self: *Self, s3_key: []const u8) ![]const u8 {
         const url = try self.buildS3Url(s3_key, "uploads");
         const auth_headers = try self.buildAuthHeaders("POST", s3_key, "", "");
@@ -525,9 +525,9 @@ pub const S3BackupManager = struct {
 
     /// Helper to build S3 URL
     fn buildS3Url(self: *Self, s3_key: []const u8, query: ?[]const u8) ![]const u8 {
-        const base_url = if (self.config.endpoint) |endpoint| 
+        const base_url = if (self.config.endpoint) |endpoint|
             try std.fmt.allocPrint(self.allocator, "https://{s}.{s}", .{ self.config.bucket, endpoint })
-        else 
+        else
             try std.fmt.allocPrint(self.allocator, "https://{s}.s3.{s}.amazonaws.com", .{ self.config.bucket, self.config.region });
 
         return if (query) |q|
@@ -539,13 +539,13 @@ pub const S3BackupManager = struct {
     /// Helper to build authentication headers
     fn buildAuthHeaders(self: *Self, method: []const u8, s3_key: []const u8, content_type: []const u8, content_md5: []const u8) !std.http.Headers {
         var headers = std.http.Headers.init(self.allocator);
-        
+
         const date = try self.getDateString();
         defer self.allocator.free(date);
 
         try headers.append("Host", try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ self.config.bucket, self.config.endpoint orelse "s3.amazonaws.com" }));
         try headers.append("Date", date);
-        
+
         if (content_type.len > 0) {
             try headers.append("Content-Type", content_type);
         }
@@ -554,10 +554,7 @@ pub const S3BackupManager = struct {
         }
 
         // Build signature string
-        const signature_string = try std.fmt.allocPrint(self.allocator, 
-            "{s}\n{s}\n{s}\n{s}\n/{s}/{s}",
-            .{ method, content_md5, content_type, date, self.config.bucket, s3_key }
-        );
+        const signature_string = try std.fmt.allocPrint(self.allocator, "{s}\n{s}\n{s}\n{s}\n/{s}/{s}", .{ method, content_md5, content_type, date, self.config.bucket, s3_key });
         defer self.allocator.free(signature_string);
 
         const signature = try self.sign(signature_string);
@@ -586,7 +583,7 @@ pub const S3BackupManager = struct {
     fn getDateString(self: *Self) ![]const u8 {
         const timestamp = std.time.timestamp();
         const epoch_seconds = @as(u64, @intCast(timestamp));
-        
+
         // Simple date formatting - in production use proper RFC 2822 formatting
         return try std.fmt.allocPrint(self.allocator, "{d}", .{epoch_seconds});
     }
@@ -606,11 +603,11 @@ pub const S3BackupManager = struct {
         // Simple XML parsing - look for <UploadId>value</UploadId>
         const start_tag = "<UploadId>";
         const end_tag = "</UploadId>";
-        
+
         if (std.mem.indexOf(u8, xml_response, start_tag)) |start_idx| {
             const value_start = start_idx + start_tag.len;
             if (std.mem.indexOf(u8, xml_response[value_start..], end_tag)) |end_idx| {
-                const upload_id = xml_response[value_start..value_start + end_idx];
+                const upload_id = xml_response[value_start .. value_start + end_idx];
                 return try self.allocator.dupe(u8, upload_id);
             }
         }
@@ -620,10 +617,10 @@ pub const S3BackupManager = struct {
     fn uploadPart(self: *Self, upload_id: []const u8, s3_key: []const u8, part_number: u32, data: []const u8) ![]const u8 {
         const query = try std.fmt.allocPrint(self.allocator, "partNumber={d}&uploadId={s}", .{ part_number, upload_id });
         defer self.allocator.free(query);
-        
+
         const url = try self.buildS3Url(s3_key, query);
         defer self.allocator.free(url);
-        
+
         const auth_headers = try self.buildAuthHeaders("PUT", s3_key, "application/octet-stream", "");
         defer self.freeHeaders(auth_headers);
 
@@ -636,21 +633,20 @@ pub const S3BackupManager = struct {
 
     fn completeMultipartUpload(self: *Self, upload_id: []const u8, s3_key: []const u8, parts: []const PartInfo, expected_checksum: u64) !void {
         _ = expected_checksum;
-        
+
         const query = try std.fmt.allocPrint(self.allocator, "uploadId={s}", .{upload_id});
         defer self.allocator.free(query);
-        
+
         const url = try self.buildS3Url(s3_key, query);
         defer self.allocator.free(url);
 
         // Build XML payload for completion
         var xml_payload = std.ArrayList(u8).init(self.allocator);
         defer xml_payload.deinit();
-        
+
         try xml_payload.appendSlice("<CompleteMultipartUpload>");
         for (parts) |part| {
-            try xml_payload.writer().print("<Part><PartNumber>{d}</PartNumber><ETag>{s}</ETag></Part>", 
-                .{ part.part_number, part.etag });
+            try xml_payload.writer().print("<Part><PartNumber>{d}</PartNumber><ETag>{s}</ETag></Part>", .{ part.part_number, part.etag });
         }
         try xml_payload.appendSlice("</CompleteMultipartUpload>");
 
@@ -663,10 +659,10 @@ pub const S3BackupManager = struct {
 
     fn putObject(self: *Self, s3_key: []const u8, data: []const u8, checksum: u64) !void {
         _ = checksum;
-        
+
         const url = try self.buildS3Url(s3_key, null);
         defer self.allocator.free(url);
-        
+
         const auth_headers = try self.buildAuthHeaders("PUT", s3_key, "application/octet-stream", "");
         defer self.freeHeaders(auth_headers);
 
@@ -677,7 +673,7 @@ pub const S3BackupManager = struct {
     fn getObject(self: *Self, s3_key: []const u8) ![]const u8 {
         const url = try self.buildS3Url(s3_key, null);
         defer self.allocator.free(url);
-        
+
         const auth_headers = try self.buildAuthHeaders("GET", s3_key, "", "");
         defer self.freeHeaders(auth_headers);
 
@@ -690,7 +686,7 @@ pub const S3BackupManager = struct {
 
         const file = try std.fs.cwd().createFile(local_path, .{});
         defer file.close();
-        
+
         try file.writeAll(data);
     }
 };
@@ -706,7 +702,7 @@ const HttpClient = struct {
     client: std.http.Client,
 
     fn init(allocator: std.mem.Allocator) !HttpClient {
-        return .{ 
+        return .{
             .allocator = allocator,
             .client = std.http.Client{ .allocator = allocator },
         };
@@ -719,12 +715,12 @@ const HttpClient = struct {
     /// Perform authenticated S3 request
     fn request(self: *HttpClient, method: std.http.Method, url: []const u8, headers: std.http.Headers, body: ?[]const u8) ![]const u8 {
         var uri = try std.Uri.parse(url);
-        
+
         var req = try self.client.open(method, uri, headers, .{});
         defer req.deinit();
 
         req.transfer_encoding = .none;
-        
+
         if (body) |payload| {
             req.transfer_encoding = .{ .content_length = payload.len };
             try req.send();
@@ -732,7 +728,7 @@ const HttpClient = struct {
         } else {
             try req.send();
         }
-        
+
         try req.finish();
         try req.wait();
 

@@ -64,10 +64,10 @@ const MockReplState = struct {
 fn executeGqlWithTimingAndErrors(writer: anytype, state: *MockReplState, gql: []const u8) !void {
     // Start timing the query execution
     var timer = try std.time.Timer.start();
-    
+
     // Execute query (may fail)
     const query_result = state.session.runGql(gql);
-    
+
     // Stop timing regardless of query success/failure
     const duration_ns = timer.read();
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
@@ -86,7 +86,7 @@ fn executeGqlWithTimingAndErrors(writer: anytype, state: *MockReplState, gql: []
         const error_msg = try std.fmt.bufPrint(&buf, "Error: {s}\n", .{@errorName(err)});
         try writer.writeAll(error_msg);
     }
-    
+
     // Display timing information regardless of success/failure
     if (state.show_timing) {
         var buf: [256]u8 = undefined;
@@ -100,7 +100,7 @@ fn executeGqlWithTimingAndErrors(writer: anytype, state: *MockReplState, gql: []
 test "Timing with query execution errors" {
     var state = MockReplState.init(testing.allocator, true);
     defer state.deinit();
-    
+
     // Configure session to fail
     state.session.should_fail = true;
 
@@ -108,10 +108,10 @@ test "Timing with query execution errors" {
     defer output.deinit(testing.allocator);
 
     try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, "INVALID QUERY");
-    
+
     // Should contain error message
     try testing.expect(std.mem.indexOf(u8, output.items, "Error: MockQueryFailed") != null);
-    
+
     // Should still contain timing information even when query fails
     try testing.expect(std.mem.indexOf(u8, output.items, "Query executed in") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "ms") != null);
@@ -126,30 +126,30 @@ test "Timing precision with very short durations" {
 
     // Very fast query (no artificial delay)
     try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, "RETURN 1");
-    
+
     // Find timing value
     const timing_start = std.mem.indexOf(u8, output.items, "Query executed in").?;
     const timing_line = output.items[timing_start..];
     const ms_pos = std.mem.indexOf(u8, timing_line, " ms").?;
     const in_pos = std.mem.indexOf(u8, timing_line, "in ").? + 3;
     const timing_str = timing_line[in_pos..ms_pos];
-    
+
     // Should be able to parse as float
     const timing_val = try std.fmt.parseFloat(f64, timing_str);
-    
+
     // Even very fast queries should show >= 0.00 ms
     try testing.expect(timing_val >= 0.0);
-    
+
     // Should be formatted with exactly 2 decimal places
     const decimal_pos = std.mem.indexOf(u8, timing_str, ".").?;
-    const fractional_part = timing_str[decimal_pos + 1..];
+    const fractional_part = timing_str[decimal_pos + 1 ..];
     try testing.expect(fractional_part.len == 2);
 }
 
 test "Timing precision with longer durations" {
     var state = MockReplState.init(testing.allocator, true);
     defer state.deinit();
-    
+
     // Set 50ms delay to test longer durations
     state.session.execution_delay_ms = 50;
 
@@ -157,7 +157,7 @@ test "Timing precision with longer durations" {
     defer output.deinit(testing.allocator);
 
     try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, "RETURN 'delayed'");
-    
+
     // Parse timing value
     const timing_start = std.mem.indexOf(u8, output.items, "Query executed in").?;
     const timing_line = output.items[timing_start..];
@@ -165,7 +165,7 @@ test "Timing precision with longer durations" {
     const in_pos = std.mem.indexOf(u8, timing_line, "in ").? + 3;
     const timing_str = timing_line[in_pos..ms_pos];
     const timing_val = try std.fmt.parseFloat(f64, timing_str);
-    
+
     // Should be at least 50ms due to artificial delay
     try testing.expect(timing_val >= 50.0);
     // Should be reasonable (less than 1000ms for test environment)
@@ -178,39 +178,39 @@ test "Timing format consistency across different ranges" {
 
     // Test different delay values to get different timing ranges
     const test_delays = [_]u64{ 0, 1, 5, 10, 25, 50 };
-    
+
     for (test_delays) |delay_ms| {
         state.session.execution_delay_ms = delay_ms;
-        
+
         var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
         defer output.deinit(testing.allocator);
 
         try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, "RETURN 'test'");
-        
+
         // Find timing message
         const timing_start = std.mem.indexOf(u8, output.items, "Query executed in") orelse {
             std.debug.print("No timing found for delay {d}ms. Output: {s}\n", .{ delay_ms, output.items });
             return error.NoTimingFound;
         };
-        
+
         const timing_line = output.items[timing_start..];
         const ms_pos = std.mem.indexOf(u8, timing_line, " ms").?;
         const in_pos = std.mem.indexOf(u8, timing_line, "in ").? + 3;
         const timing_str = timing_line[in_pos..ms_pos];
-        
+
         // Validate format
         const decimal_pos = std.mem.indexOf(u8, timing_str, ".") orelse {
             std.debug.print("No decimal point in timing: '{s}' for delay {d}ms\n", .{ timing_str, delay_ms });
             return error.NoDecimalPoint;
         };
-        
+
         // Check exactly 2 decimal places
-        const fractional_part = timing_str[decimal_pos + 1..];
+        const fractional_part = timing_str[decimal_pos + 1 ..];
         if (fractional_part.len != 2) {
             std.debug.print("Wrong decimal precision: '{s}' (expected 2, got {d}) for delay {d}ms\n", .{ timing_str, fractional_part.len, delay_ms });
             return error.WrongPrecision;
         }
-        
+
         // All fractional digits should be numeric
         for (fractional_part) |digit| {
             if (digit < '0' or digit > '9') {
@@ -223,7 +223,7 @@ test "Timing format consistency across different ranges" {
 
 test "Timing state isolation between sessions" {
     // Simulate multiple REPL sessions with different timing states
-    
+
     // Session 1: timing enabled
     {
         var state1 = MockReplState.init(testing.allocator, true);
@@ -235,7 +235,7 @@ test "Timing state isolation between sessions" {
         try executeGqlWithTimingAndErrors(output1.writer(testing.allocator), &state1, "RETURN 'session1'");
         try testing.expect(std.mem.indexOf(u8, output1.items, "Query executed in") != null);
     }
-    
+
     // Session 2: timing disabled
     {
         var state2 = MockReplState.init(testing.allocator, false);
@@ -247,7 +247,7 @@ test "Timing state isolation between sessions" {
         try executeGqlWithTimingAndErrors(output2.writer(testing.allocator), &state2, "RETURN 'session2'");
         try testing.expect(std.mem.indexOf(u8, output2.items, "Query executed in") == null);
     }
-    
+
     // Session 3: timing enabled again
     {
         var state3 = MockReplState.init(testing.allocator, true);
@@ -272,17 +272,17 @@ test "Timing memory management with repeated operations" {
 
         const query_num = @as(u32, @intCast(i));
         _ = query_num; // Use query_num to prevent optimization
-        
+
         try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, "RETURN 'memory_test'");
-        
+
         // Every query should have timing
         try testing.expect(std.mem.indexOf(u8, output.items, "Query executed in") != null);
         try testing.expect(std.mem.indexOf(u8, output.items, "ms") != null);
-        
+
         // Output should be reasonable size (not accumulating)
         try testing.expect(output.items.len < 1000);
     }
-    
+
     // Session should have accumulated 100 responses
     try testing.expect(state.session.mock_responses.items.len == 100);
 }
@@ -293,19 +293,19 @@ test "Timing with concurrent format changes" {
 
     // Test timing with different output formats
     const formats = [_]Format{ .json, .csv, .table };
-    
+
     for (formats) |format| {
         state.format = format;
-        
+
         var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
         defer output.deinit(testing.allocator);
 
         try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, "RETURN 'format_test'");
-        
+
         // Timing should work regardless of output format
         try testing.expect(std.mem.indexOf(u8, output.items, "Query executed in") != null);
         try testing.expect(std.mem.indexOf(u8, output.items, "ms") != null);
-        
+
         // Should have query result
         try testing.expect(std.mem.indexOf(u8, output.items, "Mock result") != null);
     }
@@ -316,13 +316,13 @@ test "Timing with empty and whitespace queries" {
     defer state.deinit();
 
     const test_queries = [_][]const u8{ "", " ", "   ", "\t", "\n", " \t \n " };
-    
+
     for (test_queries) |query| {
         var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
         defer output.deinit(testing.allocator);
 
         try executeGqlWithTimingAndErrors(output.writer(testing.allocator), &state, query);
-        
+
         // Even empty queries should be timed
         try testing.expect(std.mem.indexOf(u8, output.items, "Query executed in") != null);
         try testing.expect(std.mem.indexOf(u8, output.items, "ms") != null);

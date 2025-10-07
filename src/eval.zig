@@ -575,28 +575,28 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 if (call.args.len < 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(ally, call.args[0].*, env);
                 const start_arg = try evalExpr(ally, call.args[1].*, env);
-                
+
                 const str = switch (str_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 const start = switch (start_arg) {
                     .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 if (call.args.len >= 3) {
                     const len_arg = try evalExpr(ally, call.args[2].*, env);
                     const len = switch (len_arg) {
                         .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
                         else => break :blk_call .{ .Null = {} },
                     };
-                    
+
                     if (start >= str.len) {
                         break :blk_call .{ .Str = "" };
                     }
-                    
+
                     const end = @min(start + len, str.len);
                     break :blk_call .{ .Str = str[start..end] };
                 } else {
@@ -606,32 +606,32 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     break :blk_call .{ .Str = str[start..] };
                 }
             }
-            
+
             if (std.mem.eql(u8, function_name, "replace")) {
                 if (call.args.len != 3) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(ally, call.args[0].*, env);
                 const search_arg = try evalExpr(ally, call.args[1].*, env);
                 const replace_arg = try evalExpr(ally, call.args[2].*, env);
-                
+
                 const str = switch (str_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 const search = switch (search_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 const replacement = switch (replace_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 if (search.len == 0) {
                     break :blk_call .{ .Str = str };
                 }
-                
+
                 // Count occurrences
                 var count: usize = 0;
                 var pos: usize = 0;
@@ -643,84 +643,84 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                         break;
                     }
                 }
-                
+
                 if (count == 0) {
                     break :blk_call .{ .Str = str };
                 }
-                
+
                 // Allocate new string
                 const new_len = str.len + (replacement.len * count) - (search.len * count);
                 var result = try ally.alloc(u8, new_len);
-                
+
                 // Perform replacement
                 var src_pos: usize = 0;
                 var dst_pos: usize = 0;
                 while (src_pos < str.len) {
                     if (std.mem.indexOf(u8, str[src_pos..], search)) |idx| {
                         // Copy before match
-                        @memcpy(result[dst_pos..dst_pos + idx], str[src_pos..src_pos + idx]);
+                        @memcpy(result[dst_pos .. dst_pos + idx], str[src_pos .. src_pos + idx]);
                         dst_pos += idx;
                         // Copy replacement
-                        @memcpy(result[dst_pos..dst_pos + replacement.len], replacement);
+                        @memcpy(result[dst_pos .. dst_pos + replacement.len], replacement);
                         dst_pos += replacement.len;
                         src_pos = src_pos + idx + search.len;
                     } else {
                         // Copy remainder
                         const remaining = str.len - src_pos;
-                        @memcpy(result[dst_pos..dst_pos + remaining], str[src_pos..]);
+                        @memcpy(result[dst_pos .. dst_pos + remaining], str[src_pos..]);
                         break;
                     }
                 }
-                
+
                 break :blk_call .{ .Str = result };
             }
-            
+
             if (std.mem.eql(u8, function_name, "trim")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(ally, call.args[0].*, env);
-                
+
                 const str = switch (str_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 // Trim leading and trailing whitespace
                 const trimmed = std.mem.trim(u8, str, " \t\n\r");
                 break :blk_call .{ .Str = trimmed };
             }
-            
+
             if (std.mem.eql(u8, function_name, "upper")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(ally, call.args[0].*, env);
-                
+
                 const str = switch (str_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 var result = try ally.alloc(u8, str.len);
                 for (str, 0..) |c, i| {
                     result[i] = std.ascii.toUpper(c);
                 }
                 break :blk_call .{ .Str = result };
             }
-            
+
             if (std.mem.eql(u8, function_name, "lower")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(ally, call.args[0].*, env);
-                
+
                 const str = switch (str_arg) {
                     .Str => |s| s,
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 var result = try ally.alloc(u8, str.len);
                 for (str, 0..) |c, i| {
                     result[i] = std.ascii.toLower(c);
                 }
                 break :blk_call .{ .Str = result };
             }
-            
+
             // Handle special case for keys() and values() functions
             if (std.mem.eql(u8, function_name, "keys")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
@@ -738,7 +738,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             if (std.mem.eql(u8, function_name, "values")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -755,7 +755,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             // Handle special case math functions for better nesting support
             if (std.mem.eql(u8, function_name, "abs")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
@@ -771,17 +771,12 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                             break :blk_call arg; // Return unchanged
                         }
                         // Create new decimal with negated coefficient
-                        break :blk_call .{ .Decimal = .{
-                            .coeff = -d.coeff,
-                            .scale = d.scale,
-                            .orig_scale = d.orig_scale,
-                            .orig_repr = d.orig_repr
-                        }};
+                        break :blk_call .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale, .orig_repr = d.orig_repr } };
                     },
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             if (std.mem.eql(u8, function_name, "sqrt")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -799,28 +794,28 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             if (std.mem.eql(u8, function_name, "pow")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const base_arg = try evalExpr(ally, call.args[0].*, env);
                 const exp_arg = try evalExpr(ally, call.args[1].*, env);
-                
+
                 const base = switch (base_arg) {
                     .Int => |i| @as(f64, @floatFromInt(i)),
                     .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 const exponent = switch (exp_arg) {
                     .Int => |i| @as(f64, @floatFromInt(i)),
                     .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
                     else => break :blk_call .{ .Null = {} },
                 };
-                
+
                 const result = std.math.pow(f64, base, exponent);
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
-            
+
             if (std.mem.eql(u8, function_name, "sin")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -832,7 +827,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const result = @sin(val);
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
-            
+
             if (std.mem.eql(u8, function_name, "cos")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -844,7 +839,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const result = @cos(val);
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
-            
+
             if (std.mem.eql(u8, function_name, "tan")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -856,7 +851,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const result = @tan(val);
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
-            
+
             if (std.mem.eql(u8, function_name, "log")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -869,7 +864,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const result = @log(val);
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
-            
+
             if (std.mem.eql(u8, function_name, "exp")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -881,7 +876,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const result = @exp(val);
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
-            
+
             if (std.mem.eql(u8, function_name, "ceil")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -900,7 +895,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             if (std.mem.eql(u8, function_name, "floor")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -919,7 +914,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             if (std.mem.eql(u8, function_name, "round")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(ally, call.args[0].*, env);
@@ -941,7 +936,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 }
             }
-            
+
             // Special handling for random() with no args
             if (std.mem.eql(u8, function_name, "random")) {
                 if (call.args.len != 0) break :blk_call .{ .Null = {} };
@@ -1054,20 +1049,20 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             // GQL semantics: NULL IS UNKNOWN is true, non-NULL IS UNKNOWN is false
             // But for IS NOT UNKNOWN with non-null values, it returns false (test T7)
             const is_unknown = isNull(v);
-            
+
             // Special case: for IS NOT UNKNOWN with non-null values, return false
             // This matches the GQL conformance test expectation
             if (uz.negated and !is_unknown) {
                 break :blk_isunknown .{ .Bool = false };
             }
-            
+
             break :blk_isunknown .{ .Bool = if (uz.negated) !is_unknown else is_unknown };
         },
         .PropertyAccess => |pa| blk_property: {
             // Property access like n.name
             // First, get the object from the environment
             const object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
-            
+
             // If it's a Node, access its properties
             if (object == .Node) {
                 const node = object.Node;
@@ -1082,7 +1077,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     break :blk_property result;
                 }
             }
-            
+
             // Otherwise return null
             break :blk_property .{ .Null = {} };
         },
@@ -1144,7 +1139,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .Member => |member| blk_member: {
             // Handle member access like n.name (where n is already evaluated)
             const target = try evalExpr(ally, member.target.*, env);
-            
+
             // If target is a Node, access its properties
             if (target == .Node) {
                 const node = target.Node;
@@ -1159,7 +1154,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     break :blk_member result;
                 }
             }
-            
+
             // Otherwise return null
             break :blk_member Value{ .Null = {} };
         },
@@ -1185,7 +1180,7 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .List => .{ .Null = {} }, // ExtValue doesn't support complex types
-        .Node => .{ .Null = {} }, // ExtValue doesn't support graph types  
+        .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Map => .{ .Null = {} }, // ExtValue doesn't support map types
     };
 }
@@ -1242,7 +1237,7 @@ fn heapValueToEvalValue(value: heap.Value) Value {
             break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } };
         },
         .Double => |d| blk: {
-            // Check for overflow when converting to decimal  
+            // Check for overflow when converting to decimal
             if (!std.math.isFinite(d)) {
                 break :blk .{ .Null = {} }; // Return null for infinite or NaN
             }
@@ -1261,7 +1256,7 @@ fn heapValueToEvalValue(value: heap.Value) Value {
 /// Try to execute basic built-in functions (length, upper, lower, etc.)
 fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
-    
+
     // Handle current_user() function - returns the current authenticated user
     if (std.mem.eql(u8, function_name, "current_user")) {
         if (args.len != 0) return null;
@@ -1272,7 +1267,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         // Default to returning "system" user if no authentication
         return Value{ .Str = "system" };
     }
-    
+
     // Handle keys() function for maps
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;
@@ -1290,7 +1285,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} },
         }
     }
-    
+
     // Handle values() function for maps
     if (std.mem.eql(u8, function_name, "values")) {
         if (args.len != 1) return null;
@@ -1317,7 +1312,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         path_values[1] = Value{ .Int = 2 };
         return Value{ .List = path_values };
     }
-    
+
     // Handle allShortestPaths function
     if (std.mem.eql(u8, function_name, "allshortestpaths") or std.mem.eql(u8, function_name, "all_shortest_paths")) {
         // Return a list of paths
@@ -1328,7 +1323,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         paths[0] = Value{ .List = path_values };
         return Value{ .List = paths };
     }
-    
+
     // Handle algo.asNode function - converts nodeId to node reference
     if (std.mem.eql(u8, function_name, "algo.asnode") or std.mem.eql(u8, function_name, "asnode")) {
         if (args.len != 1) return null;
@@ -1336,14 +1331,14 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         // Just return the node ID for now
         return arg;
     }
-    
+
     // Handle size() function - returns count of relationships/connections
     if (std.mem.eql(u8, function_name, "size")) {
         if (args.len != 1) return null;
         // For now, return a default size
         return Value{ .Int = 3 };
     }
-    
+
     // Handle id() function - returns node ID or input if already an integer
     if (std.mem.eql(u8, function_name, "id")) {
         if (args.len != 1) return null;
@@ -1354,14 +1349,14 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} }, // Can't get ID from other types
         }
     }
-    
+
     // Handle type() function - returns relationship type
     if (std.mem.eql(u8, function_name, "type")) {
         if (args.len != 1) return null;
         // For now, return a placeholder since we don't have relationship objects yet
         return Value{ .Str = "RELATIONSHIP" };
     }
-    
+
     // Handle labels() function - returns node labels as a list
     if (std.mem.eql(u8, function_name, "labels")) {
         if (args.len != 1) return null;
@@ -1377,7 +1372,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .List = try ally.alloc(Value, 0) }, // Empty list for non-nodes
         }
     }
-    
+
     // Handle length() function - returns length of path, string, or list
     if (std.mem.eql(u8, function_name, "length")) {
         if (args.len != 1) return null;
@@ -1389,7 +1384,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Int = 1 },
         }
     }
-    
+
     // Handle string case conversion functions
     if (std.mem.eql(u8, function_name, "toupper") or std.mem.eql(u8, function_name, "upper")) {
         if (args.len != 1) return null;
@@ -1405,7 +1400,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} },
         }
     }
-    
+
     if (std.mem.eql(u8, function_name, "tolower") or std.mem.eql(u8, function_name, "lower")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(ally, args[0].*, env);
@@ -1420,7 +1415,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} },
         }
     }
-    
+
     // Handle reverse function
     if (std.mem.eql(u8, function_name, "reverse")) {
         if (args.len != 1) return null;
@@ -1445,10 +1440,9 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} },
         }
     }
-    
+
     // Math functions are now handled as special cases in the Call block above
-    
-    
+
     // Handle aggregation functions (simplified for now - real implementation needs context)
     if (std.mem.eql(u8, function_name, "count")) {
         // COUNT(*) or COUNT(expr)
@@ -1470,12 +1464,12 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "sum")) {
         // SUM aggregation function
         if (args.len == 0) return Value{ .Null = {} };
-        
+
         const arg = try evalExpr(ally, args[0].*, env);
         switch (arg) {
             .List => |list| {
                 if (list.len == 0) return Value{ .Null = {} };
-                
+
                 // Check if we have any decimals
                 var has_decimal = false;
                 for (list) |item| {
@@ -1484,7 +1478,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
                         break;
                     }
                 }
-                
+
                 if (has_decimal) {
                     // Sum as decimal (for now, convert to int)
                     var sum: i64 = 0;
@@ -1513,12 +1507,12 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "avg")) {
         // AVG aggregation function
         if (args.len == 0) return Value{ .Null = {} };
-        
+
         const arg = try evalExpr(ally, args[0].*, env);
         switch (arg) {
             .List => |list| {
                 if (list.len == 0) return Value{ .Null = {} };
-                
+
                 var sum: i64 = 0;
                 var count: usize = 0;
                 for (list) |item| {
@@ -1534,7 +1528,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
                         else => {},
                     }
                 }
-                
+
                 if (count == 0) return Value{ .Null = {} };
                 return Value{ .Int = @divFloor(sum, @as(i64, @intCast(count))) };
             },
@@ -1543,12 +1537,12 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "min")) {
         // MIN aggregation function
         if (args.len == 0) return Value{ .Null = {} };
-        
+
         const arg = try evalExpr(ally, args[0].*, env);
         switch (arg) {
             .List => |list| {
                 if (list.len == 0) return Value{ .Null = {} };
-                
+
                 var min_val = list[0];
                 for (list[1..]) |item| {
                     // Simple comparison for common types
@@ -1574,12 +1568,12 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "max")) {
         // MAX aggregation function
         if (args.len == 0) return Value{ .Null = {} };
-        
+
         const arg = try evalExpr(ally, args[0].*, env);
         switch (arg) {
             .List => |list| {
                 if (list.len == 0) return Value{ .Null = {} };
-                
+
                 var max_val = list[0];
                 for (list[1..]) |item| {
                     // Simple comparison for common types
@@ -1603,7 +1597,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             else => return Value{ .Null = {} },
         }
     }
-    
+
     // Handle random() function which takes no arguments
     if (std.mem.eql(u8, function_name, "random")) {
         if (args.len != 0) return null;
@@ -1762,7 +1756,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             return heapValueToEvalValue(result);
         }
     }
-    
+
     // Handle map functions
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;

@@ -45,7 +45,7 @@ pub const Statement = union(enum) {
 pub const Query = struct {
     optional_match: bool,
     match: GraphPattern,
-    create_pattern: ?GraphPattern = null,  // Support CREATE in queries
+    create_pattern: ?GraphPattern = null, // Support CREATE in queries
     where_clause: ?Expr,
     with_clause: ?WithClause,
     set_clauses: []SetClause = &.{},
@@ -316,7 +316,7 @@ pub const UseGraphStatement = struct {
 
 // Index operation statements
 pub const CreateIndexStatement = struct {
-    name: []const u8,  // Required in GQL
+    name: []const u8, // Required in GQL
     unique: bool = false,
     index_type: IndexType = .btree,
     label: []const u8,

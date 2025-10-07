@@ -447,9 +447,9 @@ pub const CardinalityEstimator = struct {
 
     fn estimateFilterCardinality(self: *CardinalityEstimator, node: *enumerator.LogicalPlan) !f64 {
         // Get child cardinality
-        const child_cardinality = if (node.children.len > 0) 
+        const child_cardinality = if (node.children.len > 0)
             try self.estimateCardinality(&node.children[0])
-        else 
+        else
             1000.0;
 
         // Apply selectivity based on predicate type
@@ -480,7 +480,7 @@ pub const CardinalityEstimator = struct {
         if (node.children.len == 0) return 1.0;
 
         const child_cardinality = try self.estimateCardinality(&node.children[0]);
-        
+
         // If no GROUP BY, result is 1 row
         // If GROUP BY exists, estimate distinct groups
         if (self.hasGroupBy(node)) {
@@ -504,7 +504,7 @@ pub const CardinalityEstimator = struct {
 
         const child_cardinality = try self.estimateCardinality(&node.children[0]);
         const limit_value = self.extractLimitValue(node);
-        
+
         return @min(child_cardinality, @as(f64, @floatFromInt(limit_value)));
     }
 
