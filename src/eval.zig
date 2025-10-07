@@ -1282,6 +1282,30 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "floor")) {
         const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "pow")) {
+        if (args.len != 2) return null;
+        const heap_second_arg = evalValueToHeapValue(try evalExpr(ally, args[1].*, env));
+        const result = evaluator_functions.pow_val(ally, heap_first_arg, heap_second_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "sin")) {
+        const result = evaluator_functions.sin_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "cos")) {
+        const result = evaluator_functions.cos_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "tan")) {
+        const result = evaluator_functions.tan_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "log")) {
+        const result = evaluator_functions.log_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "exp")) {
+        const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "random")) {
+        if (args.len != 0) return null;
+        const result = evaluator_functions.random_val(ally) catch return null;
+        return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "type")) {
         const result = evaluator_functions.type_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);

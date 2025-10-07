@@ -34,9 +34,18 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     json_asserts = "stdout_json_assert" in expect
     geode_query = "geode_query" in expect
     
+    # Add --no-quic if query command and no server specified
+    modified_args = args[:]
+    if len(args) > 0 and args[0] == "query":
+        has_server = any("--server" in arg for arg in args)
+        has_no_quic = any("--no-quic" in arg for arg in args)
+        if not has_server and not has_no_quic:
+            # Insert --no-quic after "query"
+            modified_args.insert(1, "--no-quic")
+    
     try:
         result = subprocess.run(
-            [binary] + args,
+            [binary] + modified_args,
             capture_output=True,
             text=True,
             timeout=5

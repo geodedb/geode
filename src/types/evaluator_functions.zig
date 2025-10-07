@@ -895,6 +895,132 @@ pub fn abs_val(val: Value) EvaluatorError!Value {
     };
 }
 
+pub fn pow_val(allocator: std.mem.Allocator, base: Value, exp: Value) EvaluatorError!Value {
+    _ = allocator;
+    const base_f = switch (base) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    
+    const exp_f = switch (exp) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    
+    const result = std.math.pow(f64, base_f, exp_f);
+    if (std.math.isNan(result)) return EvaluatorError.FloatNaN;
+    if (std.math.isInf(result)) return EvaluatorError.Overflow;
+    
+    return Value{ .Double = result };
+}
+
+pub fn sin_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    return Value{ .Double = std.math.sin(f) };
+}
+
+pub fn cos_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    return Value{ .Double = std.math.cos(f) };
+}
+
+pub fn tan_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    const result = std.math.tan(f);
+    if (std.math.isNan(result)) return EvaluatorError.FloatNaN;
+    if (std.math.isInf(result)) return EvaluatorError.Overflow;
+    return Value{ .Double = result };
+}
+
+pub fn log_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| blk: {
+            if (i <= 0) return EvaluatorError.InvalidInput;
+            break :blk @as(f64, @floatFromInt(i));
+        },
+        .SmallInt => |i| blk: {
+            if (i <= 0) return EvaluatorError.InvalidInput;
+            break :blk @as(f64, @floatFromInt(i));
+        },
+        .BigInt => |i| blk: {
+            if (i <= 0) return EvaluatorError.InvalidInput;
+            break :blk @as(f64, @floatFromInt(i));
+        },
+        .Real => |rf| blk: {
+            if (rf <= 0) return EvaluatorError.InvalidInput;
+            break :blk @as(f64, rf);
+        },
+        .Double => |d| blk: {
+            if (d <= 0) return EvaluatorError.InvalidInput;
+            break :blk d;
+        },
+        .Decimal128 => |d| blk: {
+            if (d.coeff <= 0) return EvaluatorError.InvalidInput;
+            break :blk @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+        },
+        else => return EvaluatorError.TypeMismatch,
+    };
+    return Value{ .Double = std.math.log(f64, std.math.e, f) };
+}
+
+pub fn exp_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    const result = std.math.exp(f);
+    if (std.math.isInf(result)) return EvaluatorError.Overflow;
+    return Value{ .Double = result };
+}
+
+pub fn random_val(allocator: std.mem.Allocator) EvaluatorError!Value {
+    _ = allocator;
+    // Use timestamp-based pseudo-random for deterministic testing
+    const timestamp = @as(u64, @intCast(std.time.milliTimestamp()));
+    const hash = timestamp *% 1103515245 +% 12345;
+    const normalized = @as(f64, @floatFromInt(hash & 0xFFFFFF)) / @as(f64, @floatFromInt(0xFFFFFF));
+    return Value{ .Double = normalized };
+}
+
 pub fn sqrt_val(val: Value) EvaluatorError!Value {
     return switch (val) {
         .Int => |i| {
