@@ -1368,43 +1368,41 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 
                 // Evaluate grouping key for this node
                 // For now, assume single grouping key that's a property access
-                var group_key_value: []const u8 = "";
-                var key_val = eval.Value{ .Null = {} };
                 if (group_by.keys.len > 0) {
                     const key_expr = group_by.keys[0];
-                    key_val = try evaluateNodeExpression(allocator, key_expr, node);
-                    if (key_val == .Str) {
-                        group_key_value = key_val.Str;
-                    } else if (key_val == .Int) {
-                        // Convert integer to string for grouping
-                        var buf: [32]u8 = undefined;
-                        group_key_value = try allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}", .{key_val.Int}));
-                    } else if (key_val == .Null) {
-                        group_key_value = "<null>";
-                    }
-                }
-                
-                // Add node to appropriate group - check if key exists by value
-                var found_group = false;
-                var group_iter = groups.iterator();
-                while (group_iter.next()) |g_entry| {
-                    if (std.mem.eql(u8, g_entry.key_ptr.*, group_key_value)) {
-                        try g_entry.value_ptr.append(allocator, node);
-                        found_group = true;
-                        break;
-                    }
-                }
-                
-                if (!found_group) {
-                    // Store the key for deallocation later
-                    const stored_key = if (key_val == .Int) group_key_value else try allocator.dupe(u8, group_key_value);
-                    if (key_val == .Int) {
-                        try group_keys.append(allocator, stored_key);
+                    const key_val = try evaluateNodeExpression(allocator, key_expr, node);
+                    
+                    // Format the key as a string for grouping
+                    var buf: [32]u8 = undefined;
+                    const group_key = if (key_val == .Str) 
+                        key_val.Str
+                    else if (key_val == .Int)
+                        try std.fmt.bufPrint(&buf, "{d}", .{key_val.Int})
+                    else if (key_val == .Null)
+                        "<null>"
+                    else
+                        "";
+                    
+                    // Check if this group already exists
+                    var found_existing = false;
+                    var iter = groups.iterator();
+                    while (iter.next()) |grp| {
+                        if (std.mem.eql(u8, grp.key_ptr.*, group_key)) {
+                            // Found existing group with this key
+                            try grp.value_ptr.append(allocator, node);
+                            found_existing = true;
+                            break;
+                        }
                     }
                     
-                    var new_group = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
-                    try new_group.append(allocator, node);
-                    try groups.put(stored_key, new_group);
+                    if (!found_existing) {
+                        // Create new group with allocated key
+                        const stored_key = try allocator.dupe(u8, group_key);
+                        try group_keys.append(allocator, stored_key);
+                        var new_group = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+                        try new_group.append(allocator, node);
+                        try groups.put(stored_key, new_group);
+                    }
                 }
             }
             
@@ -1783,7 +1781,7 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
             if (call.callee.* == .Ident) {
                 const func_name = call.callee.Ident.orig;
                 
-                if (std.mem.eql(u8, func_name, "count")) {
+                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
                     // COUNT(*) or COUNT(expr)
                     if (call.args.len == 1 and call.args[0].* == .Ident and 
                         std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
@@ -1792,7 +1790,7 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
                     }
                     // For COUNT(expr), count non-null values
                     return eval.Value{ .Int = @intCast(nodes.len) };
-                } else if (std.mem.eql(u8, func_name, "sum")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over group
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -1815,7 +1813,7 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
                         }
                     }
                     return eval.Value{ .Int = 0 };
-                } else if (std.mem.eql(u8, func_name, "avg")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation over group
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -1844,7 +1842,7 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
                         }
                     }
                     return eval.Value{ .Null = {} };
-                } else if (std.mem.eql(u8, func_name, "min")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     // MIN aggregation over group
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -1872,7 +1870,7 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
                         }
                     }
                     return eval.Value{ .Null = {} };
-                } else if (std.mem.eql(u8, func_name, "max")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
                     // MAX aggregation over group
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -1962,7 +1960,7 @@ fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Expr, s
             if (call.callee.* == .Ident) {
                 const func_name = call.callee.Ident.orig;
                 
-                if (std.mem.eql(u8, func_name, "count") or std.mem.eql(u8, func_name, "countDistinct")) {
+                if (std.ascii.eqlIgnoreCase(func_name, "count") or std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
                     // Check if it's COUNT(*) or COUNT(expr) or COUNT(DISTINCT expr)
                     if (call.args.len == 1 and call.args[0].* == .Ident and 
                         std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
@@ -2013,7 +2011,7 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
             if (call.callee.* == .Ident) {
                 const func_name = call.callee.Ident.orig;
                 
-                if (std.mem.eql(u8, func_name, "count") or std.mem.eql(u8, func_name, "countDistinct")) {
+                if (std.ascii.eqlIgnoreCase(func_name, "count") or std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
                     // Check if it's COUNT(*) or COUNT(expr) or COUNT(DISTINCT expr)
                     if (call.args.len == 1 and call.args[0].* == .Ident and 
                         std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
@@ -2092,7 +2090,7 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                     }
                     // Default COUNT
                     return eval.Value{ .Int = 0 };
-                } else if (std.mem.eql(u8, func_name, "sum")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -2117,7 +2115,7 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                         }
                     }
                     return eval.Value{ .Int = 0 };
-                } else if (std.mem.eql(u8, func_name, "avg")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -2149,7 +2147,7 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                         }
                     }
                     return eval.Value{ .Null = {} };
-                } else if (std.mem.eql(u8, func_name, "min")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     // MIN aggregation
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -2179,7 +2177,7 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                         }
                     }
                     return eval.Value{ .Null = {} };
-                } else if (std.mem.eql(u8, func_name, "max")) {
+                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
                     // MAX aggregation
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -2600,12 +2598,13 @@ fn isAggregationExpr(expr: ast.Expr) bool {
         .Call => |call| {
             if (call.callee.* == .Ident) {
                 const func_name = call.callee.Ident.orig;
-                return std.mem.eql(u8, func_name, "count") or
-                       std.mem.eql(u8, func_name, "countDistinct") or
-                       std.mem.eql(u8, func_name, "sum") or
-                       std.mem.eql(u8, func_name, "avg") or
-                       std.mem.eql(u8, func_name, "min") or
-                       std.mem.eql(u8, func_name, "max");
+                // Use case-insensitive comparison for aggregation functions
+                return std.ascii.eqlIgnoreCase(func_name, "count") or
+                       std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
+                       std.ascii.eqlIgnoreCase(func_name, "sum") or
+                       std.ascii.eqlIgnoreCase(func_name, "avg") or
+                       std.ascii.eqlIgnoreCase(func_name, "min") or
+                       std.ascii.eqlIgnoreCase(func_name, "max");
             }
             return false;
         },
