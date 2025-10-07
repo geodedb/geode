@@ -172,7 +172,7 @@ func startQUIC(t *testing.T) string {
 		return ""
 	}
 	// Check if already listening on QUIC
-	cmd := exec.Command(serverPath, "--listen-quic", "127.0.0.1:7567")
+	cmd := exec.Command(serverPath, "serve", "--listen", "127.0.0.1:7567")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start quic server: %v", err)
 	}

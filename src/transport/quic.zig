@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const quic_lib = @import("vendor_quic");
+pub const quic_lib = @import("vendor_quic");
 const tls = std.crypto.tls;
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-09-22

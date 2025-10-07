@@ -567,23 +567,43 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
     defer conn.close();
 
     std.debug.print("DEBUG: Handling QUIC connection\n", .{});
+    
+    // Import the QUIC library for direct access to handshake functions
+    const QuicTransport = @import("transport/quic");
+    const quic_lib = QuicTransport.quic_lib;
+    
+    // Wait for handshake to complete
+    if (conn.quic_connection) |qc| {
+        var handshake_attempts: usize = 0;
+        while (handshake_attempts < 50) : (handshake_attempts += 1) {
+            // Poll to process handshake packets
+            transport.poll(50) catch {};
+            
+            // Check if handshake is complete
+            if (quic_lib.handshakeComplete(qc)) {
+                std.debug.print("Handshake completed after {} attempts\n", .{handshake_attempts + 1});
+                break;
+            }
+            
+            std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
+        }
+    }
 
     // Poll and retry acceptStream until we get the stream
     var stream_attempts: usize = 0;
-    const stream = while (stream_attempts < 50) : (stream_attempts += 1) {
-        // Poll the endpoint multiple times to process incoming packets
-        var poll_i: usize = 0;
-        while (poll_i < 5) : (poll_i += 1) {
-            transport.poll(50) catch {};
-            std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
-        }
-
+    const stream = while (stream_attempts < 100) : (stream_attempts += 1) {
+        // Poll the endpoint to process incoming packets
+        transport.poll(50) catch {};
+        
+        // Try to accept a stream
         if (conn.acceptStream()) |s| {
             std.debug.print("Stream accepted after {} attempts\n", .{stream_attempts + 1});
             break s;
         } else |err| {
             if (err == error.WouldBlock) {
                 // No stream yet, continue polling
+                // Add a small delay to avoid busy-waiting
+                std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
                 continue;
             }
             std.debug.print("Failed to accept stream: {}\n", .{err});
@@ -595,73 +615,262 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
     };
     defer stream.close();
 
-    // Read query message
-    const query_msg = stream.readLine(65536) catch |err| {
-        std.debug.print("Failed to read query: {}\n", .{err});
-        return err;
-    };
-    defer allocator.free(query_msg);
+    // Main message processing loop
+    while (true) {
+        // Read message
+        const msg = stream.readLine(65536) catch |err| {
+            if (err == error.EndOfStream) break;
+            std.debug.print("Failed to read message: {}\n", .{err});
+            return err;
+        };
+        defer allocator.free(msg);
 
-    std.debug.print("Received query message: {s}\n", .{query_msg});
+        std.debug.print("Received message: {s}\n", .{msg});
 
-    // Parse JSON message
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, query_msg, .{}) catch {
-        const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
-        try stream.writeAll(error_response);
-        return;
-    };
-    defer parsed.deinit();
+        // Parse JSON message
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg, .{}) catch {
+            const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
+            try stream.writeAll(error_response);
+            continue;
+        };
+        defer parsed.deinit();
 
-    // Check message type
-    if (parsed.value != .object) {
-        const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid message format\"}\n";
-        try stream.writeAll(error_response);
-        return;
+        // Check message type
+        if (parsed.value != .object) {
+            const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid message format\"}\n";
+            try stream.writeAll(error_response);
+            continue;
+        }
+
+        const obj = parsed.value.object;
+        const msg_type = obj.get("type") orelse {
+            const error_response = "{\"status_class\":\"58000\",\"error\":\"Missing type field\"}\n";
+            try stream.writeAll(error_response);
+            continue;
+        };
+
+        if (msg_type != .string) {
+            const error_response = "{\"status_class\":\"58000\",\"error\":\"type field must be string\"}\n";
+            try stream.writeAll(error_response);
+            continue;
+        }
+
+        const type_str = msg_type.string;
+
+        if (std.mem.eql(u8, type_str, "HELLO")) {
+            // Handle HELLO handshake
+            std.debug.print("Processing HELLO message\n", .{});
+
+            // Extract client info (optional)
+            const client_name = if (obj.get("client_name")) |cn|
+                if (cn == .string) cn.string else "unknown"
+            else
+                "unknown";
+            const client_ver = if (obj.get("client_ver")) |cv|
+                if (cv == .string) cv.string else "unknown"
+            else
+                "unknown";
+
+            std.debug.print("Client: {s} version {s}\n", .{ client_name, client_ver });
+
+            // Send HELLO response
+            const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.16.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
+            try stream.writeAll(hello_response);
+            std.debug.print("HELLO response sent\n", .{});
+        } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
+            // Handle query execution
+            const query_text_value = obj.get("text") orelse {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"Missing text field\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            };
+
+            if (query_text_value != .string) {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"text field must be string\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            }
+
+            const query_text = query_text_value.string;
+            std.debug.print("Query text: {s}\n", .{query_text});
+
+            // Use the geode module to execute queries
+            const geode_lib = @import("geode");
+
+            // Execute query using embedded server
+            const options = geode_lib.test_harness.QueryOptions{
+                .token = null,
+                .user = null,
+            };
+
+            var mut_ally = allocator;
+            const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
+                // Send error response
+                const error_msg = try std.fmt.allocPrint(allocator, "STATUS: {{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
+                defer allocator.free(error_msg);
+                try stream.writeAll(error_msg);
+                continue;
+            };
+            defer mut_ally.free(result);
+
+            // Parse the result JSON to extract columns and rows
+            const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
+            defer result_parsed.deinit();
+
+            const result_obj = result_parsed.value.object;
+            const columns = result_obj.get("columns");
+            const rows = result_obj.get("rows");
+
+            // Build and send SCHEMA response
+            var schema_buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch {
+                const error_response = "STATUS: {\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            };
+            defer schema_buf.deinit(allocator);
+
+            try schema_buf.appendSlice(allocator, "SCHEMA: [");
+            if (columns) |cols| {
+                for (cols.array.items, 0..) |col, idx| {
+                    if (idx > 0) try schema_buf.appendSlice(allocator, ",");
+                    const col_str = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
+                    defer allocator.free(col_str);
+                    try schema_buf.appendSlice(allocator, col_str);
+                }
+            }
+            try schema_buf.appendSlice(allocator, "]\n");
+
+            // Build and send RESULT responses (one per row)
+            if (rows) |r| {
+                for (r.array.items) |row| {
+                    try schema_buf.appendSlice(allocator, "RESULT: ");
+                    
+                    // Serialize the row JSON value
+                    var row_writer = std.ArrayList(u8).initCapacity(allocator, 512) catch {
+                        try schema_buf.appendSlice(allocator, "{}\n");
+                        continue;
+                    };
+                    defer row_writer.deinit(allocator);
+                    
+                    // Use a custom JSON writer that preserves decimal scales
+                    const writer = row_writer.writer(allocator);
+                    try writeJsonValueWithDecimalScale(writer, row, allocator);
+                    try schema_buf.appendSlice(allocator, row_writer.items);
+                    try schema_buf.appendSlice(allocator, "\n");
+                }
+            }
+
+            // Add STATUS at the end
+            const row_count = if (rows) |r| r.array.items.len else 0;
+            const status_msg = try std.fmt.allocPrint(allocator, "STATUS: {{\"status_class\":\"00000\",\"row_count\":{}}}\n", .{row_count});
+            defer allocator.free(status_msg);
+            try schema_buf.appendSlice(allocator, status_msg);
+
+            std.debug.print("DEBUG: Writing query response\n", .{});
+            stream.writeAll(schema_buf.items) catch |err| {
+                std.debug.print("ERROR: Failed to write response: {}\n", .{err});
+                return err;
+            };
+            std.debug.print("DEBUG: Query response sent successfully\n", .{});
+        } else {
+            // Unknown message type
+            const error_msg = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
+            defer allocator.free(error_msg);
+            try stream.writeAll(error_msg);
+        }
     }
+}
 
-    const obj = parsed.value.object;
-    const msg_type = obj.get("type") orelse {
-        const error_response = "{\"status_class\":\"58000\",\"error\":\"Missing type field\"}\n";
-        try stream.writeAll(error_response);
-        return;
-    };
-
-    if (msg_type != .string or !std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
-        const error_response = "{\"status_class\":\"58000\",\"error\":\"Unknown message type\"}\n";
-        try stream.writeAll(error_response);
-        return;
+// Write JSON value with special handling for decimal scale preservation
+fn writeJsonValueWithDecimalScale(writer: anytype, value: std.json.Value, allocator: std.mem.Allocator) !void {
+    switch (value) {
+        .null => try writer.writeAll("null"),
+        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+        .integer => |i| try writer.print("{}", .{i}),
+        .float => |f| {
+            // Check if this is actually a decimal that needs scale preservation
+            // For now, just write the float normally
+            try writer.print("{d}", .{f});
+        },
+        .number_string => |s| {
+            // This might be a decimal with preserved scale
+            try writer.writeAll(s);
+        },
+        .string => |s| {
+            // Check if this is a decimal value encoded as a string (e.g., "1.2300")
+            // The Go client expects decimals to preserve their scale
+            if (isDecimalString(s)) {
+                // Write as-is to preserve scale
+                try writer.print("\"{s}\"", .{s});
+            } else {
+                // Regular string - escape properly
+                try writer.writeByte('"');
+                for (s) |c| {
+                    switch (c) {
+                        '"' => try writer.writeAll("\\\""),
+                        '\\' => try writer.writeAll("\\\\"),
+                        '\n' => try writer.writeAll("\\n"),
+                        '\r' => try writer.writeAll("\\r"),
+                        '\t' => try writer.writeAll("\\t"),
+                        else => try writer.writeByte(c),
+                    }
+                }
+                try writer.writeByte('"');
+            }
+        },
+        .array => |arr| {
+            try writer.writeByte('[');
+            for (arr.items, 0..) |item, i| {
+                if (i > 0) try writer.writeByte(',');
+                try writeJsonValueWithDecimalScale(writer, item, allocator);
+            }
+            try writer.writeByte(']');
+        },
+        .object => |obj| {
+            try writer.writeByte('{');
+            var first = true;
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                if (!first) try writer.writeByte(',');
+                first = false;
+                
+                // Write key
+                try writer.writeByte('"');
+                try writer.writeAll(entry.key_ptr.*);
+                try writer.writeAll("\":");
+                
+                // Write value
+                try writeJsonValueWithDecimalScale(writer, entry.value_ptr.*, allocator);
+            }
+            try writer.writeByte('}');
+        },
     }
+}
 
-    const query_text_value = obj.get("text") orelse {
-        const error_response = "{\"status_class\":\"58000\",\"error\":\"Missing text field\"}\n";
-        try stream.writeAll(error_response);
-        return;
-    };
-
-    if (query_text_value != .string) {
-        const error_response = "{\"status_class\":\"58000\",\"error\":\"text field must be string\"}\n";
-        try stream.writeAll(error_response);
-        return;
+// Check if a string looks like a decimal number
+fn isDecimalString(s: []const u8) bool {
+    if (s.len == 0) return false;
+    
+    var has_digit = false;
+    var has_dot = false;
+    var idx: usize = 0;
+    
+    // Skip optional minus sign
+    if (s[0] == '-') idx = 1;
+    
+    while (idx < s.len) : (idx += 1) {
+        const c = s[idx];
+        if (c >= '0' and c <= '9') {
+            has_digit = true;
+        } else if (c == '.') {
+            if (has_dot) return false; // Multiple dots
+            has_dot = true;
+        } else {
+            return false; // Non-digit, non-dot character
+        }
     }
-
-    const query_text = query_text_value.string;
-    std.debug.print("Query text: {s}\n", .{query_text});
-
-    // For now, send a simple test response
-    // In a full implementation, this would execute the query through the GQL engine
-    // Combine all responses into one write to avoid timing issues
-    const full_response =
-        "SCHEMA: [{\"name\":\"test\",\"type\":\"INTEGER\"}]\n" ++
-        "RESULT: {\"test\":1}\n" ++
-        "STATUS: {\"status_class\":\"00000\",\"row_count\":1}\n";
-
-    std.debug.print("DEBUG: Writing full response\n", .{});
-    stream.writeAll(full_response) catch |err| {
-        std.debug.print("ERROR: Failed to write response: {}\n", .{err});
-        return err;
-    };
-
-    std.debug.print("DEBUG: Response sent successfully\n", .{});
+    
+    return has_digit;
 }
 
 // Server startup function - direct QUIC server implementation

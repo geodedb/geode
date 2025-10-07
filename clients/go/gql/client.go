@@ -290,9 +290,31 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			tlsConf.Certificates = []tls.Certificate{pair}
 		}
 
-		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
+		// Use QUIC config with keep-alive and proper timeouts
+		qConfig := &quic.Config{
+			MaxIdleTimeout:        30 * time.Second,
+			KeepAlivePeriod:       10 * time.Second,
+			HandshakeIdleTimeout:  10 * time.Second,
+			MaxIncomingStreams:    100,
+			MaxIncomingUniStreams: 100,
+			Versions:              []quic.Version{quic.Version1}, // Force QUIC v1
+		}
+		
+		fmt.Printf("DEBUG: Go client attempting to connect via QUIC to %s\n", addr)
+		qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
 		if err != nil {
+			fmt.Printf("DEBUG: Go client QUIC connection failed: %v\n", err)
 			return nil, err
+		}
+		fmt.Printf("DEBUG: Go client QUIC connection established\n")
+		
+		// Wait a moment for handshake to stabilize
+		select {
+		case <-ctx.Done():
+			_ = qConn.CloseWithError(0, "context cancelled")
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			// Continue after brief delay
 		}
 
 		qStream, err := qConn.OpenStreamSync(ctx)
@@ -365,10 +387,34 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			}
 			tlsConf.Certificates = []tls.Certificate{pair}
 		}
-		qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
+		
+		// Use QUIC config with keep-alive and proper timeouts
+		qConfig := &quic.Config{
+			MaxIdleTimeout:        30 * time.Second,
+			KeepAlivePeriod:       10 * time.Second,
+			HandshakeIdleTimeout:  10 * time.Second,
+			MaxIncomingStreams:    100,
+			MaxIncomingUniStreams: 100,
+			Versions:              []quic.Version{quic.Version1}, // Force QUIC v1
+		}
+		
+		fmt.Printf("DEBUG: Go client attempting to connect via QUIC to %s\n", addr)
+		qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
 		if err != nil {
+			fmt.Printf("DEBUG: Go client QUIC connection failed: %v\n", err)
 			return nil, err
 		}
+		fmt.Printf("DEBUG: Go client QUIC connection established\n")
+		
+		// Wait a moment for handshake to stabilize
+		select {
+		case <-ctx.Done():
+			_ = qConn.CloseWithError(0, "context cancelled")
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			// Continue after brief delay
+		}
+		
 		qStream, err := qConn.OpenStreamSync(ctx)
 		if err != nil {
 			_ = qConn.CloseWithError(0, "failed to open stream")
@@ -441,10 +487,32 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		MinVersion:         tls.VersionTLS13,
 	}
 
-	qConn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
+	// Use QUIC config with keep-alive and proper timeouts
+	qConfig := &quic.Config{
+		MaxIdleTimeout:        30 * time.Second,
+		KeepAlivePeriod:       10 * time.Second,
+		HandshakeIdleTimeout:  10 * time.Second,
+		MaxIncomingStreams:    100,
+		MaxIncomingUniStreams: 100,
+	}
+
+	fmt.Printf("DEBUG: Go client attempting to connect to spawned server at %s\n", addr)
+	qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
 	if err != nil {
+		fmt.Printf("DEBUG: Go client connection to spawned server failed: %v\n", err)
 		_ = cmd.Process.Kill()
 		return nil, err
+	}
+	fmt.Printf("DEBUG: Go client connected to spawned server\n")
+	
+	// Wait a moment for handshake to stabilize
+	select {
+	case <-ctx.Done():
+		_ = qConn.CloseWithError(0, "context cancelled")
+		_ = cmd.Process.Kill()
+		return nil, ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+		// Continue after brief delay
 	}
 
 	qStream, err := qConn.OpenStreamSync(ctx)
