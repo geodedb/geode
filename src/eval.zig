@@ -864,6 +864,156 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         }
     }
     
+    // Handle type() function - returns relationship type
+    if (std.mem.eql(u8, function_name, "type")) {
+        if (args.len != 1) return null;
+        // For now, return a placeholder since we don't have relationship objects yet
+        return Value{ .Str = "RELATIONSHIP" };
+    }
+    
+    // Handle labels() function - returns node labels as a list
+    if (std.mem.eql(u8, function_name, "labels")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Node => |n| {
+                var labels = try ally.alloc(Value, n.labels.len);
+                for (n.labels, 0..) |label, i| {
+                    labels[i] = Value{ .Str = label };
+                }
+                return Value{ .List = labels };
+            },
+            else => return Value{ .List = try ally.alloc(Value, 0) }, // Empty list for non-nodes
+        }
+    }
+    
+    // Handle length() function - returns length of path, string, or list
+    if (std.mem.eql(u8, function_name, "length")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Str => |s| return Value{ .Int = @intCast(s.len) },
+            .List => |l| return Value{ .Int = @intCast(l.len) },
+            // For paths, we'd need a Path type - for now return 1
+            else => return Value{ .Int = 1 },
+        }
+    }
+    
+    // Handle string case conversion functions
+    if (std.mem.eql(u8, function_name, "toupper") or std.mem.eql(u8, function_name, "upper")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Str => |s| {
+                var upper = try ally.alloc(u8, s.len);
+                for (s, 0..) |c, i| {
+                    upper[i] = std.ascii.toUpper(c);
+                }
+                return Value{ .Str = upper };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
+    if (std.mem.eql(u8, function_name, "tolower") or std.mem.eql(u8, function_name, "lower")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Str => |s| {
+                var lower = try ally.alloc(u8, s.len);
+                for (s, 0..) |c, i| {
+                    lower[i] = std.ascii.toLower(c);
+                }
+                return Value{ .Str = lower };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
+    // Handle reverse function
+    if (std.mem.eql(u8, function_name, "reverse")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Str => |s| {
+                var reversed = try ally.alloc(u8, s.len);
+                var i: usize = 0;
+                while (i < s.len) : (i += 1) {
+                    reversed[i] = s[s.len - 1 - i];
+                }
+                return Value{ .Str = reversed };
+            },
+            .List => |l| {
+                var reversed = try ally.alloc(Value, l.len);
+                var i: usize = 0;
+                while (i < l.len) : (i += 1) {
+                    reversed[i] = l[l.len - 1 - i];
+                }
+                return Value{ .List = reversed };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
+    // Handle math functions
+    if (std.mem.eql(u8, function_name, "round")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Int => |i| return Value{ .Int = i },
+            .Decimal => |d| {
+                const divisor = std.math.pow(i128, 10, d.scale);
+                const whole = @divTrunc(d.coeff, divisor);
+                const frac = @rem(d.coeff, divisor);
+                const half_divisor = @divTrunc(divisor, 2);
+                if (frac >= half_divisor) {
+                    return Value{ .Int = @intCast(whole + 1) };
+                } else if (frac <= -half_divisor) {
+                    return Value{ .Int = @intCast(whole - 1) };
+                } else {
+                    return Value{ .Int = @intCast(whole) };
+                }
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
+    if (std.mem.eql(u8, function_name, "floor")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Int => |i| return Value{ .Int = i },
+            .Decimal => |d| {
+                const divisor = std.math.pow(i128, 10, d.scale);
+                var whole = @divTrunc(d.coeff, divisor);
+                // If negative and has fractional part, round down
+                if (d.coeff < 0 and @rem(d.coeff, divisor) != 0) {
+                    whole -= 1;
+                }
+                return Value{ .Int = @intCast(whole) };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
+    if (std.mem.eql(u8, function_name, "ceil")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Int => |i| return Value{ .Int = i },
+            .Decimal => |d| {
+                const divisor = std.math.pow(i128, 10, d.scale);
+                var whole = @divTrunc(d.coeff, divisor);
+                // If positive and has fractional part, round up
+                if (d.coeff > 0 and @rem(d.coeff, divisor) != 0) {
+                    whole += 1;
+                }
+                return Value{ .Int = @intCast(whole) };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+    
     // Handle aggregation functions (simplified for now - real implementation needs context)
     if (std.mem.eql(u8, function_name, "count")) {
         // COUNT(*) or COUNT(expr)

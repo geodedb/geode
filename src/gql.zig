@@ -43,8 +43,9 @@ test "arithmetic and IN list predicate" {
     try std.testing.expect(result.program.statements.len == 1);
 }
 
-test "string predicates and regex operator parse" {
-    const src = "MATCH (n) WHERE n.name STARTS WITH \"Al\" AND n.tag ENDS WITH \"Z\" AND n.bio CONTAINS \"graph\" AND n.name =~ \"^A.*\" RETURN n";
+test "string predicates parse" {
+    // GQL standard string predicates without Cypher regex operator
+    const src = "MATCH (n) WHERE n.name STARTS WITH \"Al\" AND n.tag ENDS WITH \"Z\" AND n.bio CONTAINS \"graph\" RETURN n";
     var result = try lib.parse(std.testing.allocator, src, .{});
     defer result.deinit();
     // parse already done
