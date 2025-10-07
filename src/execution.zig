@@ -159,6 +159,20 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
             }
             try writer.writeAll("}");
         },
+        .Map => |map| {
+            try writer.writeByte('{');
+            var iter = map.iterator();
+            var first = true;
+            while (iter.next()) |entry| {
+                if (!first) try writer.writeAll(",");
+                first = false;
+                try writer.writeByte('"');
+                try writer.writeAll(entry.key_ptr.*);
+                try writer.writeAll("\":");
+                try writeValue(writer, entry.value_ptr.*);
+            }
+            try writer.writeByte('}');
+        },
     }
 }
 
@@ -2259,6 +2273,7 @@ fn valuesEqual(a: eval.Value, b: eval.Value) bool {
             break :blk true;
         },
         .Node => |node_a| b == .Node and b.Node.id == node_a.id,
+        .Map => false, // Map comparison not implemented yet
     };
 }
 
@@ -2590,6 +2605,7 @@ fn getTypeOrder(v: eval.Value) u8 {
         .Str => 4,
         .List => 5,
         .Node => 6,
+        .Map => 7,
     };
 }
 

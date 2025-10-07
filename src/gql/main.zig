@@ -495,6 +495,7 @@ pub fn main() !void {
                                     .Decimal => |_| try w.print("<dec>", .{}),
                                     .List => |_| try w.print("<list>", .{}),
                                     .Node => |_| try w.print("<node>", .{}),
+                                    .Map => |_| try w.print("<map>", .{}),
                                 }
                             }
                             try w.print("\n", .{});

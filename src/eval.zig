@@ -48,6 +48,7 @@ pub const Value = union(enum) {
         orig_repr: ?[]const u8 = null,
     },
     List: []Value,
+    Map: std.StringHashMap(Value),
 };
 
 const Dec = struct { coeff: i128, scale: u8 };
@@ -213,6 +214,7 @@ fn eqVals(a: Value, b: Value) bool {
             }
             break :blk true;
         },
+        .Map => false, // Map equality comparison not implemented
     };
 }
 
@@ -774,6 +776,15 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             // Otherwise return null
             break :blk_member Value{ .Null = {} };
         },
+        .Map => |props| blk_map: {
+            // Create a map from properties
+            var map = std.StringHashMap(Value).init(ally);
+            for (props) |prop| {
+                const val = try evalExpr(ally, prop.value.*, env);
+                try map.put(prop.key, val);
+            }
+            break :blk_map Value{ .Map = map };
+        },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };
@@ -786,8 +797,9 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .List => .{ .Null = {} }, // TODO: ExtValue needs List support
-        .Node => .{ .Null = {} }, // TODO: ExtValue needs Node support
+        .List => .{ .Null = {} }, // ExtValue doesn't support complex types
+        .Node => .{ .Null = {} }, // ExtValue doesn't support graph types  
+        .Map => .{ .Null = {} }, // ExtValue doesn't support map types
     };
 }
 
@@ -818,6 +830,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = d.scale } },
         .List => .{ .Null = {} }, // TODO: heap.Value needs List support
         .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
+        .Map => .{ .Null = {} }, // TODO: heap.Value needs Map support
     };
 }
 
@@ -1135,6 +1148,39 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
                 return err;
             };
             return heapValueToEvalValue(result);
+        }
+    }
+    
+    // Handle map functions
+    if (std.mem.eql(u8, function_name, "keys")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Map => |map| {
+                var keys = try ally.alloc(Value, map.count());
+                var iter = map.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                }
+                return Value{ .List = keys };
+            },
+            else => return Value{ .Null = {} },
+        }
+    } else if (std.mem.eql(u8, function_name, "values")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Map => |map| {
+                var values = try ally.alloc(Value, map.count());
+                var iter = map.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    values[i] = entry.value_ptr.*;
+                }
+                return Value{ .List = values };
+            },
+            else => return Value{ .Null = {} },
         }
     }
 
