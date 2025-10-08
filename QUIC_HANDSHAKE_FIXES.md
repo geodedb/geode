@@ -57,9 +57,15 @@
 **Fix**: Changed type_bits from 0x20 to 0x10 in packet.zig line 550
 **Status**: FIXED - Handshake packets now use correct type field per RFC 9000
 
+### 8. ✅ FIXED: QUIC Fixed Bit Violation
+**Problem**: Initial and Handshake packets had fixed bit (bit 5) set to 0 instead of 1
+**Root Cause**: Using 0xc0 for long header instead of 0xe0 (fixed bit not set)
+**Fix**: Changed from 0xc0 to 0xe0 in both Initial and Handshake packet encoding (packet.zig lines 316, 553)
+**Status**: FIXED - All QUIC packets now have the required fixed bit set per RFC 9000
+
 ## Summary of Fixes Applied
 
-We successfully identified and fixed 7 critical issues in the QUIC handshake implementation:
+We successfully identified and fixed 8 critical issues in the QUIC handshake implementation:
 
 1. **epoll Socket Reception** - Server can now receive UDP packets
 2. **Handshake Packet Connection IDs** - Using correct peer connection IDs
@@ -68,6 +74,7 @@ We successfully identified and fixed 7 critical issues in the QUIC handshake imp
 5. **Connection ID Routing** - Correctly handles empty source connection IDs
 6. **ACK Frame Inclusion** - Server properly acknowledges Initial packets
 7. **Packet Type Bits** - Fixed Handshake packet type field (0x10 not 0x20)
+8. **Fixed Bit Compliance** - All packets now have required fixed bit set to 1
 
 ## Current Status
 
