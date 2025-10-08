@@ -1691,13 +1691,19 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
             }
         } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
-            // Transaction begin - not implemented yet
+            // Transaction begin - not implemented yet, send error response
+            const error_resp = "{\"result\":{\"type\":\"ERROR\",\"code\":\"0A000\",\"message\":\"Transactions not yet implemented\"}}\n";
+            _ = try stdout_fd.writeAll(error_resp);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
-            // Transaction commit - not implemented yet
+            // Transaction commit - not implemented yet, send error response
+            const error_resp = "{\"result\":{\"type\":\"ERROR\",\"code\":\"0A000\",\"message\":\"Transactions not yet implemented\"}}\n";
+            _ = try stdout_fd.writeAll(error_resp);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
-            // Transaction rollback - not implemented yet
+            // Transaction rollback - not implemented yet, send error response
+            const error_resp = "{\"result\":{\"type\":\"ERROR\",\"code\":\"0A000\",\"message\":\"Transactions not yet implemented\"}}\n";
+            _ = try stdout_fd.writeAll(error_resp);
             continue;
         }
     }

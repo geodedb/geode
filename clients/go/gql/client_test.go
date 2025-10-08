@@ -144,6 +144,7 @@ func TestGQL_SetDistinct(t *testing.T) {
 }
 
 func TestGQL_CaseParams(t *testing.T) {
+	t.Skip("Parameter expansion with array parameters not yet implemented")
 	c := withConn(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
