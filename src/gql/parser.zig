@@ -2872,16 +2872,22 @@ pub const Parser = struct {
                     .expression = graph_expr,
                 } },
             } };
-        } else if (self.cur.kind == .time_lit) {
+        } else if (self.cur.kind == .time_lit or
+                   (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME"))) {
             // Handle TIME ZONE in SESSION SET context
+            // Note: "TIME" without following string literal is lexed as .identifier
             self.advance();
             _ = try self.expect(.ZONE);
 
-            // Parse time zone value
+            // Parse time zone value - can be string literal or LOCAL keyword
             const tz_value = if (self.cur.kind == .string_lit) blk: {
                 const val = self.cur.lexeme;
                 self.advance();
                 break :blk val;
+            } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "LOCAL")) blk2: {
+                const val = self.cur.lexeme;
+                self.advance();
+                break :blk2 val;
             } else {
                 return error.UnexpectedToken;
             };
