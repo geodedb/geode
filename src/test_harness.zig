@@ -57,6 +57,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.GroupingError) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"grouping error: non-aggregated expression not in GROUP BY\",\"additional_statuses\":[]}}", .{});
         }
+        if (err == error.UnorderedPagination) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"US001\",\"message\":\"OFFSET requires ORDER BY clause\",\"additional_statuses\":[]}}", .{});
+        }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
             error.TypeMismatch => "Type mismatch in expression",
@@ -64,6 +67,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.OutOfMemory => return err,
             error.Unsupported => "Unsupported operation",
             error.GroupingError => unreachable,
+            error.UnorderedPagination => unreachable,
             else => "Execution error",
         };
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"error\":\"{s}\",\"additional_statuses\":[]}}", .{error_msg});

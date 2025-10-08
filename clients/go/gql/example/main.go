@@ -25,7 +25,7 @@ func main() {
 	case "quic":
 		dsn = fmt.Sprintf("quic://%s?page_size=100", *server)
 	default:
-		dsn = "process:./zig-out/bin/geoded?page_size=100"
+		dsn = "process:./zig-out/bin/geode?page_size=100"
 	}
 
 	if *verbose {

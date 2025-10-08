@@ -1448,6 +1448,12 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Use the geode module to execute queries
     const geode_lib = @import("geode");
 
+    // Store the last query result and query text for PULL requests
+    var last_result: ?[]const u8 = null;
+    defer if (last_result) |r| ally.free(r);
+    var last_query: ?[]const u8 = null;
+    defer if (last_query) |q| ally.free(q);
+
     // Read line by line from stdin
     var line_buf: [65536]u8 = undefined;
 
@@ -1480,7 +1486,9 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         const msg_type = obj.get("type") orelse continue;
 
         if (std.mem.eql(u8, msg_type.string, "HELLO")) {
-            // Respond to HELLO (handshake) - just acknowledge
+            // Respond to HELLO (handshake) with server info
+            const hello_resp = "{\"result\":{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_version\":\"0.16.0\"}}\n";
+            _ = try stdout_fd.writeAll(hello_resp);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
             // Execute GQL query
@@ -1501,13 +1509,32 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 _ = try stdout_fd.writeAll(error_resp);
                 continue;
             };
-            // Parse the result JSON to extract columns and rows
+
+            // Parse the result JSON to check for errors
             const result_parsed = try json.parseFromSlice(json.Value, ally, result, .{});
             defer result_parsed.deinit();
 
             const result_obj = result_parsed.value.object;
+
+            // Check if this is an error response (status_class != "00000")
+            if (result_obj.get("status_class")) |status_class| {
+                if (!std.mem.eql(u8, status_class.string, "00000")) {
+                    // This is an error - send ERROR response with the status code
+                    const error_msg = if (result_obj.get("message")) |msg| msg.string else "Query error";
+                    const error_resp = try std.fmt.allocPrint(ally, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"{s}\",\"message\":\"{s}\"}}}}\n", .{ status_class.string, error_msg });
+                    defer ally.free(error_resp);
+                    _ = try stdout_fd.writeAll(error_resp);
+                    continue;
+                }
+            }
+
+            // Store result and query text for PULL request
+            if (last_result) |r| ally.free(r);
+            last_result = try ally.dupe(u8, result);
+            if (last_query) |q| ally.free(q);
+            last_query = try ally.dupe(u8, query_text);
+
             const columns = result_obj.get("columns") orelse continue;
-            _ = result_obj.get("rows") orelse continue; // We'll use this for PULL
 
             // Send SCHEMA response first
             _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
@@ -1522,20 +1549,144 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
             _ = try stdout_fd.writeAll("]}}\n");
 
-            // DON'T send DATA yet - wait for PULL request
-            // The Go client will send a PULL request to get the data
+            // Wait for PULL request to send data
 
         } else if (std.mem.eql(u8, msg_type.string, "PULL")) {
-            // Handle PULL request - send DATA rows
-            const request_id = if (obj.get("request_id")) |rid| rid.integer else 1;
-            const page_size = if (obj.get("page_size")) |ps| ps.integer else 1000;
-            _ = request_id;
-            _ = page_size;
+            // Handle PULL request - send BINDINGS with data from last query
+            if (last_result) |result_str| {
+                // Parse the stored result
+                const result_parsed = try json.parseFromSlice(json.Value, ally, result_str, .{});
+                defer result_parsed.deinit();
 
-            // For now, just send empty data and END
-            // In a real implementation, we'd need to store the query results
-            // and send them here
-            _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
+                const result_obj = result_parsed.value.object;
+                const columns = result_obj.get("columns") orelse {
+                    _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
+                    continue;
+                };
+                const rows_array = result_obj.get("rows") orelse {
+                    _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
+                    continue;
+                };
+
+                // Check if query has ORDER BY clause and extract order keys
+                var order_keys_list = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
+                defer {
+                    for (order_keys_list.items) |key| ally.free(key);
+                    order_keys_list.deinit(ally);
+                }
+
+                const ordered_val = if (last_query) |query_text| blk: {
+                    // Simple heuristic: check if query contains "ORDER BY" (case insensitive)
+                    var query_upper = try ally.alloc(u8, query_text.len);
+                    defer ally.free(query_upper);
+                    for (query_text, 0..) |c, i| {
+                        query_upper[i] = if (c >= 'a' and c <= 'z') c - 32 else c;
+                    }
+                    const order_by_pos = std.mem.indexOf(u8, query_upper, "ORDER BY");
+                    if (order_by_pos) |pos| {
+                        // Extract columns between ORDER BY and next clause (LIMIT, OFFSET, etc.)
+                        const order_start = pos + "ORDER BY".len;
+                        var order_end = query_text.len;
+
+                        // Find the end of the ORDER BY clause
+                        for (&[_][]const u8{ "LIMIT", "OFFSET", "UNION", "EXCEPT", "INTERSECT" }) |keyword| {
+                            if (std.mem.indexOf(u8, query_upper[order_start..], keyword)) |kw_pos| {
+                                const abs_pos = order_start + kw_pos;
+                                if (abs_pos < order_end) order_end = abs_pos;
+                            }
+                        }
+
+                        const order_clause = std.mem.trim(u8, query_text[order_start..order_end], " \t\n\r");
+
+                        // Parse column names (simple: split by comma, take first token before space/ASC/DESC)
+                        var iter = std.mem.splitSequence(u8, order_clause, ",");
+                        while (iter.next()) |col_expr| {
+                            const trimmed = std.mem.trim(u8, col_expr, " \t\n\r");
+                            // Take just the column name (before space, ASC, or DESC)
+                            var col_name = trimmed;
+                            if (std.mem.indexOf(u8, trimmed, " ")) |space_pos| {
+                                col_name = trimmed[0..space_pos];
+                            }
+                            if (col_name.len > 0) {
+                                const col_copy = try ally.dupe(u8, col_name);
+                                try order_keys_list.append(ally, col_copy);
+                            }
+                        }
+                        break :blk true;
+                    }
+                    break :blk false;
+                } else false;
+
+                // Convert rows from array-of-arrays to array-of-objects
+                // Test harness returns: [[1, 2], [3, 4]]
+                // Go client expects: [{"col1": 1, "col2": 2}, {"col1": 3, "col2": 4}]
+                _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"BINDINGS\",");
+                const ordered_str = try std.fmt.allocPrint(ally, "\"ordered\":{s},", .{if (ordered_val) "true" else "false"});
+                defer ally.free(ordered_str);
+                _ = try stdout_fd.writeAll(ordered_str);
+
+                // Add order_keys if present
+                if (order_keys_list.items.len > 0) {
+                    _ = try stdout_fd.writeAll("\"order_keys\":[");
+                    for (order_keys_list.items, 0..) |key, idx| {
+                        if (idx > 0) _ = try stdout_fd.writeAll(",");
+                        const key_str = try std.fmt.allocPrint(ally, "\"{s}\"", .{key});
+                        defer ally.free(key_str);
+                        _ = try stdout_fd.writeAll(key_str);
+                    }
+                    _ = try stdout_fd.writeAll("],");
+                }
+
+                _ = try stdout_fd.writeAll("\"final\":true,\"rows\":[");
+
+                // Convert each row
+                for (rows_array.array.items, 0..) |row_array, row_idx| {
+                    if (row_idx > 0) _ = try stdout_fd.writeAll(",");
+                    _ = try stdout_fd.writeAll("{");
+
+                    // Match each value with its column name
+                    for (columns.array.items, 0..) |col, col_idx| {
+                        if (col_idx > 0) _ = try stdout_fd.writeAll(",");
+                        const col_name = col.string;
+                        const val = row_array.array.items[col_idx];
+
+                        // Write column name and value
+                        const pair = try std.fmt.allocPrint(ally, "\"{s}\":", .{col_name});
+                        defer ally.free(pair);
+                        _ = try stdout_fd.writeAll(pair);
+
+                        // Write the value based on its type
+                        switch (val) {
+                            .integer => |i| {
+                                const val_str = try std.fmt.allocPrint(ally, "{d}", .{i});
+                                defer ally.free(val_str);
+                                _ = try stdout_fd.writeAll(val_str);
+                            },
+                            .string => |s| {
+                                const val_str = try std.fmt.allocPrint(ally, "\"{s}\"", .{s});
+                                defer ally.free(val_str);
+                                _ = try stdout_fd.writeAll(val_str);
+                            },
+                            .bool => |b| {
+                                _ = try stdout_fd.writeAll(if (b) "true" else "false");
+                            },
+                            .null => {
+                                _ = try stdout_fd.writeAll("null");
+                            },
+                            else => {
+                                _ = try stdout_fd.writeAll("null");
+                            },
+                        }
+                    }
+
+                    _ = try stdout_fd.writeAll("}");
+                }
+
+                _ = try stdout_fd.writeAll("]}}\n");
+            } else {
+                // No stored result, send END
+                _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
+            }
         } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
             // Transaction begin - not implemented yet
             continue;
@@ -1555,6 +1706,10 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             printServeUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
+        }
+        // If --stdio flag is present, redirect to cmdStdio
+        if (std.mem.eql(u8, argv[i], "--stdio")) {
+            return cmdStdio(ally, argv, start_idx);
         }
     }
 

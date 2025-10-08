@@ -16,6 +16,7 @@ pub const ExecutionError = error{
     DivisionByZero,
     Unsupported,
     GroupingError,
+    UnorderedPagination,
 };
 
 pub const ExecutionResult = struct {
@@ -226,6 +227,11 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     switch (stmt) {
         .Query => |q| {
+            // Validate: OFFSET requires ORDER BY (US001)
+            if (q.offset != null and q.order_by == null) {
+                return ExecutionError.UnorderedPagination;
+            }
+
             // Check if query has SKIP or LIMIT
             var result = try executeQueryWithContext(allocator, q, context);
 
@@ -2468,6 +2474,11 @@ fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !Exec
     // Apply ORDER BY from the last query to the entire result
     if (last_query.order_by) |order| {
         try sortRows(allocator, &result, order);
+    }
+
+    // Validate: OFFSET requires ORDER BY (US001)
+    if (last_query.offset != null and last_query.order_by == null) {
+        return ExecutionError.UnorderedPagination;
     }
 
     // Apply SKIP and LIMIT from the LAST query in the union (applies to entire result)
