@@ -106,9 +106,16 @@ While the handshake still times out, significant progress has been made in fixin
 - `packet.zig`: Lines 557, 578, 619-620 - Track packet encoding and header changes
 - `crypto_quic.zig`: Line 138 - Track header protection mask application
 
+## Issue 10: ✅ FIXED: Handshake Packet First Byte Double-OR Issue
+
+**Problem**: Handshake packet first byte was 0xEF instead of expected 0xE1
+**Root Cause**: The code was ORing 0xe0 with type_bits (0x20), but 0xe0 already includes the Handshake type bits
+**Fix**: Removed redundant OR with type_bits since 0xe0 already has the correct Handshake type (packet.zig line 555)
+**Status**: FIXED - Handshake packets now start with correct first byte (0xE1 before protection, 0xE6 after)
+
 ## Summary of All Fixes
 
-We have successfully identified and fixed 9 critical QUIC protocol violations:
+We have successfully identified and fixed 10 critical QUIC protocol violations:
 
 1. **epoll Socket Reception** - Fixed blocking issue preventing packet reception
 2. **Handshake Packet Connection IDs** - Correctly using peer's connection ID
