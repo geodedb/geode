@@ -13,6 +13,7 @@ This document tracks critical bug fixes implemented to address test failures in 
 | String concatenation (`||`) type coercion missing | 211+ tests failing | Type system, expressions | ✅ FIXED |
 | Memory leak in string concatenation | Memory issues | All `||` operations | ✅ FIXED |
 | Error messages showing only "error" | Poor user experience | All syntax/execution errors | ✅ FIXED |
+| Implicit GROUP BY not supported | Many aggregation tests failing | Aggregation queries without explicit GROUP BY | ✅ FIXED |
 
 ---
 
@@ -348,6 +349,111 @@ make geodetestlab-comprehensive
 # Check for memory leaks
 valgrind --leak-check=full ./zig-out/bin/geode query --no-quic "RETURN 'A' || 'B' AS result"
 ```
+
+---
+
+## Issue 4: Implicit GROUP BY Not Supported
+
+**Date**: January 8, 2025 (Evening)
+
+**Problem**: The database rejected queries with aggregation functions and non-aggregated expressions when no explicit GROUP BY clause was specified. According to SQL/GQL standards, such queries should automatically group by the non-aggregated expressions.
+
+**Example Failing Query**:
+```gql
+MATCH (p:Person)
+RETURN p.company AS company, count(p) AS employee_count
+-- Expected: Implicit GROUP BY p.company
+-- Actual: ERROR (GroupingError)
+```
+
+**Root Cause**: In `src/execution.zig`, the `validateGroupBy` function (lines 669-688) strictly rejected mixed aggregation/non-aggregation without an explicit GROUP BY:
+
+```zig
+if (has_aggregation and has_non_aggregation and group_by == null) {
+    return error.GroupingError;
+}
+```
+
+**Solution**:
+
+1. **Removed strict validation** (lines 669-676):
+```zig
+fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
+    _ = ret;
+    _ = group_by;
+    // SQL/GQL standard: implicit GROUP BY is allowed
+    // When there's aggregation and non-aggregated expressions without explicit GROUP BY,
+    // the non-aggregated expressions become implicit grouping keys
+    // No validation error needed - the execution logic handles both explicit and implicit grouping
+}
+```
+
+2. **Implemented implicit GROUP BY creation** in `executeMatchQuery` (lines 1812-1838):
+```zig
+// Check if we have any aggregations and collect non-aggregated expressions
+var has_aggregation = false;
+var non_aggregated_exprs = std.ArrayList(ast.Expr).initCapacity(allocator, 0) catch unreachable;
+defer non_aggregated_exprs.deinit(allocator);
+
+for (items) |item| {
+    if (isAggregationExpr(item.expr)) {
+        has_aggregation = true;
+    } else if (isNonConstantExpr(item.expr)) {
+        // Collect non-aggregated, non-constant expressions for implicit GROUP BY
+        non_aggregated_exprs.append(allocator, item.expr) catch unreachable;
+    }
+}
+
+if (has_aggregation) {
+    // Determine the effective GROUP BY (explicit or implicit)
+    var implicit_keys: ?[]ast.Expr = null;
+    defer if (implicit_keys) |keys| allocator.free(keys);
+
+    const effective_group_by: ?ast.GroupBy = if (q.group_by) |gb|
+        gb
+    else if (non_aggregated_exprs.items.len > 0) blk: {
+        // Create implicit GROUP BY from non-aggregated expressions
+        implicit_keys = non_aggregated_exprs.toOwnedSlice(allocator) catch unreachable;
+        break :blk ast.GroupBy{ .keys = implicit_keys.? };
+    } else
+        null;
+
+    // Use effective_group_by for grouping logic
+    if (effective_group_by) |group_by| {
+        // ... existing GROUP BY logic
+```
+
+**Files Modified**:
+- `src/execution.zig`:
+  - Lines 669-676: Simplified `validateGroupBy()` to allow implicit grouping
+  - Lines 1812-1841: Added implicit GROUP BY detection and creation logic
+  - Proper memory management with `defer` for implicit keys
+
+**Testing**:
+```bash
+# Clean test
+rm -rf /tmp/geode_graph_store.bin
+
+# Create test data
+./zig-out/bin/geode query --no-quic "CREATE (:Person {company: 'TechCorp', name: 'Alice'})"
+./zig-out/bin/geode query --no-quic "CREATE (:Person {company: 'TechCorp', name: 'Bob'})"
+./zig-out/bin/geode query --no-quic "CREATE (:Person {company: 'FinCorp', name: 'Charlie'})"
+
+# Test implicit GROUP BY (NO explicit GROUP BY clause!)
+./zig-out/bin/geode query --no-quic "MATCH (p:Person) RETURN p.company AS company, count(p) AS employee_count"
+# Output: {"status_class":"00000","columns":["company","employee_count"],"rows":[["TechCorp",2],["FinCorp",1]]}
+# ✅ Works! Automatically grouped by p.company
+```
+
+**Impact**:
+- Enables SQL/GQL standard implicit GROUP BY behavior
+- Many aggregation tests should now pass
+- Node pattern queries with aggregation now work correctly
+
+**Known Limitations**:
+- Relationship pattern GROUP BY (both explicit and implicit) has a pre-existing bug where the grouping key evaluation doesn't have access to the full relationship context
+- Example: `MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name, count(p)` returns null for c.name
+- This is a separate issue that affects both explicit and implicit GROUP BY
 
 ---
 

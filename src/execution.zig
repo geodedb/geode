@@ -667,24 +667,12 @@ fn createTestGraphG2(allocator: std.mem.Allocator) !void {
 }
 
 fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
-    const items = ret.items;
-
-    // Check if we have mixed aggregation and non-aggregation without GROUP BY
-    var has_aggregation = false;
-    var has_non_aggregation = false;
-
-    for (items) |item| {
-        if (isAggregationExpr(item.expr)) {
-            has_aggregation = true;
-        } else if (isNonConstantExpr(item.expr)) {
-            has_non_aggregation = true;
-        }
-    }
-
-    // If we have both aggregation and non-aggregation without GROUP BY, it's an error
-    if (has_aggregation and has_non_aggregation and group_by == null) {
-        return error.GroupingError;
-    }
+    _ = ret;
+    _ = group_by;
+    // SQL/GQL standard: implicit GROUP BY is allowed
+    // When there's aggregation and non-aggregated expressions without explicit GROUP BY,
+    // the non-aggregated expressions become implicit grouping keys
+    // No validation error needed - the execution logic handles both explicit and implicit grouping
 }
 
 fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
@@ -1806,18 +1794,36 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
         columns[i] = try allocator.dupe(u8, column_name);
     }
 
-    // Check if we have any aggregations
+    // Check if we have any aggregations and collect non-aggregated expressions
     var has_aggregation = false;
+    var non_aggregated_exprs = std.ArrayList(ast.Expr).initCapacity(allocator, 0) catch unreachable;
+    defer non_aggregated_exprs.deinit(allocator);
+
     for (items) |item| {
         if (isAggregationExpr(item.expr)) {
             has_aggregation = true;
-            break;
+        } else if (isNonConstantExpr(item.expr)) {
+            // Collect non-aggregated, non-constant expressions for implicit GROUP BY
+            non_aggregated_exprs.append(allocator, item.expr) catch unreachable;
         }
     }
 
     if (has_aggregation) {
-        // Check if we have GROUP BY
-        if (q.group_by) |group_by| {
+        // Determine the effective GROUP BY (explicit or implicit)
+        var implicit_keys: ?[]ast.Expr = null;
+        defer if (implicit_keys) |keys| allocator.free(keys);
+
+        const effective_group_by: ?ast.GroupBy = if (q.group_by) |gb|
+            gb
+        else if (non_aggregated_exprs.items.len > 0) blk: {
+            // Create implicit GROUP BY from non-aggregated expressions
+            implicit_keys = non_aggregated_exprs.toOwnedSlice(allocator) catch unreachable;
+            break :blk ast.GroupBy{ .keys = implicit_keys.? };
+        } else
+            null;
+
+        // Use effective_group_by for grouping logic
+        if (effective_group_by) |group_by| {
             // GROUP BY with aggregations - group rows and compute aggregations per group
             var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
             var group_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
