@@ -33,7 +33,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean vendor-quic cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
-.PHONY: telemetry-smoke quic-smoke quic-smoke-strict
+.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test quic-test-vendor quic-test-e2e
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
@@ -94,12 +94,20 @@ go-vendor-check:
 	@echo "  make qemu-test-clients   - Test clients with QEMU emulation"
 	@echo ""
 	@echo "Test targets:"
-	@echo "  make test        - Run all tests (Zig + Go + dataset)"
+	@echo "  make test        - Run all tests (Zig + Go + QUIC + dataset)"
 	@echo "  make integration-test - Run comprehensive integration tests"
 	@echo "  make dataset-integration-test - Test dataset with all clients"
 	@echo "  make load-dataset - Load example social network dataset"
 	@echo "  make fuzz        - Run fuzz tests"
 	@echo "  make bench       - Run benchmarks"
+	@echo ""
+	@echo "QUIC test targets:"
+	@echo "  make quic-test        - Run core QUIC tests (vendor e2e)"
+	@echo "  make quic-test-vendor - Run vendor QUIC end-to-end tests"
+	@echo "  make quic-test-e2e    - Alias for quic-test-vendor"
+	@echo "  make quic-test-extended - Run vendor + smoke tests"
+	@echo "  make quic-smoke       - Run QUIC smoke tests (non-fatal)"
+	@echo "  make quic-smoke-strict - Run QUIC smoke tests (strict mode)"
 	@echo ""
 	@echo "Geodetestlab targets:"
 	@echo "  make geodetestlab - Run all geodetestlab test specifications"
@@ -154,15 +162,25 @@ go-vendor-check:
 build:
 	$(ZIG) build $(ZIG_FLAGS)
 	$(MAKE) go-build
+	@echo "Building vendor QUIC test binaries..."
+	@if [ -d "vendor/quic" ]; then \
+		cd vendor/quic && $(ZIG) build cli $(ZIG_FLAGS) 2>/dev/null || true; \
+	fi
 
 release:
 	$(ZIG) build $(ZIG_RELEASE_FLAGS)
 	$(MAKE) go-build
+	@echo "Building vendor QUIC test binaries..."
+	@if [ -d "vendor/quic" ]; then \
+		cd vendor/quic && $(ZIG) build cli $(ZIG_RELEASE_FLAGS) 2>/dev/null || true; \
+	fi
 
 # Run Zig tests
 test:
 	$(ZIG) build test $(ZIG_FLAGS)
 	$(MAKE) go-test
+	@echo "Running QUIC tests..."
+	$(MAKE) quic-test-vendor
 	@echo "Running dataset integration tests (if dataset is loaded)..."
 	@if [ -x "scripts/run_dataset_integration_tests.sh" ]; then \
 		./scripts/run_dataset_integration_tests.sh 2>/dev/null || echo "Dataset tests skipped (dataset may not be loaded)"; \
@@ -546,11 +564,11 @@ canary-verify: canary
 .PHONY: verify-all verify-fast ci-verify
 
 # Full, strict E2E verification. Fails on vendoring issues immediately.
-verify-all: clean sub quic-init fmt go-prep build test integration-test dataset-integration-test geodetestlab cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+verify-all: clean sub quic-init fmt go-prep build test integration-test dataset-integration-test quic-test geodetestlab cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
 	@echo "==> E2E verification: PASSED"
 
 # Faster dev loop (no fuzz/bench/docker/governance)
-verify-fast: go-prep build test geodetestlab-comprehensive cross-compile-required cross-go-clients
+verify-fast: go-prep build test quic-test-vendor geodetestlab-comprehensive cross-compile-required cross-go-clients
 	@echo "==> Fast verification: PASSED"
 
 # CI-friendly alias
@@ -604,7 +622,7 @@ clean:
 	$(MAKE) go-clean
 
 # Run build, test, fuzz, bench, strict cross, clients, governance, docker
-ci: clean go-prep build test geodetestlab fuzz bench cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+ci: clean go-prep build test quic-test geodetestlab fuzz bench cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
 	@echo "CI pipeline completed successfully (v0.17.1)"
 
 # Strict cross-compilation for CI (fails on any error)
@@ -635,6 +653,29 @@ quic-smoke-strict: build
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_quic_explain_smoke.zig
 	@echo "Running telemetry smoke (STRICT) with passive teardown..."
 	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 GEODE_TELEMETRY_PAGING=1 GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test test_telemetry_smoke.zig
+
+# Vendor QUIC end-to-end test (verifies QUIC handshake, data transmission, clean teardown)
+quic-test-vendor: build
+	@echo "Running vendor QUIC end-to-end test..."
+	@if [ -x "./test_vendor_e2e.sh" ]; then \
+		./test_vendor_e2e.sh; \
+	else \
+		echo "test_vendor_e2e.sh not found or not executable"; \
+		echo "Run: chmod +x test_vendor_e2e.sh"; \
+		exit 1; \
+	fi
+	@echo "✓ Vendor QUIC tests passed"
+
+# Comprehensive QUIC test suite (vendor tests only, smoke tests optional)
+quic-test: quic-test-vendor
+	@echo "✓ All QUIC tests passed"
+
+# Extended QUIC test suite including smoke tests (may require server running)
+quic-test-extended: quic-test-vendor quic-smoke-strict
+	@echo "✓ All extended QUIC tests passed"
+
+# End-to-end QUIC test alias (for clarity)
+quic-test-e2e: quic-test-vendor
 
 # Run transport parity smokes (env-gated, non-fatal): compares stdio vs QUIC for multiple deterministic queries
 transport-parity-smokes: build
