@@ -813,7 +813,11 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 };
 
                 const result = std.math.pow(f64, base, exponent);
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                // Check for NaN, infinity, or overflow before converting
+                if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
+                const scaled = result * 1000000;
+                if (scaled < -1.7e38 or scaled > 1.7e38) break :blk_call .{ .Null = {} }; // Overflow check
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "sin")) {
@@ -825,6 +829,8 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 };
                 const result = @sin(val);
+                // Check for NaN before converting
+                if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
@@ -837,6 +843,8 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 };
                 const result = @cos(val);
+                // Check for NaN before converting
+                if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
@@ -849,7 +857,11 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 };
                 const result = @tan(val);
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                // Check for NaN or infinity before converting
+                if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
+                const scaled = result * 1000000;
+                if (scaled < -1.7e38 or scaled > 1.7e38) break :blk_call .{ .Null = {} }; // Overflow check
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "log")) {
@@ -862,6 +874,8 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 };
                 if (val <= 0) break :blk_call .{ .Null = {} };
                 const result = @log(val);
+                // Check for NaN or infinity before converting
+                if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
@@ -874,7 +888,11 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     else => break :blk_call .{ .Null = {} },
                 };
                 const result = @exp(val);
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                // Check for NaN, infinity, or overflow before converting
+                if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
+                const scaled = result * 1000000;
+                if (scaled < -1.7e38 or scaled > 1.7e38) break :blk_call .{ .Null = {} }; // Overflow check
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "ceil")) {

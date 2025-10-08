@@ -2016,9 +2016,9 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     };
     defer ally.free(result);
 
-    // Check if the result indicates a syntax error
-    if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null) {
-        // This is a syntax error - write to stderr and exit with code 1
+    // Check if the result indicates a syntax error or execution error
+    if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {
+        // This is an error - write to stderr and exit with code 1
         const stderr_fd = std.fs.File{ .handle = 2 };
         if (std.mem.indexOf(u8, result, "syntax error") != null) {
             _ = try stderr_fd.writeAll("syntax error\n");

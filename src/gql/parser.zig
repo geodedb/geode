@@ -1728,6 +1728,7 @@ pub const Parser = struct {
             .Unary => true,
             .Ident => true,
             .Member => true,
+            .Call => true, // allow nested function calls
             else => false,
         };
     }
@@ -1737,6 +1738,7 @@ pub const Parser = struct {
             .String => true,
             .Ident => true,
             .Member => true,
+            .Call => true, // allow nested function calls
             else => false,
         };
     }
