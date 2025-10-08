@@ -230,7 +230,7 @@ fn cmpIntsOp(op: ast.BinOp, a: i64, b: i64) Value {
     } };
 }
 
-fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
+fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
         .Or => or3(l, r),
@@ -314,11 +314,11 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
                 const unicode = @import("unicode/geode_unicode.zig");
                 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
                 defer _ = gpa.deinit();
-                const alloc = gpa.allocator();
-                const ln = unicode.nfcNormalize(alloc, l.Str) catch return EvalError.Unsupported;
-                defer alloc.free(ln);
-                const rn = unicode.nfcNormalize(alloc, r.Str) catch return EvalError.Unsupported;
-                defer alloc.free(rn);
+                const gpa_alloc = gpa.allocator();
+                const ln = unicode.nfcNormalize(gpa_alloc, l.Str) catch return EvalError.Unsupported;
+                defer gpa_alloc.free(ln);
+                const rn = unicode.nfcNormalize(gpa_alloc, r.Str) catch return EvalError.Unsupported;
+                defer gpa_alloc.free(rn);
                 const ord = std.mem.order(u8, ln, rn);
                 return .{ .Bool = switch (op) {
                     .Eq => ord == .eq,
@@ -348,17 +348,18 @@ fn evalBinary(op: ast.BinOp, l: Value, r: Value) EvalError!Value {
             return EvalError.TypeMismatch;
         },
         .Concat => blk6: {
-            if (l == .Str and r == .Str) {
-                // String concatenation: allocate new string with combined length
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-                defer _ = gpa.deinit();
-                const alloc = gpa.allocator();
-                const result = alloc.alloc(u8, l.Str.len + r.Str.len) catch return EvalError.Unsupported;
-                @memcpy(result[0..l.Str.len], l.Str);
-                @memcpy(result[l.Str.len..], r.Str);
-                break :blk6 .{ .Str = result };
-            }
-            return EvalError.TypeMismatch;
+            // String concatenation with type coercion
+            // Convert both operands to strings if needed
+            var buf_l: [64]u8 = undefined;
+            var buf_r: [64]u8 = undefined;
+            const str_l = if (l == .Str) l.Str else try stringify(l, &buf_l);
+            const str_r = if (r == .Str) r.Str else try stringify(r, &buf_r);
+
+            // Allocate result string with combined length
+            const result = alloc.alloc(u8, str_l.len + str_r.len) catch return EvalError.OutOfMemory;
+            @memcpy(result[0..str_l.len], str_l);
+            @memcpy(result[str_l.len..], str_r);
+            break :blk6 .{ .Str = result };
         },
     };
 }
@@ -487,6 +488,8 @@ fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported;
             break :blk s;
         },
+        .Bool => |b| if (b) "true" else "false",
+        .Null => "null",
         .Decimal => |d| blk2: {
             // render with scale decimal point
             const abs = if (d.coeff < 0) -d.coeff else d.coeff;
@@ -546,7 +549,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .Binary => |b| blk2: {
             const l = try evalExpr(ally, b.left.*, env);
             const r = try evalExpr(ally, b.right.*, env);
-            break :blk2 try evalBinary(b.op, l, r);
+            break :blk2 try evalBinary(ally, b.op, l, r);
         },
         .StartsWith => |sp| blk3: {
             const v = try evalExpr(ally, sp.value.*, env);

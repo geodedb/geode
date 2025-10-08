@@ -2018,13 +2018,26 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
 
     // Check if the result indicates a syntax error or execution error
     if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {
-        // This is an error - write to stderr and exit with code 1
+        // This is an error - extract and write error message to stderr
         const stderr_fd = std.fs.File{ .handle = 2 };
-        if (std.mem.indexOf(u8, result, "syntax error") != null) {
-            _ = try stderr_fd.writeAll("syntax error\n");
-        } else {
-            _ = try stderr_fd.writeAll("error\n");
+
+        // Try to extract the error message from the JSON
+        // Look for "message":"..." or "error":"..." pattern
+        var error_msg: []const u8 = "error";
+        if (std.mem.indexOf(u8, result, "\"message\":\"")) |msg_start| {
+            const msg_content_start = msg_start + "\"message\":\"".len;
+            if (std.mem.indexOfPos(u8, result, msg_content_start, "\"")) |msg_end| {
+                error_msg = result[msg_content_start..msg_end];
+            }
+        } else if (std.mem.indexOf(u8, result, "\"error\":\"")) |err_start| {
+            const err_content_start = err_start + "\"error\":\"".len;
+            if (std.mem.indexOfPos(u8, result, err_content_start, "\"")) |err_end| {
+                error_msg = result[err_content_start..err_end];
+            }
         }
+
+        _ = try stderr_fd.writeAll(error_msg);
+        _ = try stderr_fd.writeAll("\n");
         std.process.exit(1);
     }
 
