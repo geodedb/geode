@@ -10,12 +10,9 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"os"
 	"time"
 
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/logging"
-	"github.com/quic-go/quic-go/qlog"
 )
 
 func generateTLSConfig() *tls.Config {
@@ -51,27 +48,16 @@ func generateTLSConfig() *tls.Config {
 }
 
 func main() {
-	// Enable detailed logging
-	qlogger := qlog.DefaultTracer(func(p logging.Perspective, connID []byte) qlog.WriteCloser {
-		filename := fmt.Sprintf("server_%x.qlog", connID)
-		f, err := os.Create(filename)
-		if err != nil {
-			log.Fatal(err)
-		}
-		return qlog.NewWriter(f)
-	})
-
 	tlsConf := generateTLSConfig()
 
 	qConfig := &quic.Config{
-		Tracer:               qlogger,
 		HandshakeIdleTimeout: 10 * time.Second,
 		MaxIdleTimeout:       30 * time.Second,
 		KeepAlivePeriod:      10 * time.Second,
 	}
 
-	fmt.Println("Starting QUIC server on 127.0.0.1:3142...")
-	listener, err := quic.ListenAddr("127.0.0.1:3142", tlsConf, qConfig)
+	fmt.Println("Starting QUIC server on 127.0.0.1:3143...")
+	listener, err := quic.ListenAddr("127.0.0.1:3143", tlsConf, qConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -89,7 +75,7 @@ func main() {
 	}
 }
 
-func handleConnection(conn quic.Connection) {
+func handleConnection(conn *quic.Conn) {
 	fmt.Printf("Handling connection from %v\n", conn.RemoteAddr())
 	// Just accept streams for now
 	for {
