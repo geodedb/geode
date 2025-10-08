@@ -335,6 +335,49 @@ INSERT (n:Person {name: 'Frank', age: 25}) RETURN n.name, n.age
 
 ---
 
+### 4. keys() and values() Functions Fix - COMPLETE ✅
+
+**Status**: Parser keyword conflict resolved
+
+**Problem**:
+- `RETURN keys({name: 'Alice'})` was failing with syntax error
+- `WITH {a: 1} AS m RETURN keys(m)` also failed
+- Issue: KEYS and VALUES were reserved keywords in the lexer/parser
+
+**Root Cause**:
+- KEYS and VALUES were defined as tokens in `src/gql/token.zig`
+- Lexer was treating "keys" and "values" as keywords instead of function names
+- Parser couldn't recognize them as function calls
+
+**Changes Made**:
+
+#### Token Changes (`src/gql/token.zig`)
+- **Line 127**: Commented out KEYS token definition
+- **Line 304**: Commented out KEYS keyword mapping in lexer
+- **Line 81**: Commented out VALUES token definition
+- **Line 258**: Commented out VALUES keyword mapping in lexer
+
+#### Parser Changes (`src/gql/parser.zig`)
+- **Line 137**: Removed KEYS from reserved keywords list
+- **Line 94**: Removed VALUES from reserved keywords list
+- **Line 343**: Updated SCAN VALUES parsing to handle VALUES as identifier
+
+#### Test Harness Changes (`src/test_harness.zig`)
+- **Line 73**: Changed error reporting to use `@errorName(err)` for better debugging
+
+**Test Results**:
+- ✅ `RETURN keys({name: 'Alice'})` → ["name"]
+- ✅ `WITH {name: 'Alice', age: 30} AS m RETURN keys(m)` → ["name", "age"]
+- ✅ `RETURN values({name: 'Alice', age: 30})` → ["Alice", 30]
+- ✅ `WITH {name: 'Alice', age: 30, city: 'NYC'} AS person RETURN keys(person), values(person)` → [["city", "name", "age"], ["NYC", "Alice", 30]]
+- ✅ `SCAN VALUES` → Still parses correctly (not implemented but no syntax error)
+
+**Known Issues**: None
+
+**Estimated Impact**: ~6 tests now passing (keys/values tests in test suite)
+
+---
+
 **Last Updated**: January 8, 2025 (Continued Session)
-**Status**: Three major features complete - WITH clause, Map member access, INSERT patterns
-**Next Steps**: Debug keys() bug, setup test fixtures, implement EXPLAIN/PROFILE
+**Status**: Four major features complete - WITH clause, Map member access, INSERT patterns, keys/values functions
+**Next Steps**: Setup test fixtures, implement EXPLAIN/PROFILE

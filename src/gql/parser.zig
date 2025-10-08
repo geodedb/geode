@@ -91,7 +91,7 @@ pub const Parser = struct {
             .CLOSE,
             .INSERT,
             .VALUE,
-            .VALUES,
+            // .VALUES - Removed to allow values() function calls
             .SCAN,
             .START,
             .TRANSACTION,
@@ -134,7 +134,7 @@ pub const Parser = struct {
             .IF,
             .TO,
             .KEY,
-            .KEYS,
+            // .KEYS - Removed from reserved keywords to allow keys() function calls
             .LABELS,
             .LOAD,
             .CSV,
@@ -340,7 +340,7 @@ pub const Parser = struct {
                 // Syntax: SCAN VALUES; simple keyword VALUES optional
                 if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "VALUES")) {
                     self.advance();
-                } else if (self.cur.kind == .VALUE or self.cur.kind == .VALUES) {
+                } else if (self.cur.kind == .VALUE) {
                     self.advance();
                 }
                 break :blk_scan .ScanValues;

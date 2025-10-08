@@ -70,7 +70,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.Unsupported => "Unsupported operation",
             error.GroupingError => unreachable,
             error.UnorderedPagination => unreachable,
-            else => "Execution error",
+            else => @errorName(err),
         };
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"error\":\"{s}\",\"additional_statuses\":[]}}", .{error_msg});
     };

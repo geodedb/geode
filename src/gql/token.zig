@@ -78,7 +78,7 @@ pub const TokenKind = enum {
     CLOSE,
     INSERT,
     VALUE,
-    VALUES,
+    // VALUES - Removed to allow values() function calls (SCAN VALUES still works via identifier check)
     SCAN,
     START,
     TRANSACTION,
@@ -124,7 +124,7 @@ pub const TokenKind = enum {
     IF,
     TO,
     KEY,
-    KEYS,
+    // KEYS - Removed to allow keys() function calls
     LABELS,
     LOAD,
     CSV,
@@ -255,7 +255,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "CLOSE")) return .CLOSE;
     if (std.ascii.eqlIgnoreCase(word, "INSERT")) return .INSERT;
     if (std.ascii.eqlIgnoreCase(word, "VALUE")) return .VALUE;
-    if (std.ascii.eqlIgnoreCase(word, "VALUES")) return .VALUES;
+    // if (std.ascii.eqlIgnoreCase(word, "VALUES")) return .VALUES; // Removed to allow values() function
     if (std.ascii.eqlIgnoreCase(word, "SCAN")) return .SCAN;
     if (std.ascii.eqlIgnoreCase(word, "START")) return .START;
     if (std.ascii.eqlIgnoreCase(word, "TRANSACTION")) return .TRANSACTION;
@@ -301,7 +301,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "IF")) return .IF;
     if (std.ascii.eqlIgnoreCase(word, "TO")) return .TO;
     if (std.ascii.eqlIgnoreCase(word, "KEY")) return .KEY;
-    if (std.ascii.eqlIgnoreCase(word, "KEYS")) return .KEYS;
+    // if (std.ascii.eqlIgnoreCase(word, "KEYS")) return .KEYS; // Removed to allow keys() function
     if (std.ascii.eqlIgnoreCase(word, "LABELS")) return .LABELS;
     if (std.ascii.eqlIgnoreCase(word, "LOAD")) return .LOAD;
     if (std.ascii.eqlIgnoreCase(word, "CSV")) return .CSV;
