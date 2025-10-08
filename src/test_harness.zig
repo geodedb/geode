@@ -11,6 +11,7 @@ pub fn cleanupTestCatalog() void {
 pub const QueryOptions = struct {
     token: ?[]const u8 = null,
     user: ?[]const u8 = null,
+    strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY (US001)
 };
 
 // Main query execution function - ONLY parses and calls real Geode execution
@@ -49,6 +50,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     const exec_context = execution.ExecutionContext{
         .user = if (options.token != null) "authenticated_user" else null,
         .token = options.token,
+        .strict_offset_validation = options.strict_offset_validation,
     };
 
     // Execute the parsed program using Geode's execution engine

@@ -6,6 +6,7 @@ const graph_store = @import("graph_store.zig");
 pub const ExecutionContext = struct {
     user: ?[]const u8 = null,
     token: ?[]const u8 = null,
+    strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY
 };
 
 pub const ExecutionError = error{
@@ -227,8 +228,8 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     switch (stmt) {
         .Query => |q| {
-            // Validate: OFFSET requires ORDER BY (US001)
-            if (q.offset != null and q.order_by == null) {
+            // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
+            if (context.strict_offset_validation and q.offset != null and q.order_by == null) {
                 return ExecutionError.UnorderedPagination;
             }
 
@@ -269,7 +270,7 @@ fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement
             return result;
         },
         .Union => |u| {
-            return executeUnion(allocator, u);
+            return executeUnionWithContext(allocator, u, context);
         },
         .Create => |c| {
             return executeCreate(allocator, c);
@@ -2371,6 +2372,10 @@ fn valuesEqual(a: eval.Value, b: eval.Value) bool {
 }
 
 fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !ExecutionResult {
+    return executeUnionWithContext(allocator, union_query, .{});
+}
+
+fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQuery, context: ExecutionContext) !ExecutionResult {
     // Execute first query (but don't apply its limit/offset yet)
     var result = try executeQueryNoLimit(allocator, union_query.first);
     errdefer result.deinit(allocator);
@@ -2476,8 +2481,8 @@ fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !Exec
         try sortRows(allocator, &result, order);
     }
 
-    // Validate: OFFSET requires ORDER BY (US001)
-    if (last_query.offset != null and last_query.order_by == null) {
+    // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
+    if (context.strict_offset_validation and last_query.offset != null and last_query.order_by == null) {
         return ExecutionError.UnorderedPagination;
     }
 

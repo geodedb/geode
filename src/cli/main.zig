@@ -701,6 +701,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             const options = geode_lib.test_harness.QueryOptions{
                 .token = null,
                 .user = null,
+                .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
             };
 
             var mut_ally = allocator;
@@ -1499,6 +1500,7 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             const options = geode_lib.test_harness.QueryOptions{
                 .token = null,
                 .user = null,
+                .strict_offset_validation = true, // Stdio mode enforces US001 (OFFSET requires ORDER BY)
             };
 
             var mut_ally = ally;
@@ -1509,6 +1511,7 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 _ = try stdout_fd.writeAll(error_resp);
                 continue;
             };
+            defer mut_ally.free(result);
 
             // Parse the result JSON to check for errors
             const result_parsed = try json.parseFromSlice(json.Value, ally, result, .{});
@@ -1988,6 +1991,7 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     const options = geode_lib.test_harness.QueryOptions{
         .token = token,
         .user = null,
+        .strict_offset_validation = true, // CLI mode enforces US001 (OFFSET requires ORDER BY)
     };
 
     const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
