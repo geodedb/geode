@@ -18,6 +18,8 @@ pub const Statement = union(enum) {
     Rollback,
     // Simple DML prototype: INSERT VALUE <expr>
     InsertValue: struct { expr: Expr },
+    // INSERT pattern syntax: INSERT (n:Label {props})
+    Insert: InsertStatement,
     // Scan all inserted values (heap table prototype)
     ScanValues,
     // Graph mutations
@@ -197,6 +199,11 @@ pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };
 
 // Graph mutation statements
 pub const CreateStatement = struct {
+    pattern: GraphPattern,
+    return_clause: ?ReturnClause = null,
+};
+
+pub const InsertStatement = struct {
     pattern: GraphPattern,
     return_clause: ?ReturnClause = null,
 };

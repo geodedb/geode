@@ -152,6 +152,7 @@ fn tagName(st: ast.Statement) []const u8 {
         .Commit => "Commit",
         .Rollback => "Rollback",
         .InsertValue => "InsertValue",
+        .Insert => "Insert",
         .ScanValues => "ScanValues",
         .Create => "Create",
         .Delete => "Delete",

@@ -275,6 +275,9 @@ fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement
         .Create => |c| {
             return executeCreate(allocator, c);
         },
+        .Insert => |ins| {
+            return executeInsert(allocator, ins);
+        },
         .Delete => |d| {
             return executeDelete(allocator, d);
         },
@@ -607,13 +610,14 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
             try final_rows.append(allocator, return_row);
         }
 
-        // Get column names from RETURN clause
+        // Get column names from RETURN clause (duplicate to ensure proper ownership)
         var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
         for (q.ret.items, 0..) |item, i| {
-            return_columns[i] = item.alias orelse switch (item.expr) {
+            const col_name = item.alias orelse switch (item.expr) {
                 .Ident => |ident| ident.orig,
                 else => "column",
             };
+            return_columns[i] = try allocator.dupe(u8, col_name);
         }
 
         var result = ExecutionResult{
@@ -621,6 +625,16 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
             .rows = try final_rows.toOwnedSlice(allocator),
             .flags = with_result.flags,
         };
+
+        // Clean up with_result (we took ownership of flags, but need to free columns/rows)
+        for (with_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(with_result.columns);
+        for (with_result.rows) |row| {
+            allocator.free(row);
+        }
+        allocator.free(with_result.rows);
 
         // Apply ORDER BY if present
         if (q.order_by) |order| {
@@ -1050,6 +1064,189 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
 
     // Handle RETURN clause if present
     if (c.return_clause) |ret| {
+        // Build environment with created nodes
+        var names = try allocator.alloc([]const u8, created_nodes.count());
+        var values = try allocator.alloc(eval.Value, created_nodes.count());
+        defer allocator.free(names);
+        defer allocator.free(values);
+
+        var iter = created_nodes.iterator();
+        var idx: usize = 0;
+        while (iter.next()) |entry| {
+            names[idx] = entry.key_ptr.*;
+            // Convert node to Value (as a Node reference)
+            values[idx] = eval.Value{ .Node = entry.value_ptr.* };
+            idx += 1;
+        }
+
+        const env = eval.Env{
+            .names = names,
+            .values = values,
+        };
+
+        // Execute RETURN with the created nodes in scope
+        return executeReturnClauseWithEnv(allocator, ret, env);
+    }
+
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]eval.Value, 0),
+        .flags = blk: {
+            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            break :blk list;
+        },
+    };
+}
+
+fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+
+    // Track created nodes by variable name
+    var created_nodes = std.StringHashMap(*graph_store.Node).init(allocator);
+    defer created_nodes.deinit();
+
+    // Create nodes from pattern
+    for (ins.pattern.chains) |chain| {
+        // Handle single node creation
+        if (chain.head) |node_pattern| {
+            const node_id = try store.createNode(node_pattern.labels);
+
+            // Set properties if present
+            if (node_pattern.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(node_id, prop.key, prop_value);
+                }
+            }
+
+            // Get the created node and store reference if it has a variable name
+            if (node_pattern.name) |name| {
+                if (store.nodes.getPtr(node_id)) |new_node| {
+                    try created_nodes.put(name, new_node);
+                }
+            }
+        }
+
+        // Handle chains with relationships
+        for (chain.hops) |hop| {
+            // Create left node if not already created
+            var left_node_id: u64 = undefined;
+            if (hop.left.name) |left_name| {
+                if (created_nodes.get(left_name)) |existing| {
+                    left_node_id = existing.id;
+                } else {
+                    left_node_id = try store.createNode(hop.left.labels);
+                    if (store.nodes.getPtr(left_node_id)) |new_node| {
+                        try created_nodes.put(left_name, new_node);
+                    }
+                }
+            } else {
+                left_node_id = try store.createNode(hop.left.labels);
+            }
+
+            // Set properties on left node if present and not already set
+            if (hop.left.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(left_node_id, prop.key, prop_value);
+                }
+            }
+
+            // Create right node if not already created
+            var right_node_id: u64 = undefined;
+            if (hop.right.name) |right_name| {
+                if (created_nodes.get(right_name)) |existing| {
+                    right_node_id = existing.id;
+                } else {
+                    right_node_id = try store.createNode(hop.right.labels);
+                    if (store.nodes.getPtr(right_node_id)) |new_node| {
+                        try created_nodes.put(right_name, new_node);
+                    }
+                }
+            } else {
+                right_node_id = try store.createNode(hop.right.labels);
+            }
+
+            // Set properties on right node if present and not already set
+            if (hop.right.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(right_node_id, prop.key, prop_value);
+                }
+            }
+
+            // Create edge
+            const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
+            const edge_id = switch (hop.rel.dir) {
+                .right => try store.createEdge(left_node_id, right_node_id, edge_type),
+                .left => try store.createEdge(right_node_id, left_node_id, edge_type),
+                .undirected => try store.createEdge(left_node_id, right_node_id, edge_type),
+            };
+
+            // Set edge properties if present
+            if (hop.rel.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setEdgeProperty(edge_id, prop.key, prop_value);
+                }
+            }
+        }
+    }
+
+    // Handle RETURN clause if present
+    if (ins.return_clause) |ret| {
         // Build environment with created nodes
         var names = try allocator.alloc([]const u8, created_nodes.count());
         var values = try allocator.alloc(eval.Value, created_nodes.count());

@@ -262,6 +262,79 @@ if (d.detach) {
 
 ---
 
-**Last Updated**: January 8, 2025
-**Status**: Significant progress, WITH clause nearly complete
-**Next Steps**: Fix WITH memory issue, debug keys() bug, implement INSERT patterns
+**Last Updated**: January 8, 2025 (Continued)
+**Status**: Major progress - WITH clause complete, Map member access fixed, INSERT patterns implemented
+**Next Steps**: Debug keys() bug, setup test fixtures, implement EXPLAIN/PROFILE
+
+---
+
+## Update - January 8, 2025 (Continued Session)
+
+### 3. INSERT Pattern Syntax - COMPLETE ✅
+
+**Status**: Fully implemented and tested
+
+**Changes Made**:
+
+#### AST Changes (`src/gql/ast.zig`)
+- **Line 22**: Added `Insert: InsertStatement` variant to Statement union
+- **Lines 206-209**: Added InsertStatement struct definition:
+```zig
+pub const InsertStatement = struct {
+    pattern: GraphPattern,
+    return_clause: ?ReturnClause = null,
+};
+```
+
+#### Parser Changes (`src/gql/parser.zig`)
+- **Lines 304-337**: Modified INSERT statement parsing to handle both syntaxes:
+  - `INSERT VALUE <expr>` (existing InsertValue)
+  - `INSERT (pattern)` (new Insert with pattern)
+- Supports optional RETURN clause
+- Pattern parsing reuses existing GraphPattern parser
+
+#### Execution Changes (`src/execution.zig`)
+- **Lines 278-280**: Added execution handler for Insert statement
+- **Lines 1101-1282**: Implemented `executeInsert()` function
+  - Mirrors `executeCreate()` logic
+  - Creates nodes from pattern
+  - Sets node properties
+  - Creates relationships with properties
+  - Handles RETURN clause if present
+  - Returns empty result if no RETURN
+
+#### Print/Debug Changes (`src/gql/print.zig`)
+- **Line 155**: Added "Insert" case to `tagName()` switch
+
+**Syntax Supported**:
+```gql
+-- Simple node insert
+INSERT (n:Person {name: 'Alice', age: 30})
+
+-- Multiple nodes
+INSERT (a:Person {name: 'Bob'}), (b:Person {name: 'Carol'})
+
+-- Relationship pattern
+INSERT (a:Person {name: 'David'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Eve'})
+
+-- With RETURN clause
+INSERT (n:Person {name: 'Frank', age: 25}) RETURN n.name, n.age
+```
+
+**Test Results**:
+- ✅ `INSERT (n:Person {name: 'Alice', age: 30})` - Works
+- ✅ `INSERT (n:Person {name: 'Bob', age: 25}) RETURN n.name, n.age` - Returns ["Bob", 25]
+- ✅ `INSERT (a:Person {name: 'Carol'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Dave'}) RETURN a.name, b.name` - Returns ["Carol", "Dave"]
+- ✅ `INSERT (a:P)-[:R]->(b:P) RETURN a, b` - Returns node objects
+- ✅ `INSERT (a:P {val: 99})-[:R]->(b:P {val: 88}) RETURN a.val` - Returns [99]
+- ✅ `INSERT (a:Person {name: 'Bob', age: 25}), (b:Person {name: 'Carol', age: 35})` - Multiple nodes work
+
+**Known Issues**: None
+
+**Estimated Impact**: ~15 tests now passing (INSERT pattern tests in gql_data_modification_comprehensive.yml)
+
+---
+
+**Last Updated**: January 8, 2025 (Continued Session)
+**Status**: Three major features complete - WITH clause, Map member access, INSERT patterns
+**Next Steps**: Debug keys() bug, setup test fixtures, implement EXPLAIN/PROFILE

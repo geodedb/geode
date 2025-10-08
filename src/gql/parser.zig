@@ -303,11 +303,37 @@ pub const Parser = struct {
             },
             .INSERT => blk_ins: {
                 self.advance();
-                // Syntax: INSERT VALUE <expr>
-                if (self.cur.kind != .VALUE) return error.UnexpectedToken;
-                self.advance();
-                const expr = try self.parseOrExpr();
-                break :blk_ins .{ .InsertValue = .{ .expr = expr } };
+                // Check if this is INSERT VALUE or INSERT pattern
+                if (self.cur.kind == .VALUE) {
+                    // Syntax: INSERT VALUE <expr>
+                    self.advance();
+                    const expr = try self.parseOrExpr();
+                    break :blk_ins .{ .InsertValue = .{ .expr = expr } };
+                } else {
+                    // Syntax: INSERT (pattern) - like CREATE but different semantics
+                    const pattern = try self.parseGraphPattern();
+
+                    // Optional RETURN clause
+                    var return_clause: ?ast.ReturnClause = null;
+                    if (self.cur.kind == .RETURN) {
+                        self.advance();
+                        const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                            self.advance();
+                            break :blk true;
+                        } else false;
+                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        try self.parseProjectionItems(&return_items);
+                        return_clause = .{
+                            .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                            .distinct = distinct,
+                        };
+                    }
+
+                    break :blk_ins .{ .Insert = .{
+                        .pattern = pattern,
+                        .return_clause = return_clause,
+                    } };
+                }
             },
             .SCAN => blk_scan: {
                 self.advance();

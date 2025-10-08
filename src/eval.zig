@@ -1173,6 +1173,14 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 }
             }
 
+            // If target is a Map, access its keys
+            if (target == .Map) {
+                const map = target.Map;
+                if (map.get(member.field)) |val| {
+                    break :blk_member val;
+                }
+            }
+
             // Otherwise return null
             break :blk_member Value{ .Null = {} };
         },
