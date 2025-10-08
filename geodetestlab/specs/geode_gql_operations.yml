@@ -108,7 +108,7 @@ tests:
 
   - name: "group-by"
     description: "GROUP BY operations"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count ORDER BY company"]
+    args: ["query", "--server", "${server_address}", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count GROUP BY c.name ORDER BY company"]
     expect:
       exit_code: 0
       geode_query:

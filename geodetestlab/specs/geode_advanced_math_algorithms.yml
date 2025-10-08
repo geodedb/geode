@@ -132,7 +132,7 @@ tests:
   # Graph Algorithm Functions
   - name: "Degree Centrality Calculation"
     command: "query"
-    args: ["MATCH (c:City)-[r:ROAD]-() RETURN c.name, count(r) AS degree ORDER BY degree DESC LIMIT 3"]
+    args: ["MATCH (c:City)-[r:ROAD]-() RETURN c.name, count(r) AS degree GROUP BY c.name ORDER BY degree DESC LIMIT 3"]
     expected_output:
       contains:
         - "Los Angeles"

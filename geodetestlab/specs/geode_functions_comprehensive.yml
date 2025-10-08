@@ -273,7 +273,7 @@ tests:
   # Graph Traversal Functions
   - name: "Degree Centrality"
     command: "query"
-    args: ["MATCH (p:Person)-[r]-() RETURN p.name, count(r) AS degree ORDER BY degree DESC"]
+    args: ["MATCH (p:Person)-[r]-() RETURN p.name, count(r) AS degree GROUP BY p.name ORDER BY degree DESC"]
     expected_output:
       contains:
         - "Alice"
