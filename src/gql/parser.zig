@@ -2873,7 +2873,8 @@ pub const Parser = struct {
                 } },
             } };
         } else if (self.cur.kind == .time_lit or
-                   (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME"))) {
+            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME")))
+        {
             // Handle TIME ZONE in SESSION SET context
             // Note: "TIME" without following string literal is lexed as .identifier
             self.advance();
