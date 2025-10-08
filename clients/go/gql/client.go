@@ -467,81 +467,31 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		}
 	}
 
-	// Start server in QUIC mode on a random port
-	port := 8443 + (os.Getpid() % 1000) // Use a semi-random port
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-
-	cmd := exec.Command(path, "serve", "--listen", addr)
+	// Start server in stdio mode for process communication
+	// Note: Process mode uses stdio, QUIC mode uses network transport
+	cmd := exec.Command(path, "serve", "--stdio")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 
-	// Wait a bit for server to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Now connect via QUIC to the spawned server
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"geode/1"},
-		MinVersion:         tls.VersionTLS13,
-	}
-
-	// Use QUIC config with keep-alive and proper timeouts
-	qConfig := &quic.Config{
-		MaxIdleTimeout:        30 * time.Second,
-		KeepAlivePeriod:       10 * time.Second,
-		HandshakeIdleTimeout:  10 * time.Second,
-		MaxIncomingStreams:    100,
-		MaxIncomingUniStreams: 100,
-	}
-
-	fmt.Printf("DEBUG: Go client attempting to connect to spawned server at %s\n", addr)
-	qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
-	if err != nil {
-		fmt.Printf("DEBUG: Go client connection to spawned server failed: %v\n", err)
-		_ = cmd.Process.Kill()
-		return nil, err
-	}
-	fmt.Printf("DEBUG: Go client connected to spawned server\n")
-
-	// Wait a moment for handshake to stabilize
-	select {
-	case <-ctx.Done():
-		_ = qConn.CloseWithError(0, "context cancelled")
-		_ = cmd.Process.Kill()
-		return nil, ctx.Err()
-	case <-time.After(100 * time.Millisecond):
-		// Continue after brief delay
-	}
-
-	qStream, err := qConn.OpenStreamSync(ctx)
-	if err != nil {
-		_ = qConn.CloseWithError(0, "failed to open stream")
-		_ = cmd.Process.Kill()
-		return nil, err
-	}
-
 	c := &Conn{
-		cmd:     cmd,
-		qConn:   qConn,
-		qStream: &qStream,
-		bufRd:   bufio.NewReaderSize(qStream, 64<<10),
-		useQUIC: true,
+		cmd:   cmd,
+		inW:   stdin,
+		outR:  stdout,
+		bufRd: bufio.NewReaderSize(stdout, 64<<10),
 	}
 	c.cancel = func() {
-		if stream := c.qStream; stream != nil {
-			if s, ok := stream.(*quic.Stream); ok {
-				_ = (*s).Close()
-			}
-		}
-		if conn := c.qConn; conn != nil {
-			if qc, ok := conn.(interface {
-				CloseWithError(quic.ApplicationErrorCode, string) error
-			}); ok {
-				_ = qc.CloseWithError(0, "closing")
-			}
-		}
+		_ = stdin.Close()
+		_ = stdout.Close()
 		_ = cmd.Process.Kill()
 	}
 
@@ -617,6 +567,10 @@ func (c *Conn) writeJSON(v any) error {
 	}
 	if c.nc != nil {
 		_, e = c.nc.Write(b)
+		return e
+	}
+	if c.inW != nil {
+		_, e = c.inW.Write(b)
 		return e
 	}
 	return fmt.Errorf("no connection available")
