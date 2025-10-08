@@ -1794,6 +1794,13 @@ pub const Parser = struct {
         if (std.ascii.eqlIgnoreCase(name, "GeoPoint")) {
             return n == 1 and argIsStringLike(args[0]);
         }
+        // Map functions
+        if (std.ascii.eqlIgnoreCase(name, "keys")) {
+            return n == 1; // Accept any expression that evaluates to a map
+        }
+        if (std.ascii.eqlIgnoreCase(name, "values")) {
+            return n == 1; // Accept any expression that evaluates to a map
+        }
         if (ts_enabled) {
             // Core time-series functions
             if (std.ascii.eqlIgnoreCase(name, "last_value")) {
