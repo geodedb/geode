@@ -281,6 +281,27 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
                 // Avoid direct @divTrunc which can still trap if denom==0 due to race on optimization; explicit branch first.
                 break :blk4 .{ .Int = @divTrunc(l.Int, denom) };
             }
+            // Support decimal division with type coercion
+            if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
+                const ld = toDec(l);
+                const rd = toDec(r);
+
+                // Check for division by zero
+                if (rd.coeff == 0) return EvalError.DivisionByZero;
+
+                // For decimal division, we need to ensure precision
+                // Scale the numerator to maintain precision (add extra scale before division)
+                const extra_scale: u8 = 6; // Provide 6 decimal places of precision (reasonable for most calculations)
+                const scale_factor = std.math.pow(i128, 10, extra_scale);
+                const scaled_num = ld.coeff * scale_factor;
+                const quotient = @divTrunc(scaled_num, rd.coeff);
+
+                // Result scale = numerator scale - denominator scale + extra scale
+                const result_scale: i16 = @as(i16, ld.scale) - @as(i16, rd.scale) + extra_scale;
+                if (result_scale < 0 or result_scale > 18) return EvalError.Unsupported; // Keep scale reasonable for JSON serialization
+
+                break :blk4 .{ .Decimal = .{ .coeff = quotient, .scale = @intCast(result_scale) } };
+            }
             return EvalError.TypeMismatch;
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
