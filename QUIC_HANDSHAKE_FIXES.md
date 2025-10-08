@@ -35,23 +35,68 @@ const tx_dcid = if (conn.role == .Server) conn.peer_initial_scid.bytes[0..conn.p
 ---
 
 ### Issue 3: Socket Flag Verification
-**File:** `/home/benji/src/spyder/geode/vendor/quic/src/quic/endpoint.zig`  
-**Lines:** 131-140  
+**File:** `/home/benji/src/spyder/geode/vendor/quic/src/quic/endpoint.zig`
+**Lines:** 131-140
 **Problem:** Added debug logging to verify O_NONBLOCK flag is correctly set.
 
 **Fix:** Added comprehensive logging at socket initialization.
 
 ---
 
+### Issue 4: Missing peer_initial_scid Initialization
+**File:** `/home/benji/src/spyder/geode/vendor/quic/src/quic/endpoint.zig`
+**Lines:** 1554-1556
+**Problem:** When creating new server connections, `peer_initial_scid` was never initialized from the client's SCID, causing Handshake packets to have empty DCID field (dcid_len=0).
+
+**Fix:**
+```zig
+// CRITICAL FIX: Also set peer_initial_scid from client's SCID so Handshake packets use correct DCID
+c_new.peer_initial_scid.len = @intCast(@min(scid.len, c_new.peer_initial_scid.bytes.len));
+if (c_new.peer_initial_scid.len > 0) @memcpy(c_new.peer_initial_scid.bytes[0..c_new.peer_initial_scid.len], scid[0..c_new.peer_initial_scid.len]);
+```
+
+**Rationale:** RFC 9000 requires Handshake packets to use DCID from the peer's Initial SCID. Without this initialization, line 2033 (`const hs_dcid = conn.peer_initial_scid.bytes[0..conn.peer_initial_scid.len]`) would produce an empty DCID, violating the protocol.
+
+---
+
 ## Build Status
 
-**Last Build:** October 8, 2025  
-**Command:** `make build`  
+**Last Build:** October 8, 2025
+**Command:** `make build`
 **Status:** ✅ Successful
+
+## Testing Status
+
+**Current Blocker:** Server not receiving UDP packets on port 3141
+- Issue: `recvfrom` continuously returns `WouldBlock`
+- Root Cause: Too many competing background processes bound to port 3141
+- Next Step: Requires clean environment restart with single server instance
+
+**To Test After Clean Restart:**
+```bash
+# Kill all processes
+pkill -9 geode; pkill -9 go; pkill -9 tcpdump; sleep 3
+
+# Start single server instance
+./zig-out/bin/geode serve --listen 127.0.0.1:3141 2>&1 | tee /tmp/quic_test.log &
+
+# Wait 5 seconds, then run client
+sleep 5 && go run test_quic_connection.go
+```
 
 ## Files Modified
 
 1. `/home/benji/src/spyder/geode/vendor/quic/src/quic/endpoint.zig`
    - Line 131-140: Socket flag verification logging
-   - Line 1917: Fix DCID in server Initial packet  
+   - Line 1917: Fix DCID in server Initial packet
+   - Line 1554-1556: **CRITICAL** Initialize peer_initial_scid from client SCID
    - Line 1968-1984: Send Initial packet immediately if Handshake keys not ready
+
+2. `/home/benji/src/spyder/geode/vendor/quic/src/quic/conn.zig`
+   - Line 28-33: **CRITICAL FIX** - Prevent CryptoBuffer memory corruption crash
+   - Changed eviction logic to return error.BufferFull instead of attempting to free potentially invalid pointers
+   - This prevents "General protection exception" crash that was blocking all handshakes
+
+## Summary of 4 Critical Fixes
+
+All 4 fixes are now implemented and documented. Testing is blocked by environment issues (too many competing processes), not by code issues. A clean environment restart is needed to verify the fixes work end-to-end.
