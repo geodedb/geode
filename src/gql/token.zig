@@ -89,6 +89,8 @@ pub const TokenKind = enum {
     DELETE,
     MERGE,
     SHOW,
+    EXPLAIN,
+    PROFILE,
     GRAPH,
     PROPERTY,
     DROP,
@@ -266,6 +268,8 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "DELETE")) return .DELETE;
     if (std.ascii.eqlIgnoreCase(word, "MERGE")) return .MERGE;
     if (std.ascii.eqlIgnoreCase(word, "SHOW")) return .SHOW;
+    if (std.ascii.eqlIgnoreCase(word, "EXPLAIN")) return .EXPLAIN;
+    if (std.ascii.eqlIgnoreCase(word, "PROFILE")) return .PROFILE;
     if (std.ascii.eqlIgnoreCase(word, "GRAPH")) return .GRAPH;
     if (std.ascii.eqlIgnoreCase(word, "PROPERTY")) return .PROPERTY;
     if (std.ascii.eqlIgnoreCase(word, "DROP")) return .DROP;

@@ -352,6 +352,12 @@ fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement
         .Show => |s| {
             return executeShow(allocator, s);
         },
+        .Explain => |exp| {
+            return executeExplain(allocator, exp, context);
+        },
+        .Profile => |prof| {
+            return executeProfile(allocator, prof, context);
+        },
         .CreateIndex => |ci| {
             // CREATE INDEX implementation
             // For now, just acknowledge the creation without actually building index
@@ -486,6 +492,127 @@ fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionRes
     return ExecutionResult{
         .columns = columns,
         .rows = try allocator.alloc([]eval.Value, 0), // Empty for now
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, context: ExecutionContext) anyerror!ExecutionResult {
+    _ = context; // May be used for permissions in future
+    // EXPLAIN shows the query execution plan
+    // For now, return a simplified plan structure
+
+    // Generate plan text for the wrapped query
+    var plan_steps = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    defer plan_steps.deinit(allocator);
+
+    // Analyze the query and build plan description
+    const query_stmt = exp.query.*;
+    switch (query_stmt) {
+        .Query => |q| {
+            try plan_steps.append(allocator, try allocator.dupe(u8, "MATCH"));
+            if (q.match.chains.len > 0) {
+                const chain = q.match.chains[0];
+                if (chain.head) |_| {
+                    try plan_steps.append(allocator, try allocator.dupe(u8, "  NodeScan"));
+                }
+                if (chain.hops.len > 0) {
+                    try plan_steps.append(allocator, try allocator.dupe(u8, "  ExpandRelationships"));
+                }
+            }
+            if (q.where_clause != null) {
+                try plan_steps.append(allocator, try allocator.dupe(u8, "  Filter"));
+            }
+            if (q.group_by != null) {
+                try plan_steps.append(allocator, try allocator.dupe(u8, "  Aggregate"));
+            }
+            if (q.order_by != null) {
+                try plan_steps.append(allocator, try allocator.dupe(u8, "  Sort"));
+            }
+            if (q.limit != null or q.offset != null) {
+                try plan_steps.append(allocator, try allocator.dupe(u8, "  Limit"));
+            }
+            try plan_steps.append(allocator, try allocator.dupe(u8, "RETURN"));
+            if (q.ret.distinct) {
+                try plan_steps.append(allocator, try allocator.dupe(u8, "  Distinct"));
+            }
+            try plan_steps.append(allocator, try allocator.dupe(u8, "  Project"));
+        },
+        .Create => |_| {
+            try plan_steps.append(allocator, try allocator.dupe(u8, "CREATE"));
+            try plan_steps.append(allocator, try allocator.dupe(u8, "  CreateNodes"));
+            try plan_steps.append(allocator, try allocator.dupe(u8, "  CreateRelationships"));
+        },
+        .Delete => |_| {
+            try plan_steps.append(allocator, try allocator.dupe(u8, "DELETE"));
+            try plan_steps.append(allocator, try allocator.dupe(u8, "  DeleteNodes"));
+        },
+        else => {
+            try plan_steps.append(allocator, try allocator.dupe(u8, "ExecuteStatement"));
+        },
+    }
+
+    // Create result with plan steps
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "plan");
+
+    const rows = try allocator.alloc([]eval.Value, plan_steps.items.len);
+    for (plan_steps.items, 0..) |step, i| {
+        const row = try allocator.alloc(eval.Value, 1);
+        row[0] = eval.Value{ .Str = step };
+        rows[i] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, context: ExecutionContext) anyerror!ExecutionResult {
+    // PROFILE executes the query and returns execution statistics
+    // For now, execute the query and add basic profiling information
+
+    // Execute the wrapped query
+    var query_result = try executeStatementWithContext(allocator, prof.query.*, context);
+    defer query_result.deinit(allocator);
+
+    // Return profiling statistics
+    const columns = try allocator.alloc([]const u8, 2);
+    columns[0] = try allocator.dupe(u8, "metric");
+    columns[1] = try allocator.dupe(u8, "value");
+
+    // Create statistics rows
+    var stats = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+    defer stats.deinit(allocator);
+
+    // Row count
+    {
+        const row = try allocator.alloc(eval.Value, 2);
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "rows_returned") };
+        row[1] = eval.Value{ .Int = @intCast(query_result.rows.len) };
+        try stats.append(allocator, row);
+    }
+
+    // Column count
+    {
+        const row = try allocator.alloc(eval.Value, 2);
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "columns") };
+        row[1] = eval.Value{ .Int = @intCast(query_result.columns.len) };
+        try stats.append(allocator, row);
+    }
+
+    // Execution time (placeholder - would need real timing)
+    {
+        const row = try allocator.alloc(eval.Value, 2);
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "execution_time_ms") };
+        row[1] = eval.Value{ .Int = 1 }; // Placeholder
+        try stats.append(allocator, row);
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = try stats.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }

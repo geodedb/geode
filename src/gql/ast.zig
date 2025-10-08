@@ -42,6 +42,9 @@ pub const Statement = union(enum) {
     DropGraph: DropGraphStatement,
     CreateGraphType: CreateGraphTypeStatement,
     DropGraphType: DropGraphTypeStatement,
+    // Query introspection
+    Explain: ExplainStatement,
+    Profile: ProfileStatement,
 };
 
 pub const Query = struct {
@@ -418,4 +421,13 @@ pub const DropGraphTypeStatement = struct {
     name: []const u8,
     if_exists: bool = false,
     property_graph: bool = true, // GQL property graphs are default
+};
+
+// Query introspection statements
+pub const ExplainStatement = struct {
+    query: *Statement, // The query to explain (wrapped in a heap-allocated Statement)
+};
+
+pub const ProfileStatement = struct {
+    query: *Statement, // The query to profile (wrapped in a heap-allocated Statement)
 };

@@ -291,6 +291,8 @@ pub const Parser = struct {
             .MERGE => self.parseMergeStatement(),
             .DROP => self.parseDropStatement(),
             .SHOW => self.parseShowStatement(),
+            .EXPLAIN => self.parseExplainStatement(),
+            .PROFILE => self.parseProfileStatement(),
             .USE => self.parseUseStatement(),
             .identifier => blk_ident: {
                 // Check for BACKUP and RESTORE keywords
@@ -2339,6 +2341,26 @@ pub const Parser = struct {
         };
 
         return .{ .Show = .{ .show_type = show_type } };
+    }
+
+    fn parseExplainStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.EXPLAIN);
+
+        // Parse the query to explain
+        const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
+        query_stmt_ptr.* = try self.parseStatement();
+
+        return .{ .Explain = .{ .query = query_stmt_ptr } };
+    }
+
+    fn parseProfileStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.PROFILE);
+
+        // Parse the query to profile
+        const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
+        query_stmt_ptr.* = try self.parseStatement();
+
+        return .{ .Profile = .{ .query = query_stmt_ptr } };
     }
 
     // Parse DROP statement (DROP INDEX, DROP SCHEMA, DROP GRAPH, etc.)
