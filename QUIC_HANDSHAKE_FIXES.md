@@ -100,3 +100,31 @@ sleep 5 && go run test_quic_connection.go
 ## Summary of 4 Critical Fixes
 
 All 4 fixes are now implemented and documented. Testing is blocked by environment issues (too many competing processes), not by code issues. A clean environment restart is needed to verify the fixes work end-to-end.
+
+---
+
+### Issue 5: Epoll Configuration - Incorrect Pointer Cast
+**File:** `/home/benji/src/spyder/geode/vendor/quic/src/quic/endpoint.zig`
+**Lines:** 148-152
+**Date Fixed:** October 8, 2025
+
+**Problem:** The epoll_ctl call used `@ptrCast(&ev)` which caused a type mismatch, preventing the socket from being properly registered with epoll. This resulted in epoll_wait never triggering EPOLLIN events, so UDP packets were never read from the socket.
+
+**Symptom:** Server would continuously get WouldBlock from recvfrom, even when packets were being sent to the socket. Epoll_wait would always timeout.
+
+**Fix:**
+```zig
+// Before (BROKEN):
+var ev: linux.epoll_event = .{ .events = linux.EPOLL.IN, .data = .{ .fd = @as(i32, @intCast(fd)) } };
+try posix.epoll_ctl(epfd, linux.EPOLL.CTL_ADD, fd, @ptrCast(&ev));
+
+// After (FIXED):
+var ev = std.mem.zeroes(linux.epoll_event);
+ev.events = linux.EPOLL.IN;
+ev.data.fd = @as(i32, @intCast(fd));
+try posix.epoll_ctl(epfd, linux.EPOLL.CTL_ADD, fd, &ev);
+```
+
+**Rationale:** The @ptrCast was causing a type mismatch with posix.epoll_ctl's expected parameter type. Using std.mem.zeroes() to initialize the struct and passing &ev directly ensures the correct type is used.
+
+**Verification:** After this fix, simple UDP packets (via netcat) are successfully received by the server, proving that epoll is now working correctly.
