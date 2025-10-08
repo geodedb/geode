@@ -452,6 +452,30 @@ pub const Parser = struct {
                 const first = try self.parseQuery();
                 break :blk_query self.handleQueryResult(first);
             },
+            .WITH => blk_with: {
+                // Handle WITH as statement starter: WITH expr AS alias [WITH ...] RETURN ...
+                const first = try self.parseQuery();
+                if (self.cur.kind == .UNION) {
+                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    while (self.cur.kind == .UNION) {
+                        self.advance();
+                        var all = false;
+                        var distinct = false;
+                        if (self.cur.kind == .ALL) {
+                            all = true;
+                            self.advance();
+                        } else if (self.cur.kind == .DISTINCT) {
+                            distinct = true;
+                            self.advance();
+                        }
+                        if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
+                        const q2 = try self.parseQuery();
+                        try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
+                    }
+                    break :blk_with .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
+                }
+                break :blk_with self.handleQueryResult(first);
+            },
             .RETURN => blk_r: {
                 // Parenthesized set expression grouping: (RETURN ... UNION ...)
                 if (self.cur.kind == .l_paren) {
@@ -642,6 +666,18 @@ pub const Parser = struct {
         var have_match = false;
         var have_create = false;
         var create_pattern: ?ast.GraphPattern = null;
+
+        // Check for WITH at the beginning (for queries like: WITH 5 AS x RETURN x)
+        // Parse WITH clause first if present, before MATCH/CREATE
+        var initial_with_clause: ?ast.WithClause = null;
+        if (self.cur.kind == .WITH) {
+            self.advance();
+            var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&witems);
+            initial_with_clause = .{ .items = try witems.toOwnedSlice(self.arena.allocator()) };
+            // Allow optional WHERE after WITH
+            // Note: WHERE after WITH filters the WITH results, not graph patterns
+        }
 
         // Check for CREATE at the beginning
         if (self.cur.kind == .CREATE) {
@@ -935,7 +971,7 @@ pub const Parser = struct {
             .match = pat,
             .create_pattern = create_pattern,
             .where_clause = where_expr,
-            .with_clause = with_clause,
+            .with_clause = if (with_clause) |wc| wc else initial_with_clause,
             .set_clauses = set_clauses,
             .remove_clauses = remove_clauses,
             .group_by = group_by,

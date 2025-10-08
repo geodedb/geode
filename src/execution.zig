@@ -575,17 +575,67 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
         return executeMatchQuery(allocator, q);
     }
 
+    // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
+    if (q.with_clause) |with_clause| {
+        // Create initial empty result with one row
+        var initial_result = ExecutionResult{
+            .columns = &.{},
+            .rows = try allocator.alloc([]eval.Value, 1),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+        initial_result.rows[0] = try allocator.alloc(eval.Value, 0);
+
+        // Apply WITH clause to transform the empty row into WITH variables
+        const with_result = try executeWithClause(allocator, initial_result, with_clause);
+
+        // Now evaluate RETURN using the WITH results as environment
+        var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+        for (with_result.rows) |with_row| {
+            var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+
+            // Create environment from WITH results
+            const env = eval.Env{
+                .names = with_result.columns,
+                .values = with_row,
+            };
+
+            for (q.ret.items, 0..) |item, i| {
+                return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+
+            try final_rows.append(allocator, return_row);
+        }
+
+        // Get column names from RETURN clause
+        var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+        for (q.ret.items, 0..) |item, i| {
+            return_columns[i] = item.alias orelse switch (item.expr) {
+                .Ident => |ident| ident.orig,
+                else => "column",
+            };
+        }
+
+        var result = ExecutionResult{
+            .columns = return_columns,
+            .rows = try final_rows.toOwnedSlice(allocator),
+            .flags = with_result.flags,
+        };
+
+        // Apply ORDER BY if present
+        if (q.order_by) |order| {
+            try sortRows(allocator, &result, order);
+        }
+
+        return result;
+    }
+
     // Otherwise just execute the return clause
     var result = try executeReturnClauseWithContext(allocator, q.ret, context);
 
     // Apply ORDER BY if present
     if (q.order_by) |order| {
         try sortRows(allocator, &result, order);
-    }
-
-    // Apply WITH clause for query pipelining if present
-    if (q.with_clause) |with_clause| {
-        result = try executeWithClause(allocator, result, with_clause);
     }
 
     return result;
