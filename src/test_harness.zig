@@ -46,11 +46,16 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         mut_pr.deinit();
     }
 
+    // Create session state for SESSION SET GRAPH support
+    var session_state = execution.SessionState.init(allocator.*);
+    defer session_state.deinit();
+
     // Create execution context with authentication if token provided
     const exec_context = execution.ExecutionContext{
         .user = if (options.token != null) "authenticated_user" else null,
         .token = options.token,
         .strict_offset_validation = options.strict_offset_validation,
+        .session_state = &session_state,
     };
 
     // Execute the parsed program using Geode's execution engine

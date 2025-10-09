@@ -406,7 +406,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, "transaction started") };
+            row[0] = eval.Value{ .Str = "transaction started" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -434,7 +434,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, "transaction committed") };
+            row[0] = eval.Value{ .Str = "transaction committed" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -462,7 +462,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, "transaction rolled back") };
+            row[0] = eval.Value{ .Str = "transaction rolled back" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -484,12 +484,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         session.graph = try allocator.dupe(u8, graph.expression);
 
                         // Create test data for known test graphs
-                        if (std.mem.eql(u8, graph.expression, "G1")) {
+                        // Support both quoted and unquoted graph names
+                        const graph_name = graph.expression;
+                        if (std.mem.eql(u8, graph_name, "G1")) {
                             try createTestGraphG1(allocator);
-                        } else if (std.mem.eql(u8, graph.expression, "G2")) {
+                        } else if (std.mem.eql(u8, graph_name, "G2")) {
                             try createTestGraphG2(allocator);
                         } else {
-                            // For any other graph, clear the store to create empty graph
+                            // For any other graph (including "NewG"), clear the store to create empty graph
                             const store = graph_store.getGlobalStore(allocator);
                             store.clearNodes();
                         }
@@ -521,7 +523,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, "session updated") };
+            row[0] = eval.Value{ .Str = "session updated" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -691,7 +693,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, "session reset") };
+            row[0] = eval.Value{ .Str = "session reset" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -712,7 +714,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, "session closed") };
+            row[0] = eval.Value{ .Str = "session closed" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -2854,45 +2856,45 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                             .values = env_values,
                         };
 
-                    // Evaluate WHERE clause if present
-                    if (q.where_clause) |where_expr| {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
-                        const passes_where = switch (where_result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
+                        // Evaluate WHERE clause if present
+                        if (q.where_clause) |where_expr| {
+                            const where_result = try eval.evalExpr(allocator, where_expr, env);
+                            const passes_where = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
 
-                        if (!passes_where) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                            continue;
+                            if (!passes_where) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
                         }
-                    }
 
-                    // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
-                    if (q.filter_clause) |filter_expr| {
-                        const filter_result = try eval.evalExpr(allocator, filter_expr, env);
-                        const passes_filter = switch (filter_result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
+                        // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+                        if (q.filter_clause) |filter_expr| {
+                            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                            const passes_filter = switch (filter_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
 
-                        if (!passes_filter) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                            continue;
+                            if (!passes_filter) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
                         }
-                    }
 
-                    // Evaluate return items
-                    var row = try allocator.alloc(eval.Value, items.len);
-                    for (items, 0..) |item, i| {
-                        row[i] = try eval.evalExpr(allocator, item.expr, env);
-                    }
+                        // Evaluate return items
+                        var row = try allocator.alloc(eval.Value, items.len);
+                        for (items, 0..) |item, i| {
+                            row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        }
 
                         allocator.free(env_names);
                         allocator.free(env_values);
