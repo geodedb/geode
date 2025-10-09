@@ -128,6 +128,7 @@ class ParallelTestRunner:
         test_name = test_case.get("name", "unnamed")
         args = self.process_args(test_case.get("args", []), instance_id=instance_id, loop_index=loop_index)
         expect = test_case.get("expect", {})
+        stdin_input = test_case.get("stdin", None)
 
         # Handle setup commands for transaction tests
         setup_commands = test_case.get("setup", [])
@@ -165,6 +166,7 @@ class ParallelTestRunner:
         try:
             result = subprocess.run(
                 [self.binary] + args,
+                input=stdin_input,
                 capture_output=True,
                 text=True,
                 timeout=self.test_timeout
@@ -346,6 +348,11 @@ class ParallelTestRunner:
         self.log_progress(f"Running {spec_file.name} ({len(tests)} tests)")
 
         for test in tests:
+            # Skip tests marked with skip: true
+            if test.get("skip", False):
+                skipped += 1
+                continue
+
             # Handle parallel tests with multiple instances
             if test.get("parallel") and test.get("instances"):
                 for instance in range(test["instances"]):
