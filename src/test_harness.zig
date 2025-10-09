@@ -81,7 +81,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
             error.TypeMismatch => "Type mismatch in expression",
-            error.DivisionByZero => "Division by zero",
+            error.DivisionByZero => "error: division by zero",
             error.OutOfMemory => return err,
             error.Unsupported => "Unsupported operation",
             error.GroupingError => unreachable,

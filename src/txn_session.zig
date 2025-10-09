@@ -3,7 +3,6 @@ const execution = @import("execution.zig");
 
 /// Transaction session persistence for CLI mode
 /// Stores transaction state in a file to persist across CLI invocations
-
 const SESSION_FILE = "/tmp/geode_transaction_session.txt";
 
 pub const TransactionSession = struct {

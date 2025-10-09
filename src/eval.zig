@@ -50,6 +50,8 @@ pub const Value = union(enum) {
     },
     List: []Value,
     Map: std.StringHashMap(Value),
+    // Extended types (advanced types like IpAddr, Subnet, etc.) wrapped to preserve type information
+    ExtValue: @import("eval_extended.zig").ExtValue,
 };
 
 const Dec = struct { coeff: i128, scale: u8 };
@@ -217,6 +219,7 @@ fn eqVals(a: Value, b: Value) bool {
             break :blk true;
         },
         .Map => false, // Map equality comparison not implemented
+        .ExtValue => false, // ExtValue equality comparison not implemented
     };
 }
 
@@ -1265,6 +1268,7 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ExtValue => |ext| ext, // Unwrap the ExtValue directly
         .List => .{ .Null = {} }, // ExtValue doesn't support complex types
         .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
@@ -1279,13 +1283,9 @@ fn extValueToValue(ext_value: @import("eval_extended.zig").ExtValue) Value {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        // For now, convert advanced types to strings for display
-        .VectorF32 => |vec| blk: {
-            // Simple string representation for vectors
-            _ = vec;
-            break :blk .{ .Str = "[vector]" };
-        },
-        else => .{ .Str = "[advanced_type]" },
+        // For advanced types, wrap in Value.ExtValue to preserve type information
+        // This allows nested function calls like ip_family(IpAddr('...')) to work correctly
+        else => .{ .ExtValue = ext_value },
     };
 }
 
@@ -1297,6 +1297,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
+        .ExtValue => .{ .Null = {} }, // ExtValue not supported in heap.Value yet
         .List => .{ .Null = {} }, // TODO: heap.Value needs List support
         .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
         .Edge => .{ .Null = {} }, // TODO: heap.Value needs Edge support

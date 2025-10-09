@@ -285,6 +285,73 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
             }
             try writer.writeByte('}');
         },
+        .ExtValue => |ext| {
+            // Convert extended types to JSON strings
+            switch (ext) {
+                .Null => try writer.writeAll("null"),
+                .Int => |n| try writer.print("{d}", .{n}),
+                .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                .Str => |s| {
+                    try writer.writeByte('"');
+                    try writer.writeAll(s);
+                    try writer.writeByte('"');
+                },
+                .Decimal => |d| {
+                    // Format decimal with proper scale
+                    if (d.scale == 0) {
+                        try writer.print("{d}", .{d.coeff});
+                    } else {
+                        const divisor = std.math.pow(i64, 10, d.scale);
+                        const f: f64 = @as(f64, @floatFromInt(d.coeff)) / @as(f64, @floatFromInt(divisor));
+                        try writer.print("{d}", .{f});
+                    }
+                },
+                .VectorF32 => {
+                    try writer.writeAll("\"[vector]\"");
+                },
+                .IpAddr => |ip| {
+                    try writer.writeByte('"');
+                    switch (ip) {
+                        .v4 => |octets| try writer.print("{d}.{d}.{d}.{d}", .{ octets[0], octets[1], octets[2], octets[3] }),
+                        .v6 => |bytes| {
+                            var segments: [8]u16 = undefined;
+                            for (0..8) |i| {
+                                segments[i] = (@as(u16, bytes[i * 2]) << 8) | @as(u16, bytes[i * 2 + 1]);
+                            }
+                            try writer.print("{x}:{x}:{x}:{x}:{x}:{x}:{x}:{x}", .{ segments[0], segments[1], segments[2], segments[3], segments[4], segments[5], segments[6], segments[7] });
+                        },
+                    }
+                    try writer.writeByte('"');
+                },
+                .Subnet => |subnet| {
+                    try writer.writeByte('"');
+                    switch (subnet.addr) {
+                        .v4 => |octets| try writer.print("{d}.{d}.{d}.{d}/{d}", .{ octets[0], octets[1], octets[2], octets[3], subnet.prefix_len }),
+                        .v6 => |bytes| {
+                            var segments: [8]u16 = undefined;
+                            for (0..8) |i| {
+                                segments[i] = (@as(u16, bytes[i * 2]) << 8) | @as(u16, bytes[i * 2 + 1]);
+                            }
+                            try writer.print("{x}:{x}:{x}:{x}:{x}:{x}:{x}:{x}/{d}", .{ segments[0], segments[1], segments[2], segments[3], segments[4], segments[5], segments[6], segments[7], subnet.prefix_len });
+                        },
+                    }
+                    try writer.writeByte('"');
+                },
+                .Mac => |mac| {
+                    try writer.print("\"{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}\"", .{ mac.bytes[0], mac.bytes[1], mac.bytes[2], mac.bytes[3], mac.bytes[4], mac.bytes[5] });
+                },
+                .Hash => |hash| {
+                    try writer.print("\"[hash:{s}]\"", .{@tagName(hash.alg)});
+                },
+                .LatLon => |latlon| {
+                    try writer.print("\"({d:.6},{d:.6})\"", .{ latlon.lat, latlon.lon });
+                },
+                .LatLonAlt => |latlonalt| {
+                    try writer.print("\"({d:.6},{d:.6},{d:.2}m)\"", .{ latlonalt.lat, latlonalt.lon, latlonalt.alt });
+                },
+                else => try writer.writeAll("\"[advanced_type]\""),
+            }
+        },
     }
 }
 
@@ -3648,6 +3715,7 @@ fn valuesEqual(a: eval.Value, b: eval.Value) bool {
         .Node => |node_a| b == .Node and b.Node.id == node_a.id,
         .Edge => |edge_a| b == .Edge and b.Edge.id == edge_a.id,
         .Map => false, // Map comparison not implemented yet
+        .ExtValue => false, // ExtValue comparison not implemented yet
     };
 }
 
@@ -3990,6 +4058,7 @@ fn getTypeOrder(v: eval.Value) u8 {
         .Node => 6,
         .Edge => 7,
         .Map => 8,
+        .ExtValue => 9,
     };
 }
 
