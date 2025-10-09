@@ -1409,8 +1409,13 @@ pub const Parser = struct {
 
     fn parseMulExpr(self: *Parser) ParserError!ast.Expr {
         var left = try self.parseUnaryExpr();
-        while (self.cur.kind == .star or self.cur.kind == .slash) {
-            const op = if (self.cur.kind == .star) ast.BinOp.Mul else ast.BinOp.Div;
+        while (self.cur.kind == .star or self.cur.kind == .slash or self.cur.kind == .percent) {
+            const op = if (self.cur.kind == .star)
+                ast.BinOp.Mul
+            else if (self.cur.kind == .slash)
+                ast.BinOp.Div
+            else
+                ast.BinOp.Mod;
             self.advance();
             const right = try self.parseUnaryExpr();
             left = try self.makeBinary(op, left, right);
@@ -1445,6 +1450,14 @@ pub const Parser = struct {
             const ep = try a.create(ast.Expr);
             ep.* = e;
             return .{ .Unary = .{ .op = .Neg, .expr = ep } };
+        }
+        if (self.cur.kind == .plus) {
+            self.advance();
+            const e = try self.parseUnaryExpr();
+            const a = self.arena.allocator();
+            const ep = try a.create(ast.Expr);
+            ep.* = e;
+            return .{ .Unary = .{ .op = .Pos, .expr = ep } };
         }
         return self.parsePostfixExpr();
     }
@@ -1519,6 +1532,19 @@ pub const Parser = struct {
                     if (!validateBuiltinCall(name.orig, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions) and !std.ascii.eqlIgnoreCase(name.orig, "countDistinct")) return self.unexpected("invalid builtin function call");
                 }
                 base = .{ .Call = .{ .callee = cp, .args = args_slice } };
+                continue;
+            }
+            if (self.cur.kind == .l_bracket) {
+                // array index: base[index]
+                self.advance();
+                const index_expr = try self.parseOrExpr();
+                _ = try self.expect(.r_bracket);
+                const a = self.arena.allocator();
+                const bp = try a.create(ast.Expr);
+                bp.* = base;
+                const ip = try a.create(ast.Expr);
+                ip.* = index_expr;
+                base = .{ .Index = .{ .target = bp, .index = ip } };
                 continue;
             }
             break;

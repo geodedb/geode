@@ -176,6 +176,7 @@ pub const Expr = union(enum) {
     VarBitLit: []const u8,
     Member: struct { target: *Expr, field: []const u8 },
     PropertyAccess: struct { object: []const u8, property: []const u8 }, // n.name syntax
+    Index: struct { target: *Expr, index: *Expr },
     Call: struct { callee: *Expr, args: []*Expr },
     Unary: struct { op: UnaryOp, expr: *Expr },
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
@@ -197,8 +198,8 @@ pub const Expr = union(enum) {
     Exists: struct { pattern: *GraphPattern },
 };
 
-pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Concat };
-pub const UnaryOp = enum { Not, Neg };
+pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat };
+pub const UnaryOp = enum { Not, Neg, Pos };
 
 pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };
 

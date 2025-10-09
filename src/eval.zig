@@ -304,6 +304,14 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             }
             return EvalError.TypeMismatch;
         },
+        .Mod => blk_mod: {
+            if (l == .Int and r == .Int) {
+                const denom = r.Int;
+                if (denom == 0) return EvalError.DivisionByZero;
+                break :blk_mod .{ .Int = @rem(l.Int, denom) };
+            }
+            return EvalError.TypeMismatch;
+        },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
             if (l == .Int and r == .Int) break :blk5 cmpIntsOp(op, l.Int, r.Int);
             // Decimal comparisons (no arithmetic yet)
@@ -563,6 +571,10 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 .Neg => switch (v) {
                     .Int => |i| break :blk .{ .Int = -i },
                     .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
+                    else => return EvalError.TypeMismatch,
+                },
+                .Pos => switch (v) {
+                    .Int, .Decimal => break :blk v,
                     else => return EvalError.TypeMismatch,
                 },
             }
@@ -1207,6 +1219,28 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
 
             // Otherwise return null
             break :blk_member Value{ .Null = {} };
+        },
+        .Index => |idx| blk_index: {
+            // Handle array indexing like array[0]
+            const target = try evalExpr(ally, idx.target.*, env);
+            const index_val = try evalExpr(ally, idx.index.*, env);
+
+            // Index must be an integer
+            if (index_val != .Int) return EvalError.TypeMismatch;
+            const index = index_val.Int;
+
+            // Target must be a list
+            if (target == .List) {
+                const list = target.List;
+                // Check bounds
+                if (index < 0 or index >= list.len) {
+                    break :blk_index Value{ .Null = {} };
+                }
+                break :blk_index list[@intCast(index)];
+            }
+
+            // Otherwise return null
+            break :blk_index Value{ .Null = {} };
         },
         .Map => |props| blk_map: {
             // Create a map from properties

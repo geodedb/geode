@@ -223,6 +223,10 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
                 },
                 .Member => |m| try walkExpr(ally_inner, dst, m.target.*),
                 .PropertyAccess => |_| {}, // No nested expressions to walk
+                .Index => |idx| {
+                    try walkExpr(ally_inner, dst, idx.target.*);
+                    try walkExpr(ally_inner, dst, idx.index.*);
+                },
                 .Call => |c| {
                     try walkExpr(ally_inner, dst, c.callee.*);
                     for (c.args) |a| try walkExpr(ally_inner, dst, a.*);
@@ -499,10 +503,17 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .PropertyAccess => |pa| {
             try w.print("{s}.{s}", .{ pa.object, pa.property });
         },
+        .Index => |idx| {
+            try printExprWith(w, idx.target.*, 0, opts);
+            try w.print("[", .{});
+            try printExprWith(w, idx.index.*, 0, opts);
+            try w.print("]", .{});
+        },
         .Unary => |u| {
             switch (u.op) {
                 .Not => try w.print("NOT ", .{}),
                 .Neg => try w.print("-", .{}),
+                .Pos => try w.print("+", .{}),
             }
             try printExprWith(w, u.expr.*, 0, opts);
         },
@@ -521,6 +532,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 .Sub => " - ",
                 .Mul => " * ",
                 .Div => " / ",
+                .Mod => " % ",
                 .Concat => " || ",
             };
             try w.print("{s}", .{op});
