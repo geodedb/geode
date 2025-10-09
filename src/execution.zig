@@ -1090,6 +1090,24 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
 }
 
 fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    // Evaluate LET bindings first and add them to parameter environment
+    var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    defer param_names.deinit(allocator);
+    var param_values = std.ArrayList(eval.Value).initCapacity(allocator, 0) catch unreachable;
+    defer param_values.deinit(allocator);
+
+    // Empty environment for evaluating LET binding expressions
+    const let_env = eval.Env{
+        .names = &.{},
+        .values = &.{},
+    };
+
+    for (q.let_bindings) |binding| {
+        const value = try eval.evalExpr(allocator, binding.value, let_env);
+        try param_names.append(allocator, binding.variable);
+        try param_values.append(allocator, value);
+    }
+
     // Check for GROUP BY validation first
     try validateGroupBy(q.ret, q.group_by);
 
@@ -1127,10 +1145,12 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
         for (with_result.rows) |with_row| {
             var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
 
-            // Create environment from WITH results
+            // Create environment from WITH results + LET binding parameters
             const env = eval.Env{
                 .names = with_result.columns,
                 .values = with_row,
+                .param_names = param_names.items,
+                .param_values = param_values.items,
             };
 
             for (q.ret.items, 0..) |item, i| {
@@ -1175,7 +1195,7 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
     }
 
     // Otherwise just execute the return clause
-    var result = try executeReturnClauseWithContext(allocator, q.ret, context);
+    var result = try executeReturnClauseWithParams(allocator, q.ret, context, param_names.items, param_values.items);
 
     // Apply ORDER BY if present
     if (q.order_by) |order| {
@@ -4061,6 +4081,10 @@ fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !Exe
 }
 
 fn executeReturnClauseWithContext(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext) !ExecutionResult {
+    return executeReturnClauseWithParams(allocator, ret, context, &.{}, &.{});
+}
+
+fn executeReturnClauseWithParams(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // Build environment with authentication context
     var names_list = std.ArrayList([]const u8){};
     defer names_list.deinit(allocator);
@@ -4076,6 +4100,8 @@ fn executeReturnClauseWithContext(allocator: std.mem.Allocator, ret: ast.ReturnC
     const env = eval.Env{
         .names = names_list.items,
         .values = values_list.items,
+        .param_names = param_names,
+        .param_values = param_values,
     };
     return executeReturnClauseWithEnv(allocator, ret, env);
 }

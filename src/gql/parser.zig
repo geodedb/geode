@@ -285,6 +285,10 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
         return switch (self.cur.kind) {
+            .LET => blk_let: {
+                const first = try self.parseQuery();
+                break :blk_let self.handleQueryResult(first);
+            },
             .CREATE => self.parseCreateStatement(),
             .DELETE => self.parseDeleteStatement(),
             .DETACH => self.parseDeleteStatement(),
@@ -689,6 +693,27 @@ pub const Parser = struct {
     }
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
+        // Parse LET bindings first (LET $var = expr, ...)
+        var let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        while (self.cur.kind == .LET) {
+            self.advance();
+            // Parse $variable
+            if (self.cur.kind != .dollar) return self.unexpected("expected $ parameter variable after LET");
+            self.advance();
+            if (self.cur.kind != .identifier) return self.unexpected("expected identifier after $");
+            const var_name = self.cur.lexeme;
+            self.advance();
+            _ = try self.expect(.eq);
+            const value_expr = try self.parseOrExpr();
+            try let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
+            // Allow comma for multiple bindings: LET $x = 1, $y = 2
+            if (self.cur.kind == .comma) {
+                self.advance();
+                continue;
+            }
+            break;
+        }
+
         // Optional MATCH/OPTIONAL MATCH/CREATE pattern; allow RETURN-only queries too.
         var optional_match = false;
         var have_match = false;
@@ -1028,6 +1053,7 @@ pub const Parser = struct {
         }
 
         return .{
+            .let_bindings = try let_bindings.toOwnedSlice(self.arena.allocator()),
             .optional_match = optional_match,
             .match = pat,
             .create_pattern = create_pattern,

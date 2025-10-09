@@ -306,7 +306,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "TO")) return .TO;
     if (std.ascii.eqlIgnoreCase(word, "KEY")) return .KEY;
     // if (std.ascii.eqlIgnoreCase(word, "KEYS")) return .KEYS; // Removed to allow keys() function
-    if (std.ascii.eqlIgnoreCase(word, "LABELS")) return .LABELS;
+    // if (std.ascii.eqlIgnoreCase(word, "LABELS")) return .LABELS; // Removed to allow labels() function
     if (std.ascii.eqlIgnoreCase(word, "LOAD")) return .LOAD;
     if (std.ascii.eqlIgnoreCase(word, "CSV")) return .CSV;
     if (std.ascii.eqlIgnoreCase(word, "PERIODIC")) return .PERIODIC;

@@ -48,6 +48,7 @@ pub const Statement = union(enum) {
 };
 
 pub const Query = struct {
+    let_bindings: []LetBinding = &.{}, // LET $var = expr bindings
     optional_match: bool,
     match: GraphPattern,
     create_pattern: ?GraphPattern = null, // Support CREATE in queries
@@ -128,6 +129,8 @@ pub const ReturnItem = struct { expr: Expr, alias: ?[]const u8 };
 pub const ReturnClause = struct { items: []ReturnItem, distinct: bool };
 
 pub const WithClause = struct { items: []ReturnItem };
+
+pub const LetBinding = struct { variable: []const u8, value: Expr };
 
 pub const GroupBy = struct { keys: []Expr };
 
