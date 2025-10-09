@@ -1,6 +1,7 @@
 const std = @import("std");
 const gql = @import("lib.zig");
 const execution = @import("execution.zig");
+const txn_session = @import("txn_session.zig");
 
 // Cleanup function for test catalog - called at end of tests
 pub fn cleanupTestCatalog() void {
@@ -46,17 +47,27 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         mut_pr.deinit();
     }
 
+    // Load transaction session if exists
+    var transaction_session = txn_session.loadSession(allocator.*) catch null;
+    defer if (transaction_session) |*ts| ts.deinit(allocator.*);
+
     // Create session state for SESSION SET GRAPH support
     var session_state = execution.SessionState.init(allocator.*);
     defer session_state.deinit();
 
-    // Create execution context with authentication if token provided
+    // Create execution context with authentication and transaction state
     const exec_context = execution.ExecutionContext{
         .user = if (options.token != null) "authenticated_user" else null,
         .token = options.token,
         .strict_offset_validation = options.strict_offset_validation,
         .session_state = &session_state,
+        .transaction_state = if (transaction_session) |ts| ts.state else .None,
     };
+
+    // Check if this is a transaction control statement to handle session persistence
+    const is_start_transaction = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .StartTransaction;
+    const is_commit = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .Commit;
+    const is_rollback = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .Rollback;
 
     // Execute the parsed program using Geode's execution engine
     const exec_result = execution.executeProgramWithContext(allocator.*, &parse_result.program, exec_context) catch |err| {
@@ -103,6 +114,18 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     // Check if the query used // comments
     if (parse_result.has_double_solidus_comment) {
         try flags.append(allocator.*, "GB03:DoubleSolidusComment");
+    }
+
+    // Handle transaction session persistence
+    if (is_start_transaction) {
+        // Create and save new transaction session
+        var new_session = try txn_session.TransactionSession.init(allocator.*);
+        new_session.state = .Active;
+        try txn_session.saveSession(new_session);
+        new_session.deinit(allocator.*);
+    } else if (is_commit or is_rollback) {
+        // Clear transaction session after commit/rollback
+        try txn_session.clearSession();
     }
 
     // Convert execution result to JSON
