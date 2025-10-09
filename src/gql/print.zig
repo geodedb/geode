@@ -541,6 +541,8 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 .Div => " / ",
                 .Mod => " % ",
                 .Concat => " || ",
+                .RegexMatch => " =~ ",
+                .RegexNotMatch => " !~ ",
             };
             try w.print("{s}", .{op});
             try printExprWith(w, b.right.*, 0, opts);

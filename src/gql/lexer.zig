@@ -159,11 +159,26 @@ pub const Lexer = struct {
                 self.col += 2;
                 return tokv;
             },
-            '!' => if (remain[1] == '=') {
-                const tokv: t.Token = .{ .kind = .ne, .lexeme = remain[0..2], .loc = loc };
+            '=' => if (remain[1] == '~') {
+                const tokv: t.Token = .{ .kind = .regex_match, .lexeme = remain[0..2], .loc = loc };
                 self.idx += 2;
                 self.col += 2;
                 return tokv;
+            },
+            '!' => switch (remain[1]) {
+                '=' => {
+                    const tokv: t.Token = .{ .kind = .ne, .lexeme = remain[0..2], .loc = loc };
+                    self.idx += 2;
+                    self.col += 2;
+                    return tokv;
+                },
+                '~' => {
+                    const tokv: t.Token = .{ .kind = .regex_not_match, .lexeme = remain[0..2], .loc = loc };
+                    self.idx += 2;
+                    self.col += 2;
+                    return tokv;
+                },
+                else => {},
             },
             '.' => if (remain[1] == '.') {
                 const tokv: t.Token = .{ .kind = .dotdot, .lexeme = remain[0..2], .loc = loc };

@@ -1354,6 +1354,8 @@ pub const Parser = struct {
             .le => ast.BinOp.Le,
             .gt => ast.BinOp.Gt,
             .ge => ast.BinOp.Ge,
+            .regex_match => ast.BinOp.RegexMatch,
+            .regex_not_match => ast.BinOp.RegexNotMatch,
             else => {
                 if (self.cur.kind == .IN) {
                     self.advance();
@@ -2114,19 +2116,21 @@ pub const Parser = struct {
             }
 
             // Return a Query with create_pattern set
-            return .{ .Query = .{
-                .optional_match = false,
-                .match = .{ .chains = &.{} },  // Empty match pattern
-                .create_pattern = pattern,      // CREATE pattern goes here
-                .where_clause = null,
-                .with_clause = with_clause,
-                .set_clauses = set_clauses,
-                .remove_clauses = remove_clauses,
-                .ret = return_clause,
-                .order_by = null,
-                .limit = null,
-                .offset = null,
-            } };
+            return .{
+                .Query = .{
+                    .optional_match = false,
+                    .match = .{ .chains = &.{} }, // Empty match pattern
+                    .create_pattern = pattern, // CREATE pattern goes here
+                    .where_clause = null,
+                    .with_clause = with_clause,
+                    .set_clauses = set_clauses,
+                    .remove_clauses = remove_clauses,
+                    .ret = return_clause,
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                },
+            };
         }
 
         // Optional RETURN clause (for standalone CREATE without WITH/SET/REMOVE)

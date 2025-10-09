@@ -202,7 +202,7 @@ pub const Expr = union(enum) {
     Exists: struct { pattern: *GraphPattern },
 };
 
-pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat };
+pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };
 pub const UnaryOp = enum { Not, Neg, Pos };
 
 pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };

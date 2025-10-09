@@ -405,6 +405,20 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             @memcpy(result[str_l.len..], str_r);
             break :blk6 .{ .Str = result };
         },
+        .RegexMatch, .RegexNotMatch => blk7: {
+            // Regex matching: left =~ right or left !~ right
+            // Both operands must be strings
+            if (l != .Str or r != .Str) return EvalError.TypeMismatch;
+
+            const input = l.Str;
+            const pattern = r.Str;
+
+            // Use the existing matchSimplePattern function
+            const matched = matchSimplePattern(input, pattern);
+
+            const result = if (op == .RegexMatch) matched else !matched;
+            break :blk7 .{ .Bool = result };
+        },
     };
 }
 
@@ -501,8 +515,12 @@ fn evalContains(val: Value, needle: Value) EvalError!Value {
 
 pub fn matchSimplePattern(s: []const u8, p_in: []const u8) bool {
     // Lightweight matcher: ^, $, ., .*, [..], escapes, '?' (no alternation)
-    if (p_in.len == 0) return s.len == 0; // empty pattern matches empty string only
-    var p = p_in;
+    // Transform + to equivalent pattern first
+    var buf: [256]u8 = undefined;
+    const p_transformed = transformPlusQuantifier(p_in, &buf) catch p_in;
+
+    if (p_transformed.len == 0) return s.len == 0; // empty pattern matches empty string only
+    var p = p_transformed;
     var anchor_start = false;
     var anchor_end = false;
     if (p.len > 0 and p[0] == '^') {
@@ -523,6 +541,64 @@ pub fn matchSimplePattern(s: []const u8, p_in: []const u8) bool {
     var start: usize = 0;
     while (start <= s.len) : (start += 1) if (regexRec(s, p, start, 0, allow_suffix_end)) return true;
     return false;
+}
+
+fn transformPlusQuantifier(pattern: []const u8, buf: *[256]u8) ![]const u8 {
+    // Transform [class]+ to [class][class]* for simpler matching
+    // This handles the + quantifier by expanding it to equivalent form
+    var write_idx: usize = 0;
+    var i: usize = 0;
+
+    while (i < pattern.len) {
+        if (pattern[i] == '[') {
+            // Find the closing ]
+            var j = i + 1;
+            while (j < pattern.len and pattern[j] != ']') : (j += 1) {}
+
+            if (j < pattern.len) {
+                // Found complete character class
+                const class_end = j + 1;
+
+                // Check if followed by +
+                if (class_end < pattern.len and pattern[class_end] == '+') {
+                    // Copy the class twice: once as-is, once with *
+                    const class_len = class_end - i;
+                    if (write_idx + class_len * 2 >= buf.len) return error.BufferTooSmall;
+
+                    // First copy: [class]
+                    @memcpy(buf[write_idx..write_idx + class_len], pattern[i..class_end]);
+                    write_idx += class_len;
+
+                    // Second copy: [class]* (replace + with *)
+                    @memcpy(buf[write_idx..write_idx + class_len], pattern[i..class_end]);
+                    buf[write_idx + class_len - 1] = '*';
+                    write_idx += class_len;
+
+                    i = class_end + 1; // Skip past the +
+                } else {
+                    // No +, copy as-is
+                    if (write_idx + class_end - i >= buf.len) return error.BufferTooSmall;
+                    @memcpy(buf[write_idx..write_idx + (class_end - i)], pattern[i..class_end]);
+                    write_idx += class_end - i;
+                    i = class_end;
+                }
+            } else {
+                // Incomplete class, copy what we have
+                if (write_idx >= buf.len) return error.BufferTooSmall;
+                buf[write_idx] = pattern[i];
+                write_idx += 1;
+                i += 1;
+            }
+        } else {
+            // Regular character, copy as-is
+            if (write_idx >= buf.len) return error.BufferTooSmall;
+            buf[write_idx] = pattern[i];
+            write_idx += 1;
+            i += 1;
+        }
+    }
+
+    return buf[0..write_idx];
 }
 
 fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {

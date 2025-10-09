@@ -25,6 +25,8 @@ pub const TokenKind = enum {
     ge,
     eq,
     ne,
+    regex_match, // =~
+    regex_not_match, // !~
     concat, // ||
     bar, // |
     dollar, // $
