@@ -1470,18 +1470,28 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
     }
 
     // Apply SET clauses if present
+    // If WITH clause exists, SET should work on the WITH result environment
     for (q.set_clauses) |set_clause| {
         switch (set_clause) {
             .Property => |prop| {
                 if (created_nodes.get(prop.target.object)) |node| {
-                    // Create environment with created nodes
+                    // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
                     var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
 
-                    var iter = created_nodes.iterator();
-                    while (iter.next()) |entry| {
-                        try names.append(allocator, entry.key_ptr.*);
-                        try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+                    if (q.with_clause != null) {
+                        // Use WITH result columns and first row as environment
+                        for (result.columns, 0..) |col_name, idx| {
+                            try names.append(allocator, col_name);
+                            try values.append(allocator, result.rows[0][idx]);
+                        }
+                    } else {
+                        // Use created nodes as environment
+                        var iter = created_nodes.iterator();
+                        while (iter.next()) |entry| {
+                            try names.append(allocator, entry.key_ptr.*);
+                            try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+                        }
                     }
 
                     const env = eval.Env{
@@ -1528,8 +1538,56 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
         }
     }
 
+    // CANARY: REQ=REQ-GQL-083; FEATURE="CreateWithClause"; ASPECT=VariablePropagation; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
     // Execute RETURN clause
-    return executeReturnClauseWithNodes(allocator, q.ret, created_nodes);
+    // If WITH clause was present, use the WITH result columns/rows as the environment for RETURN
+    if (q.with_clause != null) {
+        // WITH clause creates a result that filters/transforms the created nodes
+        // RETURN should evaluate in the context of the WITH result
+        var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+        for (q.ret.items, 0..) |item, i| {
+            const col_name = item.alias orelse switch (item.expr) {
+                .Ident => |ident| ident.orig,
+                .PropertyAccess => |prop| prop.property,
+                .Member => |mem| mem.field,
+                else => "column",
+            };
+            return_columns[i] = try allocator.dupe(u8, col_name);
+        }
+
+        // Evaluate RETURN items using the WITH result as environment
+        var return_rows = try allocator.alloc([]eval.Value, result.rows.len);
+        for (result.rows, 0..) |with_row, row_idx| {
+            var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+
+            // Create environment from WITH result columns and this row's values
+            const env = eval.Env{
+                .names = result.columns,
+                .values = with_row,
+            };
+
+            for (q.ret.items, 0..) |item, col_idx| {
+                return_row[col_idx] = try eval.evalExpr(allocator, item.expr, env);
+            }
+            return_rows[row_idx] = return_row;
+        }
+
+        // Clean up WITH result arrays (note: column names are from parser arena, don't free them)
+        allocator.free(result.columns);
+        for (result.rows) |row| {
+            allocator.free(row);
+        }
+        allocator.free(result.rows);
+
+        return ExecutionResult{
+            .columns = return_columns,
+            .rows = return_rows,
+            .flags = result.flags,
+        };
+    } else {
+        // No WITH clause - use created nodes directly for RETURN
+        return executeReturnClauseWithNodes(allocator, q.ret, created_nodes);
+    }
 }
 
 fn executeReturnClauseWithNodes(allocator: std.mem.Allocator, ret: ast.ReturnClause, nodes: std.StringHashMap(*graph_store.Node)) !ExecutionResult {

@@ -2064,7 +2064,72 @@ pub const Parser = struct {
         // Otherwise, parse the pattern to create
         const pattern = try self.parseGraphPattern();
 
-        // Optional RETURN clause
+        // CANARY: REQ=REQ-GQL-083; FEATURE="CreateWithClause"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-09
+        // Check if this is followed by WITH, SET, or REMOVE - if so, this should be a Query, not a standalone CREATE
+        if (self.cur.kind == .WITH or self.cur.kind == .SET or self.cur.kind == .REMOVE) {
+            // This is CREATE ... WITH/SET/REMOVE ... RETURN
+            // We need to construct a Query with create_pattern set
+
+            // Parse WITH clause if present
+            var with_clause: ?ast.WithClause = null;
+            if (self.cur.kind == .WITH) {
+                self.advance();
+                var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                try self.parseProjectionItems(&witems);
+                with_clause = .{ .items = try witems.toOwnedSlice(self.arena.allocator()) };
+            }
+
+            // Parse SET clauses if present
+            var set_clauses: []ast.SetClause = &.{};
+            if (self.cur.kind == .SET) {
+                self.advance();
+                set_clauses = try self.parseSetClauses();
+            }
+
+            // Parse REMOVE clauses if present
+            var remove_clauses: []ast.RemoveClause = &.{};
+            if (self.cur.kind == .REMOVE) {
+                self.advance();
+                remove_clauses = try self.parseRemoveClauses();
+            }
+
+            // Parse RETURN clause (required for Query)
+            var return_clause: ast.ReturnClause = undefined;
+            if (self.cur.kind == .RETURN) {
+                self.advance();
+                const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                    self.advance();
+                    break :blk true;
+                } else false;
+                var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                try self.parseProjectionItems(&items);
+                return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
+            } else if (set_clauses.len > 0 or remove_clauses.len > 0) {
+                // SET/REMOVE without RETURN - create empty return clause
+                return_clause = .{ .items = &.{}, .distinct = false };
+            } else {
+                // No SET/REMOVE and no RETURN after WITH - error
+                _ = try self.expect(.RETURN);
+                unreachable;
+            }
+
+            // Return a Query with create_pattern set
+            return .{ .Query = .{
+                .optional_match = false,
+                .match = .{ .chains = &.{} },  // Empty match pattern
+                .create_pattern = pattern,      // CREATE pattern goes here
+                .where_clause = null,
+                .with_clause = with_clause,
+                .set_clauses = set_clauses,
+                .remove_clauses = remove_clauses,
+                .ret = return_clause,
+                .order_by = null,
+                .limit = null,
+                .offset = null,
+            } };
+        }
+
+        // Optional RETURN clause (for standalone CREATE without WITH/SET/REMOVE)
         var return_clause: ?ast.ReturnClause = null;
         if (self.cur.kind == .RETURN) {
             self.advance();
