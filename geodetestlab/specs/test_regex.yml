@@ -1,0 +1,42 @@
+version: "1.0"
+name: "Regex Test"
+description: "Test regex operators"
+
+cli:
+  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 5000
+    cleanup: true
+  client:
+    timeout_ms: 5000
+
+tests:
+  - name: "regex-plus-quantifier"
+    description: "Test regex with + quantifier"
+    args: ["query", "--server", "${server_address}", "RETURN 'abc123' =~ '^[a-z]+[0-9]+$' AS result"]
+    expect:
+      exit_code: 0
+      stdout_json_assert:
+        - expression: "rows[0][0]"
+          equals: true
+
+  - name: "regex-simple"
+    description: "Test simple regex pattern"
+    args: ["query", "--server", "${server_address}", "RETURN 'test' =~ 'te.*' AS result"]
+    expect:
+      exit_code: 0
+      stdout_json_assert:
+        - expression: "rows[0][0]"
+          equals: true
+
+  - name: "regex-no-match"
+    description: "Test regex that should not match"
+    args: ["query", "--server", "${server_address}", "RETURN 'abc' =~ '^[0-9]+$' AS result"]
+    expect:
+      exit_code: 0
+      stdout_json_assert:
+        - expression: "rows[0][0]"
+          equals: false

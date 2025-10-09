@@ -2328,7 +2328,7 @@ fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Executio
     if (d.return_clause) |_| {
         // For now, return the count of deleted nodes
         var columns = try allocator.alloc([]const u8, 1);
-        columns[0] = "deleted_count";
+        columns[0] = try allocator.dupe(u8, "deleted_count");
 
         var rows = try allocator.alloc([]eval.Value, 1);
         var row = try allocator.alloc(eval.Value, 1);
