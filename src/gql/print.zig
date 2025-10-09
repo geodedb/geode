@@ -204,6 +204,7 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
         }
         fn walkQuery(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), q: ast.Query) !void {
             if (q.where_clause) |e| try walkExpr(ally_inner, dst, e);
+            if (q.filter_clause) |e| try walkExpr(ally_inner, dst, e);
             if (q.with_clause) |wth| for (wth.items) |it| try walkExpr(ally_inner, dst, it.expr);
             if (q.group_by) |gb| for (gb.keys) |k| try walkExpr(ally_inner, dst, k);
             if (q.having) |hv| try walkExpr(ally_inner, dst, hv);
@@ -273,6 +274,12 @@ pub fn printQueryWith(w: anytype, q: ast.Query, pad: usize, opts: PrintOptions) 
         try indent(w, pad);
         try w.print("Where: ", .{});
         try printExprWith(w, we, 0, opts);
+        try w.writeByte('\n');
+    }
+    if (q.filter_clause) |fe| {
+        try indent(w, pad);
+        try w.print("Filter: ", .{});
+        try printExprWith(w, fe, 0, opts);
         try w.writeByte('\n');
     }
     if (q.with_clause) |wc| {

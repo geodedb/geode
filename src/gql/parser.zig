@@ -793,6 +793,17 @@ pub const Parser = struct {
             where_expr = try self.parseOrExpr();
         }
 
+        // Parse FILTER clause (ISO/IEC 39075:2024)
+        var filter_expr: ?ast.Expr = null;
+        if (self.cur.kind == .FILTER) {
+            self.advance();
+            // FILTER can have optional WHERE keyword: "FILTER WHERE expr" or "FILTER expr"
+            if (self.cur.kind == .WHERE) {
+                self.advance();
+            }
+            filter_expr = try self.parseOrExpr();
+        }
+
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
         if (self.cur.kind == .WITH) {
             self.advance();
@@ -1021,6 +1032,7 @@ pub const Parser = struct {
             .match = pat,
             .create_pattern = create_pattern,
             .where_clause = where_expr,
+            .filter_clause = filter_expr,
             .with_clause = if (with_clause) |wc| wc else initial_with_clause,
             .set_clauses = set_clauses,
             .remove_clauses = remove_clauses,

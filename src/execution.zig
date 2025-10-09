@@ -174,6 +174,38 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
             }
             try writer.writeAll("}");
         },
+        .Edge => |edge| {
+            // Output edge as a JSON object with its properties
+            try writer.writeAll("{");
+            try writer.print("\"id\":{d},\"from\":{d},\"to\":{d},\"type\":\"{s}\"", .{ edge.id, edge.from_id, edge.to_id, edge.label });
+            // Add properties if any
+            if (edge.properties.count() > 0) {
+                try writer.writeAll(",\"properties\":{");
+                var iter = edge.properties.iterator();
+                var first = true;
+                while (iter.next()) |entry| {
+                    if (!first) try writer.writeAll(",");
+                    first = false;
+                    try writer.writeByte('"');
+                    try writer.writeAll(entry.key_ptr.*);
+                    try writer.writeAll("\":");
+                    const prop_value = entry.value_ptr.*;
+                    switch (prop_value) {
+                        .String => |s| {
+                            try writer.writeByte('"');
+                            try writer.writeAll(s);
+                            try writer.writeByte('"');
+                        },
+                        .Int => |i| try writer.print("{d}", .{i}),
+                        .Float => |f| try writer.print("{d}", .{f}),
+                        .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                        .Null => try writer.writeAll("null"),
+                    }
+                }
+                try writer.writeAll("}");
+            }
+            try writer.writeAll("}");
+        },
         .Map => |map| {
             try writer.writeByte('{');
             var iter = map.iterator();
@@ -529,6 +561,9 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
             }
             if (q.where_clause != null) {
                 try plan_steps.append(allocator, try allocator.dupe(u8, "  Filter"));
+            }
+            if (q.filter_clause != null) {
+                try plan_steps.append(allocator, try allocator.dupe(u8, "  Filter (FILTER clause)"));
             }
             if (q.group_by != null) {
                 try plan_steps.append(allocator, try allocator.dupe(u8, "  Aggregate"));
@@ -2085,6 +2120,25 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                     }
                 }
 
+                // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+                if (q.filter_clause) |filter_expr| {
+                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const passes_filter = switch (filter_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+
+                    if (!passes_filter) {
+                        if (match_variable != null) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                        }
+                        continue;
+                    }
+                }
+
                 // Free environment memory since we don't need it for grouping
                 if (match_variable != null) {
                     allocator.free(env_names);
@@ -2266,8 +2320,13 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                     }
                     if (rel_var) |var_name| {
                         env_names[env_idx] = var_name;
-                        // For now, store edge as a Node type (we'll need to add Edge type to eval.Value later)
-                        env_values[env_idx] = eval.Value{ .Null = {} };
+                        // Store edge as an Edge value for type() function
+                        const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                            env_values[env_idx] = eval.Value{ .Null = {} };
+                            env_idx += 1;
+                            continue;
+                        };
+                        env_values[env_idx] = eval.Value{ .Edge = edge_ptr };
                         env_idx += 1;
                     }
 
@@ -2287,6 +2346,23 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                         };
 
                         if (!passes_where) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                            continue;
+                        }
+                    }
+
+                    // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+                    if (q.filter_clause) |filter_expr| {
+                        const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                        const passes_filter = switch (filter_result) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
+
+                        if (!passes_filter) {
                             allocator.free(env_names);
                             allocator.free(env_values);
                             continue;
@@ -2359,6 +2435,25 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
 
                     if (!passes_where) {
                         // Free allocated memory before continuing
+                        if (match_variable != null) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                        }
+                        continue;
+                    }
+                }
+
+                // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+                if (q.filter_clause) |filter_expr| {
+                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const passes_filter = switch (filter_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+
+                    if (!passes_filter) {
                         if (match_variable != null) {
                             allocator.free(env_names);
                             allocator.free(env_values);
@@ -2987,6 +3082,7 @@ fn valuesEqual(a: eval.Value, b: eval.Value) bool {
             break :blk true;
         },
         .Node => |node_a| b == .Node and b.Node.id == node_a.id,
+        .Edge => |edge_a| b == .Edge and b.Edge.id == edge_a.id,
         .Map => false, // Map comparison not implemented yet
     };
 }
@@ -3328,7 +3424,8 @@ fn getTypeOrder(v: eval.Value) u8 {
         .Str => 4,
         .List => 5,
         .Node => 6,
-        .Map => 7,
+        .Edge => 7,
+        .Map => 8,
     };
 }
 

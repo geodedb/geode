@@ -38,6 +38,7 @@ pub const Value = union(enum) {
     Bool: bool,
     Str: []const u8,
     Node: *const @import("graph_store.zig").Node,
+    Edge: *const @import("graph_store.zig").Edge,
     // Fixed-point decimal: coeff * 10^-scale. Preserve original scale & literal for round-trip fidelity.
     Decimal: struct {
         coeff: i128,
@@ -205,6 +206,7 @@ fn eqVals(a: Value, b: Value) bool {
         .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
         .Node => |an| b == .Node and an == b.Node, // Compare node pointers
+        .Edge => |ae| b == .Edge and ae == b.Edge, // Compare edge pointers
         .List => |al| blk: {
             if (b != .List) break :blk false;
             const bl = b.List;
@@ -1265,6 +1267,7 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .List => .{ .Null = {} }, // ExtValue doesn't support complex types
         .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
+        .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Map => .{ .Null = {} }, // ExtValue doesn't support map types
     };
 }
@@ -1296,6 +1299,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
         .List => .{ .Null = {} }, // TODO: heap.Value needs List support
         .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
+        .Edge => .{ .Null = {} }, // TODO: heap.Value needs Edge support
         .Map => .{ .Null = {} }, // TODO: heap.Value needs Map support
     };
 }
@@ -1437,8 +1441,11 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     // Handle type() function - returns relationship type
     if (std.mem.eql(u8, function_name, "type")) {
         if (args.len != 1) return null;
-        // For now, return a placeholder since we don't have relationship objects yet
-        return Value{ .Str = "RELATIONSHIP" };
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Edge => |e| return Value{ .Str = e.label },
+            else => return Value{ .Null = {} },
+        }
     }
 
     // Handle labels() function - returns node labels as a list

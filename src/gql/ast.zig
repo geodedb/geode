@@ -52,6 +52,7 @@ pub const Query = struct {
     match: GraphPattern,
     create_pattern: ?GraphPattern = null, // Support CREATE in queries
     where_clause: ?Expr,
+    filter_clause: ?Expr = null, // FILTER clause (ISO/IEC 39075:2024)
     with_clause: ?WithClause,
     set_clauses: []SetClause = &.{},
     remove_clauses: []RemoveClause = &.{},
