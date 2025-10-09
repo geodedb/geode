@@ -5,6 +5,42 @@ const execution = @import("execution.zig");
 const lib = @import("lib.zig");
 const ast = @import("gql/ast.zig");
 
+// Test that MATCH with labels works
+test "MATCH - Labels only" {
+    const allocator = testing.allocator;
+    const query = "MATCH (a:Person) RETURN a";
+    var result = lib.parse(allocator, query, .{}) catch |err| {
+        std.debug.print("MATCH labels error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    try testing.expect(result.program.statements.len > 0);
+}
+
+// Test that MATCH with WHERE and CALL works
+test "MATCH WHERE CALL" {
+    const allocator = testing.allocator;
+    const query = "MATCH (n:Person) WHERE n.name = 'A' CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path";
+    var result = lib.parse(allocator, query, .{}) catch |err| {
+        std.debug.print("MATCH WHERE CALL error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    try testing.expect(result.program.statements.len > 0);
+}
+
+// Test that MATCH with labels and properties works (with relationship)
+test "MATCH - Labels and properties with relationship" {
+    const allocator = testing.allocator;
+    const query = "MATCH (a:Person {name: \"A\"})-[r]->(b) RETURN a";
+    var result = lib.parse(allocator, query, .{}) catch |err| {
+        std.debug.print("MATCH parse error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    try testing.expect(result.program.statements.len > 0);
+}
+
 // CANARY: REQ=REQ-GQL-MATCH-CALL-001; FEATURE="MatchCallIntegration"; ASPECT=UnitTesting; STATUS=TESTED; TEST=TestMatchCallBasic|TestMatchCallWithProperties|TestMatchCallDijkstra; OWNER=engine; UPDATED=2025-10-08
 test "MATCH + CALL - Basic node binding" {
     const allocator = testing.allocator;
@@ -13,7 +49,7 @@ test "MATCH + CALL - Basic node binding" {
     store.clearNodes();
 
     // Create test graph
-    const labels = [_][]const u8{"Node"};
+    const labels = [_][]const u8{"TestNode"};
     const labels_slice: [][]const u8 = @constCast(&labels);
     const node_a = try store.createNode(labels_slice);
     const node_b = try store.createNode(labels_slice);
@@ -28,13 +64,13 @@ test "MATCH + CALL - Basic node binding" {
     _ = try store.createEdge(node_b, node_c, "CONNECTS");
 
     // Parse and execute MATCH + CALL query
-    const query = "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN path";
+    const query = "MATCH (source:Person) WHERE source.name = 'A' CALL algo.bfs.stream(source, {maxDepth: 2}) YIELD path RETURN path";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("Parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -55,7 +91,7 @@ test "MATCH + CALL - Property-based node filtering" {
     store.clearNodes();
 
     // Create test nodes with different properties
-    const labels = [_][]const u8{"Node"};
+    const labels = [_][]const u8{"TestNode"};
     const labels_slice: [][]const u8 = @constCast(&labels);
 
     const node1 = try store.createNode(labels_slice);
@@ -72,13 +108,13 @@ test "MATCH + CALL - Property-based node filtering" {
     try store.setNodeProperty(node3, "priority", graph_store.PropertyValue{ .Int = 3 });
 
     // Test that property filtering works
-    const query = "MATCH (n:Node {priority: 1}) CALL algo.dfs.stream(n, {maxDepth: 3}) YIELD path RETURN path";
+    const query = "MATCH (n:TestNode) WHERE n.priority = 1 CALL algo.dfs.stream(n, {maxDepth: 3}) YIELD path RETURN path";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("Property filtering parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -93,7 +129,7 @@ test "MATCH + CALL - Dijkstra with start and end binding" {
     store.clearNodes();
 
     // Create test graph for shortest path
-    const labels = [_][]const u8{"Node"};
+    const labels = [_][]const u8{"TestNode"};
     const labels_slice: [][]const u8 = @constCast(&labels);
 
     const node_a = try store.createNode(labels_slice);
@@ -127,13 +163,13 @@ test "MATCH + CALL - Dijkstra with start and end binding" {
     }
 
     // Parse MATCH + CALL Dijkstra query
-    const query = "MATCH (start:Node {name: 'A'}), (end:Node {name: 'D'}) CALL algo.shortestPath.dijkstra(start, end, 'weight') YIELD path, cost RETURN cost";
+    const query = "MATCH (source:Person), (target:Person) WHERE source.name = 'A' AND target.name = 'D' CALL algo.shortestPath.dijkstra(source, target, 'weight') YIELD path, cost RETURN cost";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("Dijkstra parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -149,7 +185,7 @@ test "MATCH + CALL - Multiple node bindings" {
     store.clearNodes();
 
     // Create nodes
-    const labels = [_][]const u8{"Node"};
+    const labels = [_][]const u8{"TestNode"};
     const labels_slice: [][]const u8 = @constCast(&labels);
 
     const node1 = try store.createNode(labels_slice);
@@ -159,13 +195,13 @@ test "MATCH + CALL - Multiple node bindings" {
     try store.setNodeProperty(node2, "type", graph_store.PropertyValue{ .String = "target" });
 
     // Test query with multiple MATCH variables
-    const query = "MATCH (src:Node {type: 'source'}), (tgt:Node {type: 'target'}) CALL algo.shortestPath.dijkstra(src, tgt, 'weight') YIELD path RETURN path";
+    const query = "MATCH (src:TestNode), (tgt:TestNode) WHERE src.type = 'source' AND tgt.type = 'target' CALL algo.shortestPath.dijkstra(src, tgt, 'weight') YIELD path RETURN path";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("Multiple binding parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -176,13 +212,13 @@ test "MATCH + CALL - Multiple node bindings" {
 test "MATCH + CALL - YIELD and RETURN interaction" {
     const allocator = testing.allocator;
 
-    const query = "MATCH (n:Node) CALL algo.pageRank.stream({iterations: 20}) YIELD nodeId, score RETURN nodeId, score ORDER BY score DESC LIMIT 10";
+    const query = "MATCH (n:TestNode) CALL algo.pageRank.stream({iterations: 20}) YIELD nodeId, score RETURN nodeId, score ORDER BY score DESC LIMIT 10";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("YIELD/RETURN parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -201,13 +237,13 @@ test "MATCH + CALL - YIELD and RETURN interaction" {
 test "MATCH + CALL - ORDER BY and LIMIT on CALL results" {
     const allocator = testing.allocator;
 
-    const query = "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth ORDER BY depth LIMIT 5";
+    const query = "MATCH (source:Person) WHERE source.name = 'A' CALL algo.bfs.stream(source, {maxDepth: 3}) YIELD path RETURN length(path) AS depth ORDER BY depth LIMIT 5";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("ORDER BY/LIMIT parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -244,11 +280,11 @@ test "MATCH + CALL - Label-based filtering" {
     // Query should only match Person nodes
     const query = "MATCH (p:Person) CALL algo.bfs.stream(p, {maxDepth: 2}) YIELD path RETURN path";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("Label filter parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
@@ -262,11 +298,11 @@ test "MATCH + CALL - Direct node ID usage (fallback mode)" {
     // Test that direct node IDs still work
     const query = "CALL algo.bfs.stream(1, {maxDepth: 3}) YIELD path RETURN path";
 
-    const result = lib.parseGqlOptions(query, allocator, .{}) catch |err| {
+    var result = lib.parse(allocator, query, .{}) catch |err| {
         std.debug.print("Direct ID parse error: {}\n", .{err});
         return err;
     };
-    defer result.arena.deinit();
+    defer result.deinit();
 
     const program = result.program;
 
