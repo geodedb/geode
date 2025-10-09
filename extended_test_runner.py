@@ -47,6 +47,39 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     json_asserts = "stdout_json_assert" in expect
     geode_query = "geode_query" in expect
     
+    # Execute setup commands if present
+    setup_commands = test_case.get("setup", [])
+    if setup_commands:
+        import shlex
+        for cmd_str in setup_commands:
+            try:
+                setup_args = shlex.split(cmd_str)
+                # Apply variable substitution to setup args
+                setup_processed = []
+                for arg in setup_args:
+                    if not isinstance(arg, str):
+                        setup_processed.append(arg)
+                        continue
+                    processed_arg = arg
+                    if "${server_address}" in processed_arg:
+                        processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
+                    if instance_id is not None and "${instance_id}" in processed_arg:
+                        processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
+                    if loop_index is not None and "${loop_index}" in processed_arg:
+                        processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+                    setup_processed.append(processed_arg)
+
+                setup_result = subprocess.run(
+                    [binary] + setup_processed,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if setup_result.returncode != 0:
+                    return False, "setup command failed"
+            except Exception as e:
+                return False, f"setup error: {str(e)}"
+
     # Add --no-quic if query command and no server specified
     modified_args = args[:]
     if len(args) > 0 and args[0] == "query":
@@ -55,7 +88,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         if not has_server and not has_no_quic:
             # Insert --no-quic after "query"
             modified_args.insert(1, "--no-quic")
-    
+
     try:
         result = subprocess.run(
             [binary] + modified_args,
@@ -67,6 +100,37 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         return False, "timeout"
     except Exception as e:
         return False, str(e)
+    finally:
+        # Execute teardown commands if present
+        teardown_commands = test_case.get("teardown", [])
+        if teardown_commands:
+            import shlex
+            for cmd_str in teardown_commands:
+                try:
+                    teardown_args = shlex.split(cmd_str)
+                    # Apply variable substitution
+                    teardown_processed = []
+                    for arg in teardown_args:
+                        if not isinstance(arg, str):
+                            teardown_processed.append(arg)
+                            continue
+                        processed_arg = arg
+                        if "${server_address}" in processed_arg:
+                            processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
+                        if instance_id is not None and "${instance_id}" in processed_arg:
+                            processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
+                        if loop_index is not None and "${loop_index}" in processed_arg:
+                            processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+                        teardown_processed.append(processed_arg)
+
+                    subprocess.run(
+                        [binary] + teardown_processed,
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                except:
+                    pass  # Ignore teardown errors
     
     # Check exit code
     if "exit_code" in expect:
