@@ -333,6 +333,10 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error } };
 }
 
+// Re-export execution and graph_store for integration tests
+pub const execution = @import("execution.zig");
+pub const graph_store = @import("graph_store.zig");
+
 test "lib.parseGql basic" {
     const ally = std.testing.allocator;
     var res = try parseGql("MATCH (a)-[r]->(b) RETURN a", ally);

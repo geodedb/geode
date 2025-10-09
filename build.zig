@@ -975,6 +975,11 @@ pub fn build(b: *std.Build) void {
     e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&e2e_graph_algos_new_test.step);
 
+    // October 2025 feature integration tests
+    const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
+    october_2025_integration_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&october_2025_integration_test.step);
+
     // Add unit tests for new modules
     const crypto_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize }),

@@ -248,13 +248,14 @@ pub const CallClause = struct {
     yield_items: ?[]ReturnItem = null, // YIELD clause items (required for MATCH+CALL)
 };
 
-pub const SetClause = struct {
-    target: PropertyAccess,
-    value: Expr,
+pub const SetClause = union(enum) {
+    Property: struct { target: PropertyAccess, value: Expr },
+    Labels: struct { node: []const u8, labels: [][]const u8 },
 };
 
-pub const RemoveClause = struct {
-    target: PropertyAccess,
+pub const RemoveClause = union(enum) {
+    Property: PropertyAccess,
+    Labels: struct { node: []const u8, labels: [][]const u8 },
 };
 
 pub const PropertyAccess = struct {

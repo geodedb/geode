@@ -2188,24 +2188,42 @@ pub const Parser = struct {
     }
 
     fn parseSetClause(self: *Parser) ParserError!ast.SetClause {
-        // Parse property access (e.g., n.name)
+        // Parse identifier (e.g., n)
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         const object = self.cur.lexeme;
         self.advance();
 
-        _ = try self.expect(.dot);
+        // Check if it's a label setting (n:Label) or property setting (n.property = value)
+        if (self.cur.kind == .colon) {
+            // Parse label(s): SET n:Label or SET n:Label1:Label2
+            var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch unreachable;
 
-        const property_token = try self.expectIdentifierOrKeyword();
-        const property = property_token.lexeme;
+            while (self.cur.kind == .colon) {
+                self.advance(); // consume ':'
+                const label_token = try self.expectIdentifierOrKeyword();
+                try labels.append(self.arena.allocator(), label_token.lexeme);
+            }
 
-        _ = try self.expect(.eq);
+            return .{ .Labels = .{
+                .node = object,
+                .labels = try labels.toOwnedSlice(self.arena.allocator()),
+            } };
+        } else {
+            // Property setting: n.property = value
+            _ = try self.expect(.dot);
 
-        const value = try self.parseOrExpr();
+            const property_token = try self.expectIdentifierOrKeyword();
+            const property = property_token.lexeme;
 
-        return .{
-            .target = .{ .object = object, .property = property },
-            .value = value,
-        };
+            _ = try self.expect(.eq);
+
+            const value = try self.parseOrExpr();
+
+            return .{ .Property = .{
+                .target = .{ .object = object, .property = property },
+                .value = value,
+            } };
+        }
     }
 
     fn parseRemoveClauses(self: *Parser) ParserError![]ast.RemoveClause {
@@ -2226,19 +2244,35 @@ pub const Parser = struct {
     }
 
     fn parseRemoveClause(self: *Parser) ParserError!ast.RemoveClause {
-        // Parse property access (e.g., n.name)
+        // Parse identifier (e.g., n)
         if (self.cur.kind != .identifier) return error.UnexpectedToken;
         const object = self.cur.lexeme;
         self.advance();
 
-        _ = try self.expect(.dot);
+        // Check if it's a label removal (n:Label) or property removal (n.property)
+        if (self.cur.kind == .colon) {
+            // Parse label(s): REMOVE n:Label or REMOVE n:Label1:Label2
+            var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch unreachable;
 
-        const property_token = try self.expectIdentifierOrKeyword();
-        const property = property_token.lexeme;
+            while (self.cur.kind == .colon) {
+                self.advance(); // consume ':'
+                const label_token = try self.expectIdentifierOrKeyword();
+                try labels.append(self.arena.allocator(), label_token.lexeme);
+            }
 
-        return .{
-            .target = .{ .object = object, .property = property },
-        };
+            return .{ .Labels = .{
+                .node = object,
+                .labels = try labels.toOwnedSlice(self.arena.allocator()),
+            } };
+        } else {
+            // Property removal: n.property
+            _ = try self.expect(.dot);
+
+            const property_token = try self.expectIdentifierOrKeyword();
+            const property = property_token.lexeme;
+
+            return .{ .Property = .{ .object = object, .property = property } };
+        }
     }
 
     // Parse CREATE INDEX statement

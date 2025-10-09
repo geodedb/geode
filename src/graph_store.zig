@@ -148,6 +148,68 @@ pub const GraphStore = struct {
         }
     }
 
+    pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            // Check if label already exists
+            for (node.labels) |existing_label| {
+                if (std.mem.eql(u8, existing_label, label)) {
+                    return; // Label already exists, no need to add
+                }
+            }
+
+            // Add the label to the node's labels array
+            const label_copy = try self.allocator.dupe(u8, label);
+            const new_labels = try self.allocator.alloc([]const u8, node.labels.len + 1);
+            @memcpy(new_labels[0..node.labels.len], node.labels);
+            new_labels[node.labels.len] = label_copy;
+
+            // Free old labels array if it was allocated
+            if (node.labels.len > 0) {
+                self.allocator.free(node.labels);
+            }
+
+            node.labels = new_labels;
+
+            // Save to persistent storage
+            self.saveToFile() catch {};
+        }
+    }
+
+    pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            // Find the label to remove
+            var found_index: ?usize = null;
+            for (node.labels, 0..) |existing_label, i| {
+                if (std.mem.eql(u8, existing_label, label)) {
+                    found_index = i;
+                    break;
+                }
+            }
+
+            if (found_index) |index| {
+                // Create new labels array without the removed label
+                const new_labels = try self.allocator.alloc([]const u8, node.labels.len - 1);
+                var new_index: usize = 0;
+                for (node.labels, 0..) |existing_label, i| {
+                    if (i != index) {
+                        new_labels[new_index] = existing_label;
+                        new_index += 1;
+                    }
+                }
+
+                // Free old labels array if it was allocated
+                if (node.labels.len > 0) {
+                    self.allocator.free(node.labels);
+                }
+
+                node.labels = new_labels;
+
+                // Save to persistent storage
+                self.saveToFile() catch {};
+            }
+        }
+    }
+
     pub fn getAllNodes(self: *GraphStore) []Node {
         var result = self.allocator.alloc(Node, self.nodes.count()) catch return &.{};
         var iter = self.nodes.valueIterator();

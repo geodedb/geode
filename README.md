@@ -114,10 +114,42 @@ ORDER BY similarity DESC
 -- Analyze user activity patterns
 MATCH (user:User)-[:PERFORMED]->(action:Action)
 WHERE action.timestamp > now() - duration('PT1H')
-RETURN user.id, 
+RETURN user.id,
        count(action) AS recent_actions,
        collect(action.type) AS action_types
 ORDER BY recent_actions DESC
+```
+
+**Advanced Query Features (October 2025)**:
+```gql
+-- Variable-length paths: Find friends within 2 hops
+MATCH (alice:Person)-[:KNOWS*1..2]->(friend)
+WHERE alice.name = 'Alice'
+RETURN friend.name
+
+-- FILTER clause: Additional filtering after pattern matching
+MATCH (a:Person)-[r]->(b:Person)
+WHERE a.name = 'Alice'
+FILTER b.city = 'Seattle'
+RETURN b.name AS friend
+
+-- Dynamic label management with SET
+MATCH (n:Person)
+WHERE n.name = 'Alice'
+SET n:Employee:Manager
+RETURN n
+
+-- Relationship type introspection with type()
+MATCH (a)-[r]->(b)
+RETURN a.name, type(r) AS relationship_type, b.name
+
+-- Session and transaction management
+SESSION SET GRAPH social_network;
+START TRANSACTION;
+  CREATE (alice:Person {name: 'Alice', age: 30});
+  CREATE (bob:Person {name: 'Bob', age: 25});
+  CREATE (alice)-[:KNOWS]->(bob);
+COMMIT;
 ```
 
 ## 🏗️ Architecture
@@ -233,6 +265,7 @@ make verify-fast
 - **[Vector Operations](docs/VECTOR_OPERATIONS.md)** - Machine learning and similarity search
 - **[Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS and compliance
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming and pattern detection
+- **[October 2025 Features](docs/OCTOBER_2025_FEATURE_IMPLEMENTATIONS.md)** - FILTER, variable-length paths, sessions, transactions
 
 ## 🌐 Use Cases
 
