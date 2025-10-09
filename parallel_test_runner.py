@@ -78,26 +78,34 @@ class ParallelTestRunner:
         print(f"Test run started at {self.run_timestamp}")
         print(f"Logs will be written to: {self.run_dir}")
 
-    def process_args(self, args: List[str]) -> List[str]:
+    def process_args(self, args: List[str], instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> List[str]:
         """Process test arguments, handling variable substitution and converting to embedded mode."""
         processed_args = []
         skip_next = False
-        
+
         for i, arg in enumerate(args):
             if skip_next:
                 skip_next = False
                 continue
-                
+
             if isinstance(arg, str):
                 # Skip --server arguments and their values for embedded mode
                 if arg == "--server":
                     skip_next = True  # Skip the next argument (server address)
                     continue
-                    
+
                 # Replace server variables but don't add them to args (will use embedded mode)
                 elif "${server" in arg:
                     # Just skip these since we're using embedded mode
                     continue
+                # Replace instance_id for parallel tests
+                elif "${instance_id}" in arg and instance_id is not None:
+                    processed_arg = arg.replace("${instance_id}", str(instance_id))
+                    processed_args.append(processed_arg)
+                # Replace loop_index for loop tests
+                elif "${loop_index}" in arg and loop_index is not None:
+                    processed_arg = arg.replace("${loop_index}", str(loop_index))
+                    processed_args.append(processed_arg)
                 # Replace secret variables
                 elif "${secret" in arg:
                     processed_arg = arg.replace("${secret:api_token}", "test-token-123")
@@ -107,21 +115,53 @@ class ParallelTestRunner:
                     processed_args.append(arg)
             else:
                 processed_args.append(str(arg))
-        
-        # Add --no-quic for embedded mode
-        if "--no-quic" not in processed_args:
+
+        # Only add --no-quic to query commands (not auth, role, policy, etc.)
+        is_query_command = len(processed_args) > 0 and processed_args[0] == "query"
+        if is_query_command and "--no-quic" not in processed_args:
             processed_args.append("--no-quic")
-            
+
         return processed_args
 
-    def run_single_test(self, test_case: Dict, spec_name: str) -> TestResult:
+    def run_single_test(self, test_case: Dict, spec_name: str, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
-        args = self.process_args(test_case.get("args", []))
+        args = self.process_args(test_case.get("args", []), instance_id=instance_id, loop_index=loop_index)
         expect = test_case.get("expect", {})
-        
+
+        # Handle setup commands for transaction tests
+        setup_commands = test_case.get("setup", [])
+        if setup_commands:
+            # For --no-quic mode, combine setup with main query
+            import shlex
+            is_query = len(args) > 0 and args[0] == "query"
+            if is_query and "--no-quic" in args:
+                # Extract setup queries
+                setup_queries = []
+                for cmd_str in setup_commands:
+                    try:
+                        setup_args = shlex.split(cmd_str)
+                        # Find the query part (last non-flag argument)
+                        for arg in reversed(setup_args):
+                            if not arg.startswith("--") and arg != "query":
+                                setup_queries.append(arg)
+                                break
+                    except:
+                        pass
+
+                # Get main test query (the argument after "query", before flags)
+                # Args format: ['query', '<query_string>', '--no-quic']
+                test_query = args[1] if len(args) > 1 else ""
+
+                # Combine queries with semicolons
+                if setup_queries:
+                    combined_query = "; ".join(setup_queries + [test_query])
+                    # Rebuild args: ['query', combined_query, '--no-quic', ...]
+                    # Keep all flags (everything after position 2)
+                    args = ['query', combined_query] + args[2:]
+
         start_time = time.time()
-        
+
         try:
             result = subprocess.run(
                 [self.binary] + args,
@@ -304,15 +344,39 @@ class ParallelTestRunner:
         
         # Log progress
         self.log_progress(f"Running {spec_file.name} ({len(tests)} tests)")
-        
+
         for test in tests:
-            test_result = self.run_single_test(test, spec_file.name)
-            test_results.append(test_result)
-            
-            if test_result.success:
-                passed += 1
+            # Handle parallel tests with multiple instances
+            if test.get("parallel") and test.get("instances"):
+                for instance in range(test["instances"]):
+                    test_result = self.run_single_test(test, spec_file.name, instance_id=instance)
+                    test_results.append(test_result)
+
+                    if test_result.success:
+                        passed += 1
+                    else:
+                        failed += 1
+
+            # Handle loop tests
+            elif test.get("loop"):
+                for i in range(test["loop"]):
+                    test_result = self.run_single_test(test, spec_file.name, loop_index=i)
+                    test_results.append(test_result)
+
+                    if test_result.success:
+                        passed += 1
+                    else:
+                        failed += 1
+
+            # Handle normal tests
             else:
-                failed += 1
+                test_result = self.run_single_test(test, spec_file.name)
+                test_results.append(test_result)
+
+                if test_result.success:
+                    passed += 1
+                else:
+                    failed += 1
         
         spec_end_time = time.time()
         

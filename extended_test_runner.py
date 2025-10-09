@@ -82,7 +82,8 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
 
     # Add --no-quic if query command and no server specified
     modified_args = args[:]
-    if len(args) > 0 and args[0] == "query":
+    is_query_command = len(args) > 0 and args[0] == "query"
+    if is_query_command:
         has_server = any("--server" in arg for arg in args)
         has_no_quic = any("--no-quic" in arg for arg in args)
         if not has_server and not has_no_quic:

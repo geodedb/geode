@@ -159,35 +159,35 @@ tests:
   # Session Management Tests
   - name: "session-set-graph"
     description: "Test SESSION SET GRAPH command"
-    args: ["SESSION SET GRAPH test_graph", "--no-quic"]
+    args: ["query", "SESSION SET GRAPH test_graph", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-set-schema"
     description: "Test SESSION SET SCHEMA command"
-    args: ["SESSION SET SCHEMA test_schema", "--no-quic"]
+    args: ["query", "SESSION SET SCHEMA test_schema", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-set-timezone"
     description: "Test SESSION SET TIME ZONE command"
-    args: ["SESSION SET TIME ZONE 'UTC'", "--no-quic"]
+    args: ["query", "SESSION SET TIME ZONE 'UTC'", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-reset"
     description: "Test SESSION RESET command"
-    args: ["SESSION RESET", "--no-quic"]
+    args: ["query", "SESSION RESET", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-close"
     description: "Test SESSION CLOSE command"
-    args: ["SESSION CLOSE", "--no-quic"]
+    args: ["query", "SESSION CLOSE", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
@@ -195,14 +195,14 @@ tests:
   # Transaction Management Tests
   - name: "transaction-start"
     description: "Test START TRANSACTION command"
-    args: ["START TRANSACTION", "--no-quic"]
+    args: ["query", "START TRANSACTION", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["transaction", "october-2025"]
 
   - name: "transaction-begin-alias"
     description: "Test BEGIN as alias for START TRANSACTION"
-    args: ["BEGIN", "--no-quic"]
+    args: ["query", "BEGIN", "--no-quic"]
     expect:
       exit_code: 0
     tags: ["transaction", "october-2025"]
