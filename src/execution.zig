@@ -372,7 +372,10 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     }
 
     // Execute all statements and return the result of the last one
+    // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=StatePropagation; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
+    // Maintain mutable context to propagate transaction state changes across statements
     var last_result: ?ExecutionResult = null;
+    var current_context = context;
 
     for (program.statements) |stmt| {
         // Free previous result if any
@@ -380,7 +383,19 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             result.deinit(allocator);
         }
 
-        last_result = try executeStatementWithContext(allocator, stmt, context);
+        last_result = try executeStatementWithContext(allocator, stmt, current_context);
+
+        // Propagate transaction state changes to next statement
+        // Check if this statement was a transaction control statement
+        switch (stmt) {
+            .StartTransaction => {
+                current_context.transaction_state = .Active;
+            },
+            .Commit, .Rollback => {
+                current_context.transaction_state = .None;
+            },
+            else => {},
+        }
     }
 
     return last_result orelse ExecutionResult{
