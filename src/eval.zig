@@ -163,9 +163,32 @@ fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_e
             pi += 1;
             continue;
         } else if (pc == '[') {
+            // Find closing ]
             var i: usize = pi + 1;
             while (i < p.len and p[i] != ']') : (i += 1) {}
             if (i >= p.len) return false;
+
+            // Check for * quantifier after character class
+            if (i + 1 < p.len and p[i + 1] == '*') {
+                // [class]* - match zero or more from character class
+                // Try greedy matching: match as many as possible, then backtrack
+                var k: usize = si;
+                // First, find how many characters we can match from this class
+                while (k < s.len) {
+                    var idx: usize = pi + 1;
+                    if (!regexMatchClass(s[k], p, &idx)) break;
+                    k += 1;
+                }
+                // Now try from maximum match down to zero matches
+                while (true) {
+                    if (regexRec(s, p, k, i + 2, allow_suffix_end)) return true;
+                    if (k == si) break; // Tried zero matches, no more options
+                    k -= 1;
+                }
+                return false;
+            }
+
+            // No * quantifier, must match exactly one character
             if (si >= s.len) return false;
             var idx: usize = pi + 1;
             if (!regexMatchClass(s[si], p, &idx)) return false;
@@ -561,18 +584,19 @@ fn transformPlusQuantifier(pattern: []const u8, buf: *[256]u8) ![]const u8 {
 
                 // Check if followed by +
                 if (class_end < pattern.len and pattern[class_end] == '+') {
-                    // Copy the class twice: once as-is, once with *
-                    const class_len = class_end - i;
-                    if (write_idx + class_len * 2 >= buf.len) return error.BufferTooSmall;
+                    // Transform [class]+ to [class][class]*
+                    const class_len = class_end - i;  // Length of [class] including ]
+                    if (write_idx + class_len * 2 + 1 >= buf.len) return error.BufferTooSmall;
 
-                    // First copy: [class]
+                    // First copy: [class] - matches at least one
                     @memcpy(buf[write_idx..write_idx + class_len], pattern[i..class_end]);
                     write_idx += class_len;
 
-                    // Second copy: [class]* (replace + with *)
+                    // Second copy: [class]* - matches zero or more additional
                     @memcpy(buf[write_idx..write_idx + class_len], pattern[i..class_end]);
-                    buf[write_idx + class_len - 1] = '*';
                     write_idx += class_len;
+                    buf[write_idx] = '*';  // Append * after the ]
+                    write_idx += 1;
 
                     i = class_end + 1; // Skip past the +
                 } else {
