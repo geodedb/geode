@@ -66,6 +66,8 @@ pub const Query = struct {
     // Indicates this query is part of a WITH RECURSIVE CTE block (parser recognition only for now)
     // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle|TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-26
     has_recursive_cte: bool = false,
+    // CALL clause for MATCH ... CALL pattern (e.g., MATCH (n) CALL algo.bfs.stream(n) YIELD ...)
+    call_clause: ?CallClause = null,
 };
 
 pub const UnionQuery = struct {
@@ -236,6 +238,12 @@ pub const CallStatement = struct {
     procedure: Expr, // Function call expression: db.labels()
     yield_items: ?[]ReturnItem = null, // YIELD clause items
     return_clause: ?ReturnClause = null, // Optional RETURN clause
+};
+
+// CallClause for use within MATCH queries (MATCH ... CALL ... YIELD)
+pub const CallClause = struct {
+    procedure: Expr, // Function call expression: algo.bfs.stream(node)
+    yield_items: ?[]ReturnItem = null, // YIELD clause items (required for MATCH+CALL)
 };
 
 pub const SetClause = struct {

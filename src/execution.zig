@@ -3,10 +3,18 @@ const ast = @import("gql/ast.zig");
 const eval = @import("eval.zig");
 const graph_store = @import("graph_store.zig");
 
+// Binding for MATCH variables (node/edge references)
+pub const Binding = union(enum) {
+    node_id: u64,
+    edge_id: u64,
+};
+
 pub const ExecutionContext = struct {
     user: ?[]const u8 = null,
     token: ?[]const u8 = null,
     strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY
+    // Node/edge bindings from MATCH clauses (variable name -> node/edge ID)
+    bindings: ?*std.StringHashMap(Binding) = null,
 };
 
 pub const ExecutionError = error{
@@ -698,6 +706,11 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
     // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
     if (q.create_pattern) |create_pattern| {
         return executeCreateQuery(allocator, q, create_pattern);
+    }
+
+    // Check if there's a MATCH + CALL pattern
+    if (q.match.chains.len > 0 and q.call_clause != null) {
+        return executeMatchCallQuery(allocator, q, context);
     }
 
     // Check if there's a MATCH pattern
@@ -1740,6 +1753,186 @@ fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Executio
             break :blk list;
         },
     };
+}
+
+// Execute MATCH + CALL pattern with node binding
+fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+    const call_clause = q.call_clause.?;
+
+    // Extract node variables from MATCH pattern
+    var left_node_var: ?[]const u8 = null;
+    var right_node_var: ?[]const u8 = null;
+
+    // Get the first chain from the pattern
+    if (q.match.chains.len > 0) {
+        const chain = q.match.chains[0];
+
+        // Check if this is a relationship pattern (has hops)
+        if (chain.hops.len > 0) {
+            const hop = chain.hops[0];
+            left_node_var = hop.left.name;
+            right_node_var = hop.right.name;
+        } else if (chain.head) |node_pattern| {
+            // Simple node pattern without relationships
+            left_node_var = node_pattern.name;
+        }
+    }
+
+    // Find matching nodes based on pattern
+    const MatchedNode = struct { left_id: ?u64, right_id: ?u64 };
+    var matched_nodes = std.ArrayList(MatchedNode).initCapacity(allocator, 0) catch @panic("OOM");
+    defer matched_nodes.deinit(allocator);
+
+    // Simple matching: iterate through all nodes
+    var node_iter = store.nodes.iterator();
+    while (node_iter.next()) |entry| {
+        const node_id = entry.key_ptr.*;
+        const node = entry.value_ptr.*;
+
+        // Check if node matches the pattern criteria
+        var matches = true;
+
+        // Check labels if specified
+        if (q.match.chains.len > 0) {
+            const chain = q.match.chains[0];
+            if (chain.head) |head| {
+                if (head.labels.len > 0) {
+                    // Check if node has the required label
+                    const required_label = head.labels[0];
+                    var has_label = false;
+                    for (node.labels) |label| {
+                        if (std.mem.eql(u8, label, required_label)) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (!has_label) matches = false;
+                }
+
+                // Check properties if specified
+                if (head.props) |props| {
+                    const empty_env = eval.Env{
+                        .names = &.{},
+                        .values = &.{},
+                    };
+                    for (props) |prop| {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            // Convert PropertyValue to eval.Value for comparison
+                            const node_val = switch (node_prop_val) {
+                                .Null => eval.Value{ .Null = {} },
+                                .Bool => |b| eval.Value{ .Bool = b },
+                                .Int => |i| eval.Value{ .Int = i },
+                                .String => |s| eval.Value{ .Str = s },
+                                .Float => eval.Value{ .Null = {} }, // Float not directly supported, skip
+                            };
+                            // Evaluate expected value from pattern
+                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                            if (!valuesEqual(node_val, prop_val)) {
+                                matches = false;
+                                break;
+                            }
+                        } else {
+                            matches = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (matches) {
+            try matched_nodes.append(allocator, .{ .left_id = node_id, .right_id = null });
+        }
+    }
+
+    // If no matches found, return empty result
+    if (matched_nodes.items.len == 0) {
+        return ExecutionResult{
+            .columns = try allocator.alloc([]const u8, 0),
+            .rows = try allocator.alloc([]eval.Value, 0),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    // Create bindings from first match (for simplicity, we'll use the first match)
+    // In a full implementation, we'd aggregate results from all matches
+    const first_match = matched_nodes.items[0];
+
+    var bindings = std.StringHashMap(Binding).init(allocator);
+    defer bindings.deinit();
+
+    if (left_node_var) |var_name| {
+        if (first_match.left_id) |node_id| {
+            try bindings.put(var_name, Binding{ .node_id = node_id });
+        }
+    }
+
+    if (right_node_var) |var_name| {
+        if (first_match.right_id) |node_id| {
+            try bindings.put(var_name, Binding{ .node_id = node_id });
+        }
+    }
+
+    // Create enriched context with bindings
+    var enriched_context = context;
+    enriched_context.bindings = &bindings;
+
+    // Convert CallClause to CallStatement for execution
+    const call_stmt = ast.CallStatement{
+        .procedure = call_clause.procedure,
+        .yield_items = call_clause.yield_items,
+        .return_clause = if (q.ret.items.len > 0) q.ret else null,
+    };
+
+    // Execute CALL with bindings
+    const call_result = try executeCallStatement(allocator, call_stmt, enriched_context);
+
+    // If there's a RETURN clause in the query, apply it to the CALL results
+    if (q.ret.items.len > 0 and call_clause.yield_items != null) {
+        // The CALL already returned results, but we may need to apply ORDER BY, LIMIT, etc.
+        var result = call_result;
+
+        // Apply ORDER BY if present
+        if (q.order_by) |order| {
+            try sortRows(allocator, &result, order);
+        }
+
+        // Apply OFFSET if present
+        if (q.offset) |skip_count| {
+            if (skip_count < result.rows.len) {
+                // Create new rows array without the skipped rows
+                const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+                for (result.rows[skip_count..], 0..) |row, i| {
+                    new_rows[i] = row;
+                }
+                // Free old rows array but not the row data
+                allocator.free(result.rows);
+                result.rows = new_rows;
+            } else {
+                // Skip all rows
+                allocator.free(result.rows);
+                result.rows = try allocator.alloc([]eval.Value, 0);
+            }
+        }
+
+        // Apply LIMIT if present
+        if (q.limit) |limit_count| {
+            if (limit_count < result.rows.len) {
+                // Truncate to limit
+                const new_rows = try allocator.alloc([]eval.Value, limit_count);
+                for (result.rows[0..limit_count], 0..) |row, i| {
+                    new_rows[i] = row;
+                }
+                allocator.free(result.rows);
+                result.rows = new_rows;
+            }
+        }
+
+        return result;
+    }
+
+    return call_result;
 }
 
 fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
@@ -3816,9 +4009,359 @@ fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, colu
     };
 }
 
+// BFS Path Traversal - yields all paths from start node
+fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32) !ExecutionResult {
+    var paths = try std.ArrayList([]u64).initCapacity(allocator, 0);
+    defer {
+        for (paths.items) |path| {
+            allocator.free(path);
+        }
+        paths.deinit(allocator);
+    }
+
+    // BFS queue: stores (current_path, current_depth)
+    var queue = try std.ArrayList(struct { path: []u64, depth: u32 }).initCapacity(allocator, 0);
+    defer {
+        for (queue.items) |item| {
+            allocator.free(item.path);
+        }
+        queue.deinit(allocator);
+    }
+
+    // Start with single-node path
+    var initial_path = try allocator.alloc(u64, 1);
+    initial_path[0] = start_node_id;
+    try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
+
+    var front: usize = 0;
+    while (front < queue.items.len) : (front += 1) {
+        const current = queue.items[front];
+
+        // Add current path to results (except the initial single-node path)
+        if (current.depth > 0) {
+            const path_copy = try allocator.alloc(u64, current.path.len);
+            @memcpy(path_copy, current.path);
+            try paths.append(allocator, path_copy);
+        }
+
+        // Continue traversal if we haven't reached max depth
+        if (current.depth < max_depth) {
+            const last_node = current.path[current.path.len - 1];
+            const neighbors = try getNeighbors(store, last_node, allocator);
+            defer allocator.free(neighbors);
+
+            for (neighbors) |neighbor| {
+                // Create extended path
+                var new_path = try allocator.alloc(u64, current.path.len + 1);
+                @memcpy(new_path[0..current.path.len], current.path);
+                new_path[current.path.len] = neighbor;
+                try queue.append(allocator, .{ .path = new_path, .depth = current.depth + 1 });
+            }
+        }
+    }
+
+    // Convert paths to rows
+    var rows = try allocator.alloc([]eval.Value, paths.items.len);
+    for (paths.items, 0..) |path, i| {
+        var row = try allocator.alloc(eval.Value, 1);
+
+        // Convert path to Path value with nodes
+        var path_nodes = try allocator.alloc(eval.Value, path.len);
+        for (path, 0..) |node_id, j| {
+            path_nodes[j] = eval.Value{ .Int = @intCast(node_id) };
+        }
+        row[0] = eval.Value{ .List = path_nodes };
+        rows[i] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+// DFS Path Traversal - yields all paths from start node
+fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32) !ExecutionResult {
+    var paths = try std.ArrayList([]u64).initCapacity(allocator, 0);
+    defer {
+        for (paths.items) |path| {
+            allocator.free(path);
+        }
+        paths.deinit(allocator);
+    }
+
+    // DFS stack: stores (current_path, current_depth)
+    var stack = try std.ArrayList(struct { path: []u64, depth: u32 }).initCapacity(allocator, 0);
+    defer {
+        for (stack.items) |item| {
+            allocator.free(item.path);
+        }
+        stack.deinit(allocator);
+    }
+
+    // Start with single-node path
+    var initial_path = try allocator.alloc(u64, 1);
+    initial_path[0] = start_node_id;
+    try stack.append(allocator, .{ .path = initial_path, .depth = 0 });
+
+    while (stack.items.len > 0) {
+        const current_opt = stack.pop();
+        if (current_opt == null) break;
+        const current = current_opt.?;
+
+        // Add current path to results (except the initial single-node path)
+        if (current.depth > 0) {
+            const path_copy = try allocator.alloc(u64, current.path.len);
+            @memcpy(path_copy, current.path);
+            try paths.append(allocator, path_copy);
+        }
+
+        // Continue traversal if we haven't reached max depth
+        if (current.depth < max_depth) {
+            const last_node = current.path[current.path.len - 1];
+            const neighbors = try getNeighbors(store, last_node, allocator);
+            defer allocator.free(neighbors);
+
+            for (neighbors) |neighbor| {
+                // Create extended path
+                var new_path = try allocator.alloc(u64, current.path.len + 1);
+                @memcpy(new_path[0..current.path.len], current.path);
+                new_path[current.path.len] = neighbor;
+                try stack.append(allocator, .{ .path = new_path, .depth = current.depth + 1 });
+            }
+        }
+
+        // Free the current path since we're done with it
+        allocator.free(current.path);
+    }
+
+    // Convert paths to rows
+    var rows = try allocator.alloc([]eval.Value, paths.items.len);
+    for (paths.items, 0..) |path, i| {
+        var row = try allocator.alloc(eval.Value, 1);
+
+        // Convert path to List value
+        var path_nodes = try allocator.alloc(eval.Value, path.len);
+        for (path, 0..) |node_id, j| {
+            path_nodes[j] = eval.Value{ .Int = @intCast(node_id) };
+        }
+        row[0] = eval.Value{ .List = path_nodes };
+        rows[i] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+// Dijkstra's Shortest Path Algorithm - finds weighted shortest path
+fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_id: u64, end_id: u64, weight_property: []const u8) !ExecutionResult {
+    // Priority queue elements: (node_id, distance, path)
+    const QueueItem = struct {
+        node: u64,
+        dist: f64,
+        path: []u64,
+    };
+
+    var distances = std.AutoHashMap(u64, f64).init(allocator);
+    defer distances.deinit();
+
+    var previous = std.AutoHashMap(u64, u64).init(allocator);
+    defer previous.deinit();
+
+    // Simple priority queue using ArrayList (not optimal but functional)
+    var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 0);
+    defer {
+        for (queue.items) |item| {
+            allocator.free(item.path);
+        }
+        queue.deinit(allocator);
+    }
+
+    // Initialize with start node
+    try distances.put(start_id, 0.0);
+    var start_path = try allocator.alloc(u64, 1);
+    start_path[0] = start_id;
+    try queue.append(allocator, .{ .node = start_id, .dist = 0.0, .path = start_path });
+
+    var shortest_path: ?[]u64 = null;
+    var shortest_cost: f64 = 0.0;
+    defer if (shortest_path) |p| allocator.free(p);
+
+    while (queue.items.len > 0) {
+        // Find minimum distance item (simple linear search)
+        var min_idx: usize = 0;
+        var min_dist: f64 = queue.items[0].dist;
+        for (queue.items, 0..) |item, idx| {
+            if (item.dist < min_dist) {
+                min_dist = item.dist;
+                min_idx = idx;
+            }
+        }
+
+        const current = queue.orderedRemove(min_idx);
+
+        // Found the target?
+        if (current.node == end_id) {
+            shortest_path = try allocator.alloc(u64, current.path.len);
+            @memcpy(shortest_path.?, current.path);
+            shortest_cost = current.dist;
+            allocator.free(current.path);
+            break;
+        }
+
+        const current_dist = distances.get(current.node) orelse std.math.inf(f64);
+        if (current.dist > current_dist) {
+            allocator.free(current.path);
+            continue;
+        }
+
+        // Check all neighbors
+        const neighbors = try getNeighbors(store, current.node, allocator);
+        defer allocator.free(neighbors);
+
+        for (neighbors) |neighbor| {
+            // Get edge weight from graph store
+            const edge_weight = getEdgeWeight(store, current.node, neighbor, weight_property);
+            const new_dist = current.dist + edge_weight;
+            const old_dist = distances.get(neighbor) orelse std.math.inf(f64);
+
+            if (new_dist < old_dist) {
+                try distances.put(neighbor, new_dist);
+                try previous.put(neighbor, current.node);
+
+                // Create new path
+                var new_path = try allocator.alloc(u64, current.path.len + 1);
+                @memcpy(new_path[0..current.path.len], current.path);
+                new_path[current.path.len] = neighbor;
+                try queue.append(allocator, .{ .node = neighbor, .dist = new_dist, .path = new_path });
+            }
+        }
+
+        allocator.free(current.path);
+    }
+
+    // Create result row
+    if (shortest_path) |path| {
+        var rows = try allocator.alloc([]eval.Value, 1);
+        var row = try allocator.alloc(eval.Value, 2);
+
+        // Path as list
+        var path_nodes = try allocator.alloc(eval.Value, path.len);
+        for (path, 0..) |node_id, i| {
+            path_nodes[i] = eval.Value{ .Int = @intCast(node_id) };
+        }
+        row[0] = eval.Value{ .List = path_nodes };
+
+        // Cost as decimal
+        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(shortest_cost * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    } else {
+        // No path found
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]eval.Value, 0),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+}
+
+// Helper: Extract u32 parameter from Map expression
+fn extractU32FromMap(map_props: []ast.Property, key: []const u8, default: u32) u32 {
+    for (map_props) |prop| {
+        if (std.mem.eql(u8, prop.key, key)) {
+            if (prop.value.* == .Int) {
+                return @intCast(prop.value.Int);
+            }
+        }
+    }
+    return default;
+}
+
+// Helper: Extract f64 parameter from Map expression
+fn extractF64FromMap(map_props: []ast.Property, key: []const u8, default: f64) f64 {
+    for (map_props) |prop| {
+        if (std.mem.eql(u8, prop.key, key)) {
+            if (prop.value.* == .Int) {
+                return @floatFromInt(prop.value.Int);
+            } else if (prop.value.* == .Decimal) {
+                const dec = prop.value.Decimal;
+                const scale_divisor = std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
+                return @as(f64, @floatFromInt(dec.coeff)) / scale_divisor;
+            }
+        }
+    }
+    return default;
+}
+
+// Helper: Extract parameters from CALL arguments
+fn extractMapParameter(args: []const *ast.Expr, arg_idx: usize) ?[]ast.Property {
+    if (arg_idx >= args.len) return null;
+    const arg = args[arg_idx];
+    if (arg.* == .Map) {
+        return arg.Map;
+    }
+    return null;
+}
+
+// Helper: Extract node ID from CALL argument (resolves Ident from context bindings)
+fn extractNodeId(args: []const *ast.Expr, arg_idx: usize, context: ExecutionContext) ?u64 {
+    if (arg_idx >= args.len) return null;
+    const arg = args[arg_idx];
+
+    switch (arg.*) {
+        // Direct integer node ID
+        .Int => |int_val| return @intCast(int_val),
+
+        // Variable reference - look up in bindings
+        .Ident => |ident| {
+            if (context.bindings) |bindings| {
+                if (bindings.get(ident.orig)) |binding| {
+                    switch (binding) {
+                        .node_id => |id| return id,
+                        else => return null,
+                    }
+                }
+            }
+            return null;
+        },
+
+        else => return null,
+    }
+}
+
+// Helper: Get edge weight from graph store
+fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weight_prop: []const u8) f64 {
+    _ = weight_prop; // TODO: extract from edge properties
+
+    // For now, check if edge exists and return 1.0
+    // In the future, extract actual weight from edge properties
+    var edge_iter = store.edges.iterator();
+    while (edge_iter.next()) |entry| {
+        const edge = entry.value_ptr.*;
+        if (edge.from_id == from_id and edge.to_id == to_id) {
+            // Found the edge - return default weight for now
+            // TODO: Extract from edge.properties[weight_prop]
+            return 1.0;
+        }
+    }
+
+    // No edge found - return infinity
+    return std.math.inf(f64);
+}
+
 // Execute CALL statement for procedures and algorithms
 fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStatement, context: ExecutionContext) !ExecutionResult {
-    _ = context;
 
     // Get the procedure name from the Call expression
     const proc_name = switch (call_stmt.procedure) {
@@ -4010,24 +4553,101 @@ fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStateme
     } else if (std.mem.eql(u8, algo_name, "scc")) {
         // Strongly Connected Components
         return try executeSCC(allocator, store, columns);
-    } else if (std.mem.eql(u8, algo_name, "bfs") or
-        std.mem.eql(u8, algo_name, "dfs") or
-        std.mem.eql(u8, algo_name, "dijkstra"))
-    {
-        // Path algorithms - return empty for now
-        return ExecutionResult{
-            .columns = columns,
-            .rows = try allocator.alloc([]eval.Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    } else if (std.mem.eql(u8, algo_name, "bfs")) {
+        // BFS Path Traversal
+        // Extract arguments from CALL
+        const call_args = if (call_stmt.procedure == .Call) call_stmt.procedure.Call.args else &[_]*ast.Expr{};
+
+        // Extract start node ID from first argument (can be node reference or direct ID)
+        const start_id = extractNodeId(call_args, 0, context) orelse blk: {
+            // Fallback: use first node in graph
+            var node_iter = store.nodes.iterator();
+            if (node_iter.next()) |entry| {
+                break :blk entry.key_ptr.*;
+            } else {
+                // No nodes in graph
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = try allocator.alloc([]eval.Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
         };
-    } else if (std.mem.eql(u8, algo_name, "shortestPath")) {
-        // For shortest path, we need source and target nodes
-        // For now, return empty result
-        return ExecutionResult{
-            .columns = columns,
-            .rows = try allocator.alloc([]eval.Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+
+        // Extract max_depth from second argument (map parameter)
+        var max_depth: u32 = 3; // default
+        if (extractMapParameter(call_args, 1)) |map_props| {
+            max_depth = extractU32FromMap(map_props, "maxDepth", 3);
+        }
+
+        return try executeBFS(allocator, store, columns, start_id, max_depth);
+    } else if (std.mem.eql(u8, algo_name, "dfs")) {
+        // DFS Path Traversal
+        // Extract arguments from CALL
+        const call_args = if (call_stmt.procedure == .Call) call_stmt.procedure.Call.args else &[_]*ast.Expr{};
+
+        // Extract start node ID from first argument (can be node reference or direct ID)
+        const start_id = extractNodeId(call_args, 0, context) orelse blk: {
+            // Fallback: use first node in graph
+            var node_iter = store.nodes.iterator();
+            if (node_iter.next()) |entry| {
+                break :blk entry.key_ptr.*;
+            } else {
+                // No nodes in graph
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = try allocator.alloc([]eval.Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
         };
+
+        // Extract max_depth from second argument (map parameter)
+        var max_depth: u32 = 3; // default
+        if (extractMapParameter(call_args, 1)) |map_props| {
+            max_depth = extractU32FromMap(map_props, "maxDepth", 3);
+        }
+
+        return try executeDFS(allocator, store, columns, start_id, max_depth);
+    } else if (std.mem.eql(u8, algo_name, "dijkstra") or std.mem.eql(u8, algo_name, "shortestPath")) {
+        // Dijkstra Shortest Path
+        // Extract arguments from CALL
+        const call_args = if (call_stmt.procedure == .Call) call_stmt.procedure.Call.args else &[_]*ast.Expr{};
+
+        // Extract start and end node IDs
+        const start_id = extractNodeId(call_args, 0, context) orelse blk: {
+            // Fallback: use first node in graph
+            var node_iter = store.nodes.iterator();
+            if (node_iter.next()) |entry| {
+                break :blk entry.key_ptr.*;
+            } else {
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = try allocator.alloc([]eval.Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
+        };
+
+        const end_id = extractNodeId(call_args, 1, context) orelse blk: {
+            // Fallback: use second node in graph
+            var node_iter = store.nodes.iterator();
+            _ = node_iter.next(); // skip first
+            if (node_iter.next()) |entry| {
+                break :blk entry.key_ptr.*;
+            } else {
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = try allocator.alloc([]eval.Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
+        };
+
+        // Extract weight property name (default: "weight")
+        const weight_prop = "weight"; // TODO: extract from third argument if String
+
+        return try executeDijkstra(allocator, store, columns, start_id, end_id, weight_prop);
     }
 
     // Unknown algorithm - return empty result

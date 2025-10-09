@@ -843,7 +843,29 @@ pub const Parser = struct {
             remove_clauses = try self.parseRemoveClauses();
         }
 
-        // RETURN item (, item)* (now after SET/REMOVE, optional if SET/REMOVE present)
+        // Parse CALL clause if present (for MATCH ... CALL ... YIELD pattern)
+        var call_clause: ?ast.CallClause = null;
+        if (self.cur.kind == .CALL) {
+            self.advance();
+            // Parse procedure call expression (e.g., algo.bfs.stream(start, {maxDepth: 3}))
+            const procedure = try self.parseOrExpr();
+
+            // YIELD clause is required for MATCH+CALL pattern
+            var yield_items: ?[]ast.ReturnItem = null;
+            if (self.cur.kind == .YIELD) {
+                self.advance();
+                var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                try self.parseProjectionItems(&items);
+                yield_items = try items.toOwnedSlice(self.arena.allocator());
+            }
+
+            call_clause = .{
+                .procedure = procedure,
+                .yield_items = yield_items,
+            };
+        }
+
+        // RETURN item (, item)* (now after SET/REMOVE/CALL, optional if SET/REMOVE present)
         var return_clause: ast.ReturnClause = undefined;
         if (self.cur.kind == .RETURN) {
             self.advance();
@@ -1009,6 +1031,7 @@ pub const Parser = struct {
             .limit = limit,
             .offset = offset,
             .path_variable = path_variable,
+            .call_clause = call_clause,
         };
     }
     fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {

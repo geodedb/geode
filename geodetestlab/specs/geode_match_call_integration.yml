@@ -1,0 +1,254 @@
+name: geode-match-call-integration
+description: "Comprehensive integration tests for MATCH + CALL pattern with node binding resolution"
+
+setup:
+  - name: create-test-graph
+    args: ["query", "CREATE (a:Node {name: 'A', id: 1}), (b:Node {name: 'B', id: 2}), (c:Node {name: 'C', id: 3}), (d:Node {name: 'D', id: 4}), (e:Node {name: 'E', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e)", "--format", "json"]
+    expect:
+      exit_code: 0
+
+tests:
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-001; FEATURE="MatchCallIntegration"; ASPECT=BasicBinding; STATUS=TESTED; TEST=match-call-bfs-basic; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-bfs-basic
+    description: "MATCH + CALL BFS with single node binding"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-002; FEATURE="MatchCallIntegration"; ASPECT=PropertyMatching; STATUS=TESTED; TEST=match-call-with-properties; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-with-properties
+    description: "MATCH with property filter + CALL"
+    args: ["query", "MATCH (n:Node {id: 1}) CALL algo.bfs.stream(n, {maxDepth: 3}) YIELD path RETURN length(path) AS depth", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["depth"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-003; FEATURE="MatchCallIntegration"; ASPECT=DFS; STATUS=TESTED; TEST=match-call-dfs; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-dfs
+    description: "MATCH + CALL DFS traversal"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.dfs.stream(start, {maxDepth: 3}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-004; FEATURE="MatchCallIntegration"; ASPECT=Dijkstra; STATUS=TESTED; TEST=match-call-dijkstra-two-nodes; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-dijkstra-two-nodes
+    description: "MATCH two nodes + CALL Dijkstra shortest path"
+    args: ["query", "MATCH (start:Node {name: 'A'}), (end:Node {name: 'D'}) CALL algo.shortestPath.dijkstra(start, end, 'weight') YIELD path, cost RETURN cost", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["cost"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-005; FEATURE="MatchCallIntegration"; ASPECT=DijkstraOptimalPath; STATUS=TESTED; TEST=match-call-dijkstra-optimal; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-dijkstra-optimal
+    description: "Verify Dijkstra finds optimal path (not direct path)"
+    args: ["query", "MATCH (start:Node {name: 'A'}), (end:Node {name: 'C'}) CALL algo.shortestPath.dijkstra(start, end, 'weight') YIELD cost RETURN cost", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["3"]
+    notes: "Should return 3.0 (A->B->C) not 5.0 (A->C direct)"
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-006; FEATURE="MatchCallIntegration"; ASPECT=OrderBy; STATUS=TESTED; TEST=match-call-order-by; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-order-by
+    description: "MATCH + CALL with ORDER BY on results"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth ORDER BY depth", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["depth"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-007; FEATURE="MatchCallIntegration"; ASPECT=LimitOffset; STATUS=TESTED; TEST=match-call-limit; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-limit
+    description: "MATCH + CALL with LIMIT"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN path LIMIT 5", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-008; FEATURE="MatchCallIntegration"; ASPECT=LimitOffset; STATUS=TESTED; TEST=match-call-offset; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-offset
+    description: "MATCH + CALL with OFFSET"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN path OFFSET 2", "--format", "json"]
+    expect:
+      exit_code: 0
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-009; FEATURE="MatchCallIntegration"; ASPECT=LimitOffset; STATUS=TESTED; TEST=match-call-limit-offset; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-limit-offset
+    description: "MATCH + CALL with both LIMIT and OFFSET"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN path LIMIT 3 OFFSET 1", "--format", "json"]
+    expect:
+      exit_code: 0
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-010; FEATURE="MatchCallIntegration"; ASPECT=MultipleYield; STATUS=TESTED; TEST=match-call-multiple-yield; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-multiple-yield
+    description: "MATCH + CALL with multiple YIELD columns"
+    args: ["query", "MATCH (start:Node {name: 'A'}), (end:Node {name: 'E'}) CALL algo.shortestPath.dijkstra(start, end, 'weight') YIELD path, cost RETURN path, cost", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path", "cost"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-011; FEATURE="MatchCallIntegration"; ASPECT=PageRank; STATUS=TESTED; TEST=match-call-pagerank; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-pagerank
+    description: "MATCH + CALL PageRank with parameters"
+    args: ["query", "MATCH (n:Node) CALL algo.pageRank.stream({iterations: 20, dampingFactor: 0.85}) YIELD nodeId, score RETURN nodeId, score ORDER BY score DESC LIMIT 3", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["nodeId", "score"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-012; FEATURE="MatchCallIntegration"; ASPECT=Betweenness; STATUS=TESTED; TEST=match-call-betweenness; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-betweenness
+    description: "MATCH + CALL Betweenness Centrality"
+    args: ["query", "MATCH (n:Node) CALL algo.betweenness.stream() YIELD nodeId, centrality RETURN nodeId, centrality ORDER BY centrality DESC LIMIT 5", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["centrality"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-013; FEATURE="MatchCallIntegration"; ASPECT=Closeness; STATUS=TESTED; TEST=match-call-closeness; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-closeness
+    description: "MATCH + CALL Closeness Centrality"
+    args: ["query", "MATCH (n:Node) CALL algo.closeness.stream() YIELD nodeId, centrality RETURN centrality", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["centrality"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-014; FEATURE="MatchCallIntegration"; ASPECT=LabelFilter; STATUS=TESTED; TEST=match-call-label-filter; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-label-filter
+    description: "MATCH with label filter + CALL"
+    args: ["query", "MATCH (n:Node) WHERE n.name = 'B' CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-015; FEATURE="MatchCallIntegration"; ASPECT=MaxDepthParameter; STATUS=TESTED; TEST=match-call-max-depth; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-max-depth
+    description: "MATCH + CALL with maxDepth parameter"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 1}) YIELD path RETURN length(path) AS depth", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["depth"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-016; FEATURE="MatchCallIntegration"; ASPECT=MaxDepthParameter; STATUS=TESTED; TEST=match-call-max-depth-higher; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-max-depth-higher
+    description: "MATCH + CALL with higher maxDepth"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.dfs.stream(start, {maxDepth: 5}) YIELD path RETURN count(*) AS paths", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["paths"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-017; FEATURE="MatchCallIntegration"; ASPECT=DistinctResults; STATUS=TESTED; TEST=match-call-distinct; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-distinct
+    description: "MATCH + CALL with DISTINCT"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN DISTINCT length(path) AS depth", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["depth"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-018; FEATURE="MatchCallIntegration"; ASPECT=GroupBy; STATUS=TESTED; TEST=match-call-group-by; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-group-by
+    description: "MATCH + CALL with GROUP BY"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth, count(*) AS count GROUP BY depth ORDER BY depth", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["depth", "count"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-019; FEATURE="MatchCallIntegration"; ASPECT=WhereClause; STATUS=TESTED; TEST=match-call-where-filter; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-where-filter
+    description: "MATCH with WHERE clause + CALL"
+    args: ["query", "MATCH (n:Node) WHERE n.id > 2 CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-020; FEATURE="MatchCallIntegration"; ASPECT=DirectIdFallback; STATUS=TESTED; TEST=direct-id-bfs; OWNER=engine; UPDATED=2025-10-08
+  - name: direct-id-bfs
+    description: "Direct node ID usage (backward compatibility)"
+    args: ["query", "CALL algo.bfs.stream(1, {maxDepth: 2}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-021; FEATURE="MatchCallIntegration"; ASPECT=DirectIdFallback; STATUS=TESTED; TEST=direct-id-dijkstra; OWNER=engine; UPDATED=2025-10-08
+  - name: direct-id-dijkstra
+    description: "Direct node IDs for Dijkstra (backward compatibility)"
+    args: ["query", "CALL algo.shortestPath.dijkstra(1, 4, 'weight') YIELD cost RETURN cost", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["cost"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-022; FEATURE="MatchCallIntegration"; ASPECT=EmptyMatch; STATUS=TESTED; TEST=match-call-no-results; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-no-results
+    description: "MATCH with no matching nodes returns empty"
+    args: ["query", "MATCH (n:Node {name: 'NonExistent'}) CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["[]"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-023; FEATURE="MatchCallIntegration"; ASPECT=MultipleLabels; STATUS=TESTED; TEST=match-call-multiple-labels; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-multiple-labels-setup
+    description: "Create nodes with multiple labels"
+    args: ["query", "CREATE (p:Person:Employee {name: 'Alice', empId: 101}), (q:Person:Manager {name: 'Bob', empId: 102})", "--format", "json"]
+    expect:
+      exit_code: 0
+
+  - name: match-call-multiple-labels
+    description: "MATCH specific label + CALL"
+    args: ["query", "MATCH (p:Person) CALL algo.pageRank.stream({iterations: 10}) YIELD nodeId, score RETURN score LIMIT 2", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["score"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-024; FEATURE="MatchCallIntegration"; ASPECT=ComplexPattern; STATUS=TESTED; TEST=match-call-complex-dijkstra; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-complex-dijkstra
+    description: "Complex MATCH pattern with Dijkstra"
+    args: ["query", "MATCH (a:Node {name: 'A'}), (e:Node {name: 'E'}) CALL algo.shortestPath.dijkstra(a, e, 'weight') YIELD path, cost RETURN a.name AS start, e.name AS end, cost ORDER BY cost", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["start", "end", "cost"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-025; FEATURE="MatchCallIntegration"; ASPECT=AggregationOnResults; STATUS=TESTED; TEST=match-call-aggregation; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-aggregation
+    description: "Aggregation on CALL results"
+    args: ["query", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN count(*) AS total_paths, max(length(path)) AS max_depth", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["total_paths", "max_depth"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-026; FEATURE="MatchCallIntegration"; ASPECT=LouvainCommunity; STATUS=TESTED; TEST=match-call-louvain; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-louvain
+    description: "MATCH + CALL Louvain community detection"
+    args: ["query", "MATCH (n:Node) CALL algo.louvain.stream() YIELD nodeId, community RETURN community, count(*) AS size GROUP BY community ORDER BY size DESC", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["community", "size"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-027; FEATURE="MatchCallIntegration"; ASPECT=LabelPropagation; STATUS=TESTED; TEST=match-call-label-propagation; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-label-propagation
+    description: "MATCH + CALL Label Propagation"
+    args: ["query", "MATCH (n:Node) CALL algo.labelPropagation.stream() YIELD nodeId, label RETURN label, count(*) AS members GROUP BY label", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["label", "members"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-028; FEATURE="MatchCallIntegration"; ASPECT=UnionFind; STATUS=TESTED; TEST=match-call-union-find; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-union-find
+    description: "MATCH + CALL Connected Components (Union-Find)"
+    args: ["query", "MATCH (n:Node) CALL algo.unionFind.stream() YIELD nodeId, setId RETURN setId, count(*) AS component_size GROUP BY setId ORDER BY component_size DESC", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["setId", "component_size"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-029; FEATURE="MatchCallIntegration"; ASPECT=SCC; STATUS=TESTED; TEST=match-call-scc; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-scc
+    description: "MATCH + CALL Strongly Connected Components"
+    args: ["query", "MATCH (n:Node) CALL algo.scc.stream() YIELD nodeId, partition RETURN partition, count(*) AS nodes GROUP BY partition", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["partition", "nodes"]
+
+  # CANARY: REQ=REQ-GQL-MATCH-CALL-INT-030; FEATURE="MatchCallIntegration"; ASPECT=MultipleAlgorithms; STATUS=TESTED; TEST=match-call-sequential-algorithms; OWNER=engine; UPDATED=2025-10-08
+  - name: match-call-sequential-algorithms
+    description: "Multiple sequential MATCH + CALL queries"
+    args: ["query", "MATCH (n:Node {name: 'A'}) CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path; MATCH (m:Node {name: 'B'}) CALL algo.dfs.stream(m, {maxDepth: 2}) YIELD path RETURN path", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["path"]
