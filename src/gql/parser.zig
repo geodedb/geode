@@ -213,16 +213,10 @@ pub const Parser = struct {
     }
 
     // Helper function to accept identifiers or keywords as identifiers (for aliases, etc.)
+    // CANARY: REQ=REQ-GQL-001; FEATURE="KeywordsAsIdentifiers"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-09
+    // Per ISO/IEC 39075:2024, keywords can be used as identifiers in most contexts (aliases, variable names, property names, labels)
     fn expectIdentifierOrKeyword(self: *Parser) !tok.Token {
-        if (self.cur.kind == .identifier or
-            self.cur.kind == .COUNT or self.cur.kind == .SUM or self.cur.kind == .AVG or
-            self.cur.kind == .MIN or self.cur.kind == .MAX or self.cur.kind == .PATH or
-            self.cur.kind == .TYPE or self.cur.kind == .VALUE or self.cur.kind == .EXISTS or
-            self.cur.kind == .LAST or self.cur.kind == .REPLACE or self.cur.kind == .PROPERTY or
-            self.cur.kind == .FROM or self.cur.kind == .TO or self.cur.kind == .ORDER or
-            self.cur.kind == .BY or self.cur.kind == .GROUP or self.cur.kind == .ASC or
-            self.cur.kind == .DESC or self.cur.kind == .LIMIT or self.cur.kind == .OFFSET)
-        {
+        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             const out = self.cur;
             self.advance();
             return out;
@@ -1163,14 +1157,16 @@ pub const Parser = struct {
     fn parseNodePattern(self: *Parser) ParserError!ast.NodePattern {
         _ = try self.expect(.l_paren);
         var name: ?[]const u8 = null;
-        if (self.cur.kind == .identifier) {
+        // Accept keywords as variable names (e.g., MATCH (create:Person))
+        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             name = self.cur.lexeme;
             self.advance();
         }
         var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         while (self.cur.kind == .colon) {
             self.advance();
-            const l = try self.expect(.identifier);
+            // Accept keywords as label names (e.g., :Property, :Type)
+            const l = try self.expectIdentifierOrKeyword();
             try labels.append(self.arena.allocator(), l.lexeme);
         }
         var props: ?[]ast.Property = null;
@@ -1184,18 +1180,21 @@ pub const Parser = struct {
     fn parseRelPattern(self: *Parser, dir: ast.RelDir) ParserError!ast.RelPattern {
         _ = try self.expect(.l_bracket);
         var name: ?[]const u8 = null;
-        if (self.cur.kind == .identifier) {
+        // Accept keywords as variable names (e.g., MATCH ()-[property:KNOWS]->())
+        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             name = self.cur.lexeme;
             self.advance();
         }
         var types = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         while (self.cur.kind == .colon) {
             self.advance();
-            const tkn = try self.expect(.identifier);
+            // Accept keywords as relationship type names
+            const tkn = try self.expectIdentifierOrKeyword();
             try types.append(self.arena.allocator(), tkn.lexeme);
             while (self.cur.kind == .bar) {
                 self.advance();
-                const alt = try self.expect(.identifier);
+                // Accept keywords as alternative relationship type names
+                const alt = try self.expectIdentifierOrKeyword();
                 try types.append(self.arena.allocator(), alt.lexeme);
             }
         }
@@ -1657,7 +1656,7 @@ pub const Parser = struct {
                 const wh_slice = try whens.toOwnedSlice(self.arena.allocator());
                 break :blk_case .{ .Case = .{ .operand = operand_opt, .whens = wh_slice, .else_expr = else_p } };
             },
-            .identifier, .EXISTS, .COUNT, .SUM, .AVG, .MIN, .MAX, .VALUE, .TYPE, .LAST, .REPLACE, .PATH => blk: {
+            .identifier => blk: {
                 const tkn = self.cur;
                 self.advance();
                 // Create CNF representation for identifiers
@@ -1792,7 +1791,20 @@ pub const Parser = struct {
                 // Implement simpler form: allow after comprehension an optional 'AS ident' alias; or embed none. We'll stick to none here; aliasing can be carried by outer ReturnItem alias.
                 break :blk_pc .{ .PatternComp = .{ .pattern = pat_ptr, .where = where_expr, .map = mp, .alias = null } };
             },
-            else => error.UnexpectedToken,
+            else => blk: {
+                // Accept keywords as identifiers (ISO/IEC 39075:2024 compliance)
+                // This handles cases like: MATCH (create:Person) RETURN create
+                if (self.isKeyword(self.cur.kind)) {
+                    const tkn = self.cur;
+                    self.advance();
+                    // Create CNF representation for identifiers
+                    const unicode = @import("../unicode/unicode_tables.zig");
+                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
+                    break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
+                }
+                // Not an identifier or keyword, return error
+                return error.UnexpectedToken;
+            },
         };
     }
 
