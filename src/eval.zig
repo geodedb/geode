@@ -240,6 +240,8 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
         .And => and3(l, r),
         .Or => or3(l, r),
         .Add => blk: {
+            // NULL + anything = NULL (GQL/SQL semantics)
+            if (l == .Null or r == .Null) break :blk .{ .Null = {} };
             if (l == .Int and r == .Int) break :blk .{ .Int = l.Int + r.Int };
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
@@ -254,6 +256,8 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             return EvalError.TypeMismatch;
         },
         .Sub => blk2: {
+            // NULL - anything = NULL (GQL/SQL semantics)
+            if (l == .Null or r == .Null) break :blk2 .{ .Null = {} };
             if (l == .Int and r == .Int) break :blk2 .{ .Int = l.Int - r.Int };
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
@@ -267,6 +271,8 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             return EvalError.TypeMismatch;
         },
         .Mul => blk3: {
+            // NULL * anything = NULL (GQL/SQL semantics)
+            if (l == .Null or r == .Null) break :blk3 .{ .Null = {} };
             if (l == .Int and r == .Int) break :blk3 .{ .Int = l.Int * r.Int };
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
@@ -279,6 +285,8 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             return EvalError.TypeMismatch;
         },
         .Div => blk4: {
+            // NULL / anything = NULL (GQL/SQL semantics)
+            if (l == .Null or r == .Null) break :blk4 .{ .Null = {} };
             if (l == .Int and r == .Int) {
                 // Use safe division helper to avoid builtin trap and surface TypeMismatch.
                 const denom = r.Int;
@@ -310,6 +318,8 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             return EvalError.TypeMismatch;
         },
         .Mod => blk_mod: {
+            // NULL % anything = NULL (GQL/SQL semantics)
+            if (l == .Null or r == .Null) break :blk_mod .{ .Null = {} };
             if (l == .Int and r == .Int) {
                 const denom = r.Int;
                 if (denom == 0) return EvalError.DivisionByZero;
