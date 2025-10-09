@@ -828,6 +828,9 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
     var plan_steps = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer plan_steps.deinit(allocator);
 
+    // Add EXPLAIN header
+    try plan_steps.append(allocator, try allocator.dupe(u8, "EXPLAIN"));
+
     // Analyze the query and build plan description
     const query_stmt = exp.query.*;
     switch (query_stmt) {
