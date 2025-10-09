@@ -6,28 +6,41 @@ import yaml
 import sys
 from pathlib import Path
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name=""):
-    """Run a single test case."""
+def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None):
+    """Run a single test case with optional instance_id and loop_index for parallel/loop tests."""
     args = test_case.get("args", [])
     expect = test_case.get("expect", {})
-    
-    # Handle server variable substitution
+
+    # Handle variable substitution
     processed_args = []
     for arg in args:
-        if isinstance(arg, str) and "${server" in arg:
-            # Replace server variable with default server
-            processed_arg = arg.replace("${server:port}", "8443")
+        if not isinstance(arg, str):
+            processed_args.append(arg)
+            continue
+
+        processed_arg = arg
+
+        # Replace server variables
+        if "${server" in processed_arg:
+            processed_arg = processed_arg.replace("${server:port}", "8443")
             processed_arg = processed_arg.replace("${server:host}", "127.0.0.1")
             processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
             processed_arg = processed_arg.replace("${server}", "127.0.0.1:8443")
-            processed_args.append(processed_arg)
-        elif isinstance(arg, str) and "${secret" in arg:
-            # Replace secret variables with test values
-            processed_arg = arg.replace("${secret:api_token}", "test-token-123")
+
+        # Replace secret variables
+        if "${secret" in processed_arg:
+            processed_arg = processed_arg.replace("${secret:api_token}", "test-token-123")
             processed_arg = processed_arg.replace("${secret:user_password}", "password123")
-            processed_args.append(processed_arg)
-        else:
-            processed_args.append(arg)
+
+        # Replace instance_id for parallel tests
+        if instance_id is not None and "${instance_id}" in processed_arg:
+            processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
+
+        # Replace loop_index for loop tests
+        if loop_index is not None and "${loop_index}" in processed_arg:
+            processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+
+        processed_args.append(processed_arg)
     args = processed_args
     
     # Handle special test expectations - don't skip, just mark as limitations
@@ -169,23 +182,66 @@ def main():
         
         for test in spec.get("tests", []):
             name = test["name"]
-            success, message = run_test(test, spec_name=spec_file.name)
-            
-            if success is None:
-                # Skipped
-                spec_skipped += 1
-                total_skipped += 1
-            elif success:
-                print(f"✓ [{spec_file.name}] {name}")
-                spec_passed += 1
-                total_passed += 1
-                has_tests = True
+
+            # Handle parallel tests with multiple instances
+            if test.get("parallel") and test.get("instances"):
+                for instance in range(test["instances"]):
+                    success, message = run_test(test, spec_name=spec_file.name, instance_id=instance)
+
+                    if success is None:
+                        spec_skipped += 1
+                        total_skipped += 1
+                    elif success:
+                        print(f"✓ [{spec_file.name}] {name} [instance {instance}]")
+                        spec_passed += 1
+                        total_passed += 1
+                        has_tests = True
+                    else:
+                        print(f"✗ [{spec_file.name}] {name} [instance {instance}]: {message}")
+                        spec_failed += 1
+                        total_failed += 1
+                        all_failures.append((spec_file.name, f"{name} [instance {instance}]", message))
+                        has_tests = True
+
+            # Handle loop tests
+            elif test.get("loop"):
+                for i in range(test["loop"]):
+                    success, message = run_test(test, spec_name=spec_file.name, loop_index=i)
+
+                    if success is None:
+                        spec_skipped += 1
+                        total_skipped += 1
+                    elif success:
+                        print(f"✓ [{spec_file.name}] {name} [iteration {i}]")
+                        spec_passed += 1
+                        total_passed += 1
+                        has_tests = True
+                    else:
+                        print(f"✗ [{spec_file.name}] {name} [iteration {i}]: {message}")
+                        spec_failed += 1
+                        total_failed += 1
+                        all_failures.append((spec_file.name, f"{name} [iteration {i}]", message))
+                        has_tests = True
+
+            # Handle normal tests
             else:
-                print(f"✗ [{spec_file.name}] {name}: {message}")
-                spec_failed += 1
-                total_failed += 1
-                all_failures.append((spec_file.name, name, message))
-                has_tests = True
+                success, message = run_test(test, spec_name=spec_file.name)
+
+                if success is None:
+                    # Skipped
+                    spec_skipped += 1
+                    total_skipped += 1
+                elif success:
+                    print(f"✓ [{spec_file.name}] {name}")
+                    spec_passed += 1
+                    total_passed += 1
+                    has_tests = True
+                else:
+                    print(f"✗ [{spec_file.name}] {name}: {message}")
+                    spec_failed += 1
+                    total_failed += 1
+                    all_failures.append((spec_file.name, name, message))
+                    has_tests = True
         
         if has_tests:
             print(f"  {spec_file.name}: {spec_passed} passed, {spec_failed} failed, {spec_skipped} skipped")
