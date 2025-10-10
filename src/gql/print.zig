@@ -657,5 +657,10 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printGraphPattern(w, sp.pattern.*, 0);
             try w.print(")", .{});
         },
+        .PatternCount => |pc| {
+            try w.print("size(", .{});
+            try printGraphPattern(w, pc.*, 0);
+            try w.print(")", .{});
+        },
     }
 }

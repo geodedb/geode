@@ -104,6 +104,10 @@ pub const Lexer = struct {
             }
             // double-dash comment: -- ...
             if (c == '-' and self.idx + 1 < self.src.len and self.src[self.idx + 1] == '-') {
+                // If pattern context (e.g. "--(" or "--["), do not treat as comment
+                if (self.idx + 2 < self.src.len and (self.src[self.idx + 2] == '(' or self.src[self.idx + 2] == '[')) {
+                    break;
+                }
                 while (self.idx < self.src.len and self.src[self.idx] != '\n') self.advance();
                 continue;
             }

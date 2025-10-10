@@ -34,7 +34,7 @@ test "Path type equality - identical paths" {
     defer edge1.properties.deinit();
 
     const nodes = [_]*const @import("../../src/graph_store.zig").Node{ &node1, &node2 };
-    const edges = [_]*const @import("../../src/graph_store.zig").Edge{ &edge1 };
+    const edges = [_]*const @import("../../src/graph_store.zig").Edge{&edge1};
 
     const path_a = eval.Value{
         .Path = .{
@@ -97,7 +97,7 @@ test "Path type equality - different node count" {
     defer edge2.properties.deinit();
 
     const nodes_short = [_]*const @import("../../src/graph_store.zig").Node{ &node1, &node2 };
-    const edges_short = [_]*const @import("../../src/graph_store.zig").Edge{ &edge1 };
+    const edges_short = [_]*const @import("../../src/graph_store.zig").Edge{&edge1};
 
     const nodes_long = [_]*const @import("../../src/graph_store.zig").Node{ &node1, &node2, &node3 };
     const edges_long = [_]*const @import("../../src/graph_store.zig").Edge{ &edge1, &edge2 };

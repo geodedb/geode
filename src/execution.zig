@@ -5876,3 +5876,393 @@ fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStateme
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }
+
+// CANARY: REQ=REQ-GQL-PATTERNCOMP; FEATURE="PatternComprehensions"; ASPECT=Counting; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-10
+// Count matches of a graph pattern
+pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern) !i64 {
+    const store = graph_store.getGlobalStore(allocator);
+    var count: i64 = 0;
+
+    // Handle simple node patterns
+    if (pattern.chains.len > 0) {
+        const chain = pattern.chains[0];
+
+        if (chain.head) |node_pattern| {
+            // Count nodes matching the pattern
+            var iter = store.nodes.iterator();
+            while (iter.next()) |entry| {
+                const node = entry.value_ptr.*;
+                var matches = true;
+
+                // Check labels
+                for (node_pattern.labels) |required_label| {
+                    var has_label = false;
+                    for (node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (!has_label) {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                // Check properties
+                if (matches and node_pattern.props != null) {
+                    for (node_pattern.props.?) |prop| {
+                        // For pattern counting, we evaluate the property value
+                        const expected = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .names = &.{}, .values = &.{} });
+
+                        // Check if node has this property with matching value
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = switch (node_prop_val) {
+                                .String => |s| eval.Value{ .Str = s },
+                                .Int => |i| eval.Value{ .Int = i },
+                                .Bool => |b| eval.Value{ .Bool = b },
+                                .Float => eval.Value{ .Null = {} }, // TODO: Add float support to eval.Value
+                                .Null => eval.Value{ .Null = {} },
+                            };
+                            if (!valuesEqual(node_val, expected)) {
+                                matches = false;
+                                break;
+                            }
+                        } else {
+                            matches = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (matches) {
+                    count += 1;
+                }
+            }
+        } else if (chain.hops.len > 0) {
+            // Count relationship patterns
+            const hop = chain.hops[0];
+
+            // Find all pairs of nodes connected by the specified relationship
+            var left_iter = store.nodes.iterator();
+            while (left_iter.next()) |left_entry| {
+                const left_node = left_entry.value_ptr.*;
+
+                // Check left node pattern
+                var left_matches = true;
+                for (hop.left.labels) |required_label| {
+                    var has_label = false;
+                    for (left_node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (!has_label) {
+                        left_matches = false;
+                        break;
+                    }
+                }
+
+                if (!left_matches) continue;
+
+                // Check relationships from this node
+                var right_iter = store.nodes.iterator();
+                while (right_iter.next()) |right_entry| {
+                    const right_node = right_entry.value_ptr.*;
+
+                    // Check right node pattern
+                    var right_matches = true;
+                    for (hop.right.labels) |required_label| {
+                        var has_label = false;
+                        for (right_node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                has_label = true;
+                                break;
+                            }
+                        }
+                        if (!has_label) {
+                            right_matches = false;
+                            break;
+                        }
+                    }
+
+                    if (!right_matches) continue;
+
+                    // Check for relationship between nodes
+                    const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+
+                    var edge_iter = store.edges.iterator();
+                    while (edge_iter.next()) |edge_entry| {
+                        const edge = edge_entry.value_ptr.*;
+
+                        // Check if edge connects these nodes with the right type and direction
+                        var edge_matches = false;
+
+                        switch (hop.rel.dir) {
+                            .right => {
+                                if (edge.from_id == left_node.id and edge.to_id == right_node.id) {
+                                    edge_matches = true;
+                                }
+                            },
+                            .left => {
+                                if (edge.from_id == right_node.id and edge.to_id == left_node.id) {
+                                    edge_matches = true;
+                                }
+                            },
+                            .undirected => {
+                                if ((edge.from_id == left_node.id and edge.to_id == right_node.id) or
+                                    (edge.from_id == right_node.id and edge.to_id == left_node.id))
+                                {
+                                    edge_matches = true;
+                                }
+                            },
+                        }
+
+                        if (edge_matches and rel_type != null) {
+                            edge_matches = std.mem.eql(u8, edge.label, rel_type.?);
+                        }
+
+                        if (edge_matches) {
+                            count += 1;
+                            break; // Count each matching pair once
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-10
+// Find shortest path between nodes using BFS
+pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool) !eval.Value {
+    const store = graph_store.getGlobalStore(allocator);
+
+    // Extract start and end nodes from pattern
+    if (pattern.chains.len == 0 or pattern.chains[0].hops.len == 0) {
+        return eval.Value{ .Null = {} };
+    }
+
+    const chain = pattern.chains[0];
+    const hop = chain.hops[0];
+
+    // Find start and end node IDs based on pattern
+    var start_id: ?u64 = null;
+    var end_id: ?u64 = null;
+
+    // Find start node matching left pattern
+    var start_iter = store.nodes.iterator();
+    while (start_iter.next()) |entry| {
+        const node = entry.value_ptr.*;
+        var matches = true;
+
+        for (hop.left.labels) |required_label| {
+            var has_label = false;
+            for (node.labels) |node_label| {
+                if (std.mem.eql(u8, required_label, node_label)) {
+                    has_label = true;
+                    break;
+                }
+            }
+            if (!has_label) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            start_id = node.id;
+            break;
+        }
+    }
+
+    // Find end node matching right pattern
+    var end_iter = store.nodes.iterator();
+    while (end_iter.next()) |entry| {
+        const node = entry.value_ptr.*;
+        var matches = true;
+
+        for (hop.right.labels) |required_label| {
+            var has_label = false;
+            for (node.labels) |node_label| {
+                if (std.mem.eql(u8, required_label, node_label)) {
+                    has_label = true;
+                    break;
+                }
+            }
+            if (!has_label) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            end_id = node.id;
+            break;
+        }
+    }
+
+    if (start_id == null or end_id == null) {
+        return eval.Value{ .Null = {} };
+    }
+
+    // Use BFS to find shortest path(s)
+    const PathNode = struct {
+        node_id: u64,
+        parent: ?*@This(),
+        depth: u32,
+    };
+
+    var visited = std.AutoHashMap(u64, bool).init(allocator);
+    defer visited.deinit();
+
+    var queue = try std.ArrayList(*PathNode).initCapacity(allocator, 0);
+    defer queue.deinit(allocator);
+
+    // Track all path nodes for cleanup
+    var all_nodes = try std.ArrayList(*PathNode).initCapacity(allocator, 0);
+    defer {
+        for (all_nodes.items) |node| {
+            allocator.destroy(node);
+        }
+        all_nodes.deinit(allocator);
+    }
+
+    // Start BFS from start_id
+    const start_path_node = try allocator.create(PathNode);
+    start_path_node.* = .{ .node_id = start_id.?, .parent = null, .depth = 0 };
+    try all_nodes.append(allocator, start_path_node);
+    try queue.append(allocator, start_path_node);
+    try visited.put(start_id.?, true);
+
+    var found_paths = try std.ArrayList(*PathNode).initCapacity(allocator, 0);
+    defer found_paths.deinit(allocator);
+
+    var shortest_depth: ?u32 = null;
+
+    while (queue.items.len > 0) {
+        const current = queue.orderedRemove(0);
+
+        // If we've found a shorter path already, stop exploring longer paths
+        if (shortest_depth != null and current.depth > shortest_depth.?) {
+            break;
+        }
+
+        // Check if we reached the end node
+        if (current.node_id == end_id.?) {
+            shortest_depth = current.depth;
+            try found_paths.append(allocator, current);
+            if (!all) break; // If not finding all shortest paths, stop at first
+            continue;
+        }
+
+        // Explore neighbors
+        var edge_iter = store.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            const edge = entry.value_ptr.*;
+
+            var neighbor_id: ?u64 = null;
+
+            // Check outgoing edges
+            if (edge.from_id == current.node_id) {
+                neighbor_id = edge.to_id;
+            }
+            // For undirected, also check incoming edges
+            if (hop.rel.dir == .undirected and edge.to_id == current.node_id) {
+                neighbor_id = edge.from_id;
+            }
+
+            if (neighbor_id != null and !visited.contains(neighbor_id.?)) {
+                const neighbor_node = try allocator.create(PathNode);
+                neighbor_node.* = .{ .node_id = neighbor_id.?, .parent = current, .depth = current.depth + 1 };
+                try all_nodes.append(allocator, neighbor_node);
+                try queue.append(allocator, neighbor_node);
+                try visited.put(neighbor_id.?, true);
+            }
+        }
+    }
+
+    if (found_paths.items.len == 0) {
+        return eval.Value{ .Null = {} };
+    }
+
+    // Reconstruct path(s)
+    if (all and found_paths.items.len > 1) {
+        // Return list of paths
+        var paths_list = try allocator.alloc(eval.Value, found_paths.items.len);
+
+        for (found_paths.items, 0..) |end_node, i| {
+            var path_nodes = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, 0);
+            var path_edges = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, 0);
+
+            // Reconstruct path by following parent pointers
+            var current_node: ?*PathNode = end_node;
+            var node_ids = try std.ArrayList(u64).initCapacity(allocator, 0);
+            defer node_ids.deinit(allocator);
+
+            while (current_node != null) {
+                try node_ids.insert(allocator, 0, current_node.?.node_id);
+                current_node = current_node.?.parent;
+            }
+
+            // Build path with actual nodes
+            for (node_ids.items) |node_id| {
+                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                    try path_nodes.append(allocator, node_ptr);
+                }
+            }
+
+            paths_list[i] = eval.Value{ .Path = .{
+                .nodes = try path_nodes.toOwnedSlice(allocator),
+                .edges = try path_edges.toOwnedSlice(allocator),
+            } };
+        }
+
+        return eval.Value{ .List = paths_list };
+    } else {
+        // Return single path
+        var path_nodes = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, 0);
+        var path_edges = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, 0);
+
+        // Reconstruct path by following parent pointers
+        var current_node: ?*PathNode = found_paths.items[0];
+        var node_ids = try std.ArrayList(u64).initCapacity(allocator, 0);
+        defer node_ids.deinit(allocator);
+
+        while (current_node != null) {
+            try node_ids.insert(allocator, 0, current_node.?.node_id);
+            current_node = current_node.?.parent;
+        }
+
+        // Build path with actual nodes and edges
+        for (node_ids.items, 0..) |node_id, idx| {
+            if (store.nodes.getPtr(node_id)) |node_ptr| {
+                try path_nodes.append(allocator, node_ptr);
+            }
+
+            // Add edges between consecutive nodes
+            if (idx > 0) {
+                const prev_id = node_ids.items[idx - 1];
+                var edge_iter = store.edges.iterator();
+                while (edge_iter.next()) |entry| {
+                    const edge_ptr = entry.value_ptr;
+                    const edge = edge_ptr.*;
+                    if ((edge.from_id == prev_id and edge.to_id == node_id) or
+                        (hop.rel.dir == .undirected and edge.to_id == prev_id and edge.from_id == node_id))
+                    {
+                        try path_edges.append(allocator, edge_ptr);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return eval.Value{ .Path = .{
+            .nodes = try path_nodes.toOwnedSlice(allocator),
+            .edges = try path_edges.toOwnedSlice(allocator),
+        } };
+    }
+}

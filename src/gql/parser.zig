@@ -1166,13 +1166,62 @@ pub const Parser = struct {
                 // expect a connector for a hop: '-', '<-', or '->'
                 var dir: ast.RelDir = .undirected;
                 if (self.cur.kind == .minus) {
+                    // Check for bracketless undirected relationship (--)
+                    if (self.peekKind() == .minus) {
+                        self.advance(); // first -
+                        self.advance(); // second -
+                        const rel = ast.RelPattern{
+                            .name = null,
+                            .types = &.{},
+                            .props = null,
+                            .dir = .undirected,
+                            .min_len = null,
+                            .max_len = null,
+                        };
+                        const right = try self.parseNodePattern();
+                        try hops.append(self.arena.allocator(), .{ .left = left, .rel = rel, .right = right });
+                        left = right;
+                        continue;
+                    }
                     self.advance();
                 } else if (self.cur.kind == .arrow_l) {
+                    self.advance();
+                    // Check for bracketless left-directed relationship (<-() without bracket)
+                    if (self.cur.kind == .l_paren) {
+                        dir = .left;
+                        const rel = ast.RelPattern{
+                            .name = null,
+                            .types = &.{},
+                            .props = null,
+                            .dir = .left,
+                            .min_len = null,
+                            .max_len = null,
+                        };
+                        const right = try self.parseNodePattern();
+                        try hops.append(self.arena.allocator(), .{ .left = left, .rel = rel, .right = right });
+                        left = right;
+                        continue;
+                    }
                     dir = .left;
-                    self.advance();
                 } else if (self.cur.kind == .arrow_r) {
-                    dir = .right;
                     self.advance();
+                    // Check for bracketless right-directed relationship (->() without bracket)
+                    if (self.cur.kind == .l_paren) {
+                        dir = .right;
+                        const rel = ast.RelPattern{
+                            .name = null,
+                            .types = &.{},
+                            .props = null,
+                            .dir = .right,
+                            .min_len = null,
+                            .max_len = null,
+                        };
+                        const right = try self.parseNodePattern();
+                        try hops.append(self.arena.allocator(), .{ .left = left, .rel = rel, .right = right });
+                        left = right;
+                        continue;
+                    }
+                    dir = .right;
                 } else {
                     break;
                 }
@@ -1575,7 +1624,7 @@ pub const Parser = struct {
                 continue;
             }
             if (self.cur.kind == .l_paren) {
-                // Check for shortestPath or allShortestPaths special functions
+                // Check for shortestPath/allShortestPaths or size() with pattern
                 if (base == .Ident) {
                     const name = base.Ident.orig;
                     if (std.ascii.eqlIgnoreCase(name, "shortestPath") or std.ascii.eqlIgnoreCase(name, "allShortestPaths")) {
@@ -1589,6 +1638,21 @@ pub const Parser = struct {
                         pat_ptr.* = pattern;
                         base = .{ .ShortestPath = .{ .pattern = pat_ptr, .all = is_all } };
                         continue;
+                    }
+                    // Check for size() with pattern comprehension
+                    if (std.ascii.eqlIgnoreCase(name, "size")) {
+                        self.advance(); // consume '('
+                        // Try to parse a graph pattern
+                        if (self.cur.kind == .l_paren) {
+                            const pattern = try self.parseGraphPattern();
+                            _ = try self.expect(.r_paren);
+                            const a = self.arena.allocator();
+                            const pat_ptr = try a.create(ast.GraphPattern);
+                            pat_ptr.* = pattern;
+                            base = .{ .PatternCount = pat_ptr };
+                            continue;
+                        }
+                        // Otherwise, fall through to regular function call handling
                     }
                 }
                 // function call: base(args)

@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("gql/ast.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
+const execution = @import("execution.zig");
 
 pub const EvalError = error{
     TypeMismatch,
@@ -1378,11 +1379,19 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         },
         .ShortestPath => |sp| blk_shortest: {
             // ShortestPath expression: shortestPath((a)-[*]-(b))
-            // This requires graph traversal which needs to be handled at execution level
-            // For now, return null as this should be evaluated in MATCH context
-            // TODO: Extract start/end nodes from pattern and call graph algorithm
-            _ = sp;
-            break :blk_shortest Value{ .Null = {} };
+            // Call the execution layer to find the shortest path(s)
+            const path_value = execution.findShortestPath(ally, sp.pattern.*, sp.all) catch {
+                break :blk_shortest Value{ .Null = {} };
+            };
+            break :blk_shortest path_value;
+        },
+        .PatternCount => |pc| blk_count: {
+            // Pattern comprehension count: size((pattern))
+            // Call the execution layer to count pattern matches
+            const count = execution.countPatternMatches(ally, pc.*) catch {
+                break :blk_count Value{ .Int = 0 };
+            };
+            break :blk_count Value{ .Int = count };
         },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
@@ -1602,8 +1611,40 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         switch (arg) {
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .List => |l| return Value{ .Int = @intCast(l.len) },
-            // For paths, we'd need a Path type - for now return 1
-            else => return Value{ .Int = 1 },
+            .Path => |p| return Value{ .Int = @intCast(p.edges.len) }, // Path length is number of relationships
+            else => return Value{ .Int = 0 },
+        }
+    }
+
+    // Handle nodes() function - returns list of nodes in a path
+    if (std.mem.eql(u8, function_name, "nodes")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Path => |p| {
+                var node_values = try ally.alloc(Value, p.nodes.len);
+                for (p.nodes, 0..) |node, i| {
+                    node_values[i] = Value{ .Node = node };
+                }
+                return Value{ .List = node_values };
+            },
+            else => return Value{ .Null = {} },
+        }
+    }
+
+    // Handle relationships() function - returns list of edges in a path
+    if (std.mem.eql(u8, function_name, "relationships")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        switch (arg) {
+            .Path => |p| {
+                var edge_values = try ally.alloc(Value, p.edges.len);
+                for (p.edges, 0..) |edge, i| {
+                    edge_values[i] = Value{ .Edge = edge };
+                }
+                return Value{ .List = edge_values };
+            },
+            else => return Value{ .Null = {} },
         }
     }
 
