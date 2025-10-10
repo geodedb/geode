@@ -1291,12 +1291,7 @@ pub const Parser = struct {
             // Accept keywords as relationship type names
             const tkn = try self.expectIdentifierOrKeyword();
             try types.append(self.arena.allocator(), tkn.lexeme);
-            // Check for | separator - but only if next token looks like a type name
             while (self.cur.kind == .bar) {
-                const next = self.peekKind();
-                // Only treat | as type separator if followed by identifier/keyword (type name)
-                // NOT if followed by ] (pattern comprehension separator)
-                if (next != .identifier and !self.isKeyword(next)) break;
                 self.advance();
                 // Accept keywords as alternative relationship type names
                 const alt = try self.expectIdentifierOrKeyword();
