@@ -202,6 +202,8 @@ pub const Expr = union(enum) {
     Exists: struct { pattern: *GraphPattern },
     // Label test: n:Label (checks if node has label)
     HasLabel: struct { node: []const u8, label: []const u8 },
+    // Path finding functions: shortestPath((a)-[*]-(b)) and allShortestPaths((a)-[*]-(b))
+    ShortestPath: struct { pattern: *GraphPattern, all: bool },
 };
 
 pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };

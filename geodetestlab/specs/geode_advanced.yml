@@ -41,8 +41,9 @@ fuzz:
 tests:
   - name: "complex-graph-creation"
     description: "Create a complex graph structure"
-    args: 
-      - "query" 
+    args:
+      - "query"
+      - "--no-quic"
       - |
         CREATE 
           (alice:Person {name: 'Alice', age: 30, city: 'New York'}),
@@ -230,7 +231,7 @@ tests:
 
   - name: "error-handling-division-by-zero"
     description: "Test error handling in mathematical operations"
-    args: ["query", "RETURN 10 / 0 AS result"]
+    args: ["query", "--no-quic", "RETURN 10 / 0 AS result"]
     expect:
       exit_code: 1
       stderr_contains: ["division", "zero", "error"]
@@ -238,7 +239,7 @@ tests:
 
   - name: "memory-cleanup-test"
     description: "Test memory cleanup with large result sets"
-    args: ["query", "MATCH (n:TestNode) RETURN n LIMIT 1000"]
+    args: ["query", "--no-quic", "MATCH (n:TestNode) RETURN n LIMIT 1000"]
     expect:
       exit_code: 0
       geode_query:

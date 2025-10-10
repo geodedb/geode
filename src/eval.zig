@@ -52,6 +52,11 @@ pub const Value = union(enum) {
     Map: std.StringHashMap(Value),
     // Extended types (advanced types like IpAddr, Subnet, etc.) wrapped to preserve type information
     ExtValue: @import("eval_extended.zig").ExtValue,
+    // Path type: sequence of alternating nodes and edges
+    Path: struct {
+        nodes: []const *const @import("graph_store.zig").Node,
+        edges: []const *const @import("graph_store.zig").Edge,
+    },
 };
 
 const Dec = struct { coeff: i128, scale: u8 };
@@ -220,6 +225,18 @@ fn eqVals(a: Value, b: Value) bool {
         },
         .Map => false, // Map equality comparison not implemented
         .ExtValue => false, // ExtValue equality comparison not implemented
+        .Path => |ap| blk: {
+            if (b != .Path) break :blk false;
+            const bp = b.Path;
+            if (ap.nodes.len != bp.nodes.len or ap.edges.len != bp.edges.len) break :blk false;
+            for (ap.nodes, bp.nodes) |an, bn| {
+                if (an != bn) break :blk false;
+            }
+            for (ap.edges, bp.edges) |ae, be| {
+                if (ae != be) break :blk false;
+            }
+            break :blk true;
+        },
     };
 }
 
@@ -1359,6 +1376,14 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             }
             break :blk_label Value{ .Bool = false };
         },
+        .ShortestPath => |sp| blk_shortest: {
+            // ShortestPath expression: shortestPath((a)-[*]-(b))
+            // This requires graph traversal which needs to be handled at execution level
+            // For now, return null as this should be evaluated in MATCH context
+            // TODO: Extract start/end nodes from pattern and call graph algorithm
+            _ = sp;
+            break :blk_shortest Value{ .Null = {} };
+        },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };
@@ -1376,6 +1401,7 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Map => .{ .Null = {} }, // ExtValue doesn't support map types
+        .Path => .{ .Null = {} }, // ExtValue doesn't support path types
     };
 }
 
@@ -1405,6 +1431,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
         .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
         .Edge => .{ .Null = {} }, // TODO: heap.Value needs Edge support
         .Map => .{ .Null = {} }, // TODO: heap.Value needs Map support
+        .Path => .{ .Null = {} }, // TODO: heap.Value needs Path support
     };
 }
 

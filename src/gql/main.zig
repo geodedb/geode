@@ -498,6 +498,7 @@ pub fn main() !void {
                                     .Edge => |_| try w.print("<edge>", .{}),
                                     .Map => |_| try w.print("<map>", .{}),
                                     .ExtValue => |_| try w.print("<extvalue>", .{}),
+                                    .Path => |_| try w.print("<path>", .{}),
                                 }
                             }
                             try w.print("\n", .{});

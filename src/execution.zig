@@ -352,6 +352,20 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                 else => try writer.writeAll("\"[advanced_type]\""),
             }
         },
+        .Path => |path| {
+            // Output path as JSON object with nodes and edges
+            try writer.writeAll("{\"nodes\":[");
+            for (path.nodes, 0..) |node, i| {
+                if (i > 0) try writer.writeAll(",");
+                try writer.print("{d}", .{node.id});
+            }
+            try writer.writeAll("],\"edges\":[");
+            for (path.edges, 0..) |edge, i| {
+                if (i > 0) try writer.writeAll(",");
+                try writer.print("{d}", .{edge.id});
+            }
+            try writer.writeAll("]}");
+        },
     }
 }
 
@@ -3874,6 +3888,18 @@ fn valuesEqual(a: eval.Value, b: eval.Value) bool {
         .Edge => |edge_a| b == .Edge and b.Edge.id == edge_a.id,
         .Map => false, // Map comparison not implemented yet
         .ExtValue => false, // ExtValue comparison not implemented yet
+        .Path => |path_a| blk: {
+            if (b != .Path) break :blk false;
+            const path_b = b.Path;
+            if (path_a.nodes.len != path_b.nodes.len or path_a.edges.len != path_b.edges.len) break :blk false;
+            for (path_a.nodes, path_b.nodes) |na, nb| {
+                if (na.id != nb.id) break :blk false;
+            }
+            for (path_a.edges, path_b.edges) |ea, eb| {
+                if (ea.id != eb.id) break :blk false;
+            }
+            break :blk true;
+        },
     };
 }
 
@@ -4217,6 +4243,7 @@ fn getTypeOrder(v: eval.Value) u8 {
         .Edge => 7,
         .Map => 8,
         .ExtValue => 9,
+        .Path => 10,
     };
 }
 
@@ -5258,16 +5285,21 @@ fn extractNodeId(args: []const *ast.Expr, arg_idx: usize, context: ExecutionCont
 
 // Helper: Get edge weight from graph store
 fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weight_prop: []const u8) f64 {
-    _ = weight_prop; // TODO: extract from edge properties
-
-    // For now, check if edge exists and return 1.0
-    // In the future, extract actual weight from edge properties
     var edge_iter = store.edges.iterator();
     while (edge_iter.next()) |entry| {
         const edge = entry.value_ptr.*;
         if (edge.from_id == from_id and edge.to_id == to_id) {
-            // Found the edge - return default weight for now
-            // TODO: Extract from edge.properties[weight_prop]
+            // Try to extract weight from edge properties
+            if (edge.properties.get(weight_prop)) |prop_value| {
+                // Extract numeric value from property
+                const weight: f64 = switch (prop_value) {
+                    .Int => |i| @floatFromInt(i),
+                    .Float => |f| f,
+                    else => 1.0,
+                };
+                return weight;
+            }
+            // No weight property found, use default
             return 1.0;
         }
     }

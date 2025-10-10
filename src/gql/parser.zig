@@ -1103,12 +1103,41 @@ pub const Parser = struct {
         while (true) {
             // parse a chain with one-or-more hops
             var hops = std.ArrayList(ast.Hop).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-            // Optional path alias: ident '=' before a node pattern
+            // Optional path alias: ident '=' before a node pattern or shortestPath function
             var chain_name: ?[]const u8 = null;
             if ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq) {
                 chain_name = self.cur.lexeme;
                 self.advance(); // ident or PATH
                 _ = try self.expect(.eq);
+
+                // Check if this is a shortestPath or allShortestPaths function call
+                if (self.cur.kind == .identifier) {
+                    const func_name = self.cur.lexeme;
+                    if (std.ascii.eqlIgnoreCase(func_name, "shortestPath") or std.ascii.eqlIgnoreCase(func_name, "allShortestPaths")) {
+                        // This is a path function - create a special chain with shortestPath marker
+                        self.advance(); // consume function name
+                        _ = try self.expect(.l_paren);
+                        const inner_pattern = try self.parseGraphPattern();
+                        _ = try self.expect(.r_paren);
+
+                        // Store the shortestPath pattern as a special chain
+                        // The execution engine will handle this specially
+                        const is_all = std.ascii.eqlIgnoreCase(func_name, "allShortestPaths");
+                        _ = is_all; // Will use this in execution
+
+                        // For now, just return the inner pattern with the path name
+                        for (inner_pattern.chains) |chain| {
+                            var modified_chain = chain;
+                            modified_chain.name = chain_name;
+                            try chains.append(self.arena.allocator(), modified_chain);
+                        }
+
+                        // comma-separated chains
+                        if (self.cur.kind != .comma) break;
+                        self.advance();
+                        continue;
+                    }
+                }
             }
             var left = try self.parseNodePattern();
             while (true) {
@@ -1524,6 +1553,22 @@ pub const Parser = struct {
                 continue;
             }
             if (self.cur.kind == .l_paren) {
+                // Check for shortestPath or allShortestPaths special functions
+                if (base == .Ident) {
+                    const name = base.Ident.orig;
+                    if (std.ascii.eqlIgnoreCase(name, "shortestPath") or std.ascii.eqlIgnoreCase(name, "allShortestPaths")) {
+                        const is_all = std.ascii.eqlIgnoreCase(name, "allShortestPaths");
+                        self.advance(); // consume '('
+                        // Parse graph pattern argument
+                        const pattern = try self.parseGraphPattern();
+                        _ = try self.expect(.r_paren);
+                        const a = self.arena.allocator();
+                        const pat_ptr = try a.create(ast.GraphPattern);
+                        pat_ptr.* = pattern;
+                        base = .{ .ShortestPath = .{ .pattern = pat_ptr, .all = is_all } };
+                        continue;
+                    }
+                }
                 // function call: base(args)
                 self.advance();
                 var args = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
@@ -2447,6 +2492,44 @@ pub const Parser = struct {
             return error.UnexpectedToken;
         }
 
+        // Optional USING index_type (before properties)
+        var index_type = ast.IndexType.btree;
+        if (self.cur.kind == .USING) {
+            self.advance();
+            if (self.cur.kind == .identifier) {
+                const type_str = self.cur.lexeme;
+                if (std.ascii.eqlIgnoreCase(type_str, "btree") or std.ascii.eqlIgnoreCase(type_str, "BTree")) {
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "hash") or std.ascii.eqlIgnoreCase(type_str, "Hash")) {
+                    index_type = .hash;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "fulltext") or std.ascii.eqlIgnoreCase(type_str, "FullText")) {
+                    index_type = .fulltext;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial") or std.ascii.eqlIgnoreCase(type_str, "RTree")) {
+                    index_type = .spatial;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "vector") or std.ascii.eqlIgnoreCase(type_str, "HNSW")) {
+                    index_type = .vector;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "vector_f32")) {
+                    index_type = .vector_f32;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial_geographic")) {
+                    index_type = .spatial_geographic;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr") or std.ascii.eqlIgnoreCase(type_str, "PatriciaTrie")) {
+                    index_type = .network_cidr;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
+                    index_type = .signature_crypto;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
+                    // IntervalTree - temporal/interval index (map to btree for now)
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
+                    // JsonbInverted - JSONB GIN-style index (map to btree for now)
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
+                    // DomainTrie - domain name trie (map to btree for now)
+                    index_type = .btree;
+                }
+                self.advance();
+            }
+        }
+
         // Properties in parentheses
         if (self.cur.kind != .l_paren) return error.UnexpectedToken;
         self.advance();
@@ -2469,32 +2552,24 @@ pub const Parser = struct {
         if (self.cur.kind != .r_paren) return error.UnexpectedToken;
         self.advance();
 
-        // Optional USING index_type
-        var index_type = ast.IndexType.btree;
-        if (self.cur.kind == .USING) {
+        // Optional WITH clause for index parameters (parse but ignore for now)
+        if (self.cur.kind == .WITH) {
             self.advance();
-            if (self.cur.kind == .identifier) {
-                const type_str = self.cur.lexeme;
-                if (std.ascii.eqlIgnoreCase(type_str, "btree")) {
-                    index_type = .btree;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "hash")) {
-                    index_type = .hash;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "fulltext")) {
-                    index_type = .fulltext;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial")) {
-                    index_type = .spatial;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "vector")) {
-                    index_type = .vector;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "vector_f32")) {
-                    index_type = .vector_f32;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial_geographic")) {
-                    index_type = .spatial_geographic;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr")) {
-                    index_type = .network_cidr;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
-                    index_type = .signature_crypto;
-                }
+            if (self.cur.kind == .l_paren) {
                 self.advance();
+                // Skip parameters until closing paren
+                var paren_depth: u32 = 1;
+                while (paren_depth > 0 and self.cur.kind != .eof) {
+                    if (self.cur.kind == .l_paren) {
+                        paren_depth += 1;
+                    } else if (self.cur.kind == .r_paren) {
+                        paren_depth -= 1;
+                    }
+                    if (paren_depth > 0) self.advance();
+                }
+                if (self.cur.kind == .r_paren) {
+                    self.advance();
+                }
             }
         }
 

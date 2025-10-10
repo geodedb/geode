@@ -621,6 +621,7 @@ fn valueToBinding(v: eval.Value) BindingValue {
         .Edge => BindingValue{ .Null = {} }, // TODO: Add Edge to BindingValue if needed
         .Map => BindingValue{ .Null = {} }, // TODO: Add Map to BindingValue if needed
         .ExtValue => BindingValue{ .Null = {} }, // TODO: Add ExtValue to BindingValue if needed
+        .Path => BindingValue{ .Null = {} }, // TODO: Add Path to BindingValue if needed
     };
 }
 

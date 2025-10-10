@@ -648,5 +648,14 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         },
         .BitLit => |bits| try w.print("B\"{s}\"", .{bits}),
         .VarBitLit => |bits| try w.print("VARBIT\"{s}\"", .{bits}),
+        .ShortestPath => |sp| {
+            if (sp.all) {
+                try w.print("allShortestPaths(", .{});
+            } else {
+                try w.print("shortestPath(", .{});
+            }
+            try printGraphPattern(w, sp.pattern.*, 0);
+            try w.print(")", .{});
+        },
     }
 }

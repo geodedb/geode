@@ -197,8 +197,8 @@ pub const QuicTransport = struct {
         const result = try std.process.Child.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
-                "openssl", "req",         "-x509", "-newkey",                                       "rsa:4096",
-                "-keyout", self.key_path, "-out",  self.cert_path,                                  "-days",
+                "openssl", "req",         "-x509", "-newkey",                                      "rsa:4096",
+                "-keyout", self.key_path, "-out",  self.cert_path,                                 "-days",
                 "365",     "-nodes",      "-subj", "/C=US/ST=State/L=City/O=Geode/CN=geode.local",
             },
         });
