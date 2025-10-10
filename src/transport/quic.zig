@@ -197,9 +197,9 @@ pub const QuicTransport = struct {
         const result = try std.process.Child.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
-                "openssl", "req",         "-x509", "-newkey",                                    "rsa:4096",
-                "-keyout", self.key_path, "-out",  self.cert_path,                               "-days",
-                "365",     "-nodes",      "-subj", "/C=US/ST=State/L=City/O=Geode/CN=localhost",
+                "openssl", "req",         "-x509", "-newkey",                                       "rsa:4096",
+                "-keyout", self.key_path, "-out",  self.cert_path,                                  "-days",
+                "365",     "-nodes",      "-subj", "/C=US/ST=State/L=City/O=Geode/CN=geode.local",
             },
         });
         defer self.allocator.free(result.stdout);
@@ -502,9 +502,9 @@ pub const QuicClient = struct {
         std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"{s}\"}}\n", .{bind_addr});
         self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
 
-        // Connect to server
-        const sni = address; // Use server address as SNI
-        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initiating connection\",\"server_addr\":\"{s}\",\"sni\":\"{s}\"}}\n", .{ server_addr_str, sni });
+        // Connect to server - use geode.local as SNI when allow_insecure to match cert CN
+        const sni = if (cfg.allow_insecure) "geode.local" else address;
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initiating connection\",\"server_addr\":\"{s}\",\"sni\":\"{s}\",\"allow_insecure\":{}}}\n", .{ server_addr_str, sni, cfg.allow_insecure });
         self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
 
         self.is_quic = true;
@@ -604,8 +604,8 @@ pub const QuicClient = struct {
         const bind_addr = "0.0.0.0:0";
         self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
 
-        // Connect to server
-        const sni = address;
+        // Connect to server - use geode.local as SNI when allow_insecure to match cert CN
+        const sni = if (cfg.allow_insecure) "geode.local" else address;
         self.quic_connection = try quic_lib.connect(self.endpoint.?, server_addr_str, sni);
 
         self.is_quic = true;

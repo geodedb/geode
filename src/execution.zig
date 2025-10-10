@@ -2532,8 +2532,49 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
 
     // If there's a RETURN clause in the query, apply it to the CALL results
     if (q.ret.items.len > 0 and call_clause.yield_items != null) {
-        // The CALL already returned results, but we may need to apply ORDER BY, LIMIT, etc.
-        var result = call_result;
+        // Apply RETURN transformations to the CALL results
+        var transformed_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, call_result.rows.len);
+        defer transformed_rows.deinit(allocator);
+
+        for (call_result.rows) |call_row| {
+            // Create environment from CALL result columns and values
+            const env = eval.Env{
+                .names = call_result.columns,
+                .values = call_row,
+            };
+
+            // Evaluate each RETURN expression using the CALL result as environment
+            var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+            for (q.ret.items, 0..) |item, i| {
+                return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+
+            try transformed_rows.append(allocator, return_row);
+        }
+
+        // Get column names from RETURN clause
+        var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+        for (q.ret.items, 0..) |item, i| {
+            const col_name = item.alias orelse switch (item.expr) {
+                .Ident => |ident| ident.orig,
+                .Member => |member| member.field,
+                else => "column",
+            };
+            return_columns[i] = try allocator.dupe(u8, col_name);
+        }
+
+        // Free original call_result columns
+        for (call_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(call_result.columns);
+        allocator.free(call_result.rows); // rows will be replaced
+
+        var result = ExecutionResult{
+            .columns = return_columns,
+            .rows = try transformed_rows.toOwnedSlice(allocator),
+            .flags = call_result.flags, // Keep the flags from CALL result
+        };
 
         // Apply ORDER BY if present
         if (q.order_by) |order| {
@@ -4758,10 +4799,14 @@ fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     }
 
     const find = struct {
-        fn f(p: *std.AutoHashMap(u64, u64), x: u64) u64 {
+        fn f(p: *std.AutoHashMap(u64, u64), x: u64) ?u64 {
+            // Check if node exists in parent map
+            if (p.get(x) == null) return null;
+
             var current = x;
-            while (p.get(current).? != current) {
-                current = p.get(current).?;
+            while (p.get(current)) |parent_id| {
+                if (parent_id == current) break;
+                current = parent_id;
             }
             return current;
         }
@@ -4770,10 +4815,24 @@ fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     var edge_iter = store.edges.iterator();
     while (edge_iter.next()) |entry| {
         const edge = entry.value_ptr.*;
-        const root1 = find(&parent, edge.from_id);
-        const root2 = find(&parent, edge.to_id);
-        if (root1 != root2) {
-            try parent.put(root2, root1);
+
+        // Ensure edge endpoints exist in parent map
+        if (!parent.contains(edge.from_id)) {
+            try parent.put(edge.from_id, edge.from_id);
+        }
+        if (!parent.contains(edge.to_id)) {
+            try parent.put(edge.to_id, edge.to_id);
+        }
+
+        const root1_opt = find(&parent, edge.from_id);
+        const root2_opt = find(&parent, edge.to_id);
+
+        if (root1_opt != null and root2_opt != null) {
+            const root1 = root1_opt.?;
+            const root2 = root2_opt.?;
+            if (root1 != root2) {
+                try parent.put(root2, root1);
+            }
         }
     }
 
@@ -4781,8 +4840,12 @@ fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     defer components.deinit();
 
     for (node_list.items) |node| {
-        const root = find(&parent, node);
-        try components.put(node, root);
+        if (find(&parent, node)) |root| {
+            try components.put(node, root);
+        } else {
+            // Node has no parent (isolated node), it's its own component
+            try components.put(node, node);
+        }
     }
 
     var rows = try allocator.alloc([]eval.Value, node_list.items.len);
