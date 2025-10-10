@@ -2147,11 +2147,44 @@ pub const Parser = struct {
 
             // Parse WITH clause if present
             var with_clause: ?ast.WithClause = null;
+            var next_query_ptr: ?*ast.Query = null;
             if (self.cur.kind == .WITH) {
                 self.advance();
                 var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                 try self.parseProjectionItems(&witems);
                 with_clause = .{ .items = try witems.toOwnedSlice(self.arena.allocator()) };
+
+                // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=ParserCREATE;
+                //         STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
+                // Check for query chaining: WITH ... MATCH/CREATE ...
+                // If we see MATCH or CREATE after WITH, parse it as a chained query
+                if (self.cur.kind == .MATCH or self.cur.kind == .CREATE) {
+                    // Parse the continuation as a new query
+                    const next_query = try self.parseQuery();
+                    // Allocate on arena and store pointer
+                    const next_ptr = try self.arena.allocator().create(ast.Query);
+                    next_ptr.* = next_query;
+                    next_query_ptr = next_ptr;
+
+                    // Current query acts as a WITH-only query (implicit RETURN from WITH items)
+                    // Return a Query with create_pattern and next_query set
+                    return .{
+                        .Query = .{
+                            .optional_match = false,
+                            .match = .{ .chains = &.{} }, // Empty match pattern
+                            .create_pattern = pattern, // CREATE pattern goes here
+                            .where_clause = null,
+                            .with_clause = with_clause,
+                            .set_clauses = &.{},
+                            .remove_clauses = &.{},
+                            .ret = .{ .items = with_clause.?.items, .distinct = false }, // Implicit RETURN
+                            .order_by = null,
+                            .limit = null,
+                            .offset = null,
+                            .next_query = next_query_ptr,
+                        },
+                    };
+                }
             }
 
             // Parse SET clauses if present
@@ -2188,7 +2221,7 @@ pub const Parser = struct {
                 unreachable;
             }
 
-            // Return a Query with create_pattern set
+            // Return a Query with create_pattern set (no chaining)
             return .{
                 .Query = .{
                     .optional_match = false,
