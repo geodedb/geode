@@ -788,7 +788,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionClose; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
             // Close session - clean up all session state
             if (context.session_state) |session| {
-                session.deinit();
+                session.reset();
             }
 
             const columns = try allocator.alloc([]const u8, 1);
@@ -1293,8 +1293,8 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
 fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
-    // Track created nodes by variable name for WITH/SET/RETURN clauses
-    var created_nodes = std.StringHashMap(*graph_store.Node).init(allocator);
+    // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
+    var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
 
     // Create nodes from pattern
@@ -1325,8 +1325,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
 
             // Track created node by variable name if present
             if (node_pattern.name) |var_name| {
-                const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
-                try created_nodes.put(var_name, node);
+                try created_nodes.put(var_name, node_id);
             }
         }
 
@@ -1401,12 +1400,10 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
 
             // Track created nodes by variable names
             if (hop.left.name) |var_name| {
-                const node = store.nodes.getPtr(left_id) orelse return error.NodeNotFound;
-                try created_nodes.put(var_name, node);
+                try created_nodes.put(var_name, left_id);
             }
             if (hop.right.name) |var_name| {
-                const node = store.nodes.getPtr(right_id) orelse return error.NodeNotFound;
-                try created_nodes.put(var_name, node);
+                try created_nodes.put(var_name, right_id);
             }
         }
     }
@@ -1422,7 +1419,8 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
             // Evaluate expression based on created nodes
             if (item.expr == .Ident) {
                 const var_name = item.expr.Ident.orig;
-                if (created_nodes.get(var_name)) |node| {
+                if (created_nodes.get(var_name)) |node_id| {
+                    const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
                     row[i] = eval.Value{ .Node = node };
                 } else {
                     row[i] = eval.Value{ .Null = {} };
@@ -1435,7 +1433,9 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 var iter = created_nodes.iterator();
                 while (iter.next()) |entry| {
                     try names.append(allocator, entry.key_ptr.*);
-                    try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+                    const entry_node_id = entry.value_ptr.*;
+                    const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
+                    try values.append(allocator, eval.Value{ .Node = entry_node });
                 }
 
                 const env = eval.Env{
@@ -1474,7 +1474,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
     for (q.set_clauses) |set_clause| {
         switch (set_clause) {
             .Property => |prop| {
-                if (created_nodes.get(prop.target.object)) |node| {
+                if (created_nodes.get(prop.target.object)) |node_id| {
                     // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
                     var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
@@ -1490,7 +1490,9 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         var iter = created_nodes.iterator();
                         while (iter.next()) |entry| {
                             try names.append(allocator, entry.key_ptr.*);
-                            try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+                            const entry_node_id = entry.value_ptr.*;
+                            const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
+                            try values.append(allocator, eval.Value{ .Node = entry_node });
                         }
                     }
 
@@ -1507,13 +1509,13 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
-                    try store.setNodeProperty(node.id, prop.target.property, prop_value);
+                    try store.setNodeProperty(node_id, prop.target.property, prop_value);
                 }
             },
             .Labels => |label_set| {
-                if (created_nodes.get(label_set.node)) |node| {
+                if (created_nodes.get(label_set.node)) |node_id| {
                     for (label_set.labels) |label| {
-                        try store.addNodeLabel(node.id, label);
+                        try store.addNodeLabel(node_id, label);
                     }
                 }
             },
@@ -1524,14 +1526,14 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
     for (q.remove_clauses) |remove_clause| {
         switch (remove_clause) {
             .Property => |prop| {
-                if (created_nodes.get(prop.object)) |node| {
-                    store.removeNodeProperty(node.id, prop.property);
+                if (created_nodes.get(prop.object)) |node_id| {
+                    store.removeNodeProperty(node_id, prop.property);
                 }
             },
             .Labels => |label_removal| {
-                if (created_nodes.get(label_removal.node)) |node| {
+                if (created_nodes.get(label_removal.node)) |node_id| {
                     for (label_removal.labels) |label| {
-                        try store.removeNodeLabel(node.id, label);
+                        try store.removeNodeLabel(node_id, label);
                     }
                 }
             },
@@ -1590,7 +1592,8 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
     }
 }
 
-fn executeReturnClauseWithNodes(allocator: std.mem.Allocator, ret: ast.ReturnClause, nodes: std.StringHashMap(*graph_store.Node)) !ExecutionResult {
+fn executeReturnClauseWithNodes(allocator: std.mem.Allocator, ret: ast.ReturnClause, nodes: std.StringHashMap(u64)) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
     const items = ret.items;
     var columns = try allocator.alloc([]const u8, items.len);
     var rows = try allocator.alloc([]eval.Value, 1);
@@ -1603,7 +1606,9 @@ fn executeReturnClauseWithNodes(allocator: std.mem.Allocator, ret: ast.ReturnCla
     var iter = nodes.iterator();
     while (iter.next()) |entry| {
         try names.append(allocator, entry.key_ptr.*);
-        try values.append(allocator, eval.Value{ .Node = entry.value_ptr.* });
+        const node_id = entry.value_ptr.*;
+        const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+        try values.append(allocator, eval.Value{ .Node = node });
     }
 
     const env = eval.Env{
@@ -1634,7 +1639,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
     const store = graph_store.getGlobalStore(allocator);
 
     // Track created nodes by variable name
-    var created_nodes = std.StringHashMap(*graph_store.Node).init(allocator);
+    var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
 
     // Create nodes from pattern
@@ -1664,11 +1669,9 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                 }
             }
 
-            // Get the created node and store reference if it has a variable name
+            // Store node ID if it has a variable name
             if (node_pattern.name) |name| {
-                if (store.nodes.getPtr(node_id)) |new_node| {
-                    try created_nodes.put(name, new_node);
-                }
+                try created_nodes.put(name, node_id);
             }
         }
 
@@ -1678,12 +1681,10 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
             var left_node_id: u64 = undefined;
             if (hop.left.name) |left_name| {
                 if (created_nodes.get(left_name)) |existing| {
-                    left_node_id = existing.id;
+                    left_node_id = existing;
                 } else {
                     left_node_id = try store.createNode(hop.left.labels);
-                    if (store.nodes.getPtr(left_node_id)) |new_node| {
-                        try created_nodes.put(left_name, new_node);
-                    }
+                    try created_nodes.put(left_name, left_node_id);
                 }
             } else {
                 left_node_id = try store.createNode(hop.left.labels);
@@ -1714,12 +1715,10 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
             var right_node_id: u64 = undefined;
             if (hop.right.name) |right_name| {
                 if (created_nodes.get(right_name)) |existing| {
-                    right_node_id = existing.id;
+                    right_node_id = existing;
                 } else {
                     right_node_id = try store.createNode(hop.right.labels);
-                    if (store.nodes.getPtr(right_node_id)) |new_node| {
-                        try created_nodes.put(right_name, new_node);
-                    }
+                    try created_nodes.put(right_name, right_node_id);
                 }
             } else {
                 right_node_id = try store.createNode(hop.right.labels);
@@ -1789,8 +1788,10 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
         var idx: usize = 0;
         while (iter.next()) |entry| {
             names[idx] = entry.key_ptr.*;
-            // Convert node to Value (as a Node reference)
-            values[idx] = eval.Value{ .Node = entry.value_ptr.* };
+            // Look up node by ID from store
+            const node_id = entry.value_ptr.*;
+            const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+            values[idx] = eval.Value{ .Node = node };
             idx += 1;
         }
 
@@ -1817,7 +1818,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
     const store = graph_store.getGlobalStore(allocator);
 
     // Track created nodes by variable name
-    var created_nodes = std.StringHashMap(*graph_store.Node).init(allocator);
+    var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
 
     // Create nodes from pattern
@@ -1847,11 +1848,9 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
                 }
             }
 
-            // Get the created node and store reference if it has a variable name
+            // Store node ID if it has a variable name
             if (node_pattern.name) |name| {
-                if (store.nodes.getPtr(node_id)) |new_node| {
-                    try created_nodes.put(name, new_node);
-                }
+                try created_nodes.put(name, node_id);
             }
         }
 
@@ -1861,12 +1860,10 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
             var left_node_id: u64 = undefined;
             if (hop.left.name) |left_name| {
                 if (created_nodes.get(left_name)) |existing| {
-                    left_node_id = existing.id;
+                    left_node_id = existing;
                 } else {
                     left_node_id = try store.createNode(hop.left.labels);
-                    if (store.nodes.getPtr(left_node_id)) |new_node| {
-                        try created_nodes.put(left_name, new_node);
-                    }
+                    try created_nodes.put(left_name, left_node_id);
                 }
             } else {
                 left_node_id = try store.createNode(hop.left.labels);
@@ -1897,12 +1894,10 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
             var right_node_id: u64 = undefined;
             if (hop.right.name) |right_name| {
                 if (created_nodes.get(right_name)) |existing| {
-                    right_node_id = existing.id;
+                    right_node_id = existing;
                 } else {
                     right_node_id = try store.createNode(hop.right.labels);
-                    if (store.nodes.getPtr(right_node_id)) |new_node| {
-                        try created_nodes.put(right_name, new_node);
-                    }
+                    try created_nodes.put(right_name, right_node_id);
                 }
             } else {
                 right_node_id = try store.createNode(hop.right.labels);
@@ -1972,8 +1967,10 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
         var idx: usize = 0;
         while (iter.next()) |entry| {
             names[idx] = entry.key_ptr.*;
-            // Convert node to Value (as a Node reference)
-            values[idx] = eval.Value{ .Node = entry.value_ptr.* };
+            // Look up node by ID from store
+            const node_id = entry.value_ptr.*;
+            const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+            values[idx] = eval.Value{ .Node = node };
             idx += 1;
         }
 
