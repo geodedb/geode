@@ -47,8 +47,12 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         mut_pr.deinit();
     }
 
-    // Load transaction session if exists
-    var transaction_session = txn_session.loadSession(allocator.*) catch null;
+    // Check if this program starts with START TRANSACTION (do this before loading session)
+    const is_start_transaction = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .StartTransaction;
+
+    // Load transaction session if exists, but NOT if we're starting a new transaction
+    // (starting a new transaction should clear any previous transaction state)
+    var transaction_session = if (!is_start_transaction) txn_session.loadSession(allocator.*) catch null else null;
     defer if (transaction_session) |*ts| ts.deinit(allocator.*);
 
     // Create session state for SESSION SET GRAPH support
@@ -63,9 +67,6 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         .session_state = &session_state,
         .transaction_state = if (transaction_session) |ts| ts.state else .None,
     };
-
-    // Check if this is a transaction control statement to handle session persistence
-    const is_start_transaction = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .StartTransaction;
     const is_commit = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .Commit;
     const is_rollback = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .Rollback;
 

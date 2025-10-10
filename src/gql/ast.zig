@@ -200,6 +200,8 @@ pub const Expr = union(enum) {
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
     // EXISTS predicate with subquery pattern
     Exists: struct { pattern: *GraphPattern },
+    // Label test: n:Label (checks if node has label)
+    HasLabel: struct { node: []const u8, label: []const u8 },
 };
 
 pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };

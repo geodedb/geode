@@ -592,10 +592,36 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         }
                         session.schema = try allocator.dupe(u8, schema.name);
                     },
-                    .Parameter => {
+                    .Parameter => |param| {
                         // Store parameter in session state
-                        // For now, we just acknowledge it
-                        // Full implementation would parse and store the parameter value
+                        const param_name = switch (param) {
+                            .GraphParam => |gp| gp.parameter_name.specification,
+                            .BindingTableParam => |btp| btp.parameter_name.specification,
+                            .ValueParam => |vp| vp.parameter_name.specification,
+                        };
+
+                        const param_value = switch (param) {
+                            .GraphParam => |gp| gp.initializer orelse "null",
+                            .BindingTableParam => |btp| btp.initializer orelse "null",
+                            .ValueParam => |vp| vp.initializer orelse "null",
+                        };
+
+                        // Check IF NOT EXISTS flag
+                        const if_not_exists = switch (param) {
+                            .GraphParam => |gp| gp.parameter_name.if_not_exists,
+                            .BindingTableParam => |btp| btp.parameter_name.if_not_exists,
+                            .ValueParam => |vp| vp.parameter_name.if_not_exists,
+                        };
+
+                        if (if_not_exists and session.parameters.contains(param_name)) {
+                            // Parameter already exists and IF NOT EXISTS is set, skip
+                        } else {
+                            // Store or update parameter
+                            try session.parameters.put(
+                                try allocator.dupe(u8, param_name),
+                                try allocator.dupe(u8, param_value),
+                            );
+                        }
                     },
                 }
             }
@@ -2071,11 +2097,20 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                     .Property => |prop| {
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
-                                // Simplified: just set to true for SET n.property = true patterns
-                                if (prop.value == .Bool) {
-                                    const prop_value = graph_store.PropertyValue{ .Bool = prop.value.Bool };
-                                    try store.setNodeProperty(node_id, prop.target.property, prop_value);
-                                }
+                                // Evaluate the property expression
+                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .names = &.{}, .values = &.{} });
+                                const prop_value = switch (value) {
+                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                    .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                    .Decimal => |d| blk: {
+                                        // Convert decimal to float for PropertyValue
+                                        const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
+                                        break :blk graph_store.PropertyValue{ .Float = fval };
+                                    },
+                                    else => graph_store.PropertyValue{ .Null = {} },
+                                };
+                                try store.setNodeProperty(node_id, prop.target.property, prop_value);
                             }
                         }
                     },
@@ -2115,11 +2150,20 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                     .Property => |prop| {
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
-                                // Simplified: just set to true for SET n.property = true patterns
-                                if (prop.value == .Bool) {
-                                    const prop_value = graph_store.PropertyValue{ .Bool = prop.value.Bool };
-                                    try store.setNodeProperty(node_id, prop.target.property, prop_value);
-                                }
+                                // Evaluate the property expression
+                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .names = &.{}, .values = &.{} });
+                                const prop_value = switch (value) {
+                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                    .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                    .Decimal => |d| blk: {
+                                        // Convert decimal to float for PropertyValue
+                                        const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
+                                        break :blk graph_store.PropertyValue{ .Float = fval };
+                                    },
+                                    else => graph_store.PropertyValue{ .Null = {} },
+                                };
+                                try store.setNodeProperty(node_id, prop.target.property, prop_value);
                             }
                         }
                     },

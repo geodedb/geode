@@ -1343,6 +1343,22 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             }
             break :blk_map Value{ .Map = map };
         },
+        .HasLabel => |label_test| blk_label: {
+            // Check if a node has a specific label
+            const node_val = env.get(label_test.node) orelse break :blk_label Value{ .Bool = false };
+
+            // Only nodes have labels
+            if (node_val != .Node) break :blk_label Value{ .Bool = false };
+
+            // Check if the node has the label
+            const node = node_val.Node;
+            for (node.labels) |node_label| {
+                if (std.mem.eql(u8, node_label, label_test.label)) {
+                    break :blk_label Value{ .Bool = true };
+                }
+            }
+            break :blk_label Value{ .Bool = false };
+        },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };

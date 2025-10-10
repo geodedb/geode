@@ -1347,6 +1347,12 @@ pub const Parser = struct {
             rp.* = rhs;
             return .{ .Contains = .{ .value = lp, .needle = rp } };
         }
+        // Label test: n:Label (only if left is an identifier)
+        if (self.cur.kind == .colon and left == .Ident) {
+            self.advance();
+            const label_token = try self.expectIdentifierOrKeyword();
+            return .{ .HasLabel = .{ .node = left.Ident.orig, .label = label_token.lexeme } };
+        }
         const op_kind = switch (self.cur.kind) {
             .eq => ast.BinOp.Eq,
             .ne => ast.BinOp.Ne,
@@ -3133,17 +3139,35 @@ pub const Parser = struct {
                 .clause_type = .{ .Schema = .{ .name = schema_name } },
             } };
         } else if (self.cur.kind == .GRAPH or self.cur.kind == .PROPERTY) {
-            // Parse [PROPERTY] GRAPH clause
-            const property_graph = if (self.cur.kind == .PROPERTY) blk: {
-                self.advance();
-                _ = try self.expect(.GRAPH);
-                break :blk true;
-            } else blk: {
-                self.advance(); // consume GRAPH
-                break :blk false;
-            };
+            // Check if this is a parameter clause (GRAPH $param = ...) or graph setting (GRAPH name)
+            const is_property = self.cur.kind == .PROPERTY;
+            if (is_property) self.advance();
 
-            // Parse graph expression
+            _ = try self.expect(.GRAPH);
+
+            // If next token is a parameter ($...), parse as GRAPH parameter clause
+            if (self.cur.kind == .dollar) {
+                const param_name = try self.parseSessionParameterName();
+                var initializer: ?[]const u8 = null;
+                if (self.cur.kind == .eq) {
+                    self.advance();
+                    // Parse the initializer expression - for now just capture the token
+                    if (self.cur.kind == .identifier or self.cur.kind == .string_lit or self.cur.kind == .integer_lit) {
+                        initializer = self.cur.lexeme;
+                        self.advance();
+                    }
+                }
+
+                return .{ .SessionSet = .{
+                    .clause_type = .{ .Parameter = .{ .GraphParam = .{
+                        .property_graph = is_property,
+                        .parameter_name = param_name,
+                        .initializer = initializer,
+                    } } },
+                } };
+            }
+
+            // Otherwise, parse as graph expression
             const graph_expr = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
                 const expr = self.cur.lexeme;
                 self.advance();
@@ -3154,7 +3178,7 @@ pub const Parser = struct {
 
             return .{ .SessionSet = .{
                 .clause_type = .{ .Graph = .{
-                    .property_graph = property_graph,
+                    .property_graph = is_property,
                     .expression = graph_expr,
                 } },
             } };
@@ -3182,10 +3206,7 @@ pub const Parser = struct {
             return .{ .SessionSet = .{
                 .clause_type = .{ .TimeZone = .{ .value = tz_value } },
             } };
-        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or
-            (self.cur.kind == .identifier and
-                (std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE") or
-                    std.ascii.eqlIgnoreCase(self.cur.lexeme, "VALUE"))))
+        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or self.cur.kind == .TABLE)
         {
             // Parse parameter clauses
             return .{ .SessionSet = .{
@@ -3207,27 +3228,34 @@ pub const Parser = struct {
         }
 
         // Parse reset arguments
-        if (self.cur.kind == .identifier) {
-            const arg = self.cur.lexeme;
-            if (std.ascii.eqlIgnoreCase(arg, "ALL")) {
+        if (self.cur.kind == .ALL) {
+            self.advance();
+            // Parse ALL PARAMETERS or ALL CHARACTERISTICS
+            if (self.cur.kind == .identifier) {
+                const type_arg = self.cur.lexeme;
                 self.advance();
-                // Parse ALL PARAMETERS or ALL CHARACTERISTICS
-                if (self.cur.kind == .identifier) {
-                    const type_arg = self.cur.lexeme;
-                    self.advance();
-                    if (std.ascii.eqlIgnoreCase(type_arg, "PARAMETERS")) {
-                        return .{ .SessionReset = .{
-                            .arguments = .{ .All = .Parameters },
-                        } };
-                    } else if (std.ascii.eqlIgnoreCase(type_arg, "CHARACTERISTICS")) {
-                        return .{ .SessionReset = .{
-                            .arguments = .{ .All = .Characteristics },
-                        } };
-                    }
+                if (std.ascii.eqlIgnoreCase(type_arg, "PARAMETERS")) {
+                    return .{ .SessionReset = .{
+                        .arguments = .{ .All = .Parameters },
+                    } };
+                } else if (std.ascii.eqlIgnoreCase(type_arg, "CHARACTERISTICS")) {
+                    return .{ .SessionReset = .{
+                        .arguments = .{ .All = .Characteristics },
+                    } };
                 }
+            }
+        } else if (self.cur.kind == .identifier) {
+            const arg = self.cur.lexeme;
+            if (std.ascii.eqlIgnoreCase(arg, "PARAMETERS")) {
+                // SESSION RESET PARAMETERS (equivalent to ALL PARAMETERS)
+                self.advance();
+                return .{ .SessionReset = .{
+                    .arguments = .{ .All = .Parameters },
+                } };
             } else if (std.ascii.eqlIgnoreCase(arg, "PARAMETER")) {
                 self.advance();
-                // Parse parameter specification
+                // Parse parameter specification (with $ prefix)
+                _ = try self.expect(.dollar); // Consume $
                 const param_spec = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
                     const spec = self.cur.lexeme;
                     self.advance();
@@ -3238,6 +3266,13 @@ pub const Parser = struct {
 
                 return .{ .SessionReset = .{
                     .arguments = .{ .Parameter = param_spec },
+                } };
+            } else if (std.ascii.eqlIgnoreCase(arg, "TIME")) {
+                // SESSION RESET TIME ZONE
+                self.advance(); // consume TIME
+                _ = try self.expect(.ZONE);
+                return .{ .SessionReset = .{
+                    .arguments = .TimeZone,
                 } };
             }
         } else if (self.cur.kind == .SCHEMA) {
@@ -3259,9 +3294,9 @@ pub const Parser = struct {
             return .{ .SessionReset = .{
                 .arguments = .{ .Graph = property_graph },
             } };
-        } else if (self.cur.kind == .time_lit) {
-            // Handle TIME ZONE in SESSION SET context
-            self.advance();
+        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME")) {
+            // Handle TIME ZONE
+            self.advance(); // consume TIME
             _ = try self.expect(.ZONE);
             return .{ .SessionReset = .{
                 .arguments = .TimeZone,
@@ -3280,7 +3315,7 @@ pub const Parser = struct {
             var initializer: ?[]const u8 = null;
             if (self.cur.kind == .eq) {
                 self.advance();
-                if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }
@@ -3290,20 +3325,21 @@ pub const Parser = struct {
                 .parameter_name = param_name,
                 .initializer = initializer,
             } };
-        } else if (self.cur.kind == .BINDING or
-            (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TABLE")))
+        } else if (self.cur.kind == .BINDING or self.cur.kind == .TABLE)
         {
             // [BINDING] TABLE
             if (self.cur.kind == .BINDING) {
                 self.advance();
+                _ = try self.expect(.TABLE);
+            } else {
+                self.advance(); // consume TABLE
             }
-            _ = try self.expect(.identifier); // TABLE
 
             const param_name = try self.parseSessionParameterName();
             var initializer: ?[]const u8 = null;
             if (self.cur.kind == .eq) {
                 self.advance();
-                if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }
@@ -3328,7 +3364,7 @@ pub const Parser = struct {
             var initializer: ?[]const u8 = null;
             if (self.cur.kind == .eq) {
                 self.advance();
-                if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }
@@ -3356,7 +3392,10 @@ pub const Parser = struct {
             if_not_exists = true;
         }
 
-        // Parse parameter specification
+        // Consume the $ token
+        _ = try self.expect(.dollar);
+
+        // Parse parameter specification (identifier after the $)
         const specification = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
             const spec = self.cur.lexeme;
             self.advance();

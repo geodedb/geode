@@ -258,6 +258,10 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
                     // Walk through the EXISTS pattern (note: patterns don't contain expressions directly)
                     _ = ex; // EXISTS pattern doesn't contain sub-expressions to walk
                 },
+                .HasLabel => |hl| {
+                    // Label test doesn't contain sub-expressions
+                    _ = hl;
+                },
                 else => {},
             }
         }
@@ -618,6 +622,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printGraphPattern(w, ex.pattern.*, 0);
             try w.print(" }}", .{});
         },
+        .HasLabel => |hl| try w.print("{s}:{s}", .{ hl.node, hl.label }),
         .SmallIntLit => |i| try w.print("{d}", .{i}),
         .BigIntLit => |i| try w.print("{d}", .{i}),
         .RealLit => |f| try w.print("{d}", .{f}),
