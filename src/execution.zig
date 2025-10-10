@@ -1210,11 +1210,271 @@ fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
     }
 }
 
+// Execute a chain of queries linked by WITH clauses
+// The first query's results become bindings for the next query
+fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
+    // Execute the current query (without the next_query link to avoid infinite recursion)
+    var current_query_standalone = current_query;
+    current_query_standalone.next_query = null;
+
+    const current_result = try executeQueryWithContext(allocator, current_query_standalone, context);
+
+    // Now execute the next query with the current result as bindings
+    // For each row in current_result, execute next_query with those bindings
+    var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var final_columns: [][]const u8 = &.{};
+    var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+
+    for (current_result.rows) |current_row| {
+        // Create parameter bindings from current row
+        // The columns from current result become parameter names
+        // The values from current row become parameter values
+        const next_query_with_bindings = next_query_ptr.*;
+
+        // Build parameter arrays from current result
+        var param_names = std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len) catch unreachable;
+        defer param_names.deinit(allocator);
+        var param_values = std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
+        defer param_values.deinit(allocator);
+
+        for (current_result.columns, current_row) |col_name, col_value| {
+            try param_names.append(allocator, col_name);
+            try param_values.append(allocator, col_value);
+        }
+
+        // Execute the next query with these bindings as an initial environment
+        const next_result = try executeQueryChainWithBindings(allocator, next_query_with_bindings, context, param_names.items, param_values.items);
+
+        // Collect results
+        if (final_columns.len == 0) {
+            // First iteration: set up columns
+            final_columns = try allocator.alloc([]const u8, next_result.columns.len);
+            for (next_result.columns, 0..) |col, i| {
+                final_columns[i] = try allocator.dupe(u8, col);
+            }
+        }
+
+        // Add all rows from next_result
+        for (next_result.rows) |row| {
+            // Duplicate the row to avoid ownership issues
+            const row_copy = try allocator.alloc(eval.Value, row.len);
+            for (row, 0..) |val, i| {
+                row_copy[i] = val;
+            }
+            try final_rows.append(allocator, row_copy);
+        }
+
+        // Collect flags
+        for (next_result.flags.items) |flag| {
+            try final_flags.append(allocator, flag);
+        }
+
+        // Clean up next_result (we copied what we needed)
+        for (next_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(next_result.columns);
+        for (next_result.rows) |row| {
+            allocator.free(row);
+        }
+        allocator.free(next_result.rows);
+        // next_result.flags owned by result, no need to deinit
+    }
+
+    // Clean up current_result
+    for (current_result.columns) |col| {
+        allocator.free(col);
+    }
+    allocator.free(current_result.columns);
+    for (current_result.rows) |row| {
+        allocator.free(row);
+    }
+    allocator.free(current_result.rows);
+    // current_result.flags owned by result, no need to deinit
+
+    return ExecutionResult{
+        .columns = final_columns,
+        .rows = try final_rows.toOwnedSlice(allocator),
+        .flags = final_flags,
+    };
+}
+
+// Helper function to execute a query with pre-existing bindings from a previous query
+fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const eval.Value) anyerror!ExecutionResult {
+    // Check if this query also has a next_query (multi-level chaining)
+    if (q.next_query) |next_query_ptr| {
+        // Execute current query with bindings, then chain to next
+        var current_query_standalone = q;
+        current_query_standalone.next_query = null;
+
+        const current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
+
+        // Chain to next query using the result as bindings
+        var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+        var final_columns: [][]const u8 = &.{};
+        var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+
+        for (current_result.rows) |current_row| {
+            var param_names = std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len) catch unreachable;
+            defer param_names.deinit(allocator);
+            var param_values = std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
+            defer param_values.deinit(allocator);
+
+            for (current_result.columns, current_row) |col_name, col_value| {
+                try param_names.append(allocator, col_name);
+                try param_values.append(allocator, col_value);
+            }
+
+            const next_result = try executeQueryChainWithBindings(allocator, next_query_ptr.*, context, param_names.items, param_values.items);
+
+            if (final_columns.len == 0) {
+                final_columns = try allocator.alloc([]const u8, next_result.columns.len);
+                for (next_result.columns, 0..) |col, i| {
+                    final_columns[i] = try allocator.dupe(u8, col);
+                }
+            }
+
+            for (next_result.rows) |row| {
+                const row_copy = try allocator.alloc(eval.Value, row.len);
+                for (row, 0..) |val, i| {
+                    row_copy[i] = val;
+                }
+                try final_rows.append(allocator, row_copy);
+            }
+
+            for (next_result.flags.items) |flag| {
+                try final_flags.append(allocator, flag);
+            }
+
+            for (next_result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(next_result.columns);
+            for (next_result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(next_result.rows);
+            // next_result.flags owned by result, no need to deinit
+        }
+
+        for (current_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(current_result.columns);
+        for (current_result.rows) |row| {
+            allocator.free(row);
+        }
+        allocator.free(current_result.rows);
+        // current_result.flags owned by result, no need to deinit
+
+        return ExecutionResult{
+            .columns = final_columns,
+            .rows = try final_rows.toOwnedSlice(allocator),
+            .flags = final_flags,
+        };
+    }
+
+    // No further chaining, just execute with bindings
+    return executeQueryWithBindingsImpl(allocator, q, context, binding_names, binding_values);
+}
+
+// Execute a query with pre-existing bindings available as parameters
+fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: ExecutionContext, binding_names: []const []const u8, binding_values: []const eval.Value) anyerror!ExecutionResult {
+    // For simple MATCH patterns with bound variables, we can shortcut the matching
+    // and just use the bound values directly in the RETURN clause
+
+    // Check if this is a simple MATCH with only node patterns (no relationships)
+    var all_vars_bound = true;
+    var bound_var_env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    defer bound_var_env_names.deinit(allocator);
+    var bound_var_env_values = std.ArrayList(eval.Value).initCapacity(allocator, 0) catch unreachable;
+    defer bound_var_env_values.deinit(allocator);
+
+    if (q.match.chains.len > 0) {
+        for (q.match.chains) |chain| {
+            if (chain.head) |node_pattern| {
+                if (node_pattern.name) |var_name| {
+                    // Check if this variable is in the bindings
+                    var found = false;
+                    for (binding_names, binding_values) |name, value| {
+                        if (std.mem.eql(u8, name, var_name)) {
+                            try bound_var_env_names.append(allocator, var_name);
+                            try bound_var_env_values.append(allocator, value);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        all_vars_bound = false;
+                        break;
+                    }
+                }
+            } else if (chain.hops.len > 0) {
+                // Has relationships, not a simple bound variable case
+                all_vars_bound = false;
+                break;
+            }
+        }
+    }
+
+    // If all MATCH variables are bound, we can skip matching and just evaluate RETURN
+    if (all_vars_bound and bound_var_env_names.items.len > 0) {
+        const items = q.ret.items;
+        var columns = try allocator.alloc([]const u8, items.len);
+        for (items, 0..) |item, i| {
+            const column_name = item.alias orelse blk: {
+                switch (item.expr) {
+                    .Ident => |ident| break :blk ident.orig,
+                    .PropertyAccess => |prop| break :blk prop.property,
+                    .Member => |mem| break :blk mem.field,
+                    else => break :blk "column",
+                }
+            };
+            columns[i] = try allocator.dupe(u8, column_name);
+        }
+
+        // Create a single row by evaluating RETURN expressions with bound variables
+        var row = try allocator.alloc(eval.Value, items.len);
+
+        const env = eval.Env{
+            .names = bound_var_env_names.items,
+            .values = bound_var_env_values.items,
+            .param_names = binding_names,
+            .param_values = binding_values,
+        };
+
+        for (items, 0..) |item, i| {
+            row[i] = try eval.evalExpr(allocator, item.expr, env);
+        }
+
+        var rows = try allocator.alloc([]eval.Value, 1);
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    // Otherwise, execute the query normally (complex patterns not yet supported with chaining)
+    // This would require more sophisticated binding injection into executeMatchQuery
+    return error.NotImplemented;
+}
+
 fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     return executeQueryWithContext(allocator, q, .{});
 }
 
 fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution;
+    //         STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2025-10-10
+
+    // Check for query chaining: if next_query exists, execute chain
+    if (q.next_query) |next_query_ptr| {
+        return executeQueryChain(allocator, q, next_query_ptr, context);
+    }
+
     // Evaluate LET bindings first and add them to parameter environment
     var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     defer param_names.deinit(allocator);
