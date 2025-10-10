@@ -113,7 +113,7 @@ tests:
   # Authentication testing
   - name: "authenticated-query-admin"
     description: "Execute query as admin user"
-    args: ["query", "--server", "${server_address}", "--user", "admin", "--password", "${secret:admin_password}", "RETURN 'authenticated' AS status"]
+    args: ["query", "--no-quic", "--user", "admin", "--password", "${secret:admin_password}", "RETURN 'authenticated' AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -123,7 +123,7 @@ tests:
 
   - name: "authenticated-query-user"
     description: "Execute query as regular user"
-    args: ["query", "--server", "${server_address}", "--user", "testuser", "--password", "${secret:user_password}", "RETURN 'user_query' AS status"]
+    args: ["query", "--no-quic", "--user", "testuser", "--password", "${secret:user_password}", "RETURN 'user_query' AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -133,14 +133,14 @@ tests:
 
   - name: "unauthenticated-query-failure"
     description: "Attempt query without authentication (should fail)"
-    args: ["query", "--server", "${server_address}", "RETURN 'should_fail' AS status"]
+    args: ["query", "--no-quic", "RETURN 'should_fail' AS status"]
     expect:
       exit_code: 1
     tags: ["auth", "query", "failure"]
 
   - name: "wrong-password-failure"
     description: "Attempt query with wrong password (should fail)"
-    args: ["query", "--server", "${server_address}", "--user", "testuser", "--password", "wrongpassword", "RETURN 'should_fail' AS status"]
+    args: ["query", "--no-quic", "--user", "testuser", "--password", "wrongpassword", "RETURN 'should_fail' AS status"]
     expect:
       exit_code: 1
     tags: ["auth", "password", "failure"]
@@ -165,7 +165,7 @@ tests:
   # Audit logging testing
   - name: "enable-audit-logging"
     description: "Test audit logging functionality"
-    args: ["query", "--server", "${server_address}", "--user", "admin", "--password", "${secret:admin_password}", "--audit", "CREATE (n:AuditTest {created_by: 'admin'}) RETURN n"]
+    args: ["query", "--no-quic", "--user", "admin", "--password", "${secret:admin_password}", "--audit", "CREATE (n:AuditTest {created_by: 'admin'}) RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -175,7 +175,7 @@ tests:
   # TLS/SSL testing
   - name: "tls-connection-test"
     description: "Test TLS connection (should work with --tls-verify=false)"
-    args: ["query", "--server", "${server_address}", "--user", "admin", "--password", "${secret:admin_password}", "--tls-verify=false", "RETURN 'tls_test' AS result"]
+    args: ["query", "--no-quic", "--user", "admin", "--password", "${secret:admin_password}", "--tls-verify=false", "RETURN 'tls_test' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -245,14 +245,14 @@ tests:
   # Access control testing
   - name: "test-read-only-access"
     description: "Test read-only access restrictions"
-    args: ["query", "--server", "${server_address}", "--user", "testuser", "--password", "${secret:user_password}", "CREATE (n:Forbidden) RETURN n"]
+    args: ["query", "--no-quic", "--user", "testuser", "--password", "${secret:user_password}", "CREATE (n:Forbidden) RETURN n"]
     expect:
       exit_code: 1  # Should fail due to insufficient permissions
     tags: ["auth", "access", "readonly"]
 
   - name: "test-admin-full-access"
     description: "Test admin full access"
-    args: ["query", "--server", "${server_address}", "--user", "admin", "--password", "${secret:admin_password}", "CREATE (n:AdminTest {created: timestamp()}) RETURN n"]
+    args: ["query", "--no-quic", "--user", "admin", "--password", "${secret:admin_password}", "CREATE (n:AdminTest {created: timestamp()}) RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -262,7 +262,7 @@ tests:
   # Cleanup
   - name: "cleanup-test-data"
     description: "Clean up security test data"
-    args: ["query", "--server", "${server_address}", "--user", "admin", "--password", "${secret:admin_password}", "MATCH (n) WHERE n:AuditTest OR n:AdminTest DETACH DELETE n"]
+    args: ["query", "--no-quic", "--user", "admin", "--password", "${secret:admin_password}", "MATCH (n) WHERE n:AuditTest OR n:AdminTest DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup"]

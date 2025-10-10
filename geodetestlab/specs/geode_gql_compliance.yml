@@ -22,8 +22,7 @@ tests:
     description: "Create comprehensive test schema with all data types"
     args: 
       - "query"
-      - "--server" 
-      - "${server_address}"
+      - "--no-quic"
       - |
         CREATE 
           (alice:Person {name: 'Alice', age: 30, email: 'alice@example.com', active: true, salary: 75000.50, tags: ['developer', 'team-lead'], metadata: {department: 'Engineering', level: 'Senior'}}),
@@ -51,7 +50,7 @@ tests:
 
   - name: "keywords-basic-match-where-return"
     description: "Test basic keywords: MATCH, WHERE, RETURN"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) WHERE p.age > 25 RETURN p.name AS name, p.age AS age ORDER BY p.age"]
+    args: ["query", "--no-quic", "MATCH (p:Person) WHERE p.age > 25 RETURN p.name AS name, p.age AS age ORDER BY p.age"]
     expect:
       exit_code: 0
       geode_query:
@@ -61,7 +60,7 @@ tests:
 
   - name: "keywords-create-delete"
     description: "Test CREATE and DELETE keywords"
-    args: ["query", "--server", "${server_address}", "CREATE (temp:TempNode {id: 999}) RETURN temp.id AS temp_id"]
+    args: ["query", "--no-quic", "CREATE (temp:TempNode {id: 999}) RETURN temp.id AS temp_id"]
     expect:
       exit_code: 0
       geode_query:
@@ -71,7 +70,7 @@ tests:
 
   - name: "keywords-delete-temp"
     description: "Test DELETE keyword"
-    args: ["query", "--server", "${server_address}", "MATCH (temp:TempNode {id: 999}) DELETE temp"]
+    args: ["query", "--no-quic", "MATCH (temp:TempNode {id: 999}) DELETE temp"]
     expect:
       exit_code: 0
     tags: ["keywords", "delete"]
@@ -82,7 +81,7 @@ tests:
 
   - name: "aggregation-count-functions"
     description: "Test COUNT aggregation functions"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN COUNT(*) AS total_count, COUNT(p.name) AS name_count, COUNT(DISTINCT p.metadata.department) AS dept_count"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN COUNT(*) AS total_count, COUNT(p.name) AS name_count, COUNT(DISTINCT p.metadata.department) AS dept_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -92,7 +91,7 @@ tests:
 
   - name: "aggregation-sum-avg-min-max"
     description: "Test SUM, AVG, MIN, MAX aggregation functions"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN SUM(p.age) AS total_age, AVG(p.salary) AS avg_salary, MIN(p.age) AS min_age, MAX(p.salary) AS max_salary"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN SUM(p.age) AS total_age, AVG(p.salary) AS avg_salary, MIN(p.age) AS min_age, MAX(p.salary) AS max_salary"]
     expect:
       exit_code: 0
       geode_query:
@@ -102,7 +101,7 @@ tests:
 
   - name: "aggregation-group-by-having"
     description: "Test GROUP BY and HAVING with aggregations"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.metadata.department AS dept, COUNT(p) AS count, AVG(p.age) AS avg_age GROUP BY p.metadata.department HAVING COUNT(p) > 1 ORDER BY dept"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.metadata.department AS dept, COUNT(p) AS count, AVG(p.age) AS avg_age GROUP BY p.metadata.department HAVING COUNT(p) > 1 ORDER BY dept"]
     expect:
       exit_code: 0
       geode_query:
@@ -115,14 +114,14 @@ tests:
 
   - name: "set-properties-basic"
     description: "Test SET properties without RETURN (new compliance feature)"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person {name: 'Alice'}) SET p.updated = true, p.last_modified = 'today'"]
+    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) SET p.updated = true, p.last_modified = 'today'"]
     expect:
       exit_code: 0
     tags: ["set", "properties"]
 
   - name: "set-properties-with-return"
     description: "Test SET properties with RETURN"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person {name: 'Alice'}) SET p.version = 1.0 RETURN p.name AS name, p.version AS version, p.updated AS updated"]
+    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) SET p.version = 1.0 RETURN p.name AS name, p.version AS version, p.updated AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -132,14 +131,14 @@ tests:
 
   - name: "remove-properties-basic"
     description: "Test REMOVE properties without RETURN (new compliance feature)"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person {name: 'Alice'}) REMOVE p.last_modified"]
+    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) REMOVE p.last_modified"]
     expect:
       exit_code: 0
     tags: ["remove", "properties"]
 
   - name: "remove-properties-with-return"
     description: "Test REMOVE properties with RETURN"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person {name: 'Alice'}) REMOVE p.updated RETURN p.name AS name, p.updated AS updated, p.version AS version"]
+    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) REMOVE p.updated RETURN p.name AS name, p.updated AS updated, p.version AS version"]
     expect:
       exit_code: 0
       geode_query:
@@ -153,7 +152,7 @@ tests:
 
   - name: "detach-delete-setup"
     description: "Setup nodes for DETACH DELETE testing"
-    args: ["query", "--server", "${server_address}", "CREATE (isolated:Person {name: 'Isolated', type: 'temp'})-[:CONNECTED_TO]->(target:Node {name: 'Target', type: 'temp'}) RETURN isolated.name AS created"]
+    args: ["query", "--no-quic", "CREATE (isolated:Person {name: 'Isolated', type: 'temp'})-[:CONNECTED_TO]->(target:Node {name: 'Target', type: 'temp'}) RETURN isolated.name AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -163,14 +162,14 @@ tests:
 
   - name: "detach-delete-execution"
     description: "Test DETACH DELETE functionality"
-    args: ["query", "--server", "${server_address}", "MATCH (n {type: 'temp'}) DETACH DELETE n"]
+    args: ["query", "--no-quic", "MATCH (n {type: 'temp'}) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["detach", "delete"]
 
   - name: "detach-delete-verify"
     description: "Verify DETACH DELETE worked"
-    args: ["query", "--server", "${server_address}", "MATCH (n {type: 'temp'}) RETURN count(n) AS remaining"]
+    args: ["query", "--no-quic", "MATCH (n {type: 'temp'}) RETURN count(n) AS remaining"]
     expect:
       exit_code: 0
       geode_query:
@@ -184,7 +183,7 @@ tests:
 
   - name: "string-concatenation-operator"
     description: "Test string concatenation operator (||)"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, p.name || ' - ' || p.metadata.department AS full_title ORDER BY p.name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, p.name || ' - ' || p.metadata.department AS full_title ORDER BY p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -194,7 +193,7 @@ tests:
 
   - name: "string-predicates"
     description: "Test STARTS WITH, ENDS WITH, CONTAINS predicates"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) WHERE p.email STARTS WITH 'alice' OR p.email ENDS WITH 'example.com' OR p.name CONTAINS 'har' RETURN p.name AS name, p.email AS email ORDER BY p.name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) WHERE p.email STARTS WITH 'alice' OR p.email ENDS WITH 'example.com' OR p.name CONTAINS 'har' RETURN p.name AS name, p.email AS email ORDER BY p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -203,7 +202,7 @@ tests:
 
   - name: "string-functions-comprehensive"
     description: "Test comprehensive string functions"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, length(p.name) AS name_length, upper(p.name) AS upper_name, lower(p.email) AS lower_email, substring(p.email, 0, 5) AS email_prefix, replace(p.name, 'Alice', 'Alicia') AS replaced_name ORDER BY p.name LIMIT 2"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, length(p.name) AS name_length, upper(p.name) AS upper_name, lower(p.email) AS lower_email, substring(p.email, 0, 5) AS email_prefix, replace(p.name, 'Alice', 'Alicia') AS replaced_name ORDER BY p.name LIMIT 2"]
     expect:
       exit_code: 0
       geode_query:
@@ -217,7 +216,7 @@ tests:
 
   - name: "math-functions-comprehensive"
     description: "Test comprehensive mathematical functions"
-    args: ["query", "--server", "${server_address}", "RETURN abs(-5) AS abs_val, sqrt(16) AS sqrt_val, ceil(3.2) AS ceil_val, floor(3.8) AS floor_val, round(3.5) AS round_val, sign(-10) AS sign_val"]
+    args: ["query", "--no-quic", "RETURN abs(-5) AS abs_val, sqrt(16) AS sqrt_val, ceil(3.2) AS ceil_val, floor(3.8) AS floor_val, round(3.5) AS round_val, sign(-10) AS sign_val"]
     expect:
       exit_code: 0
       geode_query:
@@ -227,7 +226,7 @@ tests:
 
   - name: "list-functions"
     description: "Test list manipulation functions"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, size(p.tags) AS tag_count, head(p.tags) AS first_tag, tail(p.tags) AS remaining_tags, last(p.tags) AS last_tag ORDER BY p.name LIMIT 2"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, size(p.tags) AS tag_count, head(p.tags) AS first_tag, tail(p.tags) AS remaining_tags, last(p.tags) AS last_tag ORDER BY p.name LIMIT 2"]
     expect:
       exit_code: 0
       geode_query:
@@ -237,7 +236,7 @@ tests:
 
   - name: "type-functions"
     description: "Test type checking functions"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, type(p.age) AS age_type, exists(p.email) AS has_email, toString(p.age) AS age_string ORDER BY p.name LIMIT 2"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, type(p.age) AS age_type, exists(p.email) AS has_email, toString(p.age) AS age_string ORDER BY p.name LIMIT 2"]
     expect:
       exit_code: 0
       geode_query:
@@ -253,7 +252,7 @@ tests:
 
   - name: "variable-length-paths-basic"
     description: "Test basic variable-length path patterns"
-    args: ["query", "--server", "${server_address}", "MATCH (p1:Person)-[*1..2]->(p2:Person) RETURN p1.name AS from, p2.name AS to"]
+    args: ["query", "--no-quic", "MATCH (p1:Person)-[*1..2]->(p2:Person) RETURN p1.name AS from, p2.name AS to"]
     expect:
       exit_code: 0
       geode_query:
@@ -262,7 +261,7 @@ tests:
 
   - name: "variable-length-paths-unbounded"
     description: "Test unbounded variable-length paths"
-    args: ["query", "--server", "${server_address}", "MATCH (p1:Person)-[*..3]->(p2:Person) WHERE p1.name = 'Alice' RETURN p1.name AS from, p2.name AS to"]
+    args: ["query", "--no-quic", "MATCH (p1:Person)-[*..3]->(p2:Person) WHERE p1.name = 'Alice' RETURN p1.name AS from, p2.name AS to"]
     expect:
       exit_code: 0
       geode_query:
@@ -271,7 +270,7 @@ tests:
 
   - name: "path-variable-assignment"
     description: "Test path variable assignment for multi-hop patterns"
-    args: ["query", "--server", "${server_address}", "MATCH path = (p1:Person)-[:KNOWS]->(p2:Person) RETURN p1.name AS from, p2.name AS to, length(path) AS path_length"]
+    args: ["query", "--no-quic", "MATCH path = (p1:Person)-[:KNOWS]->(p2:Person) RETURN p1.name AS from, p2.name AS to, length(path) AS path_length"]
     expect:
       exit_code: 0
       geode_query:
@@ -284,14 +283,14 @@ tests:
 
   - name: "session-set-graph"
     description: "Test SET SESSION GRAPH functionality"
-    args: ["query", "--server", "${server_address}", "SET SESSION GRAPH = 'test_graph'"]
+    args: ["query", "--no-quic", "SET SESSION GRAPH = 'test_graph'"]
     expect:
       exit_code: 0
     tags: ["session", "management"]
 
   - name: "use-graph-statement"
     description: "Test USE GRAPH statement"
-    args: ["query", "--server", "${server_address}", "USE GRAPH default"]
+    args: ["query", "--no-quic", "USE GRAPH default"]
     expect:
       exit_code: 0
     tags: ["session", "use"]
@@ -302,28 +301,28 @@ tests:
 
   - name: "transaction-basic-flow"
     description: "Test basic transaction flow"
-    args: ["query", "--server", "${server_address}", "START TRANSACTION"]
+    args: ["query", "--no-quic", "START TRANSACTION"]
     expect:
       exit_code: 0
     tags: ["transaction", "start"]
 
   - name: "transaction-commit"
     description: "Test transaction commit"
-    args: ["query", "--server", "${server_address}", "COMMIT"]
+    args: ["query", "--no-quic", "COMMIT"]
     expect:
       exit_code: 0
     tags: ["transaction", "commit"]
 
   - name: "transaction-rollback-test"
     description: "Test transaction rollback"
-    args: ["query", "--server", "${server_address}", "START TRANSACTION"]
+    args: ["query", "--no-quic", "START TRANSACTION"]
     expect:
       exit_code: 0
     tags: ["transaction", "rollback-setup"]
 
   - name: "transaction-rollback-execute"
     description: "Execute transaction rollback"
-    args: ["query", "--server", "${server_address}", "ROLLBACK"]
+    args: ["query", "--no-quic", "ROLLBACK"]
     expect:
       exit_code: 0
     tags: ["transaction", "rollback"]
@@ -334,7 +333,7 @@ tests:
 
   - name: "merge-basic"
     description: "Test basic MERGE operations"
-    args: ["query", "--server", "${server_address}", "MERGE (p:Person {email: 'new@example.com'}) ON CREATE SET p.name = 'NewPerson', p.created = true ON MATCH SET p.accessed = true RETURN p.name AS name, p.email AS email"]
+    args: ["query", "--no-quic", "MERGE (p:Person {email: 'new@example.com'}) ON CREATE SET p.name = 'NewPerson', p.created = true ON MATCH SET p.accessed = true RETURN p.name AS name, p.email AS email"]
     expect:
       exit_code: 0
       geode_query:
@@ -344,7 +343,7 @@ tests:
 
   - name: "merge-existing"
     description: "Test MERGE on existing data"
-    args: ["query", "--server", "${server_address}", "MERGE (p:Person {email: 'alice@example.com'}) ON CREATE SET p.new_field = 'created' ON MATCH SET p.matched = true RETURN p.name AS name, p.matched AS was_matched"]
+    args: ["query", "--no-quic", "MERGE (p:Person {email: 'alice@example.com'}) ON CREATE SET p.new_field = 'created' ON MATCH SET p.matched = true RETURN p.name AS name, p.matched AS was_matched"]
     expect:
       exit_code: 0
       geode_query:
@@ -358,7 +357,7 @@ tests:
 
   - name: "with-clause-projection"
     description: "Test WITH clause for query chaining"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WITH p.name AS person_name, c.name AS company_name WHERE company_name = 'TechCorp' RETURN person_name AS employee, company_name AS employer ORDER BY employee"]
+    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WITH p.name AS person_name, c.name AS company_name WHERE company_name = 'TechCorp' RETURN person_name AS employee, company_name AS employer ORDER BY employee"]
     expect:
       exit_code: 0
       geode_query:
@@ -367,7 +366,7 @@ tests:
 
   - name: "distinct-operations"
     description: "Test DISTINCT operations"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN DISTINCT p.metadata.department AS department ORDER BY department"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN DISTINCT p.metadata.department AS department ORDER BY department"]
     expect:
       exit_code: 0
       geode_query:
@@ -376,7 +375,7 @@ tests:
 
   - name: "union-operations"
     description: "Test UNION operations"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, 'Person' AS type UNION MATCH (c:Company) RETURN c.name AS name, 'Company' AS type ORDER BY name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, 'Person' AS type UNION MATCH (c:Company) RETURN c.name AS name, 'Company' AS type ORDER BY name"]
     expect:
       exit_code: 0
       geode_query:
@@ -385,7 +384,7 @@ tests:
 
   - name: "complex-pattern-matching"
     description: "Test complex graph patterns"
-    args: ["query", "--server", "${server_address}", "MATCH (p1:Person)-[:KNOWS]->(p2:Person), (p2)-[:WORKS_FOR]->(c:Company) WHERE p1.age > 25 AND c.founded < 2015 RETURN p1.name AS person1, p2.name AS person2, c.name AS company"]
+    args: ["query", "--no-quic", "MATCH (p1:Person)-[:KNOWS]->(p2:Person), (p2)-[:WORKS_FOR]->(c:Company) WHERE p1.age > 25 AND c.founded < 2015 RETURN p1.name AS person1, p2.name AS person2, c.name AS company"]
     expect:
       exit_code: 0
       geode_query:
@@ -398,14 +397,14 @@ tests:
 
   - name: "call-basic-procedure"
     description: "Test basic CALL procedure"
-    args: ["query", "--server", "${server_address}", "CALL db.labels()"]
+    args: ["query", "--no-quic", "CALL db.labels()"]
     expect:
       exit_code: 0
     tags: ["call", "procedure"]
 
   - name: "call-with-yield"
     description: "Test CALL with YIELD clause"
-    args: ["query", "--server", "${server_address}", "CALL db.labels() YIELD label RETURN label ORDER BY label"]
+    args: ["query", "--no-quic", "CALL db.labels() YIELD label RETURN label ORDER BY label"]
     expect:
       exit_code: 0
       geode_query:
@@ -418,7 +417,7 @@ tests:
 
   - name: "comparison-operators"
     description: "Test all comparison operators"
-    args: ["query", "--server", "${server_address}", "RETURN 1 = 1 AS equals, 2 <> 3 AS not_equals, 3 < 4 AS less_than, 4 <= 4 AS less_equal, 5 > 4 AS greater, 5 >= 5 AS greater_equal"]
+    args: ["query", "--no-quic", "RETURN 1 = 1 AS equals, 2 <> 3 AS not_equals, 3 < 4 AS less_than, 4 <= 4 AS less_equal, 5 > 4 AS greater, 5 >= 5 AS greater_equal"]
     expect:
       exit_code: 0
       geode_query:
@@ -428,7 +427,7 @@ tests:
 
   - name: "logical-operators"
     description: "Test logical operators"
-    args: ["query", "--server", "${server_address}", "RETURN true AND false AS and_result, true OR false AS or_result, NOT true AS not_result, true XOR false AS xor_result"]
+    args: ["query", "--no-quic", "RETURN true AND false AS and_result, true OR false AS or_result, NOT true AS not_result, true XOR false AS xor_result"]
     expect:
       exit_code: 0
       geode_query:
@@ -438,7 +437,7 @@ tests:
 
   - name: "arithmetic-operators"
     description: "Test arithmetic operators"
-    args: ["query", "--server", "${server_address}", "RETURN 10 + 5 AS addition, 10 - 3 AS subtraction, 4 * 6 AS multiplication, 15 / 3 AS division, 17 % 5 AS modulo"]
+    args: ["query", "--no-quic", "RETURN 10 + 5 AS addition, 10 - 3 AS subtraction, 4 * 6 AS multiplication, 15 / 3 AS division, 17 % 5 AS modulo"]
     expect:
       exit_code: 0
       geode_query:
@@ -448,7 +447,7 @@ tests:
 
   - name: "null-handling"
     description: "Test NULL handling operations"
-    args: ["query", "--server", "${server_address}", "RETURN null IS NULL AS is_null, 'value' IS NOT NULL AS not_null, null IN [1, 2, null] AS in_with_null"]
+    args: ["query", "--no-quic", "RETURN null IS NULL AS is_null, 'value' IS NOT NULL AS not_null, null IN [1, 2, null] AS in_with_null"]
     expect:
       exit_code: 0
       geode_query:
@@ -462,7 +461,7 @@ tests:
 
   - name: "primitive-data-types"
     description: "Test primitive data types"
-    args: ["query", "--server", "${server_address}", "RETURN true AS boolean_val, 42 AS integer_val, 3.14159 AS float_val, 'hello world' AS string_val, null AS null_val"]
+    args: ["query", "--no-quic", "RETURN true AS boolean_val, 42 AS integer_val, 3.14159 AS float_val, 'hello world' AS string_val, null AS null_val"]
     expect:
       exit_code: 0
       geode_query:
@@ -472,7 +471,7 @@ tests:
 
   - name: "collection-data-types"
     description: "Test collection data types"
-    args: ["query", "--server", "${server_address}", "RETURN [1, 2, 3, 4, 5] AS list_val, {name: 'Alice', age: 30, active: true} AS map_val"]
+    args: ["query", "--no-quic", "RETURN [1, 2, 3, 4, 5] AS list_val, {name: 'Alice', age: 30, active: true} AS map_val"]
     expect:
       exit_code: 0
       geode_query:
@@ -482,7 +481,7 @@ tests:
 
   - name: "temporal-data-types"
     description: "Test temporal data types"
-    args: ["query", "--server", "${server_address}", "RETURN date('2024-01-15') AS date_val, datetime('2024-01-15T14:30:00') AS datetime_val, time('14:30:00') AS time_val"]
+    args: ["query", "--no-quic", "RETURN date('2024-01-15') AS date_val, datetime('2024-01-15T14:30:00') AS datetime_val, time('14:30:00') AS time_val"]
     expect:
       exit_code: 0
       geode_query:
@@ -496,7 +495,7 @@ tests:
 
   - name: "case-expressions"
     description: "Test CASE expressions"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, CASE WHEN p.age < 30 THEN 'Young' WHEN p.age < 35 THEN 'Middle' ELSE 'Senior' END AS age_category ORDER BY p.name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, CASE WHEN p.age < 30 THEN 'Young' WHEN p.age < 35 THEN 'Middle' ELSE 'Senior' END AS age_category ORDER BY p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -506,7 +505,7 @@ tests:
 
   - name: "optional-match-nulls"
     description: "Test OPTIONAL MATCH with NULL handling"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) OPTIONAL MATCH (p)-[r:MANAGES]->(subordinate:Person) RETURN p.name AS manager, subordinate.name AS subordinate_name ORDER BY p.name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) OPTIONAL MATCH (p)-[r:MANAGES]->(subordinate:Person) RETURN p.name AS manager, subordinate.name AS subordinate_name ORDER BY p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -516,7 +515,7 @@ tests:
 
   - name: "order-by-nulls-handling"
     description: "Test ORDER BY with NULLS FIRST/LAST"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(sub) RETURN p.name AS person, sub.name AS manages ORDER BY manages NULLS FIRST, p.name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(sub) RETURN p.name AS person, sub.name AS manages ORDER BY manages NULLS FIRST, p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -529,7 +528,7 @@ tests:
 
   - name: "large-result-pagination"
     description: "Test pagination with LIMIT and OFFSET"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY p.age, p.name LIMIT 2 OFFSET 1"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY p.age, p.name LIMIT 2 OFFSET 1"]
     expect:
       exit_code: 0
       geode_query:
@@ -539,14 +538,14 @@ tests:
 
   - name: "explain-query-plan"
     description: "Test EXPLAIN functionality"
-    args: ["query", "--server", "${server_address}", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name"]
+    args: ["query", "--no-quic", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name"]
     expect:
       exit_code: 0
     tags: ["explain", "optimization"]
 
   - name: "profile-query-execution"
     description: "Test PROFILE functionality"
-    args: ["query", "--server", "${server_address}", "PROFILE MATCH (p:Person) RETURN count(p) AS person_count"]
+    args: ["query", "--no-quic", "PROFILE MATCH (p:Person) RETURN count(p) AS person_count"]
     expect:
       exit_code: 0
     tags: ["profile", "performance"]
@@ -557,14 +556,14 @@ tests:
 
   - name: "syntax-error-handling"
     description: "Test proper handling of syntax errors"
-    args: ["query", "--server", "${server_address}", "MATCH (n:) RETURN n"]
+    args: ["query", "--no-quic", "MATCH (n:) RETURN n"]
     expect:
       exit_code: 1
     tags: ["error", "syntax"]
 
   - name: "type-mismatch-handling"
     description: "Test type mismatch error handling"
-    args: ["query", "--server", "${server_address}", "RETURN 'string' + 123"]
+    args: ["query", "--no-quic", "RETURN 'string' + 123"]
     expect:
       exit_code: 1
     tags: ["error", "types"]
@@ -575,7 +574,7 @@ tests:
 
   - name: "iso-compliance-verification"
     description: "Run internal GQL compliance test"
-    args: ["query", "--server", "${server_address}", "RETURN 'GQL ISO/IEC 39075:2024 Compliance: 98.6%' AS compliance_status"]
+    args: ["query", "--no-quic", "RETURN 'GQL ISO/IEC 39075:2024 Compliance: 98.6%' AS compliance_status"]
     expect:
       exit_code: 0
       geode_query:
@@ -589,14 +588,14 @@ tests:
 
   - name: "cleanup-test-data"
     description: "Clean up all test data"
-    args: ["query", "--server", "${server_address}", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "--no-quic", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup"]
 
   - name: "verify-complete-cleanup"
     description: "Verify all data is cleaned up"
-    args: ["query", "--server", "${server_address}", "MATCH (n) RETURN count(n) AS remaining_nodes"]
+    args: ["query", "--no-quic", "MATCH (n) RETURN count(n) AS remaining_nodes"]
     expect:
       exit_code: 0
       geode_query:

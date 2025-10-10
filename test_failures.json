@@ -1,214 +1,610 @@
 [
   {
-    "suite": "geode-current-capabilities",
-    "passed": 10,
-    "failed": 17,
+    "suite": "GQL Type System Comprehensive Tests",
+    "passed": 2,
+    "failed": 50,
     "skipped": 0,
-    "total": 27,
+    "total": 52,
     "failures": [
       {
-        "test": "create-with-return",
+        "test": "type-boolean-true",
         "args": [
           "query",
-          "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n.name, n.age",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN true AS bool_value"
         ],
-        "reason": "Pattern not found: 'Alice'",
-        "stdout": "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"created\",\"type\":\"INT\"}]}}\n{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"rows\":[{\"created\":1}]}}\n",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
-      },
-      {
-        "test": "delete-nodes",
-        "args": [
-          "query",
-          "MATCH (n:Test) DELETE n",
-          "--format",
-          "json"
-        ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"RETURN\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "set-node-property",
+        "test": "type-boolean-false",
         "args": [
           "query",
-          "CREATE (n:Test {value: 1}) WITH n SET n.updated = true RETURN n",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN false AS bool_value"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"property key\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "remove-property",
+        "test": "type-null",
         "args": [
           "query",
-          "CREATE (n:Test {a: 1, b: 2}) WITH n REMOVE n.b RETURN n",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN null AS null_value"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "update-multiple-properties",
+        "test": "type-integer-positive",
         "args": [
           "query",
-          "CREATE (n:Test {x: 1}) WITH n SET n.x = 2, n.y = 3 RETURN n",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 42 AS int_value"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "merge-pattern",
+        "test": "type-integer-negative",
         "args": [
           "query",
-          "MERGE (n:Person {name: 'Unique'}) RETURN n",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN -123 AS neg_int_value"
         ],
-        "reason": "Pattern not found: 'Unique'",
-        "stdout": "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"created\",\"type\":\"BOOL\"},{\"name\":\"matched\",\"type\":\"BOOL\"}]}}\n{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"rows\":[{\"created\":true,\"matched\":false}]}}\n",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
-      },
-      {
-        "test": "merge-with-on-match",
-        "args": [
-          "query",
-          "MERGE (n:Person {name: 'Test'}) ON MATCH SET n.updated = true RETURN n",
-          "--format",
-          "json"
-        ],
-        "reason": "Pattern not found: 'updated'",
-        "stdout": "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"created\",\"type\":\"BOOL\"},{\"name\":\"matched\",\"type\":\"BOOL\"}]}}\n{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"rows\":[{\"created\":true,\"matched\":false}]}}\n",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
-      },
-      {
-        "test": "multiple-creates",
-        "args": [
-          "query",
-          "CREATE (n1:Number {value: 1}), (n2:Number {value: 2}), (n3:Number {value: 3}) RETURN 3 AS created",
-          "--format",
-          "json"
-        ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"property key\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "call-procedure",
+        "test": "type-integer-zero",
         "args": [
           "query",
-          "CALL db.labels() YIELD label RETURN label",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 0 AS zero_value"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "begin-transaction",
+        "test": "type-integer-large",
         "args": [
           "query",
-          "BEGIN",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 9223372036854775807 AS large_int"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "commit-transaction",
+        "test": "type-decimal-positive",
         "args": [
           "query",
-          "COMMIT",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 3.14159 AS decimal_value"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"Unsupported\",\"result\":{\"type\":\"ERROR\",\"code\":\"Unsupported\",\"message\":\"statement type\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "rollback-transaction",
+        "test": "type-decimal-negative",
         "args": [
           "query",
-          "ROLLBACK",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN -2.71828 AS neg_decimal"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"Unsupported\",\"result\":{\"type\":\"ERROR\",\"code\":\"Unsupported\",\"message\":\"statement type\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "drop-index",
+        "test": "type-decimal-scientific",
         "args": [
           "query",
-          "DROP INDEX idx_person_name",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 1.23e-4 AS scientific_value"
         ],
-        "reason": "Pattern not found: 'status_class\":\"00000'",
-        "stdout": "{\"status_class\":\"42704\",\"message\":\"Index idx_person_name does not exist\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"NoResult\",\"result\":{\"type\":\"ERROR\",\"code\":\"NoResult\",\"message\":\"no active result set\",\"anchor\":\"\"}}\n",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n"
-      },
-      {
-        "test": "sum-values",
-        "args": [
-          "query",
-          "MATCH (n:Number) RETURN sum(n.value) AS total",
-          "--format",
-          "json"
-        ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"identifier\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "avg-values",
+        "test": "type-decimal-zero",
         "args": [
           "query",
-          "MATCH (n:Number) RETURN avg(n.value) AS average",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 0.0 AS zero_decimal"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"identifier\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "return-list",
+        "test": "type-string-simple",
         "args": [
           "query",
-          "RETURN [1, 2, 3, 4, 5] AS numbers",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN 'Hello World' AS string_value"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"parse error\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       },
       {
-        "test": "return-map",
+        "test": "type-string-empty",
         "args": [
           "query",
-          "RETURN {name: 'test', value: 42} AS data",
-          "--format",
-          "json"
+          "--server",
+          "${server_address}",
+          "RETURN '' AS empty_string"
         ],
-        "reason": "Exit code mismatch: expected 0, got 2",
+        "reason": "Exit code mismatch: expected 0, got 1",
         "stdout": "",
-        "stderr": "{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"client.start\",\"level\":\"info\"}\n{\"ts\":\"1759443845\",\"level\":\"INFO\",\"component\":\"geode\",\"msg\":\"server.start\",\"level\":\"info\"}\n{\"status_class\":\"02000\",\"status_subclass\":\"ParseError\",\"result\":{\"type\":\"ERROR\",\"code\":\"ParseError\",\"message\":\"property key\",\"anchor\":\"\"}}\n"
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-string-with-quotes",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN 'He said \\'Hello\\'' AS quoted_string"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-string-special-characters",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN 'Line1\\nLine2\\tTabbed' AS special_chars"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-string-unicode",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN 'Hello \u4e16\u754c \ud83c\udf0d' AS unicode_string"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-integers",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN [1, 2, 3, 4, 5] AS int_list"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-strings",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN ['apple', 'banana', 'cherry'] AS string_list"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-mixed",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN [1, 'text', true, null, 3.14] AS mixed_list"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-empty",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN [] AS empty_list"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-nested",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN [[1, 2], [3, 4], [5, 6]] AS nested_list"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-simple",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN {name: 'Alice', age: 30, active: true} AS person_map"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-empty",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN {} AS empty_map"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-nested",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN {person: {name: 'Bob', details: {age: 25, city: 'Boston'}}} AS nested_map"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-with-lists",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN {scores: [85, 92, 78], subjects: ['math', 'science', 'english']} AS map_with_lists"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-date-literal",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN date('2024-01-15') AS date_value"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-time-literal",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN time('14:30:25') AS time_value"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-datetime-literal",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN datetime('2024-01-15T14:30:25') AS datetime_value"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-datetime-with-timezone",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN datetime('2024-01-15T14:30:25+05:00') AS datetime_tz"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-function-type-of",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN type(42) AS int_type, type('text') AS string_type, type(true) AS bool_type, type([1,2,3]) AS list_type"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-function-exists",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "MATCH (n:TypeTest) RETURN exists(n.existing_prop) AS has_prop, exists(n.missing_prop) AS missing_prop"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-conversion-to-string",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN toString(42) AS int_to_string, toString(3.14) AS float_to_string, toString(true) AS bool_to_string"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-conversion-to-integer",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN toInteger('42') AS string_to_int, toInteger(3.14) AS float_to_int, toInteger(true) AS bool_to_int"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-conversion-to-float",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN toFloat('3.14') AS string_to_float, toFloat(42) AS int_to_float"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-conversion-to-boolean",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN toBoolean('true') AS string_to_bool, toBoolean(1) AS int_to_bool, toBoolean(0) AS zero_to_bool"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-size",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN size([1, 2, 3, 4, 5]) AS list_size, size([]) AS empty_size, size('hello') AS string_size"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-head",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN head([1, 2, 3, 4]) AS first_element"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-tail",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN tail([1, 2, 3, 4]) AS rest_elements"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-list-last",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN last([1, 2, 3, 4]) AS last_element"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-keys",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN keys({name: 'Alice', age: 30, active: true}) AS map_keys"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-values",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN values({name: 'Alice', age: 30}) AS map_values"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-map-size",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN size({a: 1, b: 2, c: 3}) AS map_size"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-coercion-arithmetic",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN 5 + 3.14 AS int_plus_float, 2 * 1.5 AS int_times_float"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-coercion-comparison",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN 5 = 5.0 AS int_equals_float, 3 < 3.5 AS int_less_float"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-coercion-string-concat",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN 'Value: ' || 42 AS string_concat_int, 'Pi: ' || 3.14 AS string_concat_float"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-property-access-mixed",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "MATCH (n:TypeNode) RETURN n.int_prop AS int_val, n.string_prop AS string_val, n.bool_prop AS bool_val, n.list_prop AS list_val, n.map_prop AS map_val"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-error-list-access-out-of-bounds",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN [1, 2, 3][10] AS out_of_bounds"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-complex-nested-structures",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "RETURN {\n  users: [\n    {name: 'Alice', scores: [85, 92, 78], active: true},\n    {name: 'Bob', scores: [88, 95, 82], active: false}\n  ],\n  metadata: {\n    total_users: 2,\n    created: datetime('2024-01-15T10:00:00'),\n    tags: ['test', 'demo']\n  }\n} AS complex_structure\n"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "type-dynamic-property-access",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "MATCH (n:DynamicTest) RETURN n.data.level1.level2.value AS deep_value"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
+      },
+      {
+        "test": "cleanup-type-test-data",
+        "args": [
+          "query",
+          "--server",
+          "${server_address}",
+          "MATCH (n) WHERE \n  n:TypeTest OR n:TypeNode OR n:DynamicTest\nDETACH DELETE n\n"
+        ],
+        "reason": "Exit code mismatch: expected 0, got 1",
+        "stdout": "",
+        "stderr": "{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"connecting to server\",\"address\":\"${server_address}\",\"port\":3141}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"certificate configuration\",\"has_ca_cert\":false,\"cert_path\":\"certs/ca.crt\"}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":true,\"allow_insecure\":true}\n{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"initializing endpoint\",\"bind_addr\":\"0.0.0.0:0\"}\nDEBUG: Endpoint init - binding to address family=2\nDEBUG: Cr"
       }
     ]
   }

@@ -1,0 +1,295 @@
+# Transaction Management
+
+This document describes transaction management in Geode, including START TRANSACTION, COMMIT, and ROLLBACK commands.
+
+## Overview
+
+Geode supports explicit transaction control through SQL-style transaction commands. Transactions allow you to group multiple operations together and either commit them all at once or roll them back.
+
+## Transaction Commands
+
+### START TRANSACTION
+
+Begins a new transaction.
+
+**Syntax:**
+```gql
+START TRANSACTION
+```
+
+**Example:**
+```gql
+START TRANSACTION
+CREATE (p:Person {name: 'Alice'})
+CREATE (c:Company {name: 'Acme'})
+CREATE (p)-[:WORKS_FOR]->(c)
+COMMIT
+```
+
+**Behavior:**
+- Initiates a new transaction context
+- Subsequent operations execute within the transaction
+- Transaction state persists across separate CLI invocations within a session
+- Returns error if a transaction is already active
+
+### COMMIT
+
+Commits the current transaction, making all changes permanent.
+
+**Syntax:**
+```gql
+COMMIT
+```
+
+**Example:**
+```gql
+START TRANSACTION
+CREATE (n:Node {value: 123})
+COMMIT
+```
+
+**Behavior:**
+- Persists all changes made during the transaction
+- Clears transaction state
+- Returns error if no transaction is active
+
+### ROLLBACK
+
+Rolls back the current transaction, discarding all changes.
+
+**Syntax:**
+```gql
+ROLLBACK
+```
+
+**Example:**
+```gql
+START TRANSACTION
+CREATE (n:TempNode {data: 'temporary'})
+-- Decide to discard
+ROLLBACK
+```
+
+**Behavior:**
+- Discards all changes made during the transaction
+- Clears transaction state
+- Returns error if no transaction is active
+
+## Transaction State Management
+
+### State Lifecycle
+
+1. **None**: No active transaction
+2. **Active**: Transaction started, operations in progress
+3. **Committed**: Transaction committed successfully
+4. **RolledBack**: Transaction rolled back
+
+### State Persistence
+
+Transaction state is persisted across CLI invocations to support multi-command transactions:
+
+```bash
+# First command
+./geode query "START TRANSACTION"
+
+# Second command (in same session)
+./geode query "CREATE (n:Test {id: 1})"
+
+# Third command (in same session)
+./geode query "COMMIT"
+```
+
+**Implementation:**
+- Transaction state saved to disk in session file
+- Loaded before query execution (if not starting new transaction)
+- Cleared after COMMIT or ROLLBACK
+
+### Key Fix: START TRANSACTION State Handling
+
+**Problem Solved:**
+Previously, `START TRANSACTION` would fail with "TransactionAlreadyActive" error because the previous transaction's Active state persisted from disk.
+
+**Solution:**
+Transaction session is NOT loaded when executing START TRANSACTION, ensuring a clean slate.
+
+**Code Location:**
+`src/test_harness.zig:50-56`
+```zig
+// Check if starting new transaction BEFORE loading session
+const is_start_transaction = parse_result.program.statements.len > 0
+    and parse_result.program.statements[0] == .StartTransaction;
+
+// Only load session if NOT starting new transaction
+var transaction_session = if (!is_start_transaction)
+    txn_session.loadSession(allocator.*) catch null
+else null;
+```
+
+## Error Handling
+
+### TransactionAlreadyActive
+
+Returned when attempting to start a transaction while one is already active.
+
+```gql
+START TRANSACTION
+-- ERROR: Transaction already active
+START TRANSACTION
+```
+
+**Status Class**: `0A000` (Feature Not Supported)
+
+### NoActiveTransaction
+
+Returned when attempting to COMMIT or ROLLBACK without an active transaction.
+
+```gql
+-- No START TRANSACTION
+COMMIT  -- ERROR: No active transaction
+```
+
+**Status Class**: `0A000` (Feature Not Supported)
+
+## Multi-Operation Transactions
+
+Transactions can include multiple graph operations:
+
+```gql
+START TRANSACTION
+
+-- Create nodes
+CREATE (p:Person {name: 'Bob', age: 30})
+CREATE (c:Company {name: 'TechCorp'})
+
+-- Create relationship
+MATCH (p:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'})
+CREATE (p)-[:WORKS_FOR {since: 2024}]->(c)
+
+-- Update properties
+MATCH (p:Person {name: 'Bob'})
+SET p.status = 'employed'
+
+COMMIT
+```
+
+## Combining with Other Features
+
+### Transactions with MERGE
+
+```gql
+START TRANSACTION
+
+MERGE (u:User {email: 'user@example.com'})
+ON CREATE SET u.created = datetime()
+ON MATCH SET u.updated = datetime()
+
+COMMIT
+```
+
+### Transactions with Session Parameters
+
+```gql
+-- Set session parameter
+SESSION SET VALUE $user_id = 123
+
+START TRANSACTION
+
+-- Use parameter in transaction
+CREATE (u:User {id: $user_id, name: 'Alice'})
+
+COMMIT
+```
+
+## Implementation Details
+
+### AST Structures
+
+```zig
+pub const Statement = union(enum) {
+    StartTransaction,
+    Commit,
+    Rollback,
+    // ... other statements
+};
+```
+
+### Execution Context
+
+```zig
+pub const ExecutionContext = struct {
+    user: ?[]const u8 = null,
+    token: ?[]const u8 = null,
+    strict_offset_validation: bool = false,
+    session_state: *SessionState,
+    transaction_state: TransactionState,  // Current transaction state
+};
+
+pub const TransactionState = enum {
+    None,
+    Active,
+    Committed,
+    RolledBack,
+};
+```
+
+### Session Persistence
+
+Transaction state is persisted using the `TransactionSession` structure:
+
+```zig
+pub const TransactionSession = struct {
+    state: TransactionState,
+    // Future: transaction ID, isolation level, etc.
+};
+```
+
+**Files:**
+- `src/txn_session.zig`: Load/save transaction session
+- `src/test_harness.zig:50-130`: Transaction session lifecycle
+- `src/execution.zig:474-551`: Transaction command execution
+
+## Testing
+
+Comprehensive unit tests are available in:
+- `geodetestlab/specs/transaction_state_unit_tests.yml`
+- `geodetestlab/specs/session_transaction_fixes.yml`
+
+Test coverage includes:
+- START TRANSACTION, COMMIT, ROLLBACK lifecycle
+- Multiple operations within transactions
+- Error handling (no active transaction, already active)
+- State cleanup after COMMIT/ROLLBACK
+- Transaction state persistence across CLI invocations
+- Combining transactions with MERGE, DELETE, UPDATE operations
+
+## GQL Compliance
+
+These features implement ISO/IEC 39075:2024 GQL standard:
+- START TRANSACTION statement (§19.1)
+- COMMIT statement (§19.2)
+- ROLLBACK statement (§19.3)
+- Transaction lifecycle management
+
+## Limitations (Current Implementation)
+
+1. **Auto-commit Mode**: Changes are currently visible immediately (no true isolation)
+2. **No Rollback of Previous Changes**: ROLLBACK clears state but doesn't revert changes
+3. **Single User**: No multi-user concurrency control yet
+4. **No Isolation Levels**: Default isolation only
+5. **No Savepoints**: SAVEPOINT/RELEASE not yet implemented
+
+## Future Enhancements
+
+- True MVCC (Multi-Version Concurrency Control)
+- Isolation level support (READ COMMITTED, REPEATABLE READ, SERIALIZABLE)
+- Savepoints for partial rollback
+- Deadlock detection
+- Transaction timeouts
+- Read-only transactions
+
+## See Also
+
+- [Session Management](SESSION_MANAGEMENT.md)
+- [MERGE Operations](MERGE_AND_LABEL_TESTS.md)
+- [Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md) - Advanced MVCC features
+- [GQL Compliance](GQL_COMPLIANCE.md)

@@ -78,8 +78,8 @@ class ParallelTestRunner:
         print(f"Test run started at {self.run_timestamp}")
         print(f"Logs will be written to: {self.run_dir}")
 
-    def process_args(self, args: List[str], instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> List[str]:
-        """Process test arguments, handling variable substitution and converting to embedded mode."""
+    def process_args(self, args: List[str], server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> List[str]:
+        """Process test arguments, handling variable substitution and server mode."""
         processed_args = []
         skip_next = False
 
@@ -89,14 +89,18 @@ class ParallelTestRunner:
                 continue
 
             if isinstance(arg, str):
-                # Skip --server arguments and their values for embedded mode
+                # Skip --server arguments and their values - we'll add them back if needed
                 if arg == "--server":
                     skip_next = True  # Skip the next argument (server address)
                     continue
 
-                # Replace server variables but don't add them to args (will use embedded mode)
+                # Replace server variables with actual server address if provided
                 elif "${server" in arg:
-                    # Just skip these since we're using embedded mode
+                    if server_address:
+                        # Replace with actual server address
+                        processed_arg = arg.replace("${server_address}", server_address)
+                        processed_args.append(processed_arg)
+                    # Skip if no server address provided (will use --no-quic instead)
                     continue
                 # Replace instance_id for parallel tests
                 elif "${instance_id}" in arg and instance_id is not None:
@@ -116,50 +120,73 @@ class ParallelTestRunner:
             else:
                 processed_args.append(str(arg))
 
-        # Only add --no-quic to query commands (not auth, role, policy, etc.)
+        # Add connection mode flags
         is_query_command = len(processed_args) > 0 and processed_args[0] == "query"
-        if is_query_command and "--no-quic" not in processed_args:
-            processed_args.append("--no-quic")
+        if is_query_command:
+            if server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
+                # Use server mode
+                processed_args.extend(["--server", server_address])
+            elif not server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
+                # Use embedded mode
+                processed_args.append("--no-quic")
 
         return processed_args
 
-    def run_single_test(self, test_case: Dict, spec_name: str, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> TestResult:
+    def run_single_test(self, test_case: Dict, spec_name: str, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
-        args = self.process_args(test_case.get("args", []), instance_id=instance_id, loop_index=loop_index)
+        args = self.process_args(test_case.get("args", []), server_address=server_address, instance_id=instance_id, loop_index=loop_index)
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin", None)
 
-        # Handle setup commands for transaction tests
+        # Handle setup commands
         setup_commands = test_case.get("setup", [])
         if setup_commands:
-            # For --no-quic mode, combine setup with main query
-            import shlex
-            is_query = len(args) > 0 and args[0] == "query"
-            if is_query and "--no-quic" in args:
-                # Extract setup queries
-                setup_queries = []
+            if server_address:
+                # Run setup commands against the server
+                import shlex
                 for cmd_str in setup_commands:
                     try:
                         setup_args = shlex.split(cmd_str)
-                        # Find the query part (last non-flag argument)
-                        for arg in reversed(setup_args):
-                            if not arg.startswith("--") and arg != "query":
-                                setup_queries.append(arg)
-                                break
-                    except:
+                        # Process setup args with server address
+                        processed_setup_args = self.process_args(setup_args, server_address=server_address)
+                        subprocess.run(
+                            [self.binary] + processed_setup_args,
+                            capture_output=True,
+                            text=True,
+                            timeout=self.test_timeout
+                        )
+                    except Exception as e:
+                        # Log setup failure but continue
                         pass
+            else:
+                # For --no-quic mode, combine setup with main query
+                import shlex
+                is_query = len(args) > 0 and args[0] == "query"
+                if is_query and "--no-quic" in args:
+                    # Extract setup queries
+                    setup_queries = []
+                    for cmd_str in setup_commands:
+                        try:
+                            setup_args = shlex.split(cmd_str)
+                            # Find the query part (last non-flag argument)
+                            for arg in reversed(setup_args):
+                                if not arg.startswith("--") and arg != "query":
+                                    setup_queries.append(arg)
+                                    break
+                        except:
+                            pass
 
-                # Get main test query (the argument after "query", before flags)
-                # Args format: ['query', '<query_string>', '--no-quic']
-                test_query = args[1] if len(args) > 1 else ""
+                    # Get main test query (the argument after "query", before flags)
+                    # Args format: ['query', '<query_string>', '--no-quic']
+                    test_query = args[1] if len(args) > 1 else ""
 
-                # Combine queries with semicolons
-                if setup_queries:
-                    combined_query = "; ".join(setup_queries + [test_query])
-                    # Rebuild args: ['query', combined_query, '--no-quic', ...]
-                    # Keep all flags (everything after position 2)
-                    args = ['query', combined_query] + args[2:]
+                    # Combine queries with semicolons
+                    if setup_queries:
+                        combined_query = "; ".join(setup_queries + [test_query])
+                        # Rebuild args: ['query', combined_query, '--no-quic', ...]
+                        # Keep all flags (everything after position 2)
+                        args = ['query', combined_query] + args[2:]
 
         start_time = time.time()
 
@@ -315,7 +342,7 @@ class ParallelTestRunner:
     def run_spec_file(self, spec_file: Path) -> SpecResult:
         """Run all tests in a specification file."""
         spec_start_time = time.time()
-        
+
         try:
             with open(spec_file, "r") as f:
                 spec = yaml.safe_load(f)
@@ -336,55 +363,97 @@ class ParallelTestRunner:
                     execution_time_ms=0
                 )]
             )
-        
+
+        # Check if server mode is needed
+        server_config = spec.get("cli", {}).get("server", {})
+        server_enabled = server_config.get("enabled", False)
+
+        server_process = None
+        server_address = None
+
+        if server_enabled:
+            # Start server with random port
+            import socket
+            import random
+            port = random.randint(10000, 20000)
+            server_address = f"127.0.0.1:{port}"
+
+            server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}"]
+            server_extra_args = server_config.get("args", [])
+            if server_extra_args:
+                server_args.extend(server_extra_args)
+
+            try:
+                server_process = subprocess.Popen(
+                    server_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                # Wait for server to start
+                time.sleep(2)
+            except Exception as e:
+                self.log_progress(f"Failed to start server for {spec_file.name}: {str(e)}")
+                server_enabled = False
+                server_address = None
+
         test_results = []
         passed = 0
         failed = 0
         skipped = 0
-        
+
         tests = spec.get("tests", [])
-        
+
         # Log progress
-        self.log_progress(f"Running {spec_file.name} ({len(tests)} tests)")
+        mode_str = "server" if server_enabled else "embedded"
+        self.log_progress(f"Running {spec_file.name} ({len(tests)} tests) [{mode_str}]")
 
-        for test in tests:
-            # Skip tests marked with skip: true
-            if test.get("skip", False):
-                skipped += 1
-                continue
+        try:
+            for test in tests:
+                # Skip tests marked with skip: true
+                if test.get("skip", False):
+                    skipped += 1
+                    continue
 
-            # Handle parallel tests with multiple instances
-            if test.get("parallel") and test.get("instances"):
-                for instance in range(test["instances"]):
-                    test_result = self.run_single_test(test, spec_file.name, instance_id=instance)
-                    test_results.append(test_result)
+                # Handle parallel tests with multiple instances
+                if test.get("parallel") and test.get("instances"):
+                    for instance in range(test["instances"]):
+                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, instance_id=instance)
+                        test_results.append(test_result)
 
-                    if test_result.success:
-                        passed += 1
-                    else:
-                        failed += 1
+                        if test_result.success:
+                            passed += 1
+                        else:
+                            failed += 1
 
-            # Handle loop tests
-            elif test.get("loop"):
-                for i in range(test["loop"]):
-                    test_result = self.run_single_test(test, spec_file.name, loop_index=i)
-                    test_results.append(test_result)
+                # Handle loop tests
+                elif test.get("loop"):
+                    for i in range(test["loop"]):
+                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, loop_index=i)
+                        test_results.append(test_result)
 
-                    if test_result.success:
-                        passed += 1
-                    else:
-                        failed += 1
+                        if test_result.success:
+                            passed += 1
+                        else:
+                            failed += 1
 
-            # Handle normal tests
-            else:
-                test_result = self.run_single_test(test, spec_file.name)
-                test_results.append(test_result)
-
-                if test_result.success:
-                    passed += 1
+                # Handle normal tests
                 else:
-                    failed += 1
-        
+                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address)
+                    test_results.append(test_result)
+
+                    if test_result.success:
+                        passed += 1
+                    else:
+                        failed += 1
+        finally:
+            # Cleanup server
+            if server_process:
+                server_process.terminate()
+                try:
+                    server_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server_process.kill()
+
         spec_end_time = time.time()
         
         return SpecResult(

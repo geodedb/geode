@@ -32,7 +32,7 @@ tests:
   # Server startup and basic connectivity
   - name: "server-status-check"
     description: "Verify server is running and responsive"
-    args: ["query", "--server", "${server_address}", "RETURN 1 AS test"]
+    args: ["query", "--no-quic", "RETURN 1 AS test"]
     expect:
       exit_code: 0
       geode_query:
@@ -43,7 +43,7 @@ tests:
   # Basic GQL queries
   - name: "simple-return"
     description: "Execute simple RETURN statement"
-    args: ["query", "--server", "${server_address}", "RETURN 42 AS answer, 'hello' AS greeting"]
+    args: ["query", "--no-quic", "RETURN 42 AS answer, 'hello' AS greeting"]
     expect:
       exit_code: 0
       geode_query:
@@ -53,7 +53,7 @@ tests:
 
   - name: "simple-match"
     description: "Execute simple MATCH with no data"
-    args: ["query", "--server", "${server_address}", "MATCH (n) RETURN count(n) AS node_count"]
+    args: ["query", "--no-quic", "MATCH (n) RETURN count(n) AS node_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -64,7 +64,7 @@ tests:
   # Data manipulation
   - name: "create-node"
     description: "Create a simple node"
-    args: ["query", "--server", "${server_address}", "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n"]
+    args: ["query", "--no-quic", "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -76,7 +76,7 @@ tests:
 
   - name: "create-relationship"
     description: "Create nodes with relationship"
-    args: ["query", "--server", "${server_address}", "CREATE (a:Person {name: 'Bob'})-[r:KNOWS]->(b:Person {name: 'Carol'}) RETURN a, r, b"]
+    args: ["query", "--no-quic", "CREATE (a:Person {name: 'Bob'})-[r:KNOWS]->(b:Person {name: 'Carol'}) RETURN a, r, b"]
     expect:
       exit_code: 0
       geode_query:
@@ -87,7 +87,7 @@ tests:
 
   - name: "query-created-data"
     description: "Query previously created data"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name"]
+    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -98,7 +98,7 @@ tests:
   # Transaction testing
   - name: "transaction-begin"
     description: "Begin a transaction"
-    args: ["query", "--server", "${server_address}", "--begin", "CREATE (n:TxTest {id: 1}) RETURN n"]
+    args: ["query", "--no-quic", "--begin", "CREATE (n:TxTest {id: 1}) RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -107,7 +107,7 @@ tests:
 
   - name: "transaction-commit"
     description: "Commit a transaction"
-    args: ["query", "--server", "${server_address}", "--commit", "MATCH (n:TxTest) RETURN count(n) AS count"]
+    args: ["query", "--no-quic", "--commit", "MATCH (n:TxTest) RETURN count(n) AS count"]
     expect:
       exit_code: 0
       geode_query:
@@ -117,7 +117,7 @@ tests:
   # Output format testing
   - name: "json-format"
     description: "Test JSON output format"
-    args: ["query", "--server", "${server_address}", "--format", "json", "RETURN 1 AS value"]
+    args: ["query", "--no-quic", "--format", "json", "RETURN 1 AS value"]
     expect:
       exit_code: 0
       stdout_json_assert:
@@ -127,7 +127,7 @@ tests:
 
   - name: "table-format"
     description: "Test table output format"
-    args: ["query", "--server", "${server_address}", "--format", "table", "RETURN 1 AS value"]
+    args: ["query", "--no-quic", "--format", "table", "RETURN 1 AS value"]
     expect:
       exit_code: 0
       stdout_contains: ["value", "1"]
@@ -136,14 +136,14 @@ tests:
   # Error handling
   - name: "syntax-error"
     description: "Test handling of syntax errors"
-    args: ["query", "--server", "${server_address}", "INVALID GQL SYNTAX"]
+    args: ["query", "--no-quic", "INVALID GQL SYNTAX"]
     expect:
       exit_code: 1
     tags: ["error", "syntax"]
 
   - name: "semantic-error"
     description: "Test handling of semantic errors"
-    args: ["query", "--server", "${server_address}", "MATCH (n:NonExistentLabel) WHERE n.nonexistent_property = 'value' RETURN n"]
+    args: ["query", "--no-quic", "MATCH (n:NonExistentLabel) WHERE n.nonexistent_property = 'value' RETURN n"]
     expect:
       exit_code: 0  # May return 0 with empty results
       geode_query:
@@ -153,7 +153,7 @@ tests:
   # Performance and limits
   - name: "large-result-set"
     description: "Test handling of larger result sets"
-    args: ["query", "--server", "${server_address}", "UNWIND range(1, 100) AS i CREATE (n:TestNode {id: i}) RETURN count(n) AS created"]
+    args: ["query", "--no-quic", "UNWIND range(1, 100) AS i CREATE (n:TestNode {id: i}) RETURN count(n) AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -163,7 +163,7 @@ tests:
 
   - name: "cleanup-test-data"
     description: "Clean up test data"
-    args: ["query", "--server", "${server_address}", "MATCH (n) WHERE n:Person OR n:TxTest OR n:TestNode DELETE n"]
+    args: ["query", "--no-quic", "MATCH (n) WHERE n:Person OR n:TxTest OR n:TestNode DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup"]

@@ -22,8 +22,7 @@ tests:
     description: "Create comprehensive test dataset for advanced features"
     args: 
       - "query"
-      - "--server"
-      - "${server_address}"
+      - "--no-quic"
       - |
         CREATE 
           (alice:Person {name: 'Alice', age: 30, department: 'Engineering'}),
@@ -82,7 +81,7 @@ tests:
   # Modify data before restore test
   - name: "modify-data-before-restore"
     description: "Modify data to test restore functionality"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person {name: 'Alice'}) SET p.age = 31, p.status = 'modified' RETURN p.name AS name, p.age AS age, p.status AS status"]
+    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) SET p.age = 31, p.status = 'modified' RETURN p.name AS name, p.age AS age, p.status AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -101,7 +100,7 @@ tests:
 
   - name: "verify-restore"
     description: "Verify data after restore"
-    args: ["query", "--server", "${server_address}", "MATCH (p:Person {name: 'Alice'}) RETURN p.age AS age, p.status AS status"]
+    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) RETURN p.age AS age, p.status AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -137,8 +136,8 @@ tests:
   # Schema introspection
   - name: "describe-schema"
     description: "Describe database schema"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL db.schema.visualization()"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL db.schema.visualization()"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       geode_query:
@@ -147,8 +146,8 @@ tests:
 
   - name: "list-node-labels"
     description: "List all node labels"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL db.labels()"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL db.labels()"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       geode_query:
@@ -157,8 +156,8 @@ tests:
 
   - name: "list-relationship-types"
     description: "List all relationship types"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL db.relationshipTypes()"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL db.relationshipTypes()"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       geode_query:
@@ -167,8 +166,8 @@ tests:
 
   - name: "database-statistics"
     description: "Get database statistics"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL db.stats()"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL db.stats()"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       geode_query:
@@ -178,21 +177,21 @@ tests:
   # Index management
   - name: "create-node-index"
     description: "Create index on node property"
-    args: ["query", "--server", "${server_address}", "CREATE INDEX person_name_idx FOR (p:Person) ON (p.name)"]
+    args: ["query", "--no-quic", "CREATE INDEX person_name_idx FOR (p:Person) ON (p.name)"]
     expect:
       exit_code: 0
     tags: ["index", "create", "node"]
 
   - name: "create-relationship-index"
     description: "Create index on relationship property"
-    args: ["query", "--server", "${server_address}", "CREATE INDEX works_for_since_idx FOR ()-[r:WORKS_FOR]-() ON (r.since)"]
+    args: ["query", "--no-quic", "CREATE INDEX works_for_since_idx FOR ()-[r:WORKS_FOR]-() ON (r.since)"]
     expect:
       exit_code: 0
     tags: ["index", "create", "relationship"]
 
   - name: "list-indexes"
     description: "List all indexes"
-    args: ["query", "--server", "${server_address}", "SHOW INDEXES"]
+    args: ["query", "--no-quic", "SHOW INDEXES"]
     expect:
       exit_code: 0
       geode_query:
@@ -201,7 +200,7 @@ tests:
 
   - name: "drop-index"
     description: "Drop an index"
-    args: ["query", "--server", "${server_address}", "DROP INDEX person_name_idx"]
+    args: ["query", "--no-quic", "DROP INDEX person_name_idx"]
     expect:
       exit_code: 0
     tags: ["index", "drop"]
@@ -209,21 +208,21 @@ tests:
   # Constraint management
   - name: "create-uniqueness-constraint"
     description: "Create uniqueness constraint"
-    args: ["query", "--server", "${server_address}", "CREATE CONSTRAINT person_email_unique FOR (p:Person) REQUIRE p.email IS UNIQUE"]
+    args: ["query", "--no-quic", "CREATE CONSTRAINT person_email_unique FOR (p:Person) REQUIRE p.email IS UNIQUE"]
     expect:
       exit_code: 0
     tags: ["constraint", "unique"]
 
   - name: "create-node-key-constraint"
     description: "Create node key constraint"
-    args: ["query", "--server", "${server_address}", "CREATE CONSTRAINT company_key FOR (c:Company) REQUIRE (c.name, c.founded) IS NODE KEY"]
+    args: ["query", "--no-quic", "CREATE CONSTRAINT company_key FOR (c:Company) REQUIRE (c.name, c.founded) IS NODE KEY"]
     expect:
       exit_code: 0
     tags: ["constraint", "nodekey"]
 
   - name: "list-constraints"
     description: "List all constraints"
-    args: ["query", "--server", "${server_address}", "SHOW CONSTRAINTS"]
+    args: ["query", "--no-quic", "SHOW CONSTRAINTS"]
     expect:
       exit_code: 0
       geode_query:
@@ -233,8 +232,8 @@ tests:
   # Performance and monitoring
   - name: "query-performance-stats"
     description: "Get query performance statistics"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL db.queryStats()"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL db.queryStats()"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       geode_query:
@@ -243,7 +242,7 @@ tests:
 
   - name: "explain-query-plan"
     description: "Explain query execution plan"
-    args: ["query", "--server", "${server_address}", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WHERE p.age > 30 RETURN p.name, c.name"]
+    args: ["query", "--no-quic", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WHERE p.age > 30 RETURN p.name, c.name"]
     expect:
       exit_code: 0
       stdout_contains: ["plan", "cost"]
@@ -251,7 +250,7 @@ tests:
 
   - name: "profile-query-execution"
     description: "Profile query execution"
-    args: ["query", "--server", "${server_address}", "PROFILE MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN count(p) AS employee_count"]
+    args: ["query", "--no-quic", "PROFILE MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN count(p) AS employee_count"]
     expect:
       exit_code: 0
       stdout_contains: ["profile", "time", "rows"]
@@ -260,7 +259,7 @@ tests:
   # Transaction management
   - name: "long-running-transaction"
     description: "Test long-running transaction"
-    args: ["query", "--server", "${server_address}", "--begin", "MATCH (p:Person) SET p.last_updated = timestamp() RETURN count(p) AS updated"]
+    args: ["query", "--no-quic", "--begin", "MATCH (p:Person) SET p.last_updated = timestamp() RETURN count(p) AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -270,7 +269,7 @@ tests:
 
   - name: "rollback-transaction"
     description: "Test transaction rollback"
-    args: ["query", "--server", "${server_address}", "--rollback", "MATCH (p:Person) RETURN count(p) AS count"]
+    args: ["query", "--no-quic", "--rollback", "MATCH (p:Person) RETURN count(p) AS count"]
     expect:
       exit_code: 0
       geode_query:
@@ -281,8 +280,8 @@ tests:
   # Federation testing (if available)
   - name: "test-federation-setup"
     description: "Test federation configuration"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL federation.status()"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL federation.status()"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       geode_query:
@@ -292,8 +291,8 @@ tests:
   # Import/Export operations
   - name: "export-graph-data"
     description: "Export graph data to file"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL apoc.export.graphml.all('/tmp/geode_export.graphml', {})"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL apoc.export.graphml.all('/tmp/geode_export.graphml', {})"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       stdout_contains: ["export", "completed"]
@@ -301,8 +300,8 @@ tests:
 
   - name: "import-graph-data"
     description: "Import graph data from file"
-# Non-GQL:     args: ["query", "--server", "${server_address}", "CALL apoc.import.graphml('/tmp/geode_export.graphml', {})"]
-    args: ["query", "--server", "${server_address}", "RETURN 'Non-GQL procedure not supported' AS message"]
+# Non-GQL:     args: ["query", "--no-quic", "CALL apoc.import.graphml('/tmp/geode_export.graphml', {})"]
+    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
     expect:
       exit_code: 0
       stdout_contains: ["import", "completed"]
@@ -312,8 +311,8 @@ tests:
   - name: "bulk-data-load"
     description: "Test bulk data loading"
     # UNWIND is not GQL-compliant - replaced with simpler test
-    # Original: args: ["query", "--server", "${server_address}", "UNWIND range(1, 1000) AS i CREATE (n:BulkTest {id: i, value: 'test_' + toString(i)}) RETURN count(n) AS created"]
-    args: ["query", "--server", "${server_address}", "CREATE (n1:BulkTest {id: 1, value: 'test_1'}), (n2:BulkTest {id: 2, value: 'test_2'}), (n3:BulkTest {id: 3, value: 'test_3'}) RETURN count(*) AS created"]
+    # Original: args: ["query", "--no-quic", "UNWIND range(1, 1000) AS i CREATE (n:BulkTest {id: i, value: 'test_' + toString(i)}) RETURN count(n) AS created"]
+    args: ["query", "--no-quic", "CREATE (n1:BulkTest {id: 1, value: 'test_1'}), (n2:BulkTest {id: 2, value: 'test_2'}), (n3:BulkTest {id: 3, value: 'test_3'}) RETURN count(*) AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -323,7 +322,7 @@ tests:
 
   - name: "bulk-data-update"
     description: "Test bulk data updates"
-    args: ["query", "--server", "${server_address}", "MATCH (n:BulkTest) WHERE n.id % 10 = 0 SET n.special = true RETURN count(n) AS updated"]
+    args: ["query", "--no-quic", "MATCH (n:BulkTest) WHERE n.id % 10 = 0 SET n.special = true RETURN count(n) AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -333,7 +332,7 @@ tests:
 
   - name: "bulk-data-delete"
     description: "Test bulk data deletion"
-    args: ["query", "--server", "${server_address}", "MATCH (n:BulkTest) DELETE n RETURN count(n) AS deleted"]
+    args: ["query", "--no-quic", "MATCH (n:BulkTest) DELETE n RETURN count(n) AS deleted"]
     expect:
       exit_code: 0
       geode_query:
@@ -344,14 +343,14 @@ tests:
   # Cleanup
   - name: "cleanup-constraints"
     description: "Clean up test constraints"
-    args: ["query", "--server", "${server_address}", "DROP CONSTRAINT person_email_unique"]
+    args: ["query", "--no-quic", "DROP CONSTRAINT person_email_unique"]
     expect:
       exit_code: 0
     tags: ["cleanup", "constraint"]
 
   - name: "cleanup-test-data"
     description: "Clean up all test data"
-    args: ["query", "--server", "${server_address}", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "--no-quic", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup", "data"]
