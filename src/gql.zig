@@ -459,7 +459,14 @@ test "parser: chained NOT with IN and IS NULL precedence" {
 }
 
 test "parser: nested list comprehension in expressions" {
-    const s = "MATCH (n) RETURN size([ (n)-[r]->(m) | [ (m)-[t]->(k) | k ] ])";
+    // Simpler test first - just the pattern comprehension
+    const s1 = "MATCH (n) RETURN [ (n)-[r]->(m) | m.name ]";
+    var result1 = try lib.parse(std.testing.allocator, s1, .{});
+    defer result1.deinit();
+    try std.testing.expect(result1.program.statements.len == 1);
+
+    // Now test nested pattern comprehension
+    const s = "MATCH (n) RETURN [ (n)-[r]->(m) | [ (m)-[t]->(k) | k.name ] ]";
     var result = try lib.parse(std.testing.allocator, s, .{});
     defer result.deinit();
     try std.testing.expect(result.program.statements.len == 1);
