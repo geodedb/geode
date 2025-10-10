@@ -70,6 +70,10 @@ pub const Query = struct {
     has_recursive_cte: bool = false,
     // CALL clause for MATCH ... CALL pattern (e.g., MATCH (n) CALL algo.bfs.stream(n) YIELD ...)
     call_clause: ?CallClause = null,
+    // Query chaining: supports CREATE ... WITH ... MATCH ... pattern
+    // When WITH clause is present and followed by MATCH/CREATE, the next query is stored here
+    // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=AST; STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
+    next_query: ?*Query = null,
 };
 
 pub const UnionQuery = struct {

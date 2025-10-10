@@ -380,6 +380,7 @@ pub const Parser = struct {
                     .order_by = null,
                     .limit = null,
                     .offset = null,
+                    .next_query = null, // No chaining for minimal queries
                 };
                 break :blk_select .{ .Query = query };
             },
@@ -824,6 +825,8 @@ pub const Parser = struct {
         }
 
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
+        // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
+        var next_query_ptr: ?*ast.Query = null;
         if (self.cur.kind == .WITH) {
             self.advance();
             var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
@@ -838,6 +841,20 @@ pub const Parser = struct {
                 } else {
                     where_expr = cond2;
                 }
+            }
+
+            // Check for query chaining: WITH ... MATCH/CREATE ...
+            // If we see MATCH or CREATE after WITH, parse it as a chained query
+            if (self.cur.kind == .MATCH or self.cur.kind == .CREATE) {
+                // Parse the continuation as a new query
+                const next_query = try self.parseQuery();
+                // Allocate on arena and store pointer
+                const next_ptr = try self.arena.allocator().create(ast.Query);
+                next_ptr.* = next_query;
+                next_query_ptr = next_ptr;
+
+                // Current query acts as a WITH-only query (no explicit RETURN needed)
+                // The WITH clause serves as an implicit RETURN for passing bindings forward
             }
         }
         // GROUP BY (optional)
@@ -895,7 +912,7 @@ pub const Parser = struct {
             };
         }
 
-        // RETURN item (, item)* (now after SET/REMOVE/CALL, optional if SET/REMOVE present)
+        // RETURN item (, item)* (now after SET/REMOVE/CALL, optional if SET/REMOVE present or query chaining)
         var return_clause: ast.ReturnClause = undefined;
         if (self.cur.kind == .RETURN) {
             self.advance();
@@ -926,8 +943,12 @@ pub const Parser = struct {
         } else if (set_clauses.len > 0 or remove_clauses.len > 0) {
             // SET/REMOVE without RETURN - create empty return clause
             return_clause = .{ .items = &.{}, .distinct = false };
+        } else if (next_query_ptr != null and with_clause != null) {
+            // Query chaining: WITH followed by MATCH/CREATE
+            // Use WITH items as implicit RETURN to pass bindings forward
+            return_clause = .{ .items = with_clause.?.items, .distinct = false };
         } else {
-            // No SET/REMOVE and no RETURN - error
+            // No SET/REMOVE, no chaining, and no RETURN - error
             _ = try self.expect(.RETURN);
             unreachable;
         }
@@ -1064,6 +1085,7 @@ pub const Parser = struct {
             .offset = offset,
             .path_variable = path_variable,
             .call_clause = call_clause,
+            .next_query = next_query_ptr, // Query chaining support
         };
     }
     fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {
