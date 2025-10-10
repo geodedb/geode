@@ -3206,8 +3206,7 @@ pub const Parser = struct {
             return .{ .SessionSet = .{
                 .clause_type = .{ .TimeZone = .{ .value = tz_value } },
             } };
-        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or self.cur.kind == .TABLE)
-        {
+        } else if (self.cur.kind == .VALUE or self.cur.kind == .BINDING or self.cur.kind == .TABLE) {
             // Parse parameter clauses
             return .{ .SessionSet = .{
                 .clause_type = .{ .Parameter = try self.parseSessionParameterClause() },
@@ -3325,8 +3324,7 @@ pub const Parser = struct {
                 .parameter_name = param_name,
                 .initializer = initializer,
             } };
-        } else if (self.cur.kind == .BINDING or self.cur.kind == .TABLE)
-        {
+        } else if (self.cur.kind == .BINDING or self.cur.kind == .TABLE) {
             // [BINDING] TABLE
             if (self.cur.kind == .BINDING) {
                 self.advance();

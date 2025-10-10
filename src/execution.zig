@@ -5252,14 +5252,25 @@ fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStateme
             if (item.alias) |alias| {
                 columns[i] = try allocator.dupe(u8, alias);
             } else {
-                // Default names based on algorithm
-                columns[i] = try allocator.dupe(u8, switch (i) {
-                    0 => "nodeId",
-                    1 => "score",
-                    2 => "community",
-                    3 => "path",
-                    else => "value",
-                });
+                // Extract column name from expression
+                const col_name = switch (item.expr) {
+                    .Ident => |ident| ident.orig,
+                    .Member => |member| blk: {
+                        // For member access, use the field name (e.g., foo.bar -> "bar")
+                        break :blk member.field;
+                    },
+                    else => blk: {
+                        // Fallback to default names if expression is complex
+                        break :blk switch (i) {
+                            0 => "nodeId",
+                            1 => "score",
+                            2 => "community",
+                            3 => "path",
+                            else => "value",
+                        };
+                    },
+                };
+                columns[i] = try allocator.dupe(u8, col_name);
             }
         }
     }

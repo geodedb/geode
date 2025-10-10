@@ -3,7 +3,7 @@ name: "Geode Basic Functionality Tests"
 description: "Core Geode database functionality testing including server, queries, and authentication"
 
 cli:
-  binary: "geode"
+  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
   working_dir: null
   env:
     GEODE_LOG_LEVEL: "info"

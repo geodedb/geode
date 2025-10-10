@@ -3,7 +3,7 @@ name: "Geode Advanced Features Tests"
 description: "Advanced Geode functionality including complex queries, authentication, and performance testing"
 
 cli:
-  binary: "geode"
+  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
   server:
     enabled: true
     port: null

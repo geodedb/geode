@@ -49,12 +49,12 @@ class SpecResult:
     test_results: List[TestResult]
 
 class ParallelTestRunner:
-    def __init__(self, 
+    def __init__(self,
                  specs_dir: Path = Path("/home/benji/src/spyder/geode/geodetestlab/specs"),
                  binary: str = "/home/benji/src/spyder/geode/zig-out/bin/geode",
                  log_dir: Path = Path("/home/benji/src/spyder/geode/test_logs"),
                  max_workers: int = 4,
-                 test_timeout: int = 10):
+                 test_timeout: int = 30):  # Increased for QUIC handshake + query execution
         self.specs_dir = specs_dir
         self.binary = binary
         self.log_dir = log_dir
@@ -389,8 +389,31 @@ class ParallelTestRunner:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
-                # Wait for server to start
-                time.sleep(2)
+                # Wait for server to be ready with health check
+                startup_timeout_ms = server_config.get("startup_timeout_ms", 5000)
+                max_wait = startup_timeout_ms / 1000.0
+                start_time = time.time()
+                server_ready = False
+
+                while (time.time() - start_time) < max_wait:
+                    # Try to connect to verify server is ready
+                    test_result = subprocess.run(
+                        [self.binary, "query", "--server", server_address, "RETURN 1", "--format", "json"],
+                        capture_output=True,
+                        timeout=5  # Increased timeout for QUIC handshake
+                    )
+                    if test_result.returncode == 0:
+                        server_ready = True
+                        break
+                    time.sleep(0.5)
+
+                if not server_ready:
+                    self.log_progress(f"Server for {spec_file.name} did not become ready in {max_wait}s")
+                    if server_process:
+                        server_process.terminate()
+                        server_process = None
+                    server_enabled = False
+                    server_address = None
             except Exception as e:
                 self.log_progress(f"Failed to start server for {spec_file.name}: {str(e)}")
                 server_enabled = False
@@ -406,6 +429,24 @@ class ParallelTestRunner:
         # Log progress
         mode_str = "server" if server_enabled else "embedded"
         self.log_progress(f"Running {spec_file.name} ({len(tests)} tests) [{mode_str}]")
+
+        # Handle spec-level setup
+        setup_commands = spec.get("setup", [])
+        if setup_commands and server_address:
+            for setup_item in setup_commands:
+                try:
+                    setup_args = setup_item.get("args", [])
+                    processed_args = self.process_args(setup_args, server_address=server_address)
+                    result = subprocess.run(
+                        [self.binary] + processed_args,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.test_timeout
+                    )
+                    if result.returncode != 0:
+                        self.log_progress(f"Setup failed for {spec_file.name}: {result.stderr}")
+                except Exception as e:
+                    self.log_progress(f"Setup error for {spec_file.name}: {str(e)}")
 
         try:
             for test in tests:
