@@ -2180,6 +2180,69 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                     }
                 }
             },
+            .AllProperties => |all_props| {
+                if (created_nodes.get(all_props.node)) |node_id| {
+                    // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
+                    var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+                    if (q.with_clause != null) {
+                        // Use WITH result columns and first row as environment
+                        for (result.columns, 0..) |col_name, idx| {
+                            try names.append(allocator, col_name);
+                            try values.append(allocator, result.rows[0][idx]);
+                        }
+                    } else {
+                        // Use created nodes as environment
+                        var iter = created_nodes.iterator();
+                        while (iter.next()) |entry| {
+                            try names.append(allocator, entry.key_ptr.*);
+                            const entry_node_id = entry.value_ptr.*;
+                            const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
+                            try values.append(allocator, eval.Value{ .Node = entry_node });
+                        }
+                    }
+
+                    const env = eval.Env{
+                        .names = names.items,
+                        .values = values.items,
+                    };
+
+                    // Evaluate the properties expression (should be a map literal)
+                    const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+
+                    // Clear all existing properties by getting node and manually clearing
+                    if (store.nodes.getPtr(node_id)) |node| {
+                        var prop_iter = node.properties.iterator();
+                        while (prop_iter.next()) |prop_entry| {
+                            allocator.free(prop_entry.key_ptr.*);
+                            switch (prop_entry.value_ptr.*) {
+                                .String => |s| allocator.free(s),
+                                else => {},
+                            }
+                        }
+                        node.properties.clearRetainingCapacity();
+                    }
+
+                    // Set new properties from the map
+                    if (props_value == .Map) {
+                        var map_iter = props_value.Map.iterator();
+                        while (map_iter.next()) |entry| {
+                            const key = entry.key_ptr.*;
+                            const value = entry.value_ptr.*;
+                            const prop_value = switch (value) {
+                                .Str => |s| graph_store.PropertyValue{ .String = s },
+                                .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                else => graph_store.PropertyValue{ .Null = {} },
+                            };
+                            try store.setNodeProperty(node_id, key, prop_value);
+                        }
+                    }
+                }
+            },
         }
     }
 
@@ -2768,6 +2831,45 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                             }
                         }
                     },
+                    .AllProperties => |all_props| {
+                        if (node_pattern.name) |var_name| {
+                            if (std.mem.eql(u8, all_props.node, var_name)) {
+                                // Evaluate the properties expression (should be a map literal)
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .names = &.{}, .values = &.{} });
+
+                                // Clear all existing properties by getting node and manually clearing
+                                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                                    var prop_iter = node_ptr.properties.iterator();
+                                    while (prop_iter.next()) |prop_entry| {
+                                        allocator.free(prop_entry.key_ptr.*);
+                                        switch (prop_entry.value_ptr.*) {
+                                            .String => |s| allocator.free(s),
+                                            else => {},
+                                        }
+                                    }
+                                    node_ptr.properties.clearRetainingCapacity();
+                                }
+
+                                // Set new properties from the map
+                                if (props_value == .Map) {
+                                    var map_iter = props_value.Map.iterator();
+                                    while (map_iter.next()) |entry| {
+                                        const key = entry.key_ptr.*;
+                                        const value = entry.value_ptr.*;
+                                        const prop_value = switch (value) {
+                                            .Str => |s| graph_store.PropertyValue{ .String = s },
+                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                            else => graph_store.PropertyValue{ .Null = {} },
+                                        };
+                                        try store.setNodeProperty(node_id, key, prop_value);
+                                    }
+                                }
+                            }
+                        }
+                    },
                 }
             }
         } else {
@@ -2819,6 +2921,45 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                             if (std.mem.eql(u8, label_set.node, var_name)) {
                                 for (label_set.labels) |label| {
                                     try store.addNodeLabel(node_id, label);
+                                }
+                            }
+                        }
+                    },
+                    .AllProperties => |all_props| {
+                        if (node_pattern.name) |var_name| {
+                            if (std.mem.eql(u8, all_props.node, var_name)) {
+                                // Evaluate the properties expression (should be a map literal)
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .names = &.{}, .values = &.{} });
+
+                                // Clear all existing properties by getting node and manually clearing
+                                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                                    var prop_iter = node_ptr.properties.iterator();
+                                    while (prop_iter.next()) |prop_entry| {
+                                        allocator.free(prop_entry.key_ptr.*);
+                                        switch (prop_entry.value_ptr.*) {
+                                            .String => |s| allocator.free(s),
+                                            else => {},
+                                        }
+                                    }
+                                    node_ptr.properties.clearRetainingCapacity();
+                                }
+
+                                // Set new properties from the map
+                                if (props_value == .Map) {
+                                    var map_iter = props_value.Map.iterator();
+                                    while (map_iter.next()) |map_entry| {
+                                        const key = map_entry.key_ptr.*;
+                                        const value = map_entry.value_ptr.*;
+                                        const prop_value = switch (value) {
+                                            .Str => |s| graph_store.PropertyValue{ .String = s },
+                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                            else => graph_store.PropertyValue{ .Null = {} },
+                                        };
+                                        try store.setNodeProperty(node_id, key, prop_value);
+                                    }
                                 }
                             }
                         }
@@ -3966,12 +4107,25 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
-                                // Clear all existing properties
-                                store.clearNodeProperties(node.id);
+                                // Clear all existing properties by getting node and manually clearing
+                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                    var prop_iter = node_ptr.properties.iterator();
+                                    while (prop_iter.next()) |prop_entry| {
+                                        allocator.free(prop_entry.key_ptr.*);
+                                        switch (prop_entry.value_ptr.*) {
+                                            .String => |s| allocator.free(s),
+                                            else => {},
+                                        }
+                                    }
+                                    node_ptr.properties.clearRetainingCapacity();
+                                }
 
                                 // Set new properties from the map
                                 if (props_value == .Map) {
-                                    for (props_value.Map.keys, props_value.Map.values) |key, value| {
+                                    var map_iter = props_value.Map.iterator();
+                                    while (map_iter.next()) |map_entry| {
+                                        const key = map_entry.key_ptr.*;
+                                        const value = map_entry.value_ptr.*;
                                         const prop_value = switch (value) {
                                             .Str => |s| graph_store.PropertyValue{ .String = s },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
