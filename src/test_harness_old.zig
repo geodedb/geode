@@ -109,12 +109,8 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
     // Initialize test catalog if needed
     try initTestCatalog(allocator.*);
 
-    // Check for double-hyphen comments
-    if (std.mem.indexOf(u8, query, "--") != null) {
-        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
-    }
-
     // Parse statements
+    // Note: The lexer properly distinguishes between -- comments and -- in patterns like (n)--()
     var arena = std.heap.ArenaAllocator.init(allocator.*);
     defer arena.deinit();
 

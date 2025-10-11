@@ -24,12 +24,8 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
 pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, options: QueryOptions) ![]u8 {
     @setEvalBranchQuota(2000);
 
-    // Check for double-hyphen comments (special case)
-    if (std.mem.indexOf(u8, query, "--") != null) {
-        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
-    }
-
     // Parse the query using the actual GQL parser
+    // Note: The lexer properly distinguishes between -- comments and -- in patterns like (n)--()
     const parse_result = gql.parse(allocator.*, query, .{}) catch |err| {
         // Return syntax error for parse failures
         if (err == error.OutOfMemory) return err;

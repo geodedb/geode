@@ -2747,7 +2747,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                                     .Str => |s| graph_store.PropertyValue{ .String = s },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                    .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     .Decimal => |d| blk: {
                                         // Convert decimal to float for PropertyValue
                                         const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
@@ -2802,7 +2802,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                                     .Str => |s| graph_store.PropertyValue{ .String = s },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                    .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     .Decimal => |d| blk: {
                                         // Convert decimal to float for PropertyValue
                                         const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
@@ -3948,7 +3948,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                    .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     else => graph_store.PropertyValue{ .Null = {} },
                                 };
                                 try store.setNodeProperty(node.id, prop.target.property, prop_value);
