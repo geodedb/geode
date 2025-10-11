@@ -114,6 +114,7 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("ip_overlaps", &ipOverlaps);
     try registry.put("ip_family", &ipFamily);
     try registry.put("ip_is_private", &ipIsPrivate);
+    try registry.put("subnet_prefix_length", &subnetPrefixLength);
 
     // MAC functions
     try registry.put("mac_is_local", &macIsLocal);
@@ -649,9 +650,11 @@ fn constructJsonb(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValu
 fn ipContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
     if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .Subnet) return error.TypeMismatch;
 
-    const subnet = args[0].Subnet;
+    const subnet = switch (args[0]) {
+        .Subnet => |s| s,
+        else => return error.TypeMismatch,
+    };
 
     const check_addr = switch (args[1]) {
         .IpAddr => |ip| ip,
@@ -774,6 +777,18 @@ fn ipIsPrivate(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
             return .{ .Bool = false };
         },
     }
+}
+
+fn subnetPrefixLength(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 1) return error.InvalidArgs;
+
+    const subnet = switch (args[0]) {
+        .Subnet => |s| s,
+        else => return error.TypeMismatch,
+    };
+
+    return .{ .Int = @intCast(subnet.prefix_len) };
 }
 
 // MAC functions

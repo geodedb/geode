@@ -1244,6 +1244,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
                         .Null => Value{ .Null = {} },
+                        .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     break :blk_property result;
                 }
@@ -1321,6 +1322,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
                         .Null => Value{ .Null = {} },
+                        .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     break :blk_member result;
                 }

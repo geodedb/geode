@@ -23,6 +23,7 @@ pub const PropertyValue = union(enum) {
     Float: f64,
     Bool: bool,
     Null,
+    ExtValue: @import("eval_extended.zig").ExtValue,
 };
 
 pub const GraphStore = struct {
@@ -376,6 +377,7 @@ pub const GraphStore = struct {
                     .Float => 2,
                     .Bool => 3,
                     .Null => 4,
+                    .ExtValue => 5, // ExtValue types
                 };
                 _ = try file.write(&[1]u8{val_type});
 
@@ -401,6 +403,108 @@ pub const GraphStore = struct {
                     },
                     .Null => {
                         // Nothing to write for null
+                    },
+                    .ExtValue => |ext| {
+                        // Write sub-type byte to distinguish ExtValue variants
+                        const sub_type: u8 = switch (ext) {
+                            .Null => 0,
+                            .Int => 1,
+                            .Bool => 2,
+                            .Str => 3,
+                            .Decimal => 4,
+                            .IpAddr => 5,
+                            .Subnet => 6,
+                            .Mac => 7,
+                            .Hash => 8,
+                            .Currency => 9,
+                            .LanguageTag => 10,
+                            .LatLon => 11,
+                            .LatLonAlt => 12,
+                            .Geometry => 13,
+                            .Temperature => 14,
+                            .Pressure => 15,
+                            .VectorF32 => 16,
+                            .Date => 17,
+                            .Time => 18,
+                            .TimestampTZ => 19,
+                            .List => 20,
+                        };
+                        _ = try file.write(&[1]u8{sub_type});
+
+                        // Write the actual data based on sub-type
+                        switch (ext) {
+                            .Null => {},
+                            .Int => |i| {
+                                var buf: [8]u8 = undefined;
+                                std.mem.writeInt(i64, &buf, i, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .Bool => |b| {
+                                _ = try file.write(&[1]u8{if (b) 1 else 0});
+                            },
+                            .Str => |s| {
+                                var len_buf: [4]u8 = undefined;
+                                std.mem.writeInt(u32, &len_buf, @intCast(s.len), .little);
+                                _ = try file.write(&len_buf);
+                                _ = try file.write(s);
+                            },
+                            .Decimal => |d| {
+                                var buf: [17]u8 = undefined;
+                                std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
+                                buf[16] = d.scale;
+                                _ = try file.write(&buf);
+                            },
+                            .IpAddr => |ip| {
+                                const is_v6: u8 = if (ip == .v6) 1 else 0;
+                                _ = try file.write(&[1]u8{is_v6});
+                                if (ip == .v4) {
+                                    _ = try file.write(&ip.v4);
+                                } else {
+                                    _ = try file.write(&ip.v6);
+                                }
+                            },
+                            .Subnet => |subnet| {
+                                // First write the IpAddr
+                                const is_v6: u8 = if (subnet.addr == .v6) 1 else 0;
+                                _ = try file.write(&[1]u8{is_v6});
+                                if (subnet.addr == .v4) {
+                                    _ = try file.write(&subnet.addr.v4);
+                                } else {
+                                    _ = try file.write(&subnet.addr.v6);
+                                }
+                                // Then write prefix length
+                                _ = try file.write(&[1]u8{subnet.prefix_len});
+                            },
+                            .Mac => |mac| {
+                                _ = try file.write(&mac.bytes);
+                            },
+                            .LatLon => |ll| {
+                                var buf: [16]u8 = undefined;
+                                std.mem.writeInt(u64, buf[0..8], @bitCast(ll.lat), .little);
+                                std.mem.writeInt(u64, buf[8..16], @bitCast(ll.lon), .little);
+                                _ = try file.write(&buf);
+                            },
+                            .LatLonAlt => |lla| {
+                                var buf: [25]u8 = undefined;
+                                std.mem.writeInt(u64, buf[0..8], @bitCast(lla.lat), .little);
+                                std.mem.writeInt(u64, buf[8..16], @bitCast(lla.lon), .little);
+                                std.mem.writeInt(u64, buf[16..24], @bitCast(lla.alt), .little);
+                                buf[24] = @intFromEnum(lla.ref);
+                                _ = try file.write(&buf);
+                            },
+                            .Geometry => |geom| {
+                                var len_buf: [4]u8 = undefined;
+                                std.mem.writeInt(u32, &len_buf, @intCast(geom.wkb.len), .little);
+                                _ = try file.write(&len_buf);
+                                _ = try file.write(geom.wkb);
+                            },
+                            .Currency => |cur| {
+                                _ = try file.write(&cur.code);
+                            },
+                            else => {
+                                // TODO: Implement serialization for remaining types (Hash, LanguageTag, Temperature, Pressure, VectorF32, Date, Time, TimestampTZ, List)
+                            },
+                        }
                     },
                 }
             }
@@ -523,6 +627,118 @@ pub const GraphStore = struct {
                         break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
                     },
                     4 => PropertyValue{ .Null = {} }, // Null
+                    5 => blk: { // ExtValue
+                        const ext_eval = @import("eval_extended.zig");
+                        const heap_mod = @import("storage/heap.zig");
+
+                        // Read sub-type byte
+                        var sub_type_buf: [1]u8 = undefined;
+                        if ((try file.read(&sub_type_buf)) < 1) break :blk PropertyValue{ .Null = {} };
+                        const sub_type = sub_type_buf[0];
+
+                        const ext_value = switch (sub_type) {
+                            0 => ext_eval.ExtValue{ .Null = {} },
+                            1 => blk2: { // Int
+                                var buf: [8]u8 = undefined;
+                                if ((try file.read(&buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const val = std.mem.readInt(i64, &buf, .little);
+                                break :blk2 ext_eval.ExtValue{ .Int = val };
+                            },
+                            2 => blk2: { // Bool
+                                var buf: [1]u8 = undefined;
+                                if ((try file.read(&buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Bool = buf[0] != 0 };
+                            },
+                            3 => blk2: { // Str
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const len = std.mem.readInt(u32, &len_buf, .little);
+                                const str_data = try self.allocator.alloc(u8, len);
+                                if ((try file.read(str_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Str = str_data };
+                            },
+                            4 => blk2: { // Decimal
+                                var buf: [17]u8 = undefined;
+                                if ((try file.read(&buf)) < 17) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const coeff = std.mem.readInt(i128, buf[0..16], .little);
+                                const scale = buf[16];
+                                break :blk2 ext_eval.ExtValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
+                            },
+                            5 => blk2: { // IpAddr
+                                var is_v6_buf: [1]u8 = undefined;
+                                if ((try file.read(&is_v6_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const is_v6 = is_v6_buf[0] != 0;
+
+                                if (is_v6) {
+                                    var addr_buf: [16]u8 = undefined;
+                                    if ((try file.read(&addr_buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    break :blk2 ext_eval.ExtValue{ .IpAddr = .{ .v6 = addr_buf } };
+                                } else {
+                                    var addr_buf: [4]u8 = undefined;
+                                    if ((try file.read(&addr_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    break :blk2 ext_eval.ExtValue{ .IpAddr = .{ .v4 = addr_buf } };
+                                }
+                            },
+                            6 => blk2: { // Subnet
+                                var is_v6_buf: [1]u8 = undefined;
+                                if ((try file.read(&is_v6_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const is_v6 = is_v6_buf[0] != 0;
+
+                                const addr = if (is_v6) blk3: {
+                                    var addr_buf: [16]u8 = undefined;
+                                    if ((try file.read(&addr_buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    break :blk3 heap_mod.IpAddr{ .v6 = addr_buf };
+                                } else blk3: {
+                                    var addr_buf: [4]u8 = undefined;
+                                    if ((try file.read(&addr_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    break :blk3 heap_mod.IpAddr{ .v4 = addr_buf };
+                                };
+
+                                var prefix_len_buf: [1]u8 = undefined;
+                                if ((try file.read(&prefix_len_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const prefix_len = prefix_len_buf[0];
+
+                                break :blk2 ext_eval.ExtValue{ .Subnet = .{ .addr = addr, .prefix_len = prefix_len } };
+                            },
+                            7 => blk2: { // Mac
+                                var mac_buf: [6]u8 = undefined;
+                                if ((try file.read(&mac_buf)) < 6) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Mac = .{ .bytes = mac_buf } };
+                            },
+                            11 => blk2: { // LatLon
+                                var buf: [16]u8 = undefined;
+                                if ((try file.read(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const lat_bits = std.mem.readInt(u64, buf[0..8], .little);
+                                const lon_bits = std.mem.readInt(u64, buf[8..16], .little);
+                                break :blk2 ext_eval.ExtValue{ .LatLon = .{ .lat = @bitCast(lat_bits), .lon = @bitCast(lon_bits) } };
+                            },
+                            12 => blk2: { // LatLonAlt
+                                var buf: [25]u8 = undefined;
+                                if ((try file.read(&buf)) < 25) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const lat_bits = std.mem.readInt(u64, buf[0..8], .little);
+                                const lon_bits = std.mem.readInt(u64, buf[8..16], .little);
+                                const alt_bits = std.mem.readInt(u64, buf[16..24], .little);
+                                const ref = @as(heap_mod.AltRef, @enumFromInt(buf[24]));
+                                break :blk2 ext_eval.ExtValue{ .LatLonAlt = .{ .lat = @bitCast(lat_bits), .lon = @bitCast(lon_bits), .alt = @bitCast(alt_bits), .ref = ref } };
+                            },
+                            13 => blk2: { // Geometry
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const len = std.mem.readInt(u32, &len_buf, .little);
+                                const wkb_data = try self.allocator.alloc(u8, len);
+                                if ((try file.read(wkb_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Geometry = .{ .wkb = wkb_data } };
+                            },
+                            9 => blk2: { // Currency
+                                var code_buf: [3]u8 = undefined;
+                                if ((try file.read(&code_buf)) < 3) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Currency = .{ .code = code_buf } };
+                            },
+                            else => ext_eval.ExtValue{ .Null = {} }, // TODO: Implement remaining types
+                        };
+
+                        break :blk PropertyValue{ .ExtValue = ext_value };
+                    },
                     else => PropertyValue{ .String = "" },
                 };
 

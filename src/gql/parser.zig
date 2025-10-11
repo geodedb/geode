@@ -2893,6 +2893,40 @@ pub const Parser = struct {
         if (self.cur.kind != .r_paren) return error.UnexpectedToken;
         self.advance();
 
+        // Optional USING index_type (after properties) - Neo4j/Cypher syntax
+        if (self.cur.kind == .USING) {
+            self.advance();
+            if (self.cur.kind == .identifier) {
+                const type_str = self.cur.lexeme;
+                if (std.ascii.eqlIgnoreCase(type_str, "btree") or std.ascii.eqlIgnoreCase(type_str, "BTree")) {
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "hash") or std.ascii.eqlIgnoreCase(type_str, "Hash")) {
+                    index_type = .hash;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "fulltext") or std.ascii.eqlIgnoreCase(type_str, "FullText")) {
+                    index_type = .fulltext;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial") or std.ascii.eqlIgnoreCase(type_str, "RTree")) {
+                    index_type = .spatial;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "vector") or std.ascii.eqlIgnoreCase(type_str, "HNSW")) {
+                    index_type = .vector;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "vector_f32")) {
+                    index_type = .vector_f32;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "spatial_geographic")) {
+                    index_type = .spatial_geographic;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr") or std.ascii.eqlIgnoreCase(type_str, "PatriciaTrie")) {
+                    index_type = .network_cidr;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
+                    index_type = .signature_crypto;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
+                    index_type = .btree;
+                } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
+                    index_type = .btree;
+                }
+                self.advance();
+            }
+        }
+
         // Optional WITH clause for index parameters (parse but ignore for now)
         if (self.cur.kind == .WITH) {
             self.advance();

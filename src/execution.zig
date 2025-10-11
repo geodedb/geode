@@ -233,6 +233,7 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                         .Float => |f| try writer.print("{d}", .{f}),
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
+                        .ExtValue => try writer.writeAll("\"<ExtValue>\""), // Placeholder for ExtValue serialization
                     }
                 }
                 try writer.writeAll("}");
@@ -265,6 +266,7 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                         .Float => |f| try writer.print("{d}", .{f}),
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
+                        .ExtValue => try writer.writeAll("\"<ExtValue>\""), // Placeholder for ExtValue serialization
                     }
                 }
                 try writer.writeAll("}");
@@ -1970,6 +1972,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
                     try store.setNodeProperty(node_id, prop.key, prop_value);
@@ -2001,6 +2004,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
                     try store.setNodeProperty(left_id, prop.key, prop_value);
@@ -2021,6 +2025,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
                     try store.setNodeProperty(right_id, prop.key, prop_value);
@@ -2045,6 +2050,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
                     try store.setEdgeProperty(edge_id, prop.key, prop_value);
@@ -2161,6 +2167,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
                     try store.setNodeProperty(node_id, prop.target.property, prop_value);
@@ -2317,6 +2324,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2359,6 +2367,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2393,6 +2402,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2422,6 +2432,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2496,6 +2507,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2538,6 +2550,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2572,6 +2585,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2601,6 +2615,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -2732,6 +2747,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                                     .Str => |s| graph_store.PropertyValue{ .String = s },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     .Decimal => |d| blk: {
                                         // Convert decimal to float for PropertyValue
                                         const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
@@ -2767,6 +2783,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
                     try store.setNodeProperty(node_id, prop.key, prop_value);
@@ -2785,6 +2802,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                                     .Str => |s| graph_store.PropertyValue{ .String = s },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     .Decimal => |d| blk: {
                                         // Convert decimal to float for PropertyValue
                                         const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
@@ -3096,6 +3114,7 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
                                 .Int => |i| eval.Value{ .Int = i },
                                 .String => |s| eval.Value{ .Str = s },
                                 .Float => eval.Value{ .Null = {} }, // Float not directly supported, skip
+                                .ExtValue => |ext| eval.Value{ .ExtValue = ext },
                             };
                             // Evaluate expected value from pattern
                             const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
@@ -3263,7 +3282,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
     // Extract pattern information from MATCH
     var match_variable: ?[]const u8 = null;
     var match_labels: [][]const u8 = &.{};
-    var match_props: ?[]ast.Property = null;  // NEW: Extract inline property constraints
+    var match_props: ?[]ast.Property = null; // NEW: Extract inline property constraints
     var has_relationship = false;
     var rel_type: ?[]const u8 = null;
     var left_node_var: ?[]const u8 = null;
@@ -3303,12 +3322,12 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             // For now, use left node as the main match variable
             match_variable = left_node_var;
             match_labels = hop.left.labels;
-            match_props = hop.left.props;  // NEW: Extract left node properties
+            match_props = hop.left.props; // NEW: Extract left node properties
         } else if (chain.head) |node_pattern| {
             // Simple node pattern without relationships
             match_variable = node_pattern.name;
             match_labels = node_pattern.labels;
-            match_props = node_pattern.props;  // NEW: Extract node properties
+            match_props = node_pattern.props; // NEW: Extract node properties
         }
     }
 
@@ -3841,6 +3860,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                 .Int => |i| eval.Value{ .Int = i },
                                 .String => |s| eval.Value{ .Str = s },
                                 .Float => eval.Value{ .Null = {} }, // Float not directly supported
+                                .ExtValue => |ext| eval.Value{ .ExtValue = ext },
                             };
                             // Evaluate expected value from pattern (with access to parameters)
                             const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
@@ -3928,6 +3948,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     else => graph_store.PropertyValue{ .Null = {} },
                                 };
                                 try store.setNodeProperty(node.id, prop.target.property, prop_value);
@@ -4216,6 +4237,7 @@ fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *c
                     .Float => |f| return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                     .Bool => |b| return eval.Value{ .Bool = b },
                     .Null => return eval.Value{ .Null = {} },
+                    .ExtValue => |ext| return eval.Value{ .ExtValue = ext },
                 }
             }
             return eval.Value{ .Null = {} };
@@ -4230,6 +4252,7 @@ fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *c
                     .Float => |f| return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                     .Bool => |b| return eval.Value{ .Bool = b },
                     .Null => return eval.Value{ .Null = {} },
+                    .ExtValue => |ext| return eval.Value{ .ExtValue = ext },
                 }
             }
             return eval.Value{ .Null = {} };
@@ -4520,6 +4543,7 @@ fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *gra
                         .Float => |f| return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| return eval.Value{ .Bool = b },
                         .Null => return eval.Value{ .Null = {} },
+                        .ExtValue => |ext| return eval.Value{ .ExtValue = ext },
                     }
                 }
             }
@@ -6416,6 +6440,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                 .Bool => |b| eval.Value{ .Bool = b },
                                 .Float => eval.Value{ .Null = {} }, // TODO: Add float support to eval.Value
                                 .Null => eval.Value{ .Null = {} },
+                                .ExtValue => |ext| eval.Value{ .ExtValue = ext },
                             };
                             if (!valuesEqual(node_val, expected)) {
                                 matches = false;
