@@ -215,6 +215,8 @@ pub const Expr = union(enum) {
     // Path finding functions and pattern comprehensions
     ShortestPath: struct { pattern: *GraphPattern, all: bool },
     PatternCount: *GraphPattern,
+    // Map projection: n {.name, .age} - projects specified properties from an object
+    MapProjection: struct { source: *Expr, fields: [][]const u8 },
 };
 
 pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };
@@ -375,10 +377,10 @@ pub const CreateConstraintStatement = struct {
 };
 
 pub const ConstraintType = enum {
-    unique,      // IS UNIQUE
-    node_key,    // IS NODE KEY
-    not_null,    // IS NOT NULL
-    exists,      // EXISTS (prop) - legacy syntax
+    unique, // IS UNIQUE
+    node_key, // IS NODE KEY
+    not_null, // IS NOT NULL
+    exists, // EXISTS (prop) - legacy syntax
 };
 
 pub const DropIndexStatement = struct {

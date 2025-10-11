@@ -1820,6 +1820,31 @@ pub const Parser = struct {
                 base = .{ .Index = .{ .target = bp, .index = ip } };
                 continue;
             }
+            if (self.cur.kind == .l_brace) {
+                // Map projection: n {.name, .age}
+                self.advance();
+                var fields = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+                // Parse fields: .prop1, .prop2, ...
+                while (self.cur.kind == .dot) {
+                    self.advance();
+                    const field_token = try self.expectIdentifierOrKeyword();
+                    try fields.append(self.arena.allocator(), field_token.lexeme);
+
+                    if (self.cur.kind == .comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                _ = try self.expect(.r_brace);
+                const a = self.arena.allocator();
+                const bp = try a.create(ast.Expr);
+                bp.* = base;
+                base = .{ .MapProjection = .{ .source = bp, .fields = try fields.toOwnedSlice(self.arena.allocator()) } };
+                continue;
+            }
             break;
         }
         return base;
@@ -2978,7 +3003,6 @@ pub const Parser = struct {
 
             // Parse constraint condition
             constraint_type = try self.parseConstraintCondition(pattern_var, &properties);
-
         } else {
             // Legacy syntax: ON :Label ASSERT ...
             if (self.cur.kind != .ON) return error.UnexpectedToken;
@@ -3011,7 +3035,7 @@ pub const Parser = struct {
             .label = label,
             .properties = try properties.toOwnedSlice(self.arena.allocator()),
             .if_not_exists = if_not_exists,
-        }};
+        } };
     }
 
     // Helper: Parse REQUIRE condition (ISO GQL)

@@ -665,5 +665,14 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printGraphPattern(w, pc.*, 0);
             try w.print(")", .{});
         },
+        .MapProjection => |mp| {
+            try printExprWith(w, mp.source.*, 0, opts);
+            try w.print(" {{", .{});
+            for (mp.fields, 0..) |field, i| {
+                if (i > 0) try w.print(", ", .{});
+                try w.print(".{s}", .{field});
+            }
+            try w.print("}}", .{});
+        },
     }
 }

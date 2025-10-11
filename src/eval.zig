@@ -1393,6 +1393,57 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             };
             break :blk_count Value{ .Int = count };
         },
+        .MapProjection => |mp| blk_projection: {
+            // Map projection: n {.name, .age}
+            // Evaluate the source expression
+            const source = try evalExpr(ally, mp.source.*, env);
+
+            // Create a map with projected fields
+            var map = std.StringHashMap(Value).init(ally);
+
+            // Extract fields from the source based on its type
+            for (mp.fields) |field| {
+                const field_value = switch (source) {
+                    .Map => |src_map| blk_field: {
+                        // Try to get the field from the map
+                        const val = src_map.get(field) orelse break :blk_field Value{ .Null = {} };
+                        break :blk_field val;
+                    },
+                    .Node => |node| blk_node: {
+                        // Try to get the property from the node
+                        const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
+                        // Convert PropertyValue to Value
+                        const converted = switch (val) {
+                            .String => |s| Value{ .Str = s },
+                            .Int => |i| Value{ .Int = i },
+                            .Bool => |b| Value{ .Bool = b },
+                            else => Value{ .Null = {} },
+                        };
+                        break :blk_node converted;
+                    },
+                    .Edge => |edge| blk_edge: {
+                        // Try to get the property from the edge
+                        const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
+                        // Convert PropertyValue to Value
+                        const converted = switch (val) {
+                            .String => |s| Value{ .Str = s },
+                            .Int => |i| Value{ .Int = i },
+                            .Bool => |b| Value{ .Bool = b },
+                            else => Value{ .Null = {} },
+                        };
+                        break :blk_edge converted;
+                    },
+                    .ExtValue => |_| blk_ext: {
+                        // ExtValue types don't support property access
+                        break :blk_ext Value{ .Null = {} };
+                    },
+                    else => Value{ .Null = {} },
+                };
+                try map.put(field, field_value);
+            }
+
+            break :blk_projection Value{ .Map = map };
+        },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };
