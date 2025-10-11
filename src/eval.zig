@@ -1496,6 +1496,18 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         return Value{ .Str = "system" };
     }
 
+    // Handle coalesce() function - return first non-null value
+    if (std.mem.eql(u8, function_name, "coalesce")) {
+        for (args) |arg_expr| {
+            const arg = try evalExpr(ally, arg_expr.*, env);
+            switch (arg) {
+                .Null => continue,
+                else => return arg,
+            }
+        }
+        return Value{ .Null = {} };
+    }
+
     // Handle keys() function for maps
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;
