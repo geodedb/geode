@@ -68,13 +68,13 @@ tests:
 
   # String Literal Handling
   - name: single-quote-strings
-    args: ["query", "CREATE (n:Text {message: 'Hello, World!'})) RETURN n.message", "--format", "json"]
+    args: ["query", "CREATE (n:Text {message: 'Hello, World!'}) RETURN n.message", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["Hello, World!"]
 
   - name: escaped-single-quotes
-    args: ["query", "CREATE (n:Text {message: 'It''s working'})) RETURN n.message", "--format", "json"]
+    args: ["query", "CREATE (n:Text {message: 'It''s working'}) RETURN n.message", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["It's working"]
