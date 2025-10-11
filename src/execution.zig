@@ -1638,7 +1638,7 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
     if (q.with_clause) |with_clause| {
         // Create initial empty result with one row
         var initial_result = ExecutionResult{
-            .columns = &.{},
+            .columns = try allocator.alloc([]const u8, 0),
             .rows = try allocator.alloc([]eval.Value, 1),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
@@ -1872,10 +1872,11 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
 
         var columns = try allocator.alloc([]const u8, with_clause.items.len);
         for (with_clause.items, 0..) |item, i| {
-            columns[i] = item.alias orelse switch (item.expr) {
+            const col_name = item.alias orelse switch (item.expr) {
                 .Ident => |ident| ident.orig,
                 else => "column",
             };
+            columns[i] = try allocator.dupe(u8, col_name);
         }
 
         result = ExecutionResult{
@@ -1886,8 +1887,8 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
     } else {
         // No WITH clause - created nodes are ready for SET/RETURN
         result = ExecutionResult{
-            .columns = &.{},
-            .rows = &.{},
+            .columns = try allocator.alloc([]const u8, 0),
+            .rows = try allocator.alloc([]eval.Value, 0),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }
@@ -2040,12 +2041,13 @@ fn executeReturnClauseWithNodes(allocator: std.mem.Allocator, ret: ast.ReturnCla
     };
 
     for (items, 0..) |item, i| {
-        columns[i] = item.alias orelse switch (item.expr) {
+        const col_name = item.alias orelse switch (item.expr) {
             .Ident => |ident| ident.orig,
             .PropertyAccess => |prop| prop.property,
             .Member => |mem| mem.field,
             else => "column",
         };
+        columns[i] = try allocator.dupe(u8, col_name);
         row[i] = try eval.evalExpr(allocator, item.expr, env);
     }
 
