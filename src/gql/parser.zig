@@ -1062,6 +1062,29 @@ pub const Parser = struct {
             filter_expr = try self.parseOrExpr();
         }
 
+        // Parse inline LET clause (after MATCH/WHERE/FILTER, before WITH/RETURN)
+        // Syntax: MATCH ... LET var1 = expr1, var2 = expr2 RETURN ...
+        // Note: These are computed bindings (no $ prefix), different from parameter bindings
+        var inline_let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        if (self.cur.kind == .LET) {
+            self.advance();
+            while (true) {
+                // Parse variable name (no $ prefix for inline LET)
+                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after LET");
+                const var_name = self.cur.lexeme;
+                self.advance();
+                _ = try self.expect(.eq);
+                const value_expr = try self.parseOrExpr();
+                try inline_let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
+                // Allow comma for multiple bindings: LET x = 1, y = 2
+                if (self.cur.kind == .comma) {
+                    self.advance();
+                    continue;
+                }
+                break;
+            }
+        }
+
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
         // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
         var next_query_ptr: ?*ast.Query = null;
@@ -1305,8 +1328,13 @@ pub const Parser = struct {
             limit = try std.fmt.parseInt(usize, n.lexeme, 10);
         }
 
+        // Merge let_bindings from the beginning and inline_let_bindings from after MATCH
+        var all_let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), let_bindings.items.len + inline_let_bindings.items.len) catch @panic("OOM");
+        try all_let_bindings.appendSlice(self.arena.allocator(), let_bindings.items);
+        try all_let_bindings.appendSlice(self.arena.allocator(), inline_let_bindings.items);
+
         return .{
-            .let_bindings = try let_bindings.toOwnedSlice(self.arena.allocator()),
+            .let_bindings = try all_let_bindings.toOwnedSlice(self.arena.allocator()),
             .optional_match = optional_match,
             .match = pat,
             .create_pattern = create_pattern,
