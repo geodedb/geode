@@ -809,6 +809,31 @@ pub const Parser = struct {
             // Note: WHERE after WITH filters the WITH results, not graph patterns
         }
 
+        // Check for SELECT at the beginning (for queries like: SELECT 1 AS x)
+        // SELECT maps to RETURN semantics with empty match pattern
+        if (self.cur.kind == .SELECT) {
+            self.advance();
+            var distinct = false;
+            if (self.cur.kind == .DISTINCT) {
+                distinct = true;
+                self.advance();
+            }
+            var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            try self.parseProjectionItems(&items);
+            // Return minimal query with SELECT-based return clause
+            return ast.Query{
+                .optional_match = false,
+                .match = .{ .chains = &.{} },
+                .where_clause = null,
+                .with_clause = null,
+                .ret = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct },
+                .order_by = null,
+                .limit = null,
+                .offset = null,
+                .next_query = null,
+            };
+        }
+
         // Check for CREATE at the beginning
         if (self.cur.kind == .CREATE) {
             have_create = true;
