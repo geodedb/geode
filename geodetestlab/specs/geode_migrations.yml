@@ -143,6 +143,7 @@ tests:
 
   # Complex Migration Scenarios
   - name: merge-duplicate-nodes
+    skip: true  # Neo4j-specific - uses CALL apoc.refactor.mergeNodes procedure
     args: ["query", "MATCH (u1:User), (u2:User) WHERE u1.email = u2.email AND id(u1) < id(u2) CALL apoc.refactor.mergeNodes([u1, u2]) YIELD node RETURN count(node)", "--format", "json"]
     expect:
       exit_code: 0
@@ -187,6 +188,7 @@ tests:
       stdout_contains: ["500"]
 
   - name: parallel-migration-simulation
+    skip: true  # Neo4j-specific - uses CALL apoc.periodic.iterate procedure
     args: ["query", "CALL apoc.periodic.iterate('MATCH (n:TestNode) RETURN n', 'SET n.processed = true', {batchSize: 100, parallel: true}) YIELD batches RETURN batches", "--format", "json"]
     expect:
       exit_code: 0
@@ -194,6 +196,7 @@ tests:
 
   # Schema Validation Tests
   - name: validate-schema-after-migration
+    skip: true  # Neo4j-specific - uses CALL db.schema procedure
     args: ["query", "CALL db.schema() YIELD nodes, relationships RETURN size(nodes) AS nodeTypes, size(relationships) AS relTypes", "--format", "json"]
     expect:
       exit_code: 0
@@ -213,6 +216,7 @@ tests:
       stdout_contains: ["0"]
 
   - name: drop-all-indexes
+    skip: true  # Neo4j-specific - uses CALL db.indexes and db.index.drop procedures
     args: ["query", "CALL db.indexes() YIELD name CALL db.index.drop(name) YIELD name AS dropped RETURN count(dropped)", "--format", "json"]
     expect:
       exit_code: 0

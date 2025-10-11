@@ -171,6 +171,8 @@ pub const TokenKind = enum {
     RECORD,
     REPEATABLE,
     REPLACE,
+    REQUIRE,
+    ASSERT,
     SCHEMA,
     SHORTEST,
     SIMPLE,
@@ -350,6 +352,8 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "RECORD")) return .RECORD;
     if (std.ascii.eqlIgnoreCase(word, "REPEATABLE")) return .REPEATABLE;
     if (std.ascii.eqlIgnoreCase(word, "REPLACE")) return .REPLACE;
+    if (std.ascii.eqlIgnoreCase(word, "REQUIRE")) return .REQUIRE;
+    if (std.ascii.eqlIgnoreCase(word, "ASSERT")) return .ASSERT;
     if (std.ascii.eqlIgnoreCase(word, "SCHEMA")) return .SCHEMA;
     if (std.ascii.eqlIgnoreCase(word, "SHORTEST")) return .SHORTEST;
     if (std.ascii.eqlIgnoreCase(word, "SIMPLE")) return .SIMPLE;

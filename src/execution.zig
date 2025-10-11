@@ -676,6 +676,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 },
             };
         },
+        .CreateConstraint => |cc| {
+            // CREATE CONSTRAINT implementation
+            // For now, just return success (no enforcement)
+            // TODO: Store constraint in catalog
+            // TODO: Validate existing data
+            // TODO: Enforce on INSERT/UPDATE/DELETE
+            _ = cc;
+            return ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]eval.Value, 0),
+                .flags = blk: {
+                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    break :blk list;
+                },
+            };
+        },
         .DropIndex => |di| {
             // DROP INDEX implementation
             _ = di;

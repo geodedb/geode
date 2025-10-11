@@ -135,9 +135,9 @@ tests:
 
   # Schema introspection
   - name: "describe-schema"
+    skip: true  # Neo4j-specific - uses CALL db.schema.visualization procedure
     description: "Describe database schema"
-# Non-GQL:     args: ["query", "--no-quic", "CALL db.schema.visualization()"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL db.schema.visualization()"]
     expect:
       exit_code: 0
       geode_query:
@@ -145,9 +145,9 @@ tests:
     tags: ["schema", "introspection"]
 
   - name: "list-node-labels"
+    skip: true  # Neo4j-specific - uses CALL db.labels procedure
     description: "List all node labels"
-# Non-GQL:     args: ["query", "--no-quic", "CALL db.labels()"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL db.labels()"]
     expect:
       exit_code: 0
       geode_query:
@@ -155,9 +155,9 @@ tests:
     tags: ["schema", "labels"]
 
   - name: "list-relationship-types"
+    skip: true  # Neo4j-specific - uses CALL db.relationshipTypes procedure
     description: "List all relationship types"
-# Non-GQL:     args: ["query", "--no-quic", "CALL db.relationshipTypes()"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL db.relationshipTypes()"]
     expect:
       exit_code: 0
       geode_query:
@@ -165,9 +165,9 @@ tests:
     tags: ["schema", "relationships"]
 
   - name: "database-statistics"
+    skip: true  # Neo4j-specific - uses CALL db.stats procedure
     description: "Get database statistics"
-# Non-GQL:     args: ["query", "--no-quic", "CALL db.stats()"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL db.stats()"]
     expect:
       exit_code: 0
       geode_query:
@@ -231,9 +231,9 @@ tests:
 
   # Performance and monitoring
   - name: "query-performance-stats"
+    skip: true  # Neo4j-specific - uses CALL db.queryStats procedure
     description: "Get query performance statistics"
-# Non-GQL:     args: ["query", "--no-quic", "CALL db.queryStats()"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL db.queryStats()"]
     expect:
       exit_code: 0
       geode_query:
@@ -279,9 +279,9 @@ tests:
 
   # Federation testing (if available)
   - name: "test-federation-setup"
+    skip: true  # Neo4j-specific - uses CALL federation.status procedure
     description: "Test federation configuration"
-# Non-GQL:     args: ["query", "--no-quic", "CALL federation.status()"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL federation.status()"]
     expect:
       exit_code: 0
       geode_query:
@@ -290,18 +290,18 @@ tests:
 
   # Import/Export operations
   - name: "export-graph-data"
+    skip: true  # Neo4j-specific - uses CALL apoc.export.graphml.all procedure
     description: "Export graph data to file"
-# Non-GQL:     args: ["query", "--no-quic", "CALL apoc.export.graphml.all('/tmp/geode_export.graphml', {})"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL apoc.export.graphml.all('/tmp/geode_export.graphml', {})"]
     expect:
       exit_code: 0
       stdout_contains: ["export", "completed"]
     tags: ["export", "graphml"]
 
   - name: "import-graph-data"
+    skip: true  # Neo4j-specific - uses CALL apoc.import.graphml procedure
     description: "Import graph data from file"
-# Non-GQL:     args: ["query", "--no-quic", "CALL apoc.import.graphml('/tmp/geode_export.graphml', {})"]
-    args: ["query", "--no-quic", "RETURN 'Non-GQL procedure not supported' AS message"]
+    args: ["query", "--no-quic", "CALL apoc.import.graphml('/tmp/geode_export.graphml', {})"]
     expect:
       exit_code: 0
       stdout_contains: ["import", "completed"]

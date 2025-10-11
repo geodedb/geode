@@ -31,6 +31,8 @@ pub const Statement = union(enum) {
     // Index operations
     CreateIndex: CreateIndexStatement,
     DropIndex: DropIndexStatement,
+    // Constraint operations
+    CreateConstraint: CreateConstraintStatement,
     Show: ShowStatement,
     // Backup operations
     Backup: BackupStatement,
@@ -360,6 +362,21 @@ pub const CreateIndexStatement = struct {
     label: []const u8,
     properties: [][]const u8,
     if_not_exists: bool = false,
+};
+
+pub const CreateConstraintStatement = struct {
+    name: []const u8,
+    constraint_type: ConstraintType,
+    label: []const u8,
+    properties: [][]const u8,
+    if_not_exists: bool = false,
+};
+
+pub const ConstraintType = enum {
+    unique,      // IS UNIQUE
+    node_key,    // IS NODE KEY
+    not_null,    // IS NOT NULL
+    exists,      // EXISTS (prop) - legacy syntax
 };
 
 pub const DropIndexStatement = struct {

@@ -160,6 +160,7 @@ fn tagName(st: ast.Statement) []const u8 {
         .Call => "Call",
         .CreateIndex => "CreateIndex",
         .DropIndex => "DropIndex",
+        .CreateConstraint => "CreateConstraint",
         .Show => "Show",
         .Backup => "Backup",
         .Restore => "Restore",
