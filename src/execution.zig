@@ -3,6 +3,29 @@ const ast = @import("gql/ast.zig");
 const eval = @import("eval.zig");
 const graph_store = @import("graph_store.zig");
 
+// Global catalog for tracking schemas, graphs, and indexes
+var catalog_mutex = std.Thread.Mutex{};
+var catalog_initialized = false;
+var catalog: struct {
+    schemas: std.StringHashMap(void),
+    graphs: std.StringHashMap(void),
+    indexes: std.StringHashMap(void),
+} = undefined;
+
+fn initCatalog() void {
+    if (!catalog_initialized) {
+        catalog_mutex.lock();
+        defer catalog_mutex.unlock();
+        if (!catalog_initialized) {
+            const allocator = std.heap.page_allocator;
+            catalog.schemas = std.StringHashMap(void).init(allocator);
+            catalog.graphs = std.StringHashMap(void).init(allocator);
+            catalog.indexes = std.StringHashMap(void).init(allocator);
+            catalog_initialized = true;
+        }
+    }
+}
+
 // Binding for MATCH variables (node/edge references)
 pub const Binding = union(enum) {
     node_id: u64,
@@ -730,9 +753,28 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeProfile(allocator, prof, context);
         },
         .CreateIndex => |ci| {
-            // CREATE INDEX implementation
-            // For now, just acknowledge the creation without actually building index
-            _ = ci;
+            // CREATE INDEX implementation with validation
+            initCatalog();
+
+            const index_name = ci.name;
+
+            catalog_mutex.lock();
+            defer catalog_mutex.unlock();
+
+            // Check if index already exists
+            if (!ci.if_not_exists and catalog.indexes.contains(index_name)) {
+                return error.DuplicateIndex;
+            }
+
+            // Validate index type - check for invalid index types
+            // Note: index_type is an enum, not optional
+            // We could check for invalid values if needed
+
+            // Add to catalog if not exists
+            if (!catalog.indexes.contains(index_name)) {
+                try catalog.indexes.put(try std.heap.page_allocator.dupe(u8, index_name), {});
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
@@ -809,15 +851,28 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
                     result = try executeCallSubquery(allocator, subq, context);
-                }
+                },
             }
 
             return result;
         },
         .CreateGraph => |cg| {
-            // CREATE GRAPH implementation
-            // Store the graph metadata in a global registry
-            _ = cg;
+            // CREATE GRAPH implementation with duplicate detection
+            initCatalog();
+
+            const graph_name = cg.name;
+
+            catalog_mutex.lock();
+            defer catalog_mutex.unlock();
+
+            // Check if graph already exists
+            if (catalog.graphs.contains(graph_name)) {
+                return error.DuplicateGraph;
+            }
+
+            // Add to catalog
+            try catalog.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
@@ -834,8 +889,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraph => |dg| {
-            // DROP GRAPH implementation
-            _ = dg;
+            // DROP GRAPH implementation with existence check
+            initCatalog();
+
+            const graph_name = dg.name;
+
+            catalog_mutex.lock();
+            defer catalog_mutex.unlock();
+
+            // Check if graph exists (unless IF EXISTS is used)
+            if (!dg.if_exists and !catalog.graphs.contains(graph_name)) {
+                return error.GraphNotFound;
+            }
+
+            // Remove from catalog if it exists
+            _ = catalog.graphs.remove(graph_name);
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
@@ -4859,6 +4928,11 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
             // UNION ALL - append all rows
             var part_result = try executeQueryNoLimit(allocator, part.query);
             defer part_result.deinit(allocator);
+
+            // Validate column count match
+            if (part_result.columns.len != result.columns.len) {
+                return error.UnionColumnCountMismatch;
+            }
 
             // Append rows to result
             const old_rows = result.rows;

@@ -713,11 +713,15 @@ pub const Parser = struct {
                         };
                     }
 
-                    break :blk_call .{ .Call = .{ .Subquery = .{
-                        .query = subquery,
-                        .imported_vars = null, // TODO: support imported variables
-                        .return_clause = return_clause,
-                    } } };
+                    break :blk_call .{
+                        .Call = .{
+                            .Subquery = .{
+                                .query = subquery,
+                                .imported_vars = null, // TODO: support imported variables
+                                .return_clause = return_clause,
+                            },
+                        },
+                    };
                 } else {
                     // Traditional procedure call (e.g., db.labels())
                     const procedure = try self.parseOrExpr();
@@ -751,35 +755,13 @@ pub const Parser = struct {
                     var order_by: ?ast.OrderBy = null;
                     if (return_clause != null and self.cur.kind == .ORDER) {
                         self.advance();
-                    _ = try self.expect(.BY);
-                    var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    const expr1 = try self.parseOrExpr();
-                    var desc1 = false;
-                    var nulls1: ast.OrderBy.NullsPolicy = .default;
-                    if (self.cur.kind == .DESC) {
-                        desc1 = true;
-                        self.advance();
-                    } else if (self.cur.kind == .ASC) {
-                        self.advance();
-                    }
-                    if (self.cur.kind == .NULLS) {
-                        self.advance();
-                        if (self.cur.kind == .FIRST) {
-                            nulls1 = .first;
-                            self.advance();
-                        } else if (self.cur.kind == .LAST) {
-                            nulls1 = .last;
-                            self.advance();
-                        }
-                    }
-                    try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
-                    while (self.cur.kind == .comma) {
-                        self.advance();
-                        const exprk = try self.parseOrExpr();
-                        var desk = false;
-                        var nullsk: ast.OrderBy.NullsPolicy = .default;
+                        _ = try self.expect(.BY);
+                        var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        const expr1 = try self.parseOrExpr();
+                        var desc1 = false;
+                        var nulls1: ast.OrderBy.NullsPolicy = .default;
                         if (self.cur.kind == .DESC) {
-                            desk = true;
+                            desc1 = true;
                             self.advance();
                         } else if (self.cur.kind == .ASC) {
                             self.advance();
@@ -787,37 +769,59 @@ pub const Parser = struct {
                         if (self.cur.kind == .NULLS) {
                             self.advance();
                             if (self.cur.kind == .FIRST) {
-                                nullsk = .first;
+                                nulls1 = .first;
                                 self.advance();
                             } else if (self.cur.kind == .LAST) {
-                                nullsk = .last;
+                                nulls1 = .last;
                                 self.advance();
                             }
                         }
-                        try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = desk, .nulls = nullsk });
+                        try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
+                        while (self.cur.kind == .comma) {
+                            self.advance();
+                            const exprk = try self.parseOrExpr();
+                            var desk = false;
+                            var nullsk: ast.OrderBy.NullsPolicy = .default;
+                            if (self.cur.kind == .DESC) {
+                                desk = true;
+                                self.advance();
+                            } else if (self.cur.kind == .ASC) {
+                                self.advance();
+                            }
+                            if (self.cur.kind == .NULLS) {
+                                self.advance();
+                                if (self.cur.kind == .FIRST) {
+                                    nullsk = .first;
+                                    self.advance();
+                                } else if (self.cur.kind == .LAST) {
+                                    nullsk = .last;
+                                    self.advance();
+                                }
+                            }
+                            try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = desk, .nulls = nullsk });
+                        }
+                        order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
                     }
-                    order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
-                }
 
-                // Optional LIMIT clause
-                var limit: ?usize = null;
-                if (self.cur.kind == .LIMIT) {
-                    self.advance();
-                    if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
-                    const lim_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
-                    limit = lim_val;
-                    self.advance();
-                }
+                    // Optional LIMIT clause
+                    var limit: ?usize = null;
+                    if (self.cur.kind == .LIMIT) {
+                        self.advance();
+                        if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
+                        const lim_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
+                        limit = lim_val;
+                        self.advance();
+                    }
 
-                // Optional OFFSET/SKIP clause
-                var offset: ?usize = null;
-                if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                    self.advance();
-                    if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
-                    const off_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
-                    offset = off_val;
-                    self.advance();
-                }
+                    // Optional OFFSET/SKIP clause
+                    var offset: ?usize = null;
+                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+                        self.advance();
+                        if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
+                        const off_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
+                        offset = off_val;
+                        self.advance();
+                    }
 
                     break :blk_call .{ .Call = .{ .Procedure = .{
                         .procedure = procedure,

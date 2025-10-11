@@ -81,10 +81,29 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"US001\",\"message\":\"OFFSET requires ORDER BY clause\",\"additional_statuses\":[]}}", .{});
         }
         if (err == error.NoActiveTransaction) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"2D000\",\"message\":\"No active transaction\",\"additional_statuses\":[]}}", .{});
+            // Use 0A000 generic error code as tests expect
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"message\":\"No active transaction\",\"additional_statuses\":[]}}", .{});
         }
         if (err == error.TransactionAlreadyActive) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"25001\",\"message\":\"Transaction already active\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.DuplicateGraph) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate graph name\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.GraphNotFound) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"3F000\",\"message\":\"Graph does not exist\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.DuplicateIndex) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate index name\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.InvalidIndexType) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid index type\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.InvalidTypeConversion) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22003\",\"message\":\"Invalid type conversion\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.CharLengthExceeded) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22001\",\"message\":\"String data right truncation\",\"additional_statuses\":[]}}", .{});
         }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
