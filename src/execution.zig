@@ -1812,9 +1812,9 @@ fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: E
         };
     }
 
-    // Otherwise, execute the query normally (complex patterns not yet supported with chaining)
-    // This would require more sophisticated binding injection into executeMatchQuery
-    return error.NotImplemented;
+    // Otherwise, execute the query normally with bindings available as parameters
+    // Execute the full query with bindings passed as parameters
+    return executeMatchQueryImpl(allocator, q, binding_names, binding_values, &.{});
 }
 
 fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
@@ -6684,39 +6684,121 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 }
             }
         } else if (chain.hops.len > 0) {
-            // Count relationship patterns
+            // Count relationship patterns - optimized to avoid O(N² × E) complexity
             const hop = chain.hops[0];
+            const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
 
-            // Find all pairs of nodes connected by the specified relationship
-            var left_iter = store.nodes.iterator();
-            while (left_iter.next()) |left_entry| {
-                const left_node = left_entry.value_ptr.*;
+            // Optimized path: iterate edges directly instead of N×N×E nested loops
+            var edge_iter = store.edges.iterator();
+            while (edge_iter.next()) |edge_entry| {
+                const edge = edge_entry.value_ptr.*;
 
-                // Check left node pattern
-                var left_matches = true;
-                for (hop.left.labels) |required_label| {
-                    var has_label = false;
-                    for (left_node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            has_label = true;
-                            break;
-                        }
-                    }
-                    if (!has_label) {
-                        left_matches = false;
-                        break;
-                    }
+                // Filter by relationship type if specified
+                if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
+                    continue;
                 }
 
-                if (!left_matches) continue;
+                // Get the nodes connected by this edge
+                const from_node = store.nodes.get(edge.from_id) orelse continue;
+                const to_node = store.nodes.get(edge.to_id) orelse continue;
 
-                // Check relationships from this node
-                var right_iter = store.nodes.iterator();
-                while (right_iter.next()) |right_entry| {
-                    const right_node = right_entry.value_ptr.*;
+                // Determine which node should match left/right based on direction
+                const matches_direction = blk: {
+                    var left_node: graph_store.Node = undefined;
+                    var right_node: graph_store.Node = undefined;
 
-                    // Check right node pattern
-                    var right_matches = true;
+                    switch (hop.rel.dir) {
+                        .right => {
+                            left_node = from_node;
+                            right_node = to_node;
+                        },
+                        .left => {
+                            left_node = to_node;
+                            right_node = from_node;
+                        },
+                        .undirected => {
+                            // For undirected, try both directions
+                            // First try: from->to
+                            var try1 = true;
+                            for (hop.left.labels) |required_label| {
+                                var has_label = false;
+                                for (from_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        has_label = true;
+                                        break;
+                                    }
+                                }
+                                if (!has_label) {
+                                    try1 = false;
+                                    break;
+                                }
+                            }
+                            if (try1) {
+                                for (hop.right.labels) |required_label| {
+                                    var has_label = false;
+                                    for (to_node.labels) |node_label| {
+                                        if (std.mem.eql(u8, required_label, node_label)) {
+                                            has_label = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!has_label) {
+                                        try1 = false;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Second try: to->from
+                            var try2 = true;
+                            for (hop.left.labels) |required_label| {
+                                var has_label = false;
+                                for (to_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        has_label = true;
+                                        break;
+                                    }
+                                }
+                                if (!has_label) {
+                                    try2 = false;
+                                    break;
+                                }
+                            }
+                            if (try2) {
+                                for (hop.right.labels) |required_label| {
+                                    var has_label = false;
+                                    for (from_node.labels) |node_label| {
+                                        if (std.mem.eql(u8, required_label, node_label)) {
+                                            has_label = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!has_label) {
+                                        try2 = false;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            break :blk (try1 or try2);
+                        },
+                    }
+
+                    // Check left node matches pattern
+                    for (hop.left.labels) |required_label| {
+                        var has_label = false;
+                        for (left_node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                has_label = true;
+                                break;
+                            }
+                        }
+                        if (!has_label) {
+                            break :blk false;
+                        }
+                    }
+
+                    // Check right node matches pattern
                     for (hop.right.labels) |required_label| {
                         var has_label = false;
                         for (right_node.labels) |node_label| {
@@ -6726,52 +6808,15 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                             }
                         }
                         if (!has_label) {
-                            right_matches = false;
-                            break;
+                            break :blk false;
                         }
                     }
 
-                    if (!right_matches) continue;
+                    break :blk true;
+                };
 
-                    // Check for relationship between nodes
-                    const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
-
-                    var edge_iter = store.edges.iterator();
-                    while (edge_iter.next()) |edge_entry| {
-                        const edge = edge_entry.value_ptr.*;
-
-                        // Check if edge connects these nodes with the right type and direction
-                        var edge_matches = false;
-
-                        switch (hop.rel.dir) {
-                            .right => {
-                                if (edge.from_id == left_node.id and edge.to_id == right_node.id) {
-                                    edge_matches = true;
-                                }
-                            },
-                            .left => {
-                                if (edge.from_id == right_node.id and edge.to_id == left_node.id) {
-                                    edge_matches = true;
-                                }
-                            },
-                            .undirected => {
-                                if ((edge.from_id == left_node.id and edge.to_id == right_node.id) or
-                                    (edge.from_id == right_node.id and edge.to_id == left_node.id))
-                                {
-                                    edge_matches = true;
-                                }
-                            },
-                        }
-
-                        if (edge_matches and rel_type != null) {
-                            edge_matches = std.mem.eql(u8, edge.label, rel_type.?);
-                        }
-
-                        if (edge_matches) {
-                            count += 1;
-                            break; // Count each matching pair once
-                        }
-                    }
+                if (matches_direction) {
+                    count += 1;
                 }
             }
         }
