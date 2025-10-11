@@ -297,6 +297,24 @@ pub const Lexer = struct {
             self.col = save_col;
             return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
         }
+        // Special handling for VALUES/KEYS/LABELS: if followed by '(', treat as function call (identifier)
+        if (kind == .VALUES or kind == .KEYS or kind == .LABELS) {
+            const save_idx = self.idx;
+            const save_line = self.line;
+            const save_col = self.col;
+            self.skipSeparators();
+            if (self.idx < self.src.len and self.src[self.idx] == '(') {
+                // Followed by '(' is a function call, treat as identifier
+                self.idx = save_idx;
+                self.line = save_line;
+                self.col = save_col;
+                return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
+            }
+            // Not followed by '(', restore and treat as keyword
+            self.idx = save_idx;
+            self.line = save_line;
+            self.col = save_col;
+        }
         return .{ .kind = kind, .lexeme = slice, .loc = loc };
     }
 

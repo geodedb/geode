@@ -892,9 +892,9 @@ pub const Parser = struct {
             create_pattern = try self.parseGraphPattern();
         } else if (self.cur.kind == .OPTIONAL) {
             self.advance();
-            // Check for OPTIONAL { } block or OPTIONAL MATCH
-            if (self.cur.kind == .l_brace) {
-                // OPTIONAL { ... } block - treat as optional match without initial MATCH
+            // Check for OPTIONAL { } block, OPTIONAL (...), or OPTIONAL MATCH
+            if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
+                // OPTIONAL { ... } or OPTIONAL (...) block - treat as optional match without initial MATCH
                 optional_match = true;
                 have_match = false; // Will parse inside the block
             } else {
@@ -905,8 +905,8 @@ pub const Parser = struct {
         if (self.cur.kind == .MATCH and !have_create) {
             have_match = true;
         }
-        // Handle OPTIONAL { } without preceding MATCH
-        if (self.cur.kind == .l_brace and optional_match and !have_match) {
+        // Handle OPTIONAL { } or OPTIONAL (...) without preceding MATCH
+        if ((self.cur.kind == .l_brace or self.cur.kind == .l_paren) and optional_match and !have_match) {
             have_match = true;
         }
         // Prepare defaults
@@ -919,11 +919,13 @@ pub const Parser = struct {
             // Handle OPTIONAL { } at the start
             var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
 
-            if (self.cur.kind == .l_brace and optional_match) {
-                // OPTIONAL { ... } at the start
-                self.advance(); // consume {
+            if ((self.cur.kind == .l_brace or self.cur.kind == .l_paren) and optional_match) {
+                // OPTIONAL { ... } or OPTIONAL (...) at the start
+                const is_paren = self.cur.kind == .l_paren;
+                const close_token = if (is_paren) tok.TokenKind.r_paren else tok.TokenKind.r_brace;
+                self.advance(); // consume { or (
                 // Parse multiple MATCH patterns inside the block
-                while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+                while (self.cur.kind != close_token and self.cur.kind != .eof) {
                     if (self.cur.kind == .MATCH) {
                         self.advance();
                         const block_gp = try self.parseGraphPattern();
@@ -938,7 +940,11 @@ pub const Parser = struct {
                         return error.UnexpectedToken;
                     }
                 }
-                _ = try self.expect(.r_brace);
+                if (is_paren) {
+                    _ = try self.expect(.r_paren);
+                } else {
+                    _ = try self.expect(.r_brace);
+                }
                 break :blk_pat .{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
             }
 
@@ -968,11 +974,13 @@ pub const Parser = struct {
                 // Handle OPTIONAL MATCH
                 if (self.cur.kind == .OPTIONAL) {
                     self.advance();
-                    // Check for OPTIONAL { ... } block syntax
-                    if (self.cur.kind == .l_brace) {
-                        self.advance(); // consume {
+                    // Check for OPTIONAL { ... } or OPTIONAL (...) block syntax
+                    if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
+                        const is_paren = self.cur.kind == .l_paren;
+                        const close_token = if (is_paren) tok.TokenKind.r_paren else tok.TokenKind.r_brace;
+                        self.advance(); // consume { or (
                         // Parse multiple MATCH patterns inside the block
-                        while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+                        while (self.cur.kind != close_token and self.cur.kind != .eof) {
                             if (self.cur.kind == .MATCH) {
                                 self.advance();
                                 const block_gp = try self.parseGraphPattern();
@@ -987,7 +995,11 @@ pub const Parser = struct {
                                 return error.UnexpectedToken;
                             }
                         }
-                        _ = try self.expect(.r_brace);
+                        if (is_paren) {
+                            _ = try self.expect(.r_paren);
+                        } else {
+                            _ = try self.expect(.r_brace);
+                        }
                         optional_match = true;
                         continue;
                     }
