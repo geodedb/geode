@@ -590,6 +590,57 @@ pub const Parser = struct {
                 }
                 return error.UnexpectedToken;
             },
+            .SET => blk_set: {
+                self.advance();
+                // Check for SET SESSION syntax (alternative to SESSION SET)
+                if (self.cur.kind == .SESSION) {
+                    // Don't advance - parseSessionSetStatement expects to see SESSION and consume it
+                    // Actually, parseSessionSetStatement expects to see SET, so we need to back up
+                    // But we can't back up easily. Instead, let's call a version that skips the SET consumption
+                    // For now, let's just inline the logic here
+                    self.advance(); // consume SESSION
+
+                    // Inline parseSessionSetStatement logic without the initial SET advance
+                    if (self.cur.kind == .SCHEMA) {
+                        self.advance();
+                        const schema_name = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk_schema: {
+                            const name = self.cur.lexeme;
+                            self.advance();
+                            break :blk_schema name;
+                        } else {
+                            return error.UnexpectedToken;
+                        };
+                        break :blk_set .{ .SessionSet = .{
+                            .clause_type = .{ .Schema = .{ .name = schema_name } },
+                        } };
+                    } else if (self.cur.kind == .GRAPH or self.cur.kind == .PROPERTY) {
+                        const is_property = self.cur.kind == .PROPERTY;
+                        if (is_property) self.advance();
+                        _ = try self.expect(.GRAPH);
+
+                        if (self.cur.kind == .eq) {
+                            self.advance();
+                        }
+
+                        const graph_expr = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk_graph: {
+                            const expr = self.cur.lexeme;
+                            self.advance();
+                            break :blk_graph expr;
+                        } else {
+                            return error.UnexpectedToken;
+                        };
+
+                        break :blk_set .{ .SessionSet = .{
+                            .clause_type = .{ .Graph = .{
+                                .property_graph = is_property,
+                                .expression = graph_expr,
+                            } },
+                        } };
+                    }
+                    return error.UnexpectedToken;
+                }
+                return error.UnexpectedToken;
+            },
             .START => blk2: {
                 self.advance();
                 if (self.cur.kind == .TRANSACTION) {
@@ -841,10 +892,21 @@ pub const Parser = struct {
             create_pattern = try self.parseGraphPattern();
         } else if (self.cur.kind == .OPTIONAL) {
             self.advance();
-            optional_match = true;
-            have_match = true;
+            // Check for OPTIONAL { } block or OPTIONAL MATCH
+            if (self.cur.kind == .l_brace) {
+                // OPTIONAL { ... } block - treat as optional match without initial MATCH
+                optional_match = true;
+                have_match = false; // Will parse inside the block
+            } else {
+                optional_match = true;
+                have_match = true;
+            }
         }
         if (self.cur.kind == .MATCH and !have_create) {
+            have_match = true;
+        }
+        // Handle OPTIONAL { } without preceding MATCH
+        if (self.cur.kind == .l_brace and optional_match and !have_match) {
             have_match = true;
         }
         // Prepare defaults
@@ -854,6 +916,32 @@ pub const Parser = struct {
         var having_expr: ?ast.Expr = null;
         var path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
+            // Handle OPTIONAL { } at the start
+            var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+            if (self.cur.kind == .l_brace and optional_match) {
+                // OPTIONAL { ... } at the start
+                self.advance(); // consume {
+                // Parse multiple MATCH patterns inside the block
+                while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+                    if (self.cur.kind == .MATCH) {
+                        self.advance();
+                        const block_gp = try self.parseGraphPattern();
+                        for (block_gp.chains) |chain| {
+                            try all_chains.append(self.arena.allocator(), chain);
+                        }
+                        // Optional semicolon separator
+                        if (self.cur.kind == .semicolon) {
+                            self.advance();
+                        }
+                    } else {
+                        return error.UnexpectedToken;
+                    }
+                }
+                _ = try self.expect(.r_brace);
+                break :blk_pat .{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
+            }
+
             _ = try self.expect(.MATCH);
             // For the top-level MATCH pattern, collect aliases freshly.
             self.collect_chain_aliases = true;
@@ -862,7 +950,6 @@ pub const Parser = struct {
             // Path variable assignment is handled inside parseGraphPattern
 
             // Parse first MATCH pattern
-            var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             const first_gp = try self.parseGraphPattern();
 
             // Extract path variable from the first named chain
@@ -881,6 +968,29 @@ pub const Parser = struct {
                 // Handle OPTIONAL MATCH
                 if (self.cur.kind == .OPTIONAL) {
                     self.advance();
+                    // Check for OPTIONAL { ... } block syntax
+                    if (self.cur.kind == .l_brace) {
+                        self.advance(); // consume {
+                        // Parse multiple MATCH patterns inside the block
+                        while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+                            if (self.cur.kind == .MATCH) {
+                                self.advance();
+                                const block_gp = try self.parseGraphPattern();
+                                for (block_gp.chains) |chain| {
+                                    try all_chains.append(self.arena.allocator(), chain);
+                                }
+                                // Optional semicolon separator
+                                if (self.cur.kind == .semicolon) {
+                                    self.advance();
+                                }
+                            } else {
+                                return error.UnexpectedToken;
+                            }
+                        }
+                        _ = try self.expect(.r_brace);
+                        optional_match = true;
+                        continue;
+                    }
                     if (self.cur.kind != .MATCH) {
                         return error.UnexpectedToken;
                     }
@@ -4134,6 +4244,11 @@ pub const Parser = struct {
             }
 
             // Otherwise, parse as graph expression
+            // Optional = before graph name (e.g., SET SESSION GRAPH = 'name')
+            if (self.cur.kind == .eq) {
+                self.advance();
+            }
+
             const graph_expr = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
                 const expr = self.cur.lexeme;
                 self.advance();
