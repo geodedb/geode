@@ -49,6 +49,8 @@ pub const Statement = union(enum) {
     Profile: ProfileStatement,
     // FOR loop iteration
     For: ForStatement,
+    // VALUES table constructor
+    Values: ValuesStatement,
 };
 
 pub const Query = struct {
@@ -488,4 +490,10 @@ pub const ForStatement = struct {
     order_by: ?OrderBy = null,
     limit: ?usize = null,
     offset: ?usize = null,
+};
+
+pub const ValuesStatement = struct {
+    rows: [][]Expr, // Each row is a list of expressions: VALUES (expr1, expr2), (expr3, expr4)
+    column_names: [][]const u8, // Column names from AS (col1, col2, ...)
+    next_statement: ?*Statement = null, // Continuation: MATCH, RETURN, etc.
 };

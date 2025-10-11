@@ -895,6 +895,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .For => |f| {
             return executeFor(allocator, f, context);
         },
+        .Values => |v| {
+            return executeValues(allocator, v, context);
+        },
         else => return error.NotImplemented,
     }
 }
@@ -1008,6 +1011,103 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
 
     return ExecutionResult{
         .columns = try columns.toOwnedSlice(allocator),
+        .rows = try result_rows.toOwnedSlice(allocator),
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement, context: ExecutionContext) !ExecutionResult {
+    _ = context;
+
+    // Evaluate all row expressions with empty environment
+    const empty_env = eval.Env{
+        .names = &.{},
+        .values = &.{},
+    };
+
+    // Prepare result rows
+    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, values_stmt.rows.len);
+
+    // Evaluate each row
+    for (values_stmt.rows) |row_exprs| {
+        var row_values = try allocator.alloc(eval.Value, row_exprs.len);
+        for (row_exprs, 0..) |expr, i| {
+            row_values[i] = try eval.evalExpr(allocator, expr, empty_env);
+        }
+        try result_rows.append(allocator, row_values);
+    }
+
+    // If there's a next statement (like RETURN), evaluate it with VALUES bindings
+    if (values_stmt.next_statement) |next_stmt| {
+        switch (next_stmt.*) {
+            .Query => |query| {
+                // VALUES ... RETURN pattern: evaluate RETURN for each VALUES row
+                var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+
+                // Build arrays for environment
+                var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+                // For each VALUES row, create environment and evaluate RETURN
+                for (result_rows.items) |row_values| {
+                    env_names_list.clearRetainingCapacity();
+                    env_values_list.clearRetainingCapacity();
+
+                    // Bind column names to row values
+                    for (values_stmt.column_names, 0..) |col_name, i| {
+                        if (i < row_values.len) {
+                            try env_names_list.append(allocator, col_name);
+                            try env_values_list.append(allocator, row_values[i]);
+                        }
+                    }
+
+                    // Create environment for this row
+                    const row_env = eval.Env{
+                        .names = env_names_list.items,
+                        .values = env_values_list.items,
+                    };
+
+                    // Evaluate RETURN items for this row
+                    var result_row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+                    for (query.ret.items) |ret_item| {
+                        const value = try eval.evalExpr(allocator, ret_item.expr, row_env);
+                        try result_row.append(allocator, value);
+                    }
+
+                    try final_rows.append(allocator, try result_row.toOwnedSlice(allocator));
+                }
+
+                // Build column names from RETURN clause
+                var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+
+                for (query.ret.items) |ret_item| {
+                    const col_name = if (ret_item.alias) |alias|
+                        try allocator.dupe(u8, alias)
+                    else
+                        try allocator.dupe(u8, "?column?");
+                    try columns.append(allocator, col_name);
+                }
+
+                return ExecutionResult{
+                    .columns = try columns.toOwnedSlice(allocator),
+                    .rows = try final_rows.toOwnedSlice(allocator),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            },
+            else => return error.UnsupportedValuesChain,
+        }
+    }
+
+    // No continuation - return VALUES table directly
+    // Copy column names
+    var columns = try allocator.alloc([]const u8, values_stmt.column_names.len);
+    for (values_stmt.column_names, 0..) |col, i| {
+        columns[i] = try allocator.dupe(u8, col);
+    }
+
+    return ExecutionResult{
+        .columns = columns,
         .rows = try result_rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };

@@ -174,6 +174,7 @@ fn tagName(st: ast.Statement) []const u8 {
         .Explain => "Explain",
         .Profile => "Profile",
         .For => "For",
+        .Values => "Values",
     };
 }
 

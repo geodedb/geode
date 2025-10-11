@@ -282,6 +282,7 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
         return switch (self.cur.kind) {
+            .VALUES => self.parseValuesStatement(),
             .FOR => self.parseForStatement(),
             .LET => blk_let: {
                 const first = try self.parseQuery();
@@ -3204,6 +3205,80 @@ pub const Parser = struct {
         };
 
         return .{ .Show = .{ .show_type = show_type } };
+    }
+
+    fn parseValuesStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.VALUES);
+
+        // Parse rows: (expr1), (expr2), ...
+        var rows_list = std.ArrayList([]ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+        while (true) {
+            // Expect opening paren for row
+            _ = try self.expect(.l_paren);
+
+            // Parse expressions in this row
+            var row_exprs = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+            // Parse first expression
+            const first_expr = try self.parseOrExpr();
+            try row_exprs.append(self.arena.allocator(), first_expr);
+
+            // Parse additional expressions (if multi-column)
+            while (self.cur.kind == .comma) {
+                self.advance();
+                const expr = try self.parseOrExpr();
+                try row_exprs.append(self.arena.allocator(), expr);
+            }
+
+            _ = try self.expect(.r_paren);
+
+            try rows_list.append(self.arena.allocator(), try row_exprs.toOwnedSlice(self.arena.allocator()));
+
+            // Check for more rows
+            if (self.cur.kind == .comma) {
+                self.advance();
+                continue;
+            }
+            break;
+        }
+
+        // Expect AS keyword
+        _ = try self.expect(.AS);
+
+        // Parse column names: (col1, col2, ...)
+        _ = try self.expect(.l_paren);
+
+        var column_names = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+        // Parse first column name
+        if (self.cur.kind != .identifier) return self.unexpected("expected column name after AS (");
+        try column_names.append(self.arena.allocator(), self.cur.lexeme);
+        self.advance();
+
+        // Parse additional column names
+        while (self.cur.kind == .comma) {
+            self.advance();
+            if (self.cur.kind != .identifier) return self.unexpected("expected column name");
+            try column_names.append(self.arena.allocator(), self.cur.lexeme);
+            self.advance();
+        }
+
+        _ = try self.expect(.r_paren);
+
+        // Parse continuation (RETURN, MATCH, etc.)
+        var next_stmt: ?*ast.Statement = null;
+        if (self.cur.kind != .eof and self.cur.kind != .semicolon) {
+            const stmt_ptr = try self.arena.allocator().create(ast.Statement);
+            stmt_ptr.* = try self.parseStatement();
+            next_stmt = stmt_ptr;
+        }
+
+        return .{ .Values = .{
+            .rows = try rows_list.toOwnedSlice(self.arena.allocator()),
+            .column_names = try column_names.toOwnedSlice(self.arena.allocator()),
+            .next_statement = next_stmt,
+        } };
     }
 
     fn parseForStatement(self: *Parser) ParserError!ast.Statement {

@@ -80,7 +80,7 @@ pub const TokenKind = enum {
     CLOSE,
     INSERT,
     VALUE,
-    // VALUES - Removed to allow values() function calls (SCAN VALUES still works via identifier check)
+    VALUES,
     SCAN,
     START,
     TRANSACTION,
@@ -262,7 +262,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "CLOSE")) return .CLOSE;
     if (std.ascii.eqlIgnoreCase(word, "INSERT")) return .INSERT;
     if (std.ascii.eqlIgnoreCase(word, "VALUE")) return .VALUE;
-    // if (std.ascii.eqlIgnoreCase(word, "VALUES")) return .VALUES; // Removed to allow values() function
+    if (std.ascii.eqlIgnoreCase(word, "VALUES")) return .VALUES;
     if (std.ascii.eqlIgnoreCase(word, "SCAN")) return .SCAN;
     if (std.ascii.eqlIgnoreCase(word, "START")) return .START;
     if (std.ascii.eqlIgnoreCase(word, "TRANSACTION")) return .TRANSACTION;
