@@ -257,13 +257,24 @@ pub const MergeStatement = struct {
     return_clause: ?ReturnClause = null,
 };
 
-pub const CallStatement = struct {
+pub const CallProcedure = struct {
     procedure: Expr, // Function call expression: db.labels()
     yield_items: ?[]ReturnItem = null, // YIELD clause items
     return_clause: ?ReturnClause = null, // Optional RETURN clause
     order_by: ?OrderBy = null, // ORDER BY clause
     limit: ?usize = null, // LIMIT clause
     offset: ?usize = null, // OFFSET clause
+};
+
+pub const CallSubquery = struct {
+    query: *Query, // The subquery inside CALL { ... }
+    imported_vars: ?[][]const u8 = null, // Variables imported from outer scope
+    return_clause: ?ReturnClause = null, // Optional RETURN clause after subquery
+};
+
+pub const CallStatement = union(enum) {
+    Procedure: CallProcedure,
+    Subquery: CallSubquery,
 };
 
 // CallClause for use within MATCH queries (MATCH ... CALL ... YIELD)

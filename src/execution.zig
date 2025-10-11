@@ -771,34 +771,44 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Call => |call_stmt| {
-            var result = try executeCallStatement(allocator, call_stmt, context);
+            var result: ExecutionResult = undefined;
 
-            // Apply ORDER BY if present
-            if (call_stmt.order_by) |order| {
-                try sortRows(allocator, &result, order);
-            }
+            switch (call_stmt) {
+                .Procedure => |proc| {
+                    result = try executeCallStatement(allocator, call_stmt, context);
 
-            // Apply OFFSET if present
-            if (call_stmt.offset) |skip_count| {
-                if (skip_count < result.rows.len) {
-                    const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
-                    for (result.rows[skip_count..], 0..) |row, i| {
-                        new_rows[i] = row;
+                    // Apply ORDER BY if present
+                    if (proc.order_by) |order| {
+                        try sortRows(allocator, &result, order);
                     }
-                    allocator.free(result.rows);
-                    result.rows = new_rows;
-                }
-            }
 
-            // Apply LIMIT if present
-            if (call_stmt.limit) |limit_count| {
-                if (limit_count < result.rows.len) {
-                    const new_rows = try allocator.alloc([]eval.Value, limit_count);
-                    for (result.rows[0..limit_count], 0..) |row, i| {
-                        new_rows[i] = row;
+                    // Apply OFFSET if present
+                    if (proc.offset) |skip_count| {
+                        if (skip_count < result.rows.len) {
+                            const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+                            for (result.rows[skip_count..], 0..) |row, i| {
+                                new_rows[i] = row;
+                            }
+                            allocator.free(result.rows);
+                            result.rows = new_rows;
+                        }
                     }
-                    allocator.free(result.rows);
-                    result.rows = new_rows;
+
+                    // Apply LIMIT if present
+                    if (proc.limit) |limit_count| {
+                        if (limit_count < result.rows.len) {
+                            const new_rows = try allocator.alloc([]eval.Value, limit_count);
+                            for (result.rows[0..limit_count], 0..) |row, i| {
+                                new_rows[i] = row;
+                            }
+                            allocator.free(result.rows);
+                            result.rows = new_rows;
+                        }
+                    }
+                },
+                .Subquery => |subq| {
+                    // Execute the subquery in an isolated context
+                    result = try executeCallSubquery(allocator, subq, context);
                 }
             }
 
@@ -3310,11 +3320,14 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
     enriched_context.bindings = &bindings;
 
     // Convert CallClause to CallStatement for execution
-    const call_stmt = ast.CallStatement{
+    const call_stmt = ast.CallStatement{ .Procedure = .{
         .procedure = call_clause.procedure,
         .yield_items = call_clause.yield_items,
         .return_clause = if (q.ret.items.len > 0) q.ret else null,
-    };
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    } };
 
     // Execute CALL with bindings
     const call_result = try executeCallStatement(allocator, call_stmt, enriched_context);
@@ -6265,8 +6278,77 @@ fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weigh
     return std.math.inf(f64);
 }
 
+// Execute CALL { subquery } statement - runs subquery in isolated context
+fn executeCallSubquery(allocator: std.mem.Allocator, call_subq: ast.CallSubquery, context: ExecutionContext) !ExecutionResult {
+    // Execute the subquery with context
+    const subquery_result = try executeQueryWithContext(allocator, call_subq.query.*, context);
+
+    // If there's a RETURN clause after the subquery, apply it
+    if (call_subq.return_clause) |return_clause| {
+        // Apply the RETURN transformation to subquery results
+        var transformed_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, subquery_result.rows.len);
+        defer transformed_rows.deinit(allocator);
+
+        for (subquery_result.rows) |row| {
+            // Create environment from subquery results - convert row to names/values
+            var env_names = try std.ArrayList([]const u8).initCapacity(allocator, subquery_result.columns.len);
+            var env_values = try std.ArrayList(eval.Value).initCapacity(allocator, subquery_result.columns.len);
+            defer env_names.deinit(allocator);
+            defer env_values.deinit(allocator);
+
+            for (subquery_result.columns, row) |col, val| {
+                try env_names.append(allocator, col);
+                try env_values.append(allocator, val);
+            }
+
+            const env = eval.Env{
+                .names = env_names.items,
+                .values = env_values.items,
+            };
+
+            // Evaluate RETURN items
+            var return_values = try allocator.alloc(eval.Value, return_clause.items.len);
+            for (return_clause.items, 0..) |item, i| {
+                return_values[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+            try transformed_rows.append(allocator, return_values);
+        }
+
+        // Build result columns
+        var result_columns = try allocator.alloc([]const u8, return_clause.items.len);
+        for (return_clause.items, 0..) |item, i| {
+            result_columns[i] = if (item.alias) |alias|
+                try allocator.dupe(u8, alias)
+            else
+                try allocator.dupe(u8, getExpressionNameFromAst(item.expr));
+        }
+
+        return ExecutionResult{
+            .columns = result_columns,
+            .rows = try transformed_rows.toOwnedSlice(allocator),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    // No RETURN clause, return subquery results as-is
+    return subquery_result;
+}
+
 // Execute CALL statement for procedures and algorithms
 fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStatement, context: ExecutionContext) !ExecutionResult {
+    // Handle different types of CALL statements
+    switch (call_stmt) {
+        .Procedure => |proc| {
+            return try executeCallProcedure(allocator, proc, context);
+        },
+        .Subquery => |subq| {
+            return try executeCallSubquery(allocator, subq, context);
+        },
+    }
+}
+
+// Execute CALL statement for procedures
+fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
 
     // Get the procedure name from the Call expression
     const proc_name = switch (call_stmt.procedure) {

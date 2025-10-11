@@ -684,38 +684,73 @@ pub const Parser = struct {
             },
             .CALL => blk_call: {
                 self.advance();
-                // Parse procedure call expression (e.g., db.labels())
-                const procedure = try self.parseOrExpr();
 
-                // Optional YIELD clause
-                var yield_items: ?[]ast.ReturnItem = null;
-                if (self.cur.kind == .YIELD) {
+                // Check if this is a subquery CALL { ... } or procedure call
+                if (self.cur.kind == .l_brace) {
+                    // CALL { subquery } syntax
                     self.advance();
-                    var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    try self.parseProjectionItems(&items);
-                    yield_items = try items.toOwnedSlice(self.arena.allocator());
-                }
 
-                // Optional RETURN clause
-                var return_clause: ?ast.ReturnClause = null;
-                if (self.cur.kind == .RETURN) {
-                    self.advance();
-                    const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                    // Parse the subquery
+                    const subquery = try self.arena.allocator().create(ast.Query);
+                    subquery.* = try self.parseQuery();
+
+                    // Expect closing brace
+                    _ = try self.expect(.r_brace);
+
+                    // Optional RETURN clause after subquery
+                    var return_clause: ?ast.ReturnClause = null;
+                    if (self.cur.kind == .RETURN) {
                         self.advance();
-                        break :blk true;
-                    } else false;
-                    var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    try self.parseProjectionItems(&return_items);
-                    return_clause = .{
-                        .items = try return_items.toOwnedSlice(self.arena.allocator()),
-                        .distinct = distinct,
-                    };
-                }
+                        const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                            self.advance();
+                            break :blk true;
+                        } else false;
+                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        try self.parseProjectionItems(&return_items);
+                        return_clause = .{
+                            .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                            .distinct = distinct,
+                        };
+                    }
 
-                // Optional ORDER BY clause (after RETURN)
-                var order_by: ?ast.OrderBy = null;
-                if (return_clause != null and self.cur.kind == .ORDER) {
-                    self.advance();
+                    break :blk_call .{ .Call = .{ .Subquery = .{
+                        .query = subquery,
+                        .imported_vars = null, // TODO: support imported variables
+                        .return_clause = return_clause,
+                    } } };
+                } else {
+                    // Traditional procedure call (e.g., db.labels())
+                    const procedure = try self.parseOrExpr();
+
+                    // Optional YIELD clause
+                    var yield_items: ?[]ast.ReturnItem = null;
+                    if (self.cur.kind == .YIELD) {
+                        self.advance();
+                        var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        try self.parseProjectionItems(&items);
+                        yield_items = try items.toOwnedSlice(self.arena.allocator());
+                    }
+
+                    // Optional RETURN clause
+                    var return_clause: ?ast.ReturnClause = null;
+                    if (self.cur.kind == .RETURN) {
+                        self.advance();
+                        const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                            self.advance();
+                            break :blk true;
+                        } else false;
+                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        try self.parseProjectionItems(&return_items);
+                        return_clause = .{
+                            .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                            .distinct = distinct,
+                        };
+                    }
+
+                    // Optional ORDER BY clause (after RETURN)
+                    var order_by: ?ast.OrderBy = null;
+                    if (return_clause != null and self.cur.kind == .ORDER) {
+                        self.advance();
                     _ = try self.expect(.BY);
                     var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     const expr1 = try self.parseOrExpr();
@@ -784,14 +819,15 @@ pub const Parser = struct {
                     self.advance();
                 }
 
-                break :blk_call .{ .Call = .{
-                    .procedure = procedure,
-                    .yield_items = yield_items,
-                    .return_clause = return_clause,
-                    .order_by = order_by,
-                    .limit = limit,
-                    .offset = offset,
-                } };
+                    break :blk_call .{ .Call = .{ .Procedure = .{
+                        .procedure = procedure,
+                        .yield_items = yield_items,
+                        .return_clause = return_clause,
+                        .order_by = order_by,
+                        .limit = limit,
+                        .offset = offset,
+                    } } };
+                }
             },
             else => return error.UnexpectedToken,
         };
