@@ -4111,9 +4111,9 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                 if (store.nodes.getPtr(node.id)) |node_ptr| {
                                     var prop_iter = node_ptr.properties.iterator();
                                     while (prop_iter.next()) |prop_entry| {
-                                        allocator.free(prop_entry.key_ptr.*);
+                                        store.allocator.free(prop_entry.key_ptr.*);
                                         switch (prop_entry.value_ptr.*) {
-                                            .String => |s| allocator.free(s),
+                                            .String => |s| store.allocator.free(s),
                                             else => {},
                                         }
                                     }
