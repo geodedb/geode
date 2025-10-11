@@ -43,6 +43,11 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         mut_pr.deinit();
     }
 
+    // Check if the query used double-dash comments (GB02 - disabled)
+    if (parse_result.has_double_dash_comment) {
+        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
+    }
+
     // Check if this program starts with START TRANSACTION (do this before loading session)
     const is_start_transaction = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .StartTransaction;
 

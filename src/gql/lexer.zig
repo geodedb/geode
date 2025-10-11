@@ -8,6 +8,7 @@ pub const Lexer = struct {
     line: u32 = 1,
     col: u32 = 1,
     has_double_solidus_comment: bool = false,
+    has_double_dash_comment: bool = false,
 
     pub fn next(self: *Lexer) t.Token {
         self.skipSeparators();
@@ -108,6 +109,8 @@ pub const Lexer = struct {
                 if (self.idx + 2 < self.src.len and (self.src[self.idx + 2] == '(' or self.src[self.idx + 2] == '[')) {
                     break;
                 }
+                // Mark that we found a double-dash comment (which is disabled per GB02)
+                self.has_double_dash_comment = true;
                 while (self.idx < self.src.len and self.src[self.idx] != '\n') self.advance();
                 continue;
             }
