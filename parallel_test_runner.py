@@ -18,6 +18,7 @@ import time
 import threading
 import queue
 import os
+import shlex
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -144,7 +145,6 @@ class ParallelTestRunner:
         if setup_commands:
             if server_address:
                 # Run setup commands against the server
-                import shlex
                 for cmd_str in setup_commands:
                     try:
                         setup_args = shlex.split(cmd_str)
@@ -161,7 +161,6 @@ class ParallelTestRunner:
                         pass
             else:
                 # For --no-quic mode, combine setup with main query
-                import shlex
                 is_query = len(args) > 0 and args[0] == "query"
                 if is_query and "--no-quic" in args:
                     # Extract setup queries
@@ -435,7 +434,14 @@ class ParallelTestRunner:
         if setup_commands and server_address:
             for setup_item in setup_commands:
                 try:
-                    setup_args = setup_item.get("args", [])
+                    # Handle both string and dict setup items
+                    if isinstance(setup_item, str):
+                        # Parse string as command-line arguments
+                        setup_args = shlex.split(setup_item)
+                    else:
+                        # Dict format with "args" key
+                        setup_args = setup_item.get("args", [])
+
                     processed_args = self.process_args(setup_args, server_address=server_address)
                     result = subprocess.run(
                         [self.binary] + processed_args,

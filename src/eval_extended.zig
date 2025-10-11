@@ -104,6 +104,7 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("vector", &constructVector);
     try registry.put("vectorf32", &constructVectorF32);
     try registry.put("decimal", &constructDecimal);
+    try registry.put("jsonb", &constructJsonb);
 
     // IP/CIDR functions
     try registry.put("ip_contains", &ipContains);
@@ -330,6 +331,25 @@ fn canonicalizeLanguageTag(allocator: std.mem.Allocator, tag: []const u8) ![]con
 
 fn constructLatLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
+
+    // Handle string format: LatLon('40.7128,-74.0060')
+    if (args.len == 1 and args[0] == .Str) {
+        const text = args[0].Str;
+        var parts = std.mem.tokenizeAny(u8, text, ",");
+
+        const lat_str = parts.next() orelse return error.InvalidFormat;
+        const lon_str = parts.next() orelse return error.InvalidFormat;
+
+        const lat = try std.fmt.parseFloat(f64, lat_str);
+        const lon = try std.fmt.parseFloat(f64, lon_str);
+
+        if (lat < -90 or lat > 90) return error.InvalidLatitude;
+        if (lon < -180 or lon > 180) return error.InvalidLongitude;
+
+        return .{ .LatLon = .{ .lat = lat, .lon = lon } };
+    }
+
+    // Handle numeric format: LatLon(40.7128, -74.0060)
     if (args.len != 2) return error.InvalidArgs;
 
     const lat = switch (args[0]) {
@@ -352,7 +372,40 @@ fn constructLatLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
 
 fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 4) return error.InvalidArgs;
+
+    // Handle string format: LatLonAlt('40.7128,-74.0060,100') or LatLonAlt('40.7128,-74.0060,100,ellipsoid')
+    if (args.len == 1 and args[0] == .Str) {
+        const text = args[0].Str;
+        var parts = std.mem.tokenizeAny(u8, text, ",");
+
+        const lat_str = parts.next() orelse return error.InvalidFormat;
+        const lon_str = parts.next() orelse return error.InvalidFormat;
+        const alt_str = parts.next() orelse return error.InvalidFormat;
+        const ref_str = parts.next(); // Optional, defaults to ellipsoid
+
+        const lat = try std.fmt.parseFloat(f64, lat_str);
+        const lon = try std.fmt.parseFloat(f64, lon_str);
+        const alt = try std.fmt.parseFloat(f64, alt_str);
+
+        const ref: heap.AltRef = if (ref_str) |r|
+            if (std.mem.eql(u8, r, "ellipsoid"))
+                .ellipsoid
+            else if (std.mem.eql(u8, r, "geoid"))
+                .geoid
+            else
+                return error.InvalidAltRef
+        else
+            .ellipsoid; // Default
+
+        if (lat < -90 or lat > 90) return error.InvalidLatitude;
+        if (lon < -180 or lon > 180) return error.InvalidLongitude;
+
+        return .{ .LatLonAlt = .{ .lat = lat, .lon = lon, .alt = alt, .ref = ref } };
+    }
+
+    // Handle numeric format: LatLonAlt(40.7128, -74.0060, 100, 'ellipsoid')
+    // Also accept 3 args with default ref
+    if (args.len != 3 and args.len != 4) return error.InvalidArgs;
 
     const lat = switch (args[0]) {
         .Int => |i| @as(f64, @floatFromInt(i)),
@@ -372,14 +425,15 @@ fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
         else => return error.TypeMismatch,
     };
 
-    if (args[3] != .Str) return error.TypeMismatch;
-
-    const ref: heap.AltRef = if (std.mem.eql(u8, args[3].Str, "ellipsoid"))
-        .ellipsoid
-    else if (std.mem.eql(u8, args[3].Str, "geoid"))
-        .geoid
-    else
-        return error.InvalidAltRef;
+    const ref: heap.AltRef = if (args.len == 4) blk: {
+        if (args[3] != .Str) return error.TypeMismatch;
+        break :blk if (std.mem.eql(u8, args[3].Str, "ellipsoid"))
+            .ellipsoid
+        else if (std.mem.eql(u8, args[3].Str, "geoid"))
+            .geoid
+        else
+            return error.InvalidAltRef;
+    } else .ellipsoid; // Default
 
     if (lat < -90 or lat > 90) return error.InvalidLatitude;
     if (lon < -180 or lon > 180) return error.InvalidLongitude;
@@ -509,6 +563,29 @@ fn constructVector(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
 
 fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
+
+    // Handle array literal: VectorF32([0.1, 0.2, 0.3])
+    if (args[0] == .List) {
+        const list = args[0].List;
+        var data = try allocator.alloc(f32, list.len);
+
+        for (list, 0..) |item, i| {
+            data[i] = switch (item) {
+                .Int => |iv| @floatFromInt(iv),
+                .Decimal => |d| blk: {
+                    const coeff_f64 = @as(f64, @floatFromInt(d.coeff));
+                    const scale_f64 = @as(f64, @floatFromInt(d.scale));
+                    const divisor = std.math.pow(f64, 10, scale_f64);
+                    break :blk @as(f32, @floatCast(coeff_f64 / divisor));
+                },
+                else => return error.TypeMismatch,
+            };
+        }
+
+        return .{ .VectorF32 = .{ .dim = @intCast(list.len), .data = data } };
+    }
+
+    // Handle string: VectorF32('[0.1, 0.2, 0.3]')
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
@@ -518,6 +595,51 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     const result = eval_funcs.VectorF32(allocator, text) catch return error.InvalidFormat;
 
     return .{ .VectorF32 = result.VectorF32 };
+}
+
+fn constructJsonb(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 1) return error.InvalidArgs;
+    if (args[0] != .Str) return error.TypeMismatch;
+
+    const json_str = args[0].Str;
+
+    // Basic JSON validation - check for balanced braces/brackets
+    var brace_depth: i32 = 0;
+    var bracket_depth: i32 = 0;
+    var in_string = false;
+    var escape_next = false;
+
+    for (json_str) |c| {
+        if (escape_next) {
+            escape_next = false;
+            continue;
+        }
+
+        if (c == '\\') {
+            escape_next = true;
+            continue;
+        }
+
+        if (c == '"') {
+            in_string = !in_string;
+            continue;
+        }
+
+        if (!in_string) {
+            if (c == '{') brace_depth += 1;
+            if (c == '}') brace_depth -= 1;
+            if (c == '[') bracket_depth += 1;
+            if (c == ']') bracket_depth -= 1;
+        }
+    }
+
+    if (brace_depth != 0 or bracket_depth != 0 or in_string) {
+        return error.InvalidJson;
+    }
+
+    // Return as string for now (until Jsonb heap type is fully integrated)
+    return .{ .Str = json_str };
 }
 
 // IP/CIDR functions

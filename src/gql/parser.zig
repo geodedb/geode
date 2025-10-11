@@ -2177,21 +2177,28 @@ pub const Parser = struct {
         if (std.ascii.eqlIgnoreCase(name, "abs")) {
             return n == 1 and argIsNumericLike(args[0]);
         }
-        // Vector types
+        // Vector types - accept array literal or string
         if (std.ascii.eqlIgnoreCase(name, "VectorF32")) {
-            return n == 1 and argIsStringLike(args[0]);
+            return n == 1 and (args[0] == .List or argIsStringLike(args[0]));
         }
         if (std.ascii.eqlIgnoreCase(name, "VectorI32")) {
-            return n == 1 and argIsStringLike(args[0]);
+            return n == 1 and (args[0] == .List or argIsStringLike(args[0]));
         }
-        // Geographic types
+        // Geographic types - accept two numbers or one string
         if (std.ascii.eqlIgnoreCase(name, "LatLon")) {
-            return n == 1 and argIsStringLike(args[0]);
+            return (n == 2 and argIsNumericLike(args[0]) and argIsNumericLike(args[1])) or (n == 1 and argIsStringLike(args[0]));
         }
         if (std.ascii.eqlIgnoreCase(name, "LatLonAlt")) {
-            return n == 1 and argIsStringLike(args[0]);
+            return (n == 3 and argIsNumericLike(args[0]) and argIsNumericLike(args[1]) and argIsNumericLike(args[2])) or (n == 1 and argIsStringLike(args[0]));
         }
         if (std.ascii.eqlIgnoreCase(name, "GeoPoint")) {
+            return (n == 2 and argIsNumericLike(args[0]) and argIsNumericLike(args[1])) or (n == 1 and argIsStringLike(args[0]));
+        }
+        // JSON/Geometry types - accept string
+        if (std.ascii.eqlIgnoreCase(name, "Jsonb")) {
+            return n == 1 and argIsStringLike(args[0]);
+        }
+        if (std.ascii.eqlIgnoreCase(name, "GeometryFromText")) {
             return n == 1 and argIsStringLike(args[0]);
         }
         // Map functions
