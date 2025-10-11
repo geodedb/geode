@@ -185,6 +185,11 @@ pub const TokenKind = enum {
     ZONE,
     BINDING,
     ORDINALITY,
+    READ,
+    WRITE,
+    NO,
+    BINDINGS,
+    ONLY,
 
     eof,
     invalid,
@@ -367,6 +372,11 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "BINDING")) return .BINDING;
     if (std.ascii.eqlIgnoreCase(word, "ZONE")) return .ZONE;
     if (std.ascii.eqlIgnoreCase(word, "ORDINALITY")) return .ORDINALITY;
+    if (std.ascii.eqlIgnoreCase(word, "READ")) return .READ;
+    if (std.ascii.eqlIgnoreCase(word, "WRITE")) return .WRITE;
+    if (std.ascii.eqlIgnoreCase(word, "NO")) return .NO;
+    if (std.ascii.eqlIgnoreCase(word, "BINDINGS")) return .BINDINGS;
+    if (std.ascii.eqlIgnoreCase(word, "ONLY")) return .ONLY;
 
     // Temporal keywords - checked before regular TIME keyword
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;

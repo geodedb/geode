@@ -645,6 +645,15 @@ pub const Parser = struct {
                 self.advance();
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
+                    // Parse optional transaction characteristics: READ ONLY | READ WRITE
+                    if (self.cur.kind == .READ) {
+                        self.advance();
+                        if (self.cur.kind == .ONLY) {
+                            self.advance();
+                        } else if (self.cur.kind == .WRITE) {
+                            self.advance();
+                        }
+                    }
                     break :blk2 .StartTransaction;
                 }
                 return error.UnexpectedToken;
@@ -1605,6 +1614,18 @@ pub const Parser = struct {
     }
 
     fn parseProjectionItems(self: *Parser, out: *std.ArrayList(ast.ReturnItem)) ParserError!void {
+        // Handle RETURN NO BINDINGS to return 0 rows
+        if (self.cur.kind == .NO) {
+            self.advance();
+            if (self.cur.kind == .BINDINGS) {
+                self.advance();
+                // Return empty list of items - this signals no rows should be returned
+                return;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
         // Handle RETURN * to return all bound variables
         if (self.cur.kind == .star) {
             self.advance();
