@@ -6175,7 +6175,7 @@ fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: geode.ast.Expr) !
 
             if (registry.get(lowercase_name)) |func| {
                 const result = func(allocator, args) catch |err| {
-                    std.log.err("Function {s} failed with error: {}", .{function_name, err});
+                    std.log.err("Function {s} failed with error: {}", .{ function_name, err });
                     break :blk_call .{ .Null = {} };
                 };
 
@@ -6191,7 +6191,7 @@ fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: geode.ast.Expr) !
                 };
             }
 
-            std.log.err("Function {s} (lowercase: {s}) not found in registry", .{function_name, lowercase_name});
+            std.log.err("Function {s} (lowercase: {s}) not found in registry", .{ function_name, lowercase_name });
             break :blk_call .{ .Null = {} };
         },
         else => .{ .Null = {} }, // Default for unsupported expressions
