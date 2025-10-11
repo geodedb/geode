@@ -6,10 +6,19 @@ const graph_store = @import("graph_store.zig");
 // Global catalog for tracking schemas, graphs, and indexes
 var catalog_mutex = std.Thread.Mutex{};
 var catalog_initialized = false;
+
+// IndexInfo stores metadata about an index
+const IndexInfo = struct {
+    name: []const u8,
+    index_type: []const u8,
+    table_name: []const u8,
+    columns: [][]const u8,
+};
+
 var catalog: struct {
     schemas: std.StringHashMap(void),
     graphs: std.StringHashMap(void),
-    indexes: std.StringHashMap(void),
+    indexes: std.StringHashMap(IndexInfo),
 } = undefined;
 
 fn initCatalog() void {
@@ -20,7 +29,7 @@ fn initCatalog() void {
             const allocator = std.heap.page_allocator;
             catalog.schemas = std.StringHashMap(void).init(allocator);
             catalog.graphs = std.StringHashMap(void).init(allocator);
-            catalog.indexes = std.StringHashMap(void).init(allocator);
+            catalog.indexes = std.StringHashMap(IndexInfo).init(allocator);
             catalog_initialized = true;
         }
     }
@@ -772,7 +781,30 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Add to catalog if not exists
             if (!catalog.indexes.contains(index_name)) {
-                try catalog.indexes.put(try std.heap.page_allocator.dupe(u8, index_name), {});
+                // Create IndexInfo with all the details
+                const index_info = IndexInfo{
+                    .name = try std.heap.page_allocator.dupe(u8, index_name),
+                    .index_type = switch (ci.index_type) {
+                        .btree => "btree",
+                        .hash => "hash",
+                        .fulltext => "fulltext",
+                        .spatial => "spatial",
+                        .vector => "vector",
+                        .vector_f32 => "vector_f32",
+                        .spatial_geographic => "spatial_geographic",
+                        .network_cidr => "network_cidr",
+                        .signature_crypto => "signature_crypto",
+                    },
+                    .table_name = try std.heap.page_allocator.dupe(u8, ci.label),
+                    .columns = blk: {
+                        var cols = try std.heap.page_allocator.alloc([]const u8, ci.properties.len);
+                        for (ci.properties, 0..) |prop, i| {
+                            cols[i] = try std.heap.page_allocator.dupe(u8, prop);
+                        }
+                        break :blk cols;
+                    },
+                };
+                try catalog.indexes.put(try std.heap.page_allocator.dupe(u8, index_name), index_info);
             }
 
             return ExecutionResult{
@@ -1048,8 +1080,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 }
 
 fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionResult {
-    // For now, return empty result for all SHOW commands
-    // In the future, this would query the catalog/metadata
+    initCatalog();
+
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
         .constraints => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -1065,9 +1097,51 @@ fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionRes
         columns[i] = try allocator.dupe(u8, col);
     }
 
+    // Build rows based on show type
+    var rows_list = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
+
+    switch (s.show_type) {
+        .indexes => {
+            // Return index data from catalog
+            var iter = catalog.indexes.iterator();
+            while (iter.next()) |entry| {
+                const info = entry.value_ptr.*;
+                var row = try allocator.alloc(eval.Value, 4);
+                row[0] = eval.Value{ .Str = try allocator.dupe(u8, info.name) };
+                row[1] = eval.Value{ .Str = try allocator.dupe(u8, info.index_type) };
+                row[2] = eval.Value{ .Str = try allocator.dupe(u8, info.table_name) };
+
+                // Join columns with comma
+                var columns_str = try std.ArrayList(u8).initCapacity(allocator, 0);
+                for (info.columns, 0..) |col, i| {
+                    if (i > 0) try columns_str.appendSlice(allocator, ", ");
+                    try columns_str.appendSlice(allocator, col);
+                }
+                row[3] = eval.Value{ .Str = try columns_str.toOwnedSlice(allocator) };
+
+                try rows_list.append(allocator, row);
+            }
+        },
+        .graphs => {
+            // Return graph names from catalog
+            var iter = catalog.graphs.iterator();
+            while (iter.next()) |entry| {
+                var row = try allocator.alloc(eval.Value, 1);
+                row[0] = eval.Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
+                try rows_list.append(allocator, row);
+            }
+        },
+        else => {
+            // Other show types not yet implemented
+        },
+    }
+
     return ExecutionResult{
         .columns = columns,
-        .rows = try allocator.alloc([]eval.Value, 0), // Empty for now
+        .rows = try rows_list.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }
@@ -1329,82 +1403,55 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
                     // NodeScan base cost: 100 per node
                     const node_cost: i64 = 100;
                     total_cost += node_cost;
-                    try plan_steps.append(allocator, .{
-                        .op = try std.fmt.allocPrint(allocator, "NodeScan (cost: {})", .{node_cost}),
-                        .cost = node_cost
-                    });
+                    try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
                 }
                 if (chain.hops.len > 0) {
                     // ExpandRelationships cost: 50 per hop
                     const expand_cost: i64 = @intCast(chain.hops.len * 50);
                     total_cost += expand_cost;
-                    try plan_steps.append(allocator, .{
-                        .op = try std.fmt.allocPrint(allocator, "ExpandRelationships (cost: {})", .{expand_cost}),
-                        .cost = expand_cost
-                    });
+                    try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "ExpandRelationships (cost: {})", .{expand_cost}), .cost = expand_cost });
                 }
             }
             if (q.where_clause != null) {
                 // Filter cost: 10 per condition
                 const filter_cost: i64 = 10;
                 total_cost += filter_cost;
-                try plan_steps.append(allocator, .{
-                    .op = try std.fmt.allocPrint(allocator, "Filter (cost: {})", .{filter_cost}),
-                    .cost = filter_cost
-                });
+                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Filter (cost: {})", .{filter_cost}), .cost = filter_cost });
             }
             if (q.filter_clause != null) {
                 // Additional filter cost
                 const filter_cost: i64 = 10;
                 total_cost += filter_cost;
-                try plan_steps.append(allocator, .{
-                    .op = try std.fmt.allocPrint(allocator, "Filter FILTER clause (cost: {})", .{filter_cost}),
-                    .cost = filter_cost
-                });
+                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Filter FILTER clause (cost: {})", .{filter_cost}), .cost = filter_cost });
             }
             if (q.group_by != null) {
                 // Aggregate cost: 200 for grouping
                 const agg_cost: i64 = 200;
                 total_cost += agg_cost;
-                try plan_steps.append(allocator, .{
-                    .op = try std.fmt.allocPrint(allocator, "Aggregate (cost: {})", .{agg_cost}),
-                    .cost = agg_cost
-                });
+                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Aggregate (cost: {})", .{agg_cost}), .cost = agg_cost });
             }
             if (q.order_by != null) {
                 // Sort cost: 150 for sorting
                 const sort_cost: i64 = 150;
                 total_cost += sort_cost;
-                try plan_steps.append(allocator, .{
-                    .op = try std.fmt.allocPrint(allocator, "Sort (cost: {})", .{sort_cost}),
-                    .cost = sort_cost
-                });
+                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Sort (cost: {})", .{sort_cost}), .cost = sort_cost });
             }
             if (q.limit != null or q.offset != null) {
                 // Limit cost: 5
                 const limit_cost: i64 = 5;
                 total_cost += limit_cost;
-                try plan_steps.append(allocator, .{
-                    .op = try std.fmt.allocPrint(allocator, "Limit (cost: {})", .{limit_cost}),
-                    .cost = limit_cost
-                });
+                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Limit (cost: {})", .{limit_cost}), .cost = limit_cost });
             }
             if (q.ret.distinct) {
                 // Distinct cost: 100
                 const distinct_cost: i64 = 100;
                 total_cost += distinct_cost;
-                try plan_steps.append(allocator, .{
-                    .op = try std.fmt.allocPrint(allocator, "Distinct (cost: {})", .{distinct_cost}),
-                    .cost = distinct_cost
-                });
+                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Distinct (cost: {})", .{distinct_cost}), .cost = distinct_cost });
             }
             // Project cost: 5
             const project_cost: i64 = 5;
             total_cost += project_cost;
-            try plan_steps.append(allocator, .{
-                .op = try std.fmt.allocPrint(allocator, "Project (cost: {})", .{project_cost}),
-                .cost = project_cost
-            });
+            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Project (cost: {})", .{project_cost}), .cost = project_cost });
         },
         .Create => |_| {
             // CREATE costs
@@ -1412,31 +1459,19 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
             const create_rel_cost: i64 = 75;
             total_cost += create_node_cost + create_rel_cost;
 
-            try plan_steps.append(allocator, .{
-                .op = try std.fmt.allocPrint(allocator, "CreateNodes (cost: {})", .{create_node_cost}),
-                .cost = create_node_cost
-            });
-            try plan_steps.append(allocator, .{
-                .op = try std.fmt.allocPrint(allocator, "CreateRelationships (cost: {})", .{create_rel_cost}),
-                .cost = create_rel_cost
-            });
+            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "CreateNodes (cost: {})", .{create_node_cost}), .cost = create_node_cost });
+            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "CreateRelationships (cost: {})", .{create_rel_cost}), .cost = create_rel_cost });
         },
         .Delete => |_| {
             // DELETE cost
             const delete_cost: i64 = 100;
             total_cost += delete_cost;
-            try plan_steps.append(allocator, .{
-                .op = try std.fmt.allocPrint(allocator, "DeleteNodes (cost: {})", .{delete_cost}),
-                .cost = delete_cost
-            });
+            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "DeleteNodes (cost: {})", .{delete_cost}), .cost = delete_cost });
         },
         else => {
             const generic_cost: i64 = 50;
             total_cost += generic_cost;
-            try plan_steps.append(allocator, .{
-                .op = try std.fmt.allocPrint(allocator, "ExecuteStatement (cost: {})", .{generic_cost}),
-                .cost = generic_cost
-            });
+            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "ExecuteStatement (cost: {})", .{generic_cost}), .cost = generic_cost });
         },
     }
 
