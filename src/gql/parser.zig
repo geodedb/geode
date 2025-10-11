@@ -2042,6 +2042,12 @@ pub const Parser = struct {
                 base = .{ .MapProjection = .{ .source = bp, .fields = try fields.toOwnedSlice(self.arena.allocator()) } };
                 continue;
             }
+            // Label test: n:Label (only if base is an identifier)
+            if (self.cur.kind == .colon and base == .Ident) {
+                self.advance();
+                const label_token = try self.expectIdentifierOrKeyword();
+                return .{ .HasLabel = .{ .node = base.Ident.orig, .label = label_token.lexeme } };
+            }
             break;
         }
         return base;

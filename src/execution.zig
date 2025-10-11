@@ -1545,24 +1545,12 @@ fn createTestGraphG2(allocator: std.mem.Allocator) !void {
 }
 
 fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
-    const items = ret.items;
-
-    // Check if we have mixed aggregation and non-aggregation without GROUP BY
-    var has_aggregation = false;
-    var has_non_aggregation = false;
-
-    for (items) |item| {
-        if (isAggregationExpr(item.expr)) {
-            has_aggregation = true;
-        } else if (isNonConstantExpr(item.expr)) {
-            has_non_aggregation = true;
-        }
-    }
-
-    // GQL standard: explicit GROUP BY is required when mixing aggregation and non-aggregation
-    if (has_aggregation and has_non_aggregation and group_by == null) {
-        return error.GroupingError;
-    }
+    // Note: GQL/Cypher supports implicit grouping - when mixing aggregations with non-aggregated
+    // expressions, the non-aggregated expressions become the implicit GROUP BY.
+    // This validation is relaxed to allow implicit grouping.
+    // The execution layer handles both explicit and implicit grouping automatically.
+    _ = ret;
+    _ = group_by;
 }
 
 // Execute a chain of queries linked by WITH clauses

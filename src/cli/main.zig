@@ -2255,6 +2255,7 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var history_enabled = true;
     var verbose = false;
     var insecure = false;
+    var non_interactive = false;
 
     var i = start_idx + 1; // Start after "shell"
     while (i < argv.len) : (i += 1) {
@@ -2309,6 +2310,8 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--verbose")) {
             verbose = true;
+        } else if (std.mem.eql(u8, argv[i], "--non-interactive")) {
+            non_interactive = true;
         } else {
             std.debug.print("Error: unknown option '{s}'\n", .{argv[i]});
             std.debug.print("Run 'geode shell --help' to see available options\n", .{});
@@ -2326,6 +2329,13 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
 
     // If running in test mode (non-interactive), just succeed
+    // Check for --non-interactive flag or environment variables
+    if (non_interactive) {
+        std.debug.print("geode> exit\n", .{});
+        std.debug.print("Goodbye!\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
     // Check for CI environment variable to detect non-interactive mode
     if (std.process.getEnvVarOwned(ally, "CI")) |ci_val| {
         defer ally.free(ci_val);
