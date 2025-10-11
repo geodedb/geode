@@ -3191,16 +3191,26 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
             var rows = try allocator.alloc([]eval.Value, 1);
             var row = try allocator.alloc(eval.Value, ret.items.len);
 
-            // Create environment with the merged node
+            // Create environment with the merged node and 'created' flag
             const node = store.nodes.getPtr(node_id).?;
             var env_names: [][]const u8 = &.{};
             var env_values: []eval.Value = &.{};
 
+            // Always include the 'created' variable
+            const base_vars: usize = 1; // for 'created' variable
+            const total_vars: usize = if (node_pattern.name != null) base_vars + 1 else base_vars;
+
+            env_names = try allocator.alloc([]const u8, total_vars);
+            env_values = try allocator.alloc(eval.Value, total_vars);
+
+            // Add 'created' variable
+            env_names[0] = "created";
+            env_values[0] = eval.Value{ .Bool = created };
+
+            // Add node variable if named
             if (node_pattern.name) |var_name| {
-                env_names = try allocator.alloc([]const u8, 1);
-                env_values = try allocator.alloc(eval.Value, 1);
-                env_names[0] = var_name;
-                env_values[0] = eval.Value{ .Node = node };
+                env_names[1] = var_name;
+                env_values[1] = eval.Value{ .Node = node };
             }
 
             const env = eval.Env{
@@ -3212,10 +3222,9 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
 
-            if (node_pattern.name != null) {
-                allocator.free(env_names);
-                allocator.free(env_values);
-            }
+            // Always free the allocated environment (we always allocate now)
+            allocator.free(env_names);
+            allocator.free(env_values);
 
             rows[0] = row;
 

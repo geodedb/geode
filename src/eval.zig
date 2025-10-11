@@ -1138,6 +1138,39 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(value * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
+            // Handle Char function - converts string to fixed-length char with length validation
+            if (std.mem.eql(u8, function_name, "char") or std.mem.eql(u8, function_name, "Char")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(ally, call.args[0].*, env);
+                const len_arg = try evalExpr(ally, call.args[1].*, env);
+
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                const max_len = switch (len_arg) {
+                    .Int => |i| if (i > 0) @as(usize, @intCast(i)) else break :blk_call .{ .Null = {} },
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Validate length constraint - throw error if exceeded
+                if (str.len > max_len) {
+                    return error.CharLengthExceeded;
+                }
+
+                // Pad with spaces if shorter than max_len
+                if (str.len < max_len) {
+                    var padded = try ally.alloc(u8, max_len);
+                    @memcpy(padded[0..str.len], str);
+                    @memset(padded[str.len..], ' ');
+                    break :blk_call .{ .Str = padded };
+                } else {
+                    // Exact length match
+                    break :blk_call .{ .Str = try ally.dupe(u8, str) };
+                }
+            }
+
             // Try to use the extended function registry for advanced type functions
             const eval_ext = @import("eval_extended.zig");
 
