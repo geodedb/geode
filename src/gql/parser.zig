@@ -30,6 +30,8 @@ pub const Parser = struct {
     path_aliases: std.ArrayList([]const u8) = undefined,
     // Whether parseGraphPattern should record chain aliases into path_aliases.
     collect_chain_aliases: bool = false,
+    // Track nesting depth in pattern comprehensions to handle ambiguous | tokens
+    pattern_comp_depth: u32 = 0,
 
     fn advance(self: *Parser) void {
         self.cur = self.lx.next();
@@ -1292,6 +1294,11 @@ pub const Parser = struct {
             const tkn = try self.expectIdentifierOrKeyword();
             try types.append(self.arena.allocator(), tkn.lexeme);
             while (self.cur.kind == .bar) {
+                // If inside pattern comprehension, only consume | if it's followed by a type identifier
+                if (self.pattern_comp_depth > 0) {
+                    const next = self.peekToken();
+                    if (next != .identifier and !self.isKeyword(next)) break;
+                }
                 self.advance();
                 // Accept keywords as alternative relationship type names
                 const alt = try self.expectIdentifierOrKeyword();
@@ -1639,11 +1646,11 @@ pub const Parser = struct {
                         base = .{ .ShortestPath = .{ .pattern = pat_ptr, .all = is_all } };
                         continue;
                     }
-                    // Check for size() with pattern comprehension
+                    // Check for size() with direct graph pattern: size((n)-[r]->(m))
                     if (std.ascii.eqlIgnoreCase(name, "size")) {
-                        self.advance(); // consume '('
-                        // Try to parse a graph pattern
-                        if (self.cur.kind == .l_paren) {
+                        // Peek ahead to see if this is size((pattern))
+                        if (self.peekToken() == .l_paren) {
+                            self.advance(); // consume '('
                             const pattern = try self.parseGraphPattern();
                             _ = try self.expect(.r_paren);
                             const a = self.arena.allocator();
@@ -1652,7 +1659,8 @@ pub const Parser = struct {
                             base = .{ .PatternCount = pat_ptr };
                             continue;
                         }
-                        // Otherwise, fall through to regular function call handling
+                        // Otherwise fall through to regular function call handling
+                        // This handles size([ pattern | expr ]) and size(expr)
                     }
                 }
                 // function call: base(args)
@@ -1908,6 +1916,7 @@ pub const Parser = struct {
                     const elements_slice = try elements.toOwnedSlice(self.arena.allocator());
                     break :blk_pc .{ .ArrayLit = elements_slice };
                 }
+                self.pattern_comp_depth += 1;
                 const pat_val = try self.parseGraphPattern();
                 var where_expr: ?*ast.Expr = null;
                 if (self.cur.kind == .WHERE) {
@@ -1922,6 +1931,7 @@ pub const Parser = struct {
                 const mp = try self.arena.allocator().create(ast.Expr);
                 mp.* = map_expr_v;
                 _ = try self.expect(.r_bracket);
+                self.pattern_comp_depth -= 1;
                 const a = self.arena.allocator();
                 const pat_ptr = try a.create(ast.GraphPattern);
                 pat_ptr.* = pat_val;
