@@ -5,6 +5,7 @@ const protocol = geode.protocol;
 const impl_flagger = @import("flagger_impl_defined.zig");
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
+const eval_extended = @import("../eval_extended.zig");
 const exec = geode.exec;
 const wal_mod = @import("wal");
 const storage_pm = @import("storage_page_manager");
@@ -6130,6 +6131,69 @@ fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: geode.ast.Expr) !
         .Int => |i| .{ .Int = i },
         .String => |s| .{ .String = try allocator.dupe(u8, s) }, // Deep copy string to prevent dangling pointers
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Call => |call| blk_call: {
+            // Handle function calls for advanced types (VectorF32, IpAddr, etc.)
+            const function_name = switch (call.callee.*) {
+                .Ident => |ident| ident.orig,
+                else => break :blk_call .{ .Null = {} },
+            };
+
+            // Convert arguments from ast.Expr to eval_extended.ExtValue
+            var args = try allocator.alloc(eval_extended.ExtValue, call.args.len);
+            defer allocator.free(args);
+
+            for (call.args, 0..) |arg, i| {
+                args[i] = switch (arg.*) {
+                    .Null => .{ .Null = {} },
+                    .Bool => |b| .{ .Bool = b },
+                    .Int => |n| .{ .Int = n },
+                    .String => |s| .{ .Str = s },
+                    .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                    .ArrayLit => |arr| blk_arr: {
+                        // Convert array literal to list of ExtValue
+                        var list = try allocator.alloc(eval_extended.ExtValue, arr.len);
+                        for (arr, 0..) |elem, j| {
+                            list[j] = switch (elem.*) {
+                                .Int => |n| .{ .Int = n },
+                                .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                                else => .{ .Null = {} },
+                            };
+                        }
+                        break :blk_arr .{ .List = list };
+                    },
+                    else => .{ .Null = {} },
+                };
+            }
+
+            // Initialize function registry and call the function
+            var registry = try eval_extended.initFunctionRegistry(allocator);
+            defer registry.deinit();
+
+            // Convert function name to lowercase for registry lookup
+            const lowercase_name = try std.ascii.allocLowerString(allocator, function_name);
+            defer allocator.free(lowercase_name);
+
+            if (registry.get(lowercase_name)) |func| {
+                const result = func(allocator, args) catch |err| {
+                    std.log.err("Function {s} failed with error: {}", .{function_name, err});
+                    break :blk_call .{ .Null = {} };
+                };
+
+                // Convert ExtValue result to PropertyValue
+                break :blk_call switch (result) {
+                    .Null => .{ .Null = {} },
+                    .Bool => |b| .{ .Bool = b },
+                    .Int => |i| .{ .Int = i },
+                    .Str => |s| .{ .String = try allocator.dupe(u8, s) },
+                    .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                    .VectorF32 => |v| .{ .VectorF32 = v },
+                    else => .{ .Null = {} },
+                };
+            }
+
+            std.log.err("Function {s} (lowercase: {s}) not found in registry", .{function_name, lowercase_name});
+            break :blk_call .{ .Null = {} };
+        },
         else => .{ .Null = {} }, // Default for unsupported expressions
     };
 }

@@ -2205,10 +2205,10 @@ pub const Parser = struct {
         }
         // Vector types - accept array literal or string
         if (std.ascii.eqlIgnoreCase(name, "VectorF32")) {
-            return n == 1 and (args[0] == .List or argIsStringLike(args[0]));
+            return n == 1 and (args[0] == .ArrayLit or argIsStringLike(args[0]));
         }
         if (std.ascii.eqlIgnoreCase(name, "VectorI32")) {
-            return n == 1 and (args[0] == .List or argIsStringLike(args[0]));
+            return n == 1 and (args[0] == .ArrayLit or argIsStringLike(args[0]));
         }
         // Geographic types - accept two numbers or one string
         if (std.ascii.eqlIgnoreCase(name, "LatLon")) {
