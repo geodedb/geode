@@ -907,6 +907,28 @@ pub const Parser = struct {
             initial_with_clause = .{ .items = try witems.toOwnedSlice(self.arena.allocator()) };
             // Allow optional WHERE after WITH
             // Note: WHERE after WITH filters the WITH results, not graph patterns
+
+            // Check for FOR after initial WITH clause
+            if (self.cur.kind == .FOR) {
+                // Parse FOR statement and return it wrapped in a Query
+                const for_stmt = try self.parseForStatement();
+                return ast.Query{
+                    .optional_match = false,
+                    .match = .{ .chains = &.{} }, // Empty match pattern
+                    .create_pattern = null,
+                    .where_clause = null,
+                    .with_clause = initial_with_clause,
+                    .set_clauses = &.{},
+                    .remove_clauses = &.{},
+                    .ret = for_stmt.For.return_clause,
+                    .order_by = for_stmt.For.order_by,
+                    .offset = for_stmt.For.offset,
+                    .limit = for_stmt.For.limit,
+                    .next_query = null,
+                    .group_by = null,
+                    .having = null,
+                };
+            }
         }
 
         // Check for SELECT at the beginning (for queries like: SELECT 1 AS x)
@@ -1144,15 +1166,42 @@ pub const Parser = struct {
                 }
             }
 
-            // Check for query chaining: WITH ... MATCH/CREATE ...
-            // If we see MATCH or CREATE after WITH, parse it as a chained query
-            if (self.cur.kind == .MATCH or self.cur.kind == .CREATE) {
-                // Parse the continuation as a new query
-                const next_query = try self.parseQuery();
-                // Allocate on arena and store pointer
-                const next_ptr = try self.arena.allocator().create(ast.Query);
-                next_ptr.* = next_query;
-                next_query_ptr = next_ptr;
+            // Check for query chaining: WITH ... MATCH/CREATE/FOR ...
+            // If we see MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
+            if (self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR) {
+                if (self.cur.kind == .FOR) {
+                    // FOR needs special handling as it's a statement, not a query
+                    // Parse the FOR statement and wrap it in a query structure
+                    const for_stmt = try self.parseForStatement();
+                    // Create a query wrapper for the FOR statement
+                    const next_query = ast.Query{
+                        .optional_match = false,
+                        .match = .{ .chains = &.{} }, // Empty match pattern
+                        .create_pattern = null,
+                        .where_clause = null,
+                        .with_clause = null,
+                        .set_clauses = &.{},
+                        .remove_clauses = &.{},
+                        .ret = for_stmt.For.return_clause,
+                        .order_by = for_stmt.For.order_by,
+                        .offset = for_stmt.For.offset,
+                        .limit = for_stmt.For.limit,
+                        .next_query = null,
+                        .group_by = null,
+                        .having = null,
+                    };
+                    // Allocate on arena and store pointer
+                    const next_ptr = try self.arena.allocator().create(ast.Query);
+                    next_ptr.* = next_query;
+                    next_query_ptr = next_ptr;
+                } else {
+                    // Parse the continuation as a new query
+                    const next_query = try self.parseQuery();
+                    // Allocate on arena and store pointer
+                    const next_ptr = try self.arena.allocator().create(ast.Query);
+                    next_ptr.* = next_query;
+                    next_query_ptr = next_ptr;
+                }
 
                 // Current query acts as a WITH-only query (no explicit RETURN needed)
                 // The WITH clause serves as an implicit RETURN for passing bindings forward
