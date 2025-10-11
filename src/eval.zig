@@ -1154,7 +1154,9 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                     const arg_value = evalExpr(ally, arg.*, env) catch {
                         break :blk_call .{ .Null = {} };
                     };
-                    args[i] = valueToExtValue(arg_value);
+                    args[i] = valueToExtValue(ally, arg_value) catch {
+                        break :blk_call .{ .Null = {} };
+                    };
                 }
 
                 // Call the extended function and handle validation errors
@@ -1458,7 +1460,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
     };
 }
 
-fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
+fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("eval_extended.zig").ExtValue {
     return switch (value) {
         .Null => .{ .Null = {} },
         .Int => |i| .{ .Int = i },
@@ -1466,7 +1468,14 @@ fn valueToExtValue(value: Value) @import("eval_extended.zig").ExtValue {
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .ExtValue => |ext| ext, // Unwrap the ExtValue directly
-        .List => .{ .Null = {} }, // ExtValue doesn't support complex types
+        .List => |list| blk: {
+            // Convert Value.List to ExtValue.List recursively
+            var ext_list = try allocator.alloc(@import("eval_extended.zig").ExtValue, list.len);
+            for (list, 0..) |item, i| {
+                ext_list[i] = try valueToExtValue(allocator, item);
+            }
+            break :blk .{ .List = ext_list };
+        },
         .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Map => .{ .Null = {} }, // ExtValue doesn't support map types
