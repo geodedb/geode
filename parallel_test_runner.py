@@ -122,21 +122,55 @@ class ParallelTestRunner:
                 processed_args.append(str(arg))
 
         # Add connection mode flags
-        is_query_command = len(processed_args) > 0 and processed_args[0] == "query"
-        if is_query_command:
-            if server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
-                # Use server mode
-                processed_args.extend(["--server", server_address])
-            elif not server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
-                # Use embedded mode
-                processed_args.append("--no-quic")
+        if len(processed_args) > 0:
+            command = processed_args[0]
+            # Detect query commands: explicit "query" subcommand OR query-like strings (starting with GQL keywords)
+            gql_keywords = ["MATCH", "RETURN", "CREATE", "DELETE", "MERGE", "WITH", "UNWIND", "CALL",
+                           "INSERT", "SHOW", "EXPLAIN", "PROFILE", "USE", "SET", "BEGIN", "COMMIT",
+                           "ROLLBACK", "START", "SELECT", "OPTIONAL"]
+            is_query_like = any(command.upper().startswith(kw) for kw in gql_keywords)
+            is_query_command = command == "query" or is_query_like
+            is_shell_command = command == "shell"
+
+            if is_query_command:
+                if server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
+                    # Use server mode
+                    processed_args.extend(["--server", server_address])
+                elif not server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
+                    # Use embedded mode
+                    processed_args.append("--no-quic")
+            elif is_shell_command:
+                # Shell doesn't support --no-quic, remove it if present
+                if "--no-quic" in processed_args:
+                    processed_args = [arg for arg in processed_args if arg != "--no-quic"]
+                # Add --server if server_address is provided and not already present
+                if server_address and "--server" not in processed_args:
+                    processed_args.extend(["--server", server_address])
 
         return processed_args
 
     def run_single_test(self, test_case: Dict, spec_name: str, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
-        args = self.process_args(test_case.get("args", []), server_address=server_address, instance_id=instance_id, loop_index=loop_index)
+
+        # Handle both args format and command/query format
+        if "args" in test_case:
+            args = test_case.get("args", [])
+        elif "command" in test_case or "query" in test_case:
+            # Construct args from command and query
+            args = ["query"]
+            if "query" in test_case:
+                args.append(test_case["query"])
+            if "command" in test_case:
+                command = test_case["command"]
+                if isinstance(command, list):
+                    args.extend(command)
+                else:
+                    args.append(command)
+        else:
+            args = []
+
+        args = self.process_args(args, server_address=server_address, instance_id=instance_id, loop_index=loop_index)
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin", None)
 

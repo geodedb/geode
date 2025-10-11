@@ -1513,10 +1513,11 @@ pub const Parser = struct {
 
     fn parseOrExpr(self: *Parser) ParserError!ast.Expr {
         var left = try self.parseAndExpr();
-        while (self.cur.kind == .OR) {
+        while (self.cur.kind == .OR or self.cur.kind == .XOR) {
+            const op_kind = self.cur.kind;
             self.advance();
             const right = try self.parseAndExpr();
-            const node = try self.makeBinary(.Or, left, right);
+            const node = try self.makeBinary(if (op_kind == .OR) .Or else .Xor, left, right);
             left = node;
         }
         return left;

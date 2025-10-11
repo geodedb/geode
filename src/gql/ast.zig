@@ -219,7 +219,7 @@ pub const Expr = union(enum) {
     MapProjection: struct { source: *Expr, fields: [][]const u8 },
 };
 
-pub const BinOp = enum { And, Or, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };
+pub const BinOp = enum { And, Or, Xor, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };
 pub const UnaryOp = enum { Not, Neg, Pos };
 
 pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };

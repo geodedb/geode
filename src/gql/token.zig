@@ -240,6 +240,7 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "AND")) return .AND;
     if (std.ascii.eqlIgnoreCase(word, "OR")) return .OR;
     if (std.ascii.eqlIgnoreCase(word, "NOT")) return .NOT;
+    if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
     if (std.ascii.eqlIgnoreCase(word, "IN")) return .IN;
     if (std.ascii.eqlIgnoreCase(word, "IS")) return .IS;
     if (std.ascii.eqlIgnoreCase(word, "STARTS")) return .STARTS;

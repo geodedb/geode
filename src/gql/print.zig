@@ -536,6 +536,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             const op = switch (b.op) {
                 .And => " AND ",
                 .Or => " OR ",
+                .Xor => " XOR ",
                 .Eq => " = ",
                 .Ne => " <> ",
                 .Lt => " < ",

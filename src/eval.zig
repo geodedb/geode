@@ -130,6 +130,20 @@ fn or3(a: Value, b: Value) Value {
     return .{ .Bool = false };
 }
 
+fn xor3(a: Value, b: Value) Value {
+    // Three-valued logic for XOR: returns true when exactly one operand is true
+    // null XOR anything = null
+    if (a == .Null or b == .Null) return Value{ .Null = {} };
+
+    // Both must be Bool for XOR to work
+    if (a == .Bool and b == .Bool) {
+        return .{ .Bool = a.Bool != b.Bool };
+    }
+
+    // Non-bool values treated as false
+    return .{ .Bool = false };
+}
+
 // --- Lightweight regex helpers ---
 fn regexEatEsc(pat: []const u8, idx: *usize) ?u8 {
     if (idx.* >= pat.len) return null;
@@ -264,6 +278,7 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
     return switch (op) {
         .And => and3(l, r),
         .Or => or3(l, r),
+        .Xor => xor3(l, r),
         .Add => blk: {
             // NULL + anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk .{ .Null = {} };
