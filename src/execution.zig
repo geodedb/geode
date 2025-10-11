@@ -1310,75 +1310,159 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
 
 fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, context: ExecutionContext) anyerror!ExecutionResult {
     _ = context; // May be used for permissions in future
-    // EXPLAIN shows the query execution plan
-    // For now, return a simplified plan structure
+    // EXPLAIN shows the query execution plan with cost estimates
 
-    // Generate plan text for the wrapped query
-    var plan_steps = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    // Generate plan steps with cost information
+    var plan_steps = try std.ArrayList(struct { op: []const u8, cost: i64 }).initCapacity(allocator, 0);
     defer plan_steps.deinit(allocator);
 
-    // Add EXPLAIN header
-    try plan_steps.append(allocator, try allocator.dupe(u8, "EXPLAIN"));
+    // Track cumulative cost
+    var total_cost: i64 = 0;
 
-    // Analyze the query and build plan description
+    // Analyze the query and build plan with cost estimates
     const query_stmt = exp.query.*;
     switch (query_stmt) {
         .Query => |q| {
-            try plan_steps.append(allocator, try allocator.dupe(u8, "MATCH"));
             if (q.match.chains.len > 0) {
                 const chain = q.match.chains[0];
                 if (chain.head) |_| {
-                    try plan_steps.append(allocator, try allocator.dupe(u8, "  NodeScan"));
+                    // NodeScan base cost: 100 per node
+                    const node_cost: i64 = 100;
+                    total_cost += node_cost;
+                    try plan_steps.append(allocator, .{
+                        .op = try std.fmt.allocPrint(allocator, "NodeScan (cost: {})", .{node_cost}),
+                        .cost = node_cost
+                    });
                 }
                 if (chain.hops.len > 0) {
-                    try plan_steps.append(allocator, try allocator.dupe(u8, "  ExpandRelationships"));
+                    // ExpandRelationships cost: 50 per hop
+                    const expand_cost: i64 = @intCast(chain.hops.len * 50);
+                    total_cost += expand_cost;
+                    try plan_steps.append(allocator, .{
+                        .op = try std.fmt.allocPrint(allocator, "ExpandRelationships (cost: {})", .{expand_cost}),
+                        .cost = expand_cost
+                    });
                 }
             }
             if (q.where_clause != null) {
-                try plan_steps.append(allocator, try allocator.dupe(u8, "  Filter"));
+                // Filter cost: 10 per condition
+                const filter_cost: i64 = 10;
+                total_cost += filter_cost;
+                try plan_steps.append(allocator, .{
+                    .op = try std.fmt.allocPrint(allocator, "Filter (cost: {})", .{filter_cost}),
+                    .cost = filter_cost
+                });
             }
             if (q.filter_clause != null) {
-                try plan_steps.append(allocator, try allocator.dupe(u8, "  Filter (FILTER clause)"));
+                // Additional filter cost
+                const filter_cost: i64 = 10;
+                total_cost += filter_cost;
+                try plan_steps.append(allocator, .{
+                    .op = try std.fmt.allocPrint(allocator, "Filter FILTER clause (cost: {})", .{filter_cost}),
+                    .cost = filter_cost
+                });
             }
             if (q.group_by != null) {
-                try plan_steps.append(allocator, try allocator.dupe(u8, "  Aggregate"));
+                // Aggregate cost: 200 for grouping
+                const agg_cost: i64 = 200;
+                total_cost += agg_cost;
+                try plan_steps.append(allocator, .{
+                    .op = try std.fmt.allocPrint(allocator, "Aggregate (cost: {})", .{agg_cost}),
+                    .cost = agg_cost
+                });
             }
             if (q.order_by != null) {
-                try plan_steps.append(allocator, try allocator.dupe(u8, "  Sort"));
+                // Sort cost: 150 for sorting
+                const sort_cost: i64 = 150;
+                total_cost += sort_cost;
+                try plan_steps.append(allocator, .{
+                    .op = try std.fmt.allocPrint(allocator, "Sort (cost: {})", .{sort_cost}),
+                    .cost = sort_cost
+                });
             }
             if (q.limit != null or q.offset != null) {
-                try plan_steps.append(allocator, try allocator.dupe(u8, "  Limit"));
+                // Limit cost: 5
+                const limit_cost: i64 = 5;
+                total_cost += limit_cost;
+                try plan_steps.append(allocator, .{
+                    .op = try std.fmt.allocPrint(allocator, "Limit (cost: {})", .{limit_cost}),
+                    .cost = limit_cost
+                });
             }
-            try plan_steps.append(allocator, try allocator.dupe(u8, "RETURN"));
             if (q.ret.distinct) {
-                try plan_steps.append(allocator, try allocator.dupe(u8, "  Distinct"));
+                // Distinct cost: 100
+                const distinct_cost: i64 = 100;
+                total_cost += distinct_cost;
+                try plan_steps.append(allocator, .{
+                    .op = try std.fmt.allocPrint(allocator, "Distinct (cost: {})", .{distinct_cost}),
+                    .cost = distinct_cost
+                });
             }
-            try plan_steps.append(allocator, try allocator.dupe(u8, "  Project"));
+            // Project cost: 5
+            const project_cost: i64 = 5;
+            total_cost += project_cost;
+            try plan_steps.append(allocator, .{
+                .op = try std.fmt.allocPrint(allocator, "Project (cost: {})", .{project_cost}),
+                .cost = project_cost
+            });
         },
         .Create => |_| {
-            try plan_steps.append(allocator, try allocator.dupe(u8, "CREATE"));
-            try plan_steps.append(allocator, try allocator.dupe(u8, "  CreateNodes"));
-            try plan_steps.append(allocator, try allocator.dupe(u8, "  CreateRelationships"));
+            // CREATE costs
+            const create_node_cost: i64 = 50;
+            const create_rel_cost: i64 = 75;
+            total_cost += create_node_cost + create_rel_cost;
+
+            try plan_steps.append(allocator, .{
+                .op = try std.fmt.allocPrint(allocator, "CreateNodes (cost: {})", .{create_node_cost}),
+                .cost = create_node_cost
+            });
+            try plan_steps.append(allocator, .{
+                .op = try std.fmt.allocPrint(allocator, "CreateRelationships (cost: {})", .{create_rel_cost}),
+                .cost = create_rel_cost
+            });
         },
         .Delete => |_| {
-            try plan_steps.append(allocator, try allocator.dupe(u8, "DELETE"));
-            try plan_steps.append(allocator, try allocator.dupe(u8, "  DeleteNodes"));
+            // DELETE cost
+            const delete_cost: i64 = 100;
+            total_cost += delete_cost;
+            try plan_steps.append(allocator, .{
+                .op = try std.fmt.allocPrint(allocator, "DeleteNodes (cost: {})", .{delete_cost}),
+                .cost = delete_cost
+            });
         },
         else => {
-            try plan_steps.append(allocator, try allocator.dupe(u8, "ExecuteStatement"));
+            const generic_cost: i64 = 50;
+            total_cost += generic_cost;
+            try plan_steps.append(allocator, .{
+                .op = try std.fmt.allocPrint(allocator, "ExecuteStatement (cost: {})", .{generic_cost}),
+                .cost = generic_cost
+            });
         },
     }
 
-    // Create result with plan steps
+    // Create result with plan column
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "plan");
 
-    const rows = try allocator.alloc([]eval.Value, plan_steps.items.len);
+    // Create rows with operation descriptions and add total cost at the end
+    const rows = try allocator.alloc([]eval.Value, plan_steps.items.len + 2);
+
+    // Add header row
+    const header_row = try allocator.alloc(eval.Value, 1);
+    header_row[0] = eval.Value{ .Str = try allocator.dupe(u8, "EXPLAIN") };
+    rows[0] = header_row;
+
+    // Add operation rows
     for (plan_steps.items, 0..) |step, i| {
         const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = step };
-        rows[i] = row;
+        row[0] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "  {s}", .{step.op}) };
+        rows[i + 1] = row;
     }
+
+    // Add total cost row
+    const total_row = try allocator.alloc(eval.Value, 1);
+    total_row[0] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "Total cost: {}", .{total_cost}) };
+    rows[plan_steps.items.len + 1] = total_row;
 
     return ExecutionResult{
         .columns = columns,
