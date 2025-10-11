@@ -349,6 +349,70 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                 .LatLonAlt => |latlonalt| {
                     try writer.print("\"({d:.6},{d:.6},{d:.2}m)\"", .{ latlonalt.lat, latlonalt.lon, latlonalt.alt });
                 },
+                .Date => |date| {
+                    // Format date as YYYY-MM-DD using civil calendar algorithm
+                    // Convert days since Unix epoch (1970-01-01) to Gregorian Y-M-D
+
+                    // Shift from Unix epoch to use algorithm starting from 0000-03-01
+                    const z: i64 = @as(i64, date.days_since_epoch) + 719468; // Days from 0000-03-01 to 1970-01-01
+                    const era: i64 = if (z >= 0) @divFloor(z, 146097) else @divFloor(z - 146096, 146097);
+                    const doe: u32 = @intCast(z - era * 146097); // Day of era [0, 146096]
+                    const yoe: u32 = @intCast(@divFloor(doe - doe / 1460 + doe / 36524 - doe / 146096, 365)); // Year of era [0, 399]
+                    const y_tmp: i64 = @as(i64, yoe) + era * 400;
+                    const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100); // Day of year [0, 365]
+                    const mp: u32 = @intCast(@divFloor(5 * doy + 2, 153)); // Month' [0, 11]
+                    const d: u32 = doy - @divFloor(153 * mp + 2, 5) + 1; // Day [1, 31]
+                    const m: u32 = if (mp < 10) mp + 3 else mp - 9; // Month [1, 12]
+                    const y: i64 = y_tmp + @as(i64, if (m <= 2) @as(u32, 1) else @as(u32, 0));
+
+                    try writer.print("\"{:0>4}-{:0>2}-{:0>2}\"", .{ @abs(y), m, d });
+                },
+                .Time => |time| {
+                    // Format time as HH:MM:SS.ffffff
+                    const micros = time.micros_since_midnight;
+                    const hours: u32 = @intCast(@divFloor(micros, 3600 * 1_000_000));
+                    const remaining_after_hours = micros - @as(i64, hours) * 3600 * 1_000_000;
+                    const minutes: u32 = @intCast(@divFloor(remaining_after_hours, 60 * 1_000_000));
+                    const remaining_after_mins = remaining_after_hours - @as(i64, minutes) * 60 * 1_000_000;
+                    const seconds: u32 = @intCast(@divFloor(remaining_after_mins, 1_000_000));
+                    const microseconds: u32 = @intCast(remaining_after_mins - @as(i64, seconds) * 1_000_000);
+
+                    try writer.print("\"{:0>2}:{:0>2}:{:0>2}.{:0>6}\"", .{ hours, minutes, seconds, microseconds });
+                },
+                .TimestampTZ => |ts| {
+                    // Format timestamp as ISO8601: YYYY-MM-DDTHH:MM:SS.ffffffZ
+                    const micros = ts.micros_since_epoch_utc;
+                    const seconds_since_epoch = @divFloor(micros, 1_000_000);
+                    const days_since_epoch: i64 = @divFloor(seconds_since_epoch, 86400);
+
+                    // Calculate time of day, handling negative timestamps correctly
+                    var time_of_day_micros = @mod(micros, 86400 * 1_000_000);
+                    if (time_of_day_micros < 0) {
+                        time_of_day_micros += 86400 * 1_000_000;
+                    }
+
+                    // Date part using civil calendar algorithm
+                    const z: i64 = days_since_epoch + 719468; // Days from 0000-03-01 to 1970-01-01
+                    const era: i64 = if (z >= 0) @divFloor(z, 146097) else @divFloor(z - 146096, 146097);
+                    const doe: u32 = @intCast(z - era * 146097); // Day of era [0, 146096]
+                    const yoe: u32 = @intCast(@divFloor(doe - doe / 1460 + doe / 36524 - doe / 146096, 365)); // Year of era [0, 399]
+                    const y_tmp: i64 = @as(i64, yoe) + era * 400;
+                    const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100); // Day of year [0, 365]
+                    const mp: u32 = @intCast(@divFloor(5 * doy + 2, 153)); // Month' [0, 11]
+                    const d: u32 = doy - @divFloor(153 * mp + 2, 5) + 1; // Day [1, 31]
+                    const m: u32 = if (mp < 10) mp + 3 else mp - 9; // Month [1, 12]
+                    const y: i64 = y_tmp + @as(i64, if (m <= 2) @as(u32, 1) else @as(u32, 0));
+
+                    // Time part
+                    const hours: u32 = @intCast(@divFloor(time_of_day_micros, 3600 * 1_000_000));
+                    const rem_after_hours = time_of_day_micros - @as(i64, hours) * 3600 * 1_000_000;
+                    const minutes: u32 = @intCast(@divFloor(rem_after_hours, 60 * 1_000_000));
+                    const rem_after_mins = rem_after_hours - @as(i64, minutes) * 60 * 1_000_000;
+                    const secs: u32 = @intCast(@divFloor(rem_after_mins, 1_000_000));
+                    const microseconds: u32 = @intCast(rem_after_mins - @as(i64, secs) * 1_000_000);
+
+                    try writer.print("\"{:0>4}-{:0>2}-{:0>2}T{:0>2}:{:0>2}:{:0>2}.{:0>6}Z\"", .{ @abs(y), m, d, hours, minutes, secs, microseconds });
+                },
                 else => try writer.writeAll("\"[advanced_type]\""),
             }
         },
@@ -1037,63 +1101,113 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
         try result_rows.append(allocator, row_values);
     }
 
-    // If there's a next statement (like RETURN), evaluate it with VALUES bindings
+    // If there's a next statement (like MATCH or RETURN), evaluate it with VALUES bindings
     if (values_stmt.next_statement) |next_stmt| {
         switch (next_stmt.*) {
             .Query => |query| {
-                // VALUES ... RETURN pattern: evaluate RETURN for each VALUES row
-                var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+                // Check if query has MATCH clause - if so, execute full query with parameters
+                if (query.match.chains.len > 0) {
+                    // VALUES ... MATCH pattern: execute MATCH for each VALUES row and collect results
+                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+                    var final_columns: ?[]const []const u8 = null;
 
-                // Build arrays for environment
-                var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                    // For each VALUES row, execute the full MATCH query with bindings as parameters
+                    for (result_rows.items) |row_values| {
+                        // Build parameter names and values from VALUES columns
+                        var param_names = try allocator.alloc([]const u8, values_stmt.column_names.len);
+                        var param_values = try allocator.alloc(eval.Value, values_stmt.column_names.len);
 
-                // For each VALUES row, create environment and evaluate RETURN
-                for (result_rows.items) |row_values| {
-                    env_names_list.clearRetainingCapacity();
-                    env_values_list.clearRetainingCapacity();
-
-                    // Bind column names to row values
-                    for (values_stmt.column_names, 0..) |col_name, i| {
-                        if (i < row_values.len) {
-                            try env_names_list.append(allocator, col_name);
-                            try env_values_list.append(allocator, row_values[i]);
+                        for (values_stmt.column_names, 0..) |col_name, i| {
+                            if (i < row_values.len) {
+                                param_names[i] = col_name;
+                                param_values[i] = row_values[i];
+                            }
                         }
+
+                        // Execute the query with VALUES bindings as parameters
+                        const match_result = try executeMatchQueryWithParams(allocator, query, param_names, param_values);
+
+                        // Collect results from this execution
+                        for (match_result.rows) |row| {
+                            try final_rows.append(allocator, row);
+                        }
+
+                        // Use column names from first result
+                        if (final_columns == null) {
+                            final_columns = match_result.columns;
+                        } else {
+                            // Free duplicate column arrays
+                            for (match_result.columns) |col| {
+                                allocator.free(col);
+                            }
+                            allocator.free(match_result.columns);
+                        }
+
+                        // Clean up parameter arrays
+                        allocator.free(param_names);
+                        allocator.free(param_values);
                     }
 
-                    // Create environment for this row
-                    const row_env = eval.Env{
-                        .names = env_names_list.items,
-                        .values = env_values_list.items,
+                    return ExecutionResult{
+                        .columns = if (final_columns) |cols| @constCast(cols) else try allocator.alloc([]const u8, 0),
+                        .rows = try final_rows.toOwnedSlice(allocator),
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
                     };
+                } else {
+                    // VALUES ... RETURN pattern (no MATCH): evaluate RETURN for each VALUES row
+                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
 
-                    // Evaluate RETURN items for this row
-                    var result_row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                    // Build arrays for environment
+                    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+                    // For each VALUES row, create environment and evaluate RETURN
+                    for (result_rows.items) |row_values| {
+                        env_names_list.clearRetainingCapacity();
+                        env_values_list.clearRetainingCapacity();
+
+                        // Bind column names to row values
+                        for (values_stmt.column_names, 0..) |col_name, i| {
+                            if (i < row_values.len) {
+                                try env_names_list.append(allocator, col_name);
+                                try env_values_list.append(allocator, row_values[i]);
+                            }
+                        }
+
+                        // Create environment for this row
+                        const row_env = eval.Env{
+                            .names = env_names_list.items,
+                            .values = env_values_list.items,
+                        };
+
+                        // Evaluate RETURN items for this row
+                        var result_row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+                        for (query.ret.items) |ret_item| {
+                            const value = try eval.evalExpr(allocator, ret_item.expr, row_env);
+                            try result_row.append(allocator, value);
+                        }
+
+                        try final_rows.append(allocator, try result_row.toOwnedSlice(allocator));
+                    }
+
+                    // Build column names from RETURN clause
+                    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
 
                     for (query.ret.items) |ret_item| {
-                        const value = try eval.evalExpr(allocator, ret_item.expr, row_env);
-                        try result_row.append(allocator, value);
+                        const col_name = if (ret_item.alias) |alias|
+                            try allocator.dupe(u8, alias)
+                        else
+                            try allocator.dupe(u8, "?column?");
+                        try columns.append(allocator, col_name);
                     }
 
-                    try final_rows.append(allocator, try result_row.toOwnedSlice(allocator));
+                    return ExecutionResult{
+                        .columns = try columns.toOwnedSlice(allocator),
+                        .rows = try final_rows.toOwnedSlice(allocator),
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
                 }
-
-                // Build column names from RETURN clause
-                var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-
-                for (query.ret.items) |ret_item| {
-                    const col_name = if (ret_item.alias) |alias|
-                        try allocator.dupe(u8, alias)
-                    else
-                        try allocator.dupe(u8, "?column?");
-                    try columns.append(allocator, col_name);
-                }
-
-                return ExecutionResult{
-                    .columns = try columns.toOwnedSlice(allocator),
-                    .rows = try final_rows.toOwnedSlice(allocator),
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-                };
             },
             else => return error.UnsupportedValuesChain,
         }
@@ -3149,6 +3263,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
     // Extract pattern information from MATCH
     var match_variable: ?[]const u8 = null;
     var match_labels: [][]const u8 = &.{};
+    var match_props: ?[]ast.Property = null;  // NEW: Extract inline property constraints
     var has_relationship = false;
     var rel_type: ?[]const u8 = null;
     var left_node_var: ?[]const u8 = null;
@@ -3188,10 +3303,12 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             // For now, use left node as the main match variable
             match_variable = left_node_var;
             match_labels = hop.left.labels;
+            match_props = hop.left.props;  // NEW: Extract left node properties
         } else if (chain.head) |node_pattern| {
             // Simple node pattern without relationships
             match_variable = node_pattern.name;
             match_labels = node_pattern.labels;
+            match_props = node_pattern.props;  // NEW: Extract node properties
         }
     }
 
@@ -3702,6 +3819,43 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                         }
                     }
                     if (!has_all_labels) continue;
+                }
+
+                // Check inline property constraints from pattern (e.g., MATCH (n {name: value}))
+                if (match_props) |props| {
+                    var props_match = true;
+                    // Create environment with parameters for evaluating property expressions
+                    const prop_env = eval.Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
+                    };
+
+                    for (props) |prop| {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            // Convert PropertyValue to eval.Value for comparison
+                            const node_val = switch (node_prop_val) {
+                                .Null => eval.Value{ .Null = {} },
+                                .Bool => |b| eval.Value{ .Bool = b },
+                                .Int => |i| eval.Value{ .Int = i },
+                                .String => |s| eval.Value{ .Str = s },
+                                .Float => eval.Value{ .Null = {} }, // Float not directly supported
+                            };
+                            // Evaluate expected value from pattern (with access to parameters)
+                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            if (!valuesEqual(node_val, expected_val)) {
+                                props_match = false;
+                                break;
+                            }
+                        } else {
+                            // Node doesn't have this property
+                            props_match = false;
+                            break;
+                        }
+                    }
+
+                    if (!props_match) continue;
                 }
 
                 // Create environment with matched node bound to variable

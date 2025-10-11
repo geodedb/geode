@@ -81,6 +81,9 @@ pub const ExtValue = union(enum) {
     Temperature: heap.Temperature,
     Pressure: heap.Pressure,
     VectorF32: heap.VectorF32,
+    Date: @import("types/datetime.zig").Date,
+    Time: @import("types/datetime.zig").Time,
+    TimestampTZ: @import("types/datetime.zig").TimestampTZ,
     List: []ExtValue,
 };
 

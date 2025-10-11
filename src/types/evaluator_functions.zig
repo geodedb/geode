@@ -605,6 +605,11 @@ pub fn current_time() Value {
     return Value{ .Time = datetime.Time{ .micros_since_midnight = time_of_day } };
 }
 
+pub fn current_timestamp() Value {
+    const timestamp = std.time.microTimestamp();
+    return Value{ .TimestampTZ = datetime.TimestampTZ{ .micros_since_epoch_utc = timestamp } };
+}
+
 pub fn to_hex(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
     const bytes = switch (val) {
         .Bytea => |b| b,

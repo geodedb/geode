@@ -79,8 +79,15 @@ pub const Env = struct {
     param_values: []const Value = &.{},
 
     pub fn get(self: Env, name: []const u8) ?Value {
+        // First check regular environment variables
         var i: usize = 0;
         while (i < self.names.len) : (i += 1) if (std.mem.eql(u8, self.names[i], name)) return self.values[i];
+
+        // Fall back to checking parameters (for VALUES bindings and other parameter contexts)
+        // This allows identifiers to reference parameters without the $ prefix
+        i = 0;
+        while (i < self.param_names.len) : (i += 1) if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
+
         return null;
     }
     pub fn getParam(self: Env, name: []const u8) ?Value {
@@ -1497,6 +1504,7 @@ fn evalValueToHeapValue(value: Value) heap.Value {
 
 /// Convert heap.Value to eval.Value for function results
 fn heapValueToEvalValue(value: heap.Value) Value {
+    const eval_ext = @import("eval_extended.zig");
     return switch (value) {
         .Null => .{ .Null = {} },
         .Int => |i| .{ .Int = i },
@@ -1528,6 +1536,9 @@ fn heapValueToEvalValue(value: heap.Value) Value {
             break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } };
         },
         .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
+        .Date => |dt| .{ .ExtValue = eval_ext.ExtValue{ .Date = dt } },
+        .Time => |t| .{ .ExtValue = eval_ext.ExtValue{ .Time = t } },
+        .TimestampTZ => |ts| .{ .ExtValue = eval_ext.ExtValue{ .TimestampTZ = ts } },
         else => .{ .Null = {} }, // Convert unknown types to null
     };
 }
@@ -1921,6 +1932,23 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     if (std.mem.eql(u8, function_name, "random")) {
         if (args.len != 0) return null;
         const result = evaluator_functions.random_val(ally) catch return null;
+        return heapValueToEvalValue(result);
+    }
+
+    // Handle date/time functions which take no arguments
+    if (std.mem.eql(u8, function_name, "current_date")) {
+        if (args.len != 0) return null;
+        const result = evaluator_functions.current_date();
+        return heapValueToEvalValue(result);
+    }
+    if (std.mem.eql(u8, function_name, "current_time")) {
+        if (args.len != 0) return null;
+        const result = evaluator_functions.current_time();
+        return heapValueToEvalValue(result);
+    }
+    if (std.mem.eql(u8, function_name, "current_timestamp")) {
+        if (args.len != 0) return null;
+        const result = evaluator_functions.current_timestamp();
         return heapValueToEvalValue(result);
     }
 
