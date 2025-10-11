@@ -1560,13 +1560,6 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         return arg;
     }
 
-    // Handle size() function - returns count of relationships/connections
-    if (std.mem.eql(u8, function_name, "size")) {
-        if (args.len != 1) return null;
-        // For now, return a default size
-        return Value{ .Int = 3 };
-    }
-
     // Handle id() function - returns node ID or input if already an integer
     if (std.mem.eql(u8, function_name, "id")) {
         if (args.len != 1) return null;
@@ -1937,6 +1930,28 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             .List => |l| return Value{ .Int = @intCast(l.len) },
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             else => return Value{ .Int = 0 },
+        }
+    } else if (std.mem.eql(u8, function_name, "head")) {
+        // Return the first element of a list
+        switch (first_arg) {
+            .List => |l| {
+                if (l.len == 0) return Value{ .Null = {} };
+                return l[0];
+            },
+            else => return Value{ .Null = {} },
+        }
+    } else if (std.mem.eql(u8, function_name, "tail")) {
+        // Return all elements except the first
+        switch (first_arg) {
+            .List => |l| {
+                if (l.len <= 1) {
+                    return Value{ .List = &[_]Value{} };
+                }
+                const tail_slice = try ally.alloc(Value, l.len - 1);
+                @memcpy(tail_slice, l[1..]);
+                return Value{ .List = tail_slice };
+            },
+            else => return Value{ .List = &[_]Value{} },
         }
     } else if (std.mem.eql(u8, function_name, "toString")) {
         // Convert to string
