@@ -2810,7 +2810,7 @@ pub const Parser = struct {
         const object = self.cur.lexeme;
         self.advance();
 
-        // Check if it's a label setting (n:Label) or property setting (n.property = value)
+        // Check what follows the identifier
         if (self.cur.kind == .colon) {
             // Parse label(s): SET n:Label or SET n:Label1:Label2
             var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch unreachable;
@@ -2824,6 +2824,15 @@ pub const Parser = struct {
             return .{ .Labels = .{
                 .node = object,
                 .labels = try labels.toOwnedSlice(self.arena.allocator()),
+            } };
+        } else if (self.cur.kind == .eq) {
+            // SET n = {properties}: Replace all properties
+            self.advance(); // consume '='
+            const properties = try self.parseOrExpr();
+
+            return .{ .AllProperties = .{
+                .node = object,
+                .properties = properties,
             } };
         } else {
             // Property setting: n.property = value

@@ -275,6 +275,7 @@ pub const CallClause = struct {
 pub const SetClause = union(enum) {
     Property: struct { target: PropertyAccess, value: Expr },
     Labels: struct { node: []const u8, labels: [][]const u8 },
+    AllProperties: struct { node: []const u8, properties: Expr }, // SET n = {prop1: val1, prop2: val2}
 };
 
 pub const RemoveClause = union(enum) {

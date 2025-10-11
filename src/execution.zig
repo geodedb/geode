@@ -3961,6 +3961,30 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                 }
                             }
                         },
+                        .AllProperties => |all_props| {
+                            if (std.mem.eql(u8, all_props.node, match_variable orelse "")) {
+                                // Evaluate the properties expression (should be a map literal)
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+
+                                // Clear all existing properties
+                                store.clearNodeProperties(node.id);
+
+                                // Set new properties from the map
+                                if (props_value == .Map) {
+                                    for (props_value.Map.keys, props_value.Map.values) |key, value| {
+                                        const prop_value = switch (value) {
+                                            .Str => |s| graph_store.PropertyValue{ .String = s },
+                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                            else => graph_store.PropertyValue{ .Null = {} },
+                                        };
+                                        try store.setNodeProperty(node.id, key, prop_value);
+                                    }
+                                }
+                            }
+                        },
                     }
                 }
 
