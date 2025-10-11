@@ -689,7 +689,38 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Call => |call_stmt| {
-            return try executeCallStatement(allocator, call_stmt, context);
+            var result = try executeCallStatement(allocator, call_stmt, context);
+
+            // Apply ORDER BY if present
+            if (call_stmt.order_by) |order| {
+                try sortRows(allocator, &result, order);
+            }
+
+            // Apply OFFSET if present
+            if (call_stmt.offset) |skip_count| {
+                if (skip_count < result.rows.len) {
+                    const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+                    for (result.rows[skip_count..], 0..) |row, i| {
+                        new_rows[i] = row;
+                    }
+                    allocator.free(result.rows);
+                    result.rows = new_rows;
+                }
+            }
+
+            // Apply LIMIT if present
+            if (call_stmt.limit) |limit_count| {
+                if (limit_count < result.rows.len) {
+                    const new_rows = try allocator.alloc([]eval.Value, limit_count);
+                    for (result.rows[0..limit_count], 0..) |row, i| {
+                        new_rows[i] = row;
+                    }
+                    allocator.free(result.rows);
+                    result.rows = new_rows;
+                }
+            }
+
+            return result;
         },
         .CreateGraph => |cg| {
             // CREATE GRAPH implementation
@@ -845,6 +876,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
+        .For => |f| {
+            return executeFor(allocator, f, context);
+        },
         else => return error.NotImplemented,
     }
 }
@@ -870,6 +904,95 @@ fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionRes
     return ExecutionResult{
         .columns = columns,
         .rows = try allocator.alloc([]eval.Value, 0), // Empty for now
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context: ExecutionContext) !ExecutionResult {
+    _ = context;
+
+    // Evaluate the collection expression with an empty environment
+    const empty_env = eval.Env{
+        .names = &.{},
+        .values = &.{},
+    };
+
+    const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
+
+    // Extract list items from the collection
+    var items = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+    switch (collection_value) {
+        .List => |list| {
+            for (list) |item| {
+                try items.append(allocator, item);
+            }
+        },
+        else => {
+            // If it's not a list, treat it as a single-item list
+            try items.append(allocator, collection_value);
+        },
+    }
+
+    // Build result rows by iterating over collection
+    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+
+    // Build arrays for iteration environment
+    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+    for (items.items, 0..) |item, idx| {
+        // Clear environment for this iteration
+        env_names_list.clearRetainingCapacity();
+        env_values_list.clearRetainingCapacity();
+
+        // Bind the iteration variable
+        try env_names_list.append(allocator, for_stmt.variable);
+        try env_values_list.append(allocator, item);
+
+        // Bind ordinality variable if present (1-based)
+        if (for_stmt.ordinality_var) |ord_var| {
+            try env_names_list.append(allocator, ord_var);
+            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx + 1) });
+        }
+
+        // Bind offset variable if present (0-based)
+        if (for_stmt.offset_var) |off_var| {
+            try env_names_list.append(allocator, off_var);
+            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx) });
+        }
+
+        // Create environment for this iteration
+        const iteration_env = eval.Env{
+            .names = env_names_list.items,
+            .values = env_values_list.items,
+        };
+
+        // Evaluate RETURN items for this iteration
+        var row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+        for (for_stmt.return_clause.items) |ret_item| {
+            const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
+            try row.append(allocator, value);
+        }
+
+        try result_rows.append(allocator, try row.toOwnedSlice(allocator));
+    }
+
+    // Build column names from RETURN clause
+    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+
+    for (for_stmt.return_clause.items) |ret_item| {
+        const col_name = if (ret_item.alias) |alias|
+            try allocator.dupe(u8, alias)
+        else
+            try allocator.dupe(u8, "?column?");
+        try columns.append(allocator, col_name);
+    }
+
+    return ExecutionResult{
+        .columns = try columns.toOwnedSlice(allocator),
+        .rows = try result_rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }
@@ -1508,7 +1631,7 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
 
     // Check if there's a MATCH pattern
     if (q.match.chains.len > 0) {
-        return executeMatchQuery(allocator, q);
+        return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items);
     }
 
     // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
@@ -2892,7 +3015,17 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
     return call_result;
 }
 
+fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
+    // Call the main executeMatchQuery implementation with parameters stored in a context
+    // For now, we'll add the parameters to the environment when evaluating expressions
+    return executeMatchQueryImpl(allocator, q, param_names, param_values);
+}
+
 fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
+    return executeMatchQueryImpl(allocator, q, &.{}, &.{});
+}
+
+fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
     // Extract pattern information from MATCH
@@ -3030,6 +3163,8 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 const env = eval.Env{
                     .names = env_names,
                     .values = env_values,
+                    .param_names = param_names,
+                    .param_values = param_values,
                 };
 
                 // Evaluate WHERE clause if present
@@ -3276,6 +3411,8 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                         const env = eval.Env{
                             .names = env_names,
                             .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
                         };
 
                         // Evaluate WHERE clause if present
@@ -3373,6 +3510,8 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                         const env = eval.Env{
                             .names = env_names,
                             .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
                         };
 
                         // Evaluate WHERE clause if present
@@ -3461,6 +3600,8 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
                 const env = eval.Env{
                     .names = env_names,
                     .values = env_values,
+                    .param_names = param_names,
+                    .param_values = param_values,
                 };
 
                 // Evaluate WHERE clause if present
@@ -4549,6 +4690,40 @@ fn isNonConstantExpr(expr: ast.Expr) bool {
 
 fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClause, env: eval.Env) !ExecutionResult {
     const items = ret.items;
+
+    // Handle RETURN * - expand to all bound variables
+    if (items.len == 1 and items[0].expr == .Ident and std.mem.eql(u8, items[0].expr.Ident.orig, "*")) {
+        // Return all variables from the environment
+        const total_vars = env.names.len + env.param_names.len;
+        var columns = try allocator.alloc([]const u8, total_vars);
+        var row = try allocator.alloc(eval.Value, total_vars);
+
+        var idx: usize = 0;
+        // Add regular environment variables
+        for (env.names, 0..) |name, i| {
+            columns[idx] = try allocator.dupe(u8, name);
+            row[idx] = env.values[i];
+            idx += 1;
+        }
+        // Add parameter variables
+        for (env.param_names, 0..) |name, i| {
+            columns[idx] = try allocator.dupe(u8, name);
+            row[idx] = env.param_values[i];
+            idx += 1;
+        }
+
+        var rows = try allocator.alloc([]eval.Value, 1);
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = blk: {
+                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                break :blk list;
+            },
+        };
+    }
 
     // Collect column names
     var columns = try allocator.alloc([]const u8, items.len);
@@ -5867,6 +6042,52 @@ fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStateme
         const weight_prop = "weight"; // TODO: extract from third argument if String
 
         return try executeDijkstra(allocator, store, columns, start_id, end_id, weight_prop);
+    }
+
+    // Database introspection procedures (db.*)
+    if (std.mem.startsWith(u8, proc_name, "db.labels")) {
+        // db.labels() - Return all distinct node labels in the database
+        var labels_map = std.StringHashMap(void).init(allocator);
+        defer labels_map.deinit();
+
+        // Collect all unique labels from all nodes
+        var node_iter = store.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr.*;
+            for (node.labels) |label| {
+                try labels_map.put(label, {});
+            }
+        }
+
+        // Convert to sorted list
+        var labels_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        defer labels_list.deinit(allocator);
+
+        var labels_iter = labels_map.keyIterator();
+        while (labels_iter.next()) |label_ptr| {
+            try labels_list.append(allocator, label_ptr.*);
+        }
+
+        // Sort alphabetically
+        std.mem.sort([]const u8, labels_list.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lessThan);
+
+        // Create result rows
+        var rows = try allocator.alloc([]eval.Value, labels_list.items.len);
+        for (labels_list.items, 0..) |label, i| {
+            var row = try allocator.alloc(eval.Value, 1);
+            row[0] = eval.Value{ .Str = label };
+            rows[i] = row;
+        }
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
     }
 
     // Unknown algorithm - return empty result

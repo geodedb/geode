@@ -186,6 +186,7 @@ pub const Parser = struct {
             .WALK,
             .XOR,
             .ZONED,
+            .ORDINALITY,
             => true,
             else => false,
         };
@@ -281,6 +282,7 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
         return switch (self.cur.kind) {
+            .FOR => self.parseForStatement(),
             .LET => blk_let: {
                 const first = try self.parseQuery();
                 break :blk_let self.handleQueryResult(first);
@@ -649,10 +651,85 @@ pub const Parser = struct {
                     };
                 }
 
+                // Optional ORDER BY clause (after RETURN)
+                var order_by: ?ast.OrderBy = null;
+                if (return_clause != null and self.cur.kind == .ORDER) {
+                    self.advance();
+                    _ = try self.expect(.BY);
+                    var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    const expr1 = try self.parseOrExpr();
+                    var desc1 = false;
+                    var nulls1: ast.OrderBy.NullsPolicy = .default;
+                    if (self.cur.kind == .DESC) {
+                        desc1 = true;
+                        self.advance();
+                    } else if (self.cur.kind == .ASC) {
+                        self.advance();
+                    }
+                    if (self.cur.kind == .NULLS) {
+                        self.advance();
+                        if (self.cur.kind == .FIRST) {
+                            nulls1 = .first;
+                            self.advance();
+                        } else if (self.cur.kind == .LAST) {
+                            nulls1 = .last;
+                            self.advance();
+                        }
+                    }
+                    try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
+                    while (self.cur.kind == .comma) {
+                        self.advance();
+                        const exprk = try self.parseOrExpr();
+                        var desk = false;
+                        var nullsk: ast.OrderBy.NullsPolicy = .default;
+                        if (self.cur.kind == .DESC) {
+                            desk = true;
+                            self.advance();
+                        } else if (self.cur.kind == .ASC) {
+                            self.advance();
+                        }
+                        if (self.cur.kind == .NULLS) {
+                            self.advance();
+                            if (self.cur.kind == .FIRST) {
+                                nullsk = .first;
+                                self.advance();
+                            } else if (self.cur.kind == .LAST) {
+                                nullsk = .last;
+                                self.advance();
+                            }
+                        }
+                        try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = desk, .nulls = nullsk });
+                    }
+                    order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                }
+
+                // Optional LIMIT clause
+                var limit: ?usize = null;
+                if (self.cur.kind == .LIMIT) {
+                    self.advance();
+                    if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
+                    const lim_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
+                    limit = lim_val;
+                    self.advance();
+                }
+
+                // Optional OFFSET/SKIP clause
+                var offset: ?usize = null;
+                if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+                    self.advance();
+                    if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
+                    const off_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
+                    offset = off_val;
+                    self.advance();
+                }
+
                 break :blk_call .{ .Call = .{
                     .procedure = procedure,
                     .yield_items = yield_items,
                     .return_clause = return_clause,
+                    .order_by = order_by,
+                    .limit = limit,
+                    .offset = offset,
                 } };
             },
             else => return error.UnexpectedToken,
@@ -692,23 +769,25 @@ pub const Parser = struct {
     fn parseQuery(self: *Parser) ParserError!ast.Query {
         // Parse LET bindings first (LET $var = expr, ...)
         var let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-        while (self.cur.kind == .LET) {
+        if (self.cur.kind == .LET) {
             self.advance();
-            // Parse $variable
-            if (self.cur.kind != .dollar) return self.unexpected("expected $ parameter variable after LET");
-            self.advance();
-            if (self.cur.kind != .identifier) return self.unexpected("expected identifier after $");
-            const var_name = self.cur.lexeme;
-            self.advance();
-            _ = try self.expect(.eq);
-            const value_expr = try self.parseOrExpr();
-            try let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
-            // Allow comma for multiple bindings: LET $x = 1, $y = 2
-            if (self.cur.kind == .comma) {
+            while (true) {
+                // Parse $variable
+                if (self.cur.kind != .dollar) return self.unexpected("expected $ parameter variable after LET");
                 self.advance();
-                continue;
+                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after $");
+                const var_name = self.cur.lexeme;
+                self.advance();
+                _ = try self.expect(.eq);
+                const value_expr = try self.parseOrExpr();
+                try let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
+                // Allow comma for multiple bindings: LET $x = 1, $y = 2
+                if (self.cur.kind == .comma) {
+                    self.advance();
+                    continue;
+                }
+                break;
             }
-            break;
         }
 
         // Optional MATCH/OPTIONAL MATCH/CREATE pattern; allow RETURN-only queries too.
@@ -1378,6 +1457,15 @@ pub const Parser = struct {
     }
 
     fn parseProjectionItems(self: *Parser, out: *std.ArrayList(ast.ReturnItem)) ParserError!void {
+        // Handle RETURN * to return all bound variables
+        if (self.cur.kind == .star) {
+            self.advance();
+            // Create a special marker using Ident with "*" to signal executor to return all bindings
+            const star_expr = ast.Expr{ .Ident = .{ .orig = "*", .cnf = "*" } };
+            try out.append(self.arena.allocator(), .{ .expr = star_expr, .alias = null });
+            return;
+        }
+
         while (true) {
             const expr = try self.parseOrExpr();
             var alias: ?[]const u8 = null;
@@ -2755,6 +2843,146 @@ pub const Parser = struct {
         return .{ .Show = .{ .show_type = show_type } };
     }
 
+    fn parseForStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.FOR);
+
+        // Parse iteration variable: FOR item IN ...
+        if (self.cur.kind != .identifier) return self.unexpected("expected identifier after FOR");
+        const variable = self.cur.lexeme;
+        self.advance();
+
+        // Expect IN keyword
+        _ = try self.expect(.IN);
+
+        // Parse collection expression (list, variable reference, etc.)
+        const collection = try self.parseOrExpr();
+
+        // Check for WITH ORDINALITY or WITH OFFSET
+        var ordinality_var: ?[]const u8 = null;
+        var offset_var: ?[]const u8 = null;
+
+        if (self.cur.kind == .WITH) {
+            self.advance();
+            if (self.cur.kind == .ORDINALITY) {
+                self.advance();
+                // Expect variable name after ORDINALITY
+                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after ORDINALITY");
+                ordinality_var = self.cur.lexeme;
+                self.advance();
+            } else if (self.cur.kind == .OFFSET) {
+                self.advance();
+                // Expect variable name after OFFSET
+                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after OFFSET");
+                offset_var = self.cur.lexeme;
+                self.advance();
+            } else {
+                return self.unexpected("expected ORDINALITY or OFFSET after WITH");
+            }
+        }
+
+        // Expect RETURN clause
+        _ = try self.expect(.RETURN);
+
+        // Parse RETURN clause
+        const distinct = if (self.cur.kind == .DISTINCT) blk: {
+            self.advance();
+            break :blk true;
+        } else false;
+
+        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        try self.parseProjectionItems(&return_items);
+
+        const return_clause = ast.ReturnClause{
+            .items = try return_items.toOwnedSlice(self.arena.allocator()),
+            .distinct = distinct,
+        };
+
+        // Optional ORDER BY
+        var order_by: ?ast.OrderBy = null;
+        if (self.cur.kind == .ORDER) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+            // Parse first key
+            const expr1 = try self.parseOrExpr();
+            var desc1 = false;
+            if (self.cur.kind == .ASC) {
+                desc1 = false;
+                self.advance();
+            } else if (self.cur.kind == .DESC) {
+                desc1 = true;
+                self.advance();
+            }
+            var nulls1: ast.OrderBy.NullsPolicy = .default;
+            if (self.cur.kind == .NULLS) {
+                self.advance();
+                if (self.cur.kind == .FIRST) {
+                    nulls1 = .first;
+                    self.advance();
+                } else if (self.cur.kind == .LAST) {
+                    nulls1 = .last;
+                    self.advance();
+                } else return self.unexpected("expected FIRST/LAST after NULLS");
+            }
+            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
+
+            // Parse additional keys
+            while (self.cur.kind == .comma) {
+                self.advance();
+                const exprk = try self.parseOrExpr();
+                var d = false;
+                if (self.cur.kind == .ASC) {
+                    d = false;
+                    self.advance();
+                } else if (self.cur.kind == .DESC) {
+                    d = true;
+                    self.advance();
+                }
+                var np: ast.OrderBy.NullsPolicy = .default;
+                if (self.cur.kind == .NULLS) {
+                    self.advance();
+                    if (self.cur.kind == .FIRST) {
+                        np = .first;
+                        self.advance();
+                    } else if (self.cur.kind == .LAST) {
+                        np = .last;
+                        self.advance();
+                    } else return self.unexpected("expected FIRST/LAST after NULLS");
+                }
+                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = d, .nulls = np });
+            }
+            order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+        }
+
+        // Optional LIMIT
+        var limit: ?usize = null;
+        if (self.cur.kind == .LIMIT) {
+            self.advance();
+            const lim_tok = try self.expect(.integer_lit);
+            limit = std.fmt.parseInt(usize, lim_tok.lexeme, 10) catch return error.Overflow;
+        }
+
+        // Optional OFFSET
+        var offset: ?usize = null;
+        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+            self.advance();
+            const off_tok = try self.expect(.integer_lit);
+            offset = std.fmt.parseInt(usize, off_tok.lexeme, 10) catch return error.Overflow;
+        }
+
+        return .{ .For = .{
+            .variable = variable,
+            .collection = collection,
+            .ordinality_var = ordinality_var,
+            .offset_var = offset_var,
+            .return_clause = return_clause,
+            .order_by = order_by,
+            .limit = limit,
+            .offset = offset,
+        } };
+    }
+
     fn parseExplainStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.EXPLAIN);
 
@@ -3355,8 +3583,20 @@ pub const Parser = struct {
                 var initializer: ?[]const u8 = null;
                 if (self.cur.kind == .eq) {
                     self.advance();
-                    // Parse the initializer expression - for now just capture the token
-                    if (self.cur.kind == .identifier or self.cur.kind == .string_lit or self.cur.kind == .integer_lit) {
+                    // Parse the initializer expression - accept various formats
+                    if (self.cur.kind == .l_brace) {
+                        // Graph literal like {} or { MATCH ... }
+                        const start_idx = self.lx.idx - 1; // Include the opening brace
+                        var brace_depth: u32 = 1;
+                        self.advance(); // consume {
+                        while (brace_depth > 0 and self.cur.kind != .eof) {
+                            if (self.cur.kind == .l_brace) brace_depth += 1;
+                            if (self.cur.kind == .r_brace) brace_depth -= 1;
+                            self.advance();
+                        }
+                        const end_idx = self.lx.idx;
+                        initializer = self.lx.src[start_idx..end_idx];
+                    } else if (self.cur.kind == .identifier or self.cur.kind == .string_lit or self.cur.kind == .integer_lit) {
                         initializer = self.cur.lexeme;
                         self.advance();
                     }
@@ -3541,7 +3781,20 @@ pub const Parser = struct {
             var initializer: ?[]const u8 = null;
             if (self.cur.kind == .eq) {
                 self.advance();
-                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
+                // Accept various initializer formats: string, identifier, number, or braces for table literals
+                if (self.cur.kind == .l_brace) {
+                    // Table literal like {} or { MATCH ... }
+                    const start_idx = self.lx.idx - 1; // Include the opening brace
+                    var brace_depth: u32 = 1;
+                    self.advance(); // consume {
+                    while (brace_depth > 0 and self.cur.kind != .eof) {
+                        if (self.cur.kind == .l_brace) brace_depth += 1;
+                        if (self.cur.kind == .r_brace) brace_depth -= 1;
+                        self.advance();
+                    }
+                    const end_idx = self.lx.idx;
+                    initializer = self.lx.src[start_idx..end_idx];
+                } else if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }
@@ -3566,7 +3819,20 @@ pub const Parser = struct {
             var initializer: ?[]const u8 = null;
             if (self.cur.kind == .eq) {
                 self.advance();
-                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
+                // Accept various initializer formats including braces for graph literals
+                if (self.cur.kind == .l_brace) {
+                    // Graph literal like {} or { MATCH ... }
+                    const start_idx = self.lx.idx - 1; // Include the opening brace
+                    var brace_depth: u32 = 1;
+                    self.advance(); // consume {
+                    while (brace_depth > 0 and self.cur.kind != .eof) {
+                        if (self.cur.kind == .l_brace) brace_depth += 1;
+                        if (self.cur.kind == .r_brace) brace_depth -= 1;
+                        self.advance();
+                    }
+                    const end_idx = self.lx.idx;
+                    initializer = self.lx.src[start_idx..end_idx];
+                } else if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }
@@ -3590,7 +3856,7 @@ pub const Parser = struct {
         if (self.cur.kind == .IF) {
             self.advance();
             _ = try self.expect(.NOT);
-            _ = try self.expect(.identifier); // EXISTS
+            _ = try self.expect(.EXISTS);
             if_not_exists = true;
         }
 

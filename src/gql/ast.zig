@@ -45,6 +45,8 @@ pub const Statement = union(enum) {
     // Query introspection
     Explain: ExplainStatement,
     Profile: ProfileStatement,
+    // FOR loop iteration
+    For: ForStatement,
 };
 
 pub const Query = struct {
@@ -252,6 +254,9 @@ pub const CallStatement = struct {
     procedure: Expr, // Function call expression: db.labels()
     yield_items: ?[]ReturnItem = null, // YIELD clause items
     return_clause: ?ReturnClause = null, // Optional RETURN clause
+    order_by: ?OrderBy = null, // ORDER BY clause
+    limit: ?usize = null, // LIMIT clause
+    offset: ?usize = null, // OFFSET clause
 };
 
 // CallClause for use within MATCH queries (MATCH ... CALL ... YIELD)
@@ -453,4 +458,17 @@ pub const ExplainStatement = struct {
 
 pub const ProfileStatement = struct {
     query: *Statement, // The query to profile (wrapped in a heap-allocated Statement)
+};
+
+// FOR loop iteration statement
+// Syntax: FOR item IN list_expr [WITH ORDINALITY var | WITH OFFSET var] RETURN ...
+pub const ForStatement = struct {
+    variable: []const u8, // The iteration variable name
+    collection: Expr, // The collection to iterate over
+    ordinality_var: ?[]const u8 = null, // WITH ORDINALITY variable name (1-based)
+    offset_var: ?[]const u8 = null, // WITH OFFSET variable name (0-based)
+    return_clause: ReturnClause, // RETURN clause for each iteration
+    order_by: ?OrderBy = null,
+    limit: ?usize = null,
+    offset: ?usize = null,
 };
