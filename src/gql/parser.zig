@@ -1328,13 +1328,13 @@ pub const Parser = struct {
             limit = try std.fmt.parseInt(usize, n.lexeme, 10);
         }
 
-        // Merge let_bindings from the beginning and inline_let_bindings from after MATCH
-        var all_let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), let_bindings.items.len + inline_let_bindings.items.len) catch @panic("OOM");
-        try all_let_bindings.appendSlice(self.arena.allocator(), let_bindings.items);
-        try all_let_bindings.appendSlice(self.arena.allocator(), inline_let_bindings.items);
+        // Keep let_bindings and inline_let_bindings separate for proper evaluation timing
+        // Parameter bindings (before MATCH) are evaluated once upfront
+        // Inline bindings (after MATCH) are evaluated per result row with matched variables in scope
 
         return .{
-            .let_bindings = try all_let_bindings.toOwnedSlice(self.arena.allocator()),
+            .let_bindings = try let_bindings.toOwnedSlice(self.arena.allocator()),
+            .inline_let_bindings = try inline_let_bindings.toOwnedSlice(self.arena.allocator()),
             .optional_match = optional_match,
             .match = pat,
             .create_pattern = create_pattern,

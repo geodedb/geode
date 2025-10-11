@@ -1127,7 +1127,7 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                         }
 
                         // Execute the query with VALUES bindings as parameters
-                        const match_result = try executeMatchQueryWithParams(allocator, query, param_names, param_values);
+                        const match_result = try executeMatchQueryWithParams(allocator, query, param_names, param_values, query.inline_let_bindings);
 
                         // Collect results from this execution
                         for (match_result.rows) |row| {
@@ -1545,12 +1545,24 @@ fn createTestGraphG2(allocator: std.mem.Allocator) !void {
 }
 
 fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
-    // Note: GQL/Cypher supports implicit grouping - when mixing aggregations with non-aggregated
-    // expressions, the non-aggregated expressions become the implicit GROUP BY.
-    // This validation is relaxed to allow implicit grouping.
-    // The execution layer handles both explicit and implicit grouping automatically.
-    _ = ret;
-    _ = group_by;
+    const items = ret.items;
+
+    // Check if we have mixed aggregation and non-aggregation without GROUP BY
+    var has_aggregation = false;
+    var has_non_aggregation = false;
+
+    for (items) |item| {
+        if (isAggregationExpr(item.expr)) {
+            has_aggregation = true;
+        } else if (isNonConstantExpr(item.expr)) {
+            has_non_aggregation = true;
+        }
+    }
+
+    // GQL standard: explicit GROUP BY is required when mixing aggregation and non-aggregation
+    if (has_aggregation and has_non_aggregation and group_by == null) {
+        return error.GroupingError;
+    }
 }
 
 // Execute a chain of queries linked by WITH clauses
@@ -1851,7 +1863,7 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
 
     // Check if there's a MATCH pattern
     if (q.match.chains.len > 0) {
-        return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items);
+        return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings);
     }
 
     // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
@@ -3254,17 +3266,17 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
     return call_result;
 }
 
-fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
+fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     // Call the main executeMatchQuery implementation with parameters stored in a context
     // For now, we'll add the parameters to the environment when evaluating expressions
-    return executeMatchQueryImpl(allocator, q, param_names, param_values);
+    return executeMatchQueryImpl(allocator, q, param_names, param_values, inline_let_bindings);
 }
 
 fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
-    return executeMatchQueryImpl(allocator, q, &.{}, &.{});
+    return executeMatchQueryImpl(allocator, q, &.{}, &.{}, &.{});
 }
 
-fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
+fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
     // Extract pattern information from MATCH
@@ -3970,15 +3982,63 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     }
                 }
 
+                // Evaluate inline LET bindings and extend environment
+                var extended_env = env;
+                var inline_let_names = std.ArrayList([]const u8).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
+                var inline_let_values = std.ArrayList(eval.Value).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
+                defer inline_let_names.deinit(allocator);
+                defer inline_let_values.deinit(allocator);
+
+                for (inline_let_bindings) |binding| {
+                    const value = try eval.evalExpr(allocator, binding.value, extended_env);
+                    try inline_let_names.append(allocator, binding.variable);
+                    try inline_let_values.append(allocator, value);
+                }
+
+                // Create extended environment with both matched variables and inline LET bindings
+                if (inline_let_bindings.len > 0) {
+                    var all_names = try allocator.alloc([]const u8, env_names.len + inline_let_names.items.len);
+                    var all_values = try allocator.alloc(eval.Value, env_values.len + inline_let_values.items.len);
+
+                    // Copy original env
+                    for (env_names, 0..) |name, idx| {
+                        all_names[idx] = name;
+                    }
+                    for (env_values, 0..) |value, idx| {
+                        all_values[idx] = value;
+                    }
+
+                    // Add inline LET bindings
+                    for (inline_let_names.items, 0..) |name, idx| {
+                        all_names[env_names.len + idx] = name;
+                    }
+                    for (inline_let_values.items, 0..) |value, idx| {
+                        all_values[env_values.len + idx] = value;
+                    }
+
+                    extended_env = eval.Env{
+                        .names = all_names,
+                        .values = all_values,
+                        .param_names = param_names,
+                        .param_values = param_values,
+                    };
+                }
+
                 // Note: env is still valid here since we only free on continue
                 var row = try allocator.alloc(eval.Value, items.len);
 
                 for (items, 0..) |item, i| {
-                    // Evaluate expression with node in environment
-                    row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    // Evaluate expression with node and inline LET bindings in environment
+                    row[i] = try eval.evalExpr(allocator, item.expr, extended_env);
                 }
 
-                // Free environment memory
+                // Free extended environment memory
+                if (inline_let_bindings.len > 0) {
+                    allocator.free(extended_env.names);
+                    allocator.free(extended_env.values);
+                }
+
+                // Free original environment memory
                 if (match_variable != null) {
                     allocator.free(env_names);
                     allocator.free(env_values);

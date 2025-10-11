@@ -54,7 +54,8 @@ pub const Statement = union(enum) {
 };
 
 pub const Query = struct {
-    let_bindings: []LetBinding = &.{}, // LET $var = expr bindings
+    let_bindings: []LetBinding = &.{}, // LET $var = expr bindings (before MATCH)
+    inline_let_bindings: []LetBinding = &.{}, // LET var = expr bindings (after MATCH)
     optional_match: bool,
     match: GraphPattern,
     create_pattern: ?GraphPattern = null, // Support CREATE in queries

@@ -493,7 +493,7 @@ tests:
   
   - name: "query-with-count"
     description: "Test query with COUNT aggregation"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count"]
+    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count GROUP BY c.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -527,10 +527,11 @@ tests:
         OPTIONAL MATCH (p)-[m:MANAGES]->(subordinate:Person)
         OPTIONAL MATCH (p)-[d:DEVELOPED]->(prod:Product)
         WHERE p.age > 20
-        RETURN p.name AS person, 
+        RETURN p.name AS person,
                c.name AS company,
                count(subordinate) AS subordinates,
                count(prod) AS products_developed
+        GROUP BY p.name, c.name
         ORDER BY p.name
     expect:
       exit_code: 0

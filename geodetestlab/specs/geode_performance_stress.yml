@@ -127,7 +127,7 @@ tests:
 
   - name: "grouping-performance"
     description: "GROUP BY query performance"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) RETURN n.metadata AS category, count(n) AS count, avg(n.value) AS avg_value ORDER BY count DESC LIMIT 20"]
+    args: ["query", "--no-quic", "MATCH (n:LargeTest) RETURN n.metadata AS category, count(n) AS count, avg(n.value) AS avg_value GROUP BY n.metadata ORDER BY count DESC LIMIT 20"]
     expect:
       exit_code: 0
       geode_query:
