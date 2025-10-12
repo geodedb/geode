@@ -2209,7 +2209,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
             else => return Value{ .Str = "" },
         }
-    } else if (std.mem.eql(u8, function_name, "toFloat") or std.mem.eql(u8, function_name, "toDouble")) {
+    } else if (std.mem.eql(u8, function_name, "tofloat") or std.mem.eql(u8, function_name, "todouble")) {
         // Convert to float
         switch (first_arg) {
             .Int => |i| return Value{ .Decimal = .{ .coeff = i * 10, .scale = 1 } },
@@ -2220,7 +2220,7 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "toInt") or std.mem.eql(u8, function_name, "toInteger")) {
+    } else if (std.mem.eql(u8, function_name, "toint") or std.mem.eql(u8, function_name, "tointeger")) {
         // Convert to integer
         switch (first_arg) {
             .Int => |i| return Value{ .Int = i },

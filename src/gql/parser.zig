@@ -1329,15 +1329,15 @@ pub const Parser = struct {
                     having_expr = try self.parseOrExpr();
                 }
             }
-        } else if (set_clauses.len > 0 or remove_clauses.len > 0) {
-            // SET/REMOVE without RETURN - create empty return clause
+        } else if (set_clauses.len > 0 or remove_clauses.len > 0 or create_pattern != null) {
+            // SET/REMOVE/CREATE without RETURN - create empty return clause
             return_clause = .{ .items = &.{}, .distinct = false };
         } else if (next_query_ptr != null and with_clause != null) {
             // Query chaining: WITH followed by MATCH/CREATE
             // Use WITH items as implicit RETURN to pass bindings forward
             return_clause = .{ .items = with_clause.?.items, .distinct = false };
         } else {
-            // No SET/REMOVE, no chaining, and no RETURN - error
+            // No SET/REMOVE/CREATE, no chaining, and no RETURN - error
             _ = try self.expect(.RETURN);
             unreachable;
         }
