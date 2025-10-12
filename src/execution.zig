@@ -638,15 +638,18 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Rollback => {
-            // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=Rollback; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Check if transaction is active
-            if (context.transaction_state != .Active) {
-                return error.NoActiveTransaction;
-            }
+            // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=Rollback; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-11
+            // ROLLBACK succeeds even without an active transaction (SQL/GQL standard behavior)
+            const status_msg = if (context.transaction_state == .Active)
+                "transaction rolled back"
+            else
+                "no transaction active";
 
-            // Mark transaction as rolled back
+            // Mark transaction as rolled back if active
             var mut_context = context;
-            mut_context.transaction_state = .RolledBack;
+            if (context.transaction_state == .Active) {
+                mut_context.transaction_state = .RolledBack;
+            }
 
             // In a full implementation, this would revert uncommitted changes
             // For now, changes are immediately visible (auto-commit mode)
@@ -656,7 +659,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "transaction rolled back" };
+            row[0] = eval.Value{ .Str = status_msg };
             rows[0] = row;
 
             return ExecutionResult{

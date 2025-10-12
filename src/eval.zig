@@ -1476,6 +1476,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
+                            .ExtValue => |ext| Value{ .ExtValue = ext }, // Preserve ExtValue types (Geometry, VectorF32, etc.)
                             else => Value{ .Null = {} },
                         };
                         break :blk_node converted;
@@ -1488,6 +1489,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
+                            .ExtValue => |ext| Value{ .ExtValue = ext }, // Preserve ExtValue types (Geometry, VectorF32, etc.)
                             else => Value{ .Null = {} },
                         };
                         break :blk_edge converted;
