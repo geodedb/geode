@@ -2034,7 +2034,13 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         const result = evaluator_functions.abs_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "sqrt")) {
-        const result = evaluator_functions.sqrt_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.sqrt_val(heap_first_arg) catch |err| {
+            return switch (err) {
+                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+                else => EvalError.TypeMismatch,
+            };
+        };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "ceil")) {
         const result = evaluator_functions.ceil_val(heap_first_arg) catch return null;
@@ -2056,8 +2062,32 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
     } else if (std.mem.eql(u8, function_name, "tan")) {
         const result = evaluator_functions.tan_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "asin")) {
+        const result = evaluator_functions.asin_val(heap_first_arg) catch |err| {
+            return switch (err) {
+                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+                else => EvalError.TypeMismatch,
+            };
+        };
+        return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "acos")) {
+        const result = evaluator_functions.acos_val(heap_first_arg) catch |err| {
+            return switch (err) {
+                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+                else => EvalError.TypeMismatch,
+            };
+        };
+        return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "log")) {
-        const result = evaluator_functions.log_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.log_val(heap_first_arg) catch |err| {
+            return switch (err) {
+                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+                else => EvalError.TypeMismatch,
+            };
+        };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "exp")) {
         const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
@@ -2069,10 +2099,25 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         const result = evaluator_functions.toString_val(ally, heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "tointeger")) {
-        const result = evaluator_functions.toInteger_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.toInteger_val(heap_first_arg) catch |err| {
+            // Convert evaluator errors to eval errors
+            return switch (err) {
+                evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+                else => EvalError.TypeMismatch,
+            };
+        };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "toreal")) {
-        const result = evaluator_functions.toReal_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.toReal_val(heap_first_arg) catch |err| {
+            return switch (err) {
+                evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+                evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+                else => EvalError.TypeMismatch,
+            };
+        };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
         // Size of a list or string

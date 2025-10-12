@@ -32,6 +32,7 @@ pub const TokenKind = enum {
     dollar, // $
     arrow_r, // ->
     arrow_l, // <-
+    double_arrow, // =>
 
     // literals & identifiers
     identifier,

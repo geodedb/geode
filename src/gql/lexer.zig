@@ -136,6 +136,13 @@ pub const Lexer = struct {
             self.col += 2;
             return tokv;
         }
+        // =>
+        if (remain.len >= 2 and remain[0] == '=' and remain[1] == '>') {
+            const tokv: t.Token = .{ .kind = .double_arrow, .lexeme = remain[0..2], .loc = loc };
+            self.idx += 2;
+            self.col += 2;
+            return tokv;
+        }
         // ||
         if (remain.len >= 2 and remain[0] == '|' and remain[1] == '|') {
             const tokv: t.Token = .{ .kind = .concat, .lexeme = remain[0..2], .loc = loc };

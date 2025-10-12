@@ -112,11 +112,31 @@ pub fn isDateTimeIso(s: []const u8, allow_zone: bool) bool {
 
 // Parsing into structured types
 
+fn isLeapYear(y: u16) bool {
+    return (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0);
+}
+
+fn daysInMonth(y: u16, m: u8) u8 {
+    return switch (m) {
+        1, 3, 5, 7, 8, 10, 12 => 31,
+        4, 6, 9, 11 => 30,
+        2 => if (isLeapYear(y)) 29 else 28,
+        else => 0,
+    };
+}
+
 pub fn parseDate(raw: []const u8) TemporalError!Date {
     if (!isDateStrict(raw)) return TemporalError.Invalid;
     const y: u16 = @intCast((@as(u32, raw[0] - '0') * 1000) + (@as(u32, raw[1] - '0') * 100) + (@as(u32, raw[2] - '0') * 10) + (@as(u32, raw[3] - '0')));
     const m: u8 = @intCast((raw[5] - '0') * 10 + (raw[6] - '0'));
     const d: u8 = @intCast((raw[8] - '0') * 10 + (raw[9] - '0'));
+
+    // Validate month range
+    if (m < 1 or m > 12) return TemporalError.Invalid;
+
+    // Validate day range for the given month
+    if (d < 1 or d > daysInMonth(y, m)) return TemporalError.Invalid;
+
     return .{ .raw = raw, .y = y, .m = m, .d = d };
 }
 

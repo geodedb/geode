@@ -2052,11 +2052,12 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
             const value_start = status_start + "\"status_class\":\"".len;
             if (value_start + 2 <= result.len) {
-                const status_category = result[value_start..value_start + 2];
+                const status_category = result[value_start .. value_start + 2];
                 // Exit with code 1 for error status classes (not 00, 01, or 02)
                 if (!std.mem.eql(u8, status_category, "00") and
                     !std.mem.eql(u8, status_category, "01") and
-                    !std.mem.eql(u8, status_category, "02")) {
+                    !std.mem.eql(u8, status_category, "02"))
+                {
                     std.process.exit(1);
                 }
             }

@@ -972,6 +972,40 @@ pub fn tan_val(val: Value) EvaluatorError!Value {
     return Value{ .Double = result };
 }
 
+pub fn asin_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    // asin domain is [-1, 1]
+    if (f < -1.0 or f > 1.0) return EvaluatorError.InvalidInput;
+    const result = std.math.asin(f);
+    if (std.math.isNan(result)) return EvaluatorError.InvalidInput;
+    return Value{ .Double = result };
+}
+
+pub fn acos_val(val: Value) EvaluatorError!Value {
+    const f = switch (val) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .SmallInt => |i| @as(f64, @floatFromInt(i)),
+        .BigInt => |i| @as(f64, @floatFromInt(i)),
+        .Real => |f| @as(f64, f),
+        .Double => |d| d,
+        .Decimal128 => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => return EvaluatorError.TypeMismatch,
+    };
+    // acos domain is [-1, 1]
+    if (f < -1.0 or f > 1.0) return EvaluatorError.InvalidInput;
+    const result = std.math.acos(f);
+    if (std.math.isNan(result)) return EvaluatorError.InvalidInput;
+    return Value{ .Double = result };
+}
+
 pub fn log_val(val: Value) EvaluatorError!Value {
     const f = switch (val) {
         .Int => |i| blk: {

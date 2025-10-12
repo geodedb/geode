@@ -2069,7 +2069,35 @@ pub const Parser = struct {
                         try args.append(self.arena.allocator(), ap);
                     } else {
                         while (true) {
-                            const arg = try self.parseOrExpr();
+                            // Parse expression, handling named parameter syntax: identifier => expression
+                            // We peek ahead: if we see identifier followed by =>, skip both and parse value
+                            const arg = blk: {
+                                if (self.cur.kind == .identifier) {
+                                    // Save lexer state to check for =>
+                                    const saved_idx = self.lx.idx;
+                                    const saved_line = self.lx.line;
+                                    const saved_col = self.lx.col;
+
+                                    // Try to peek ahead
+                                    const next_tok = self.lx.next();
+
+                                    if (next_tok.kind == .double_arrow) {
+                                        // This is a named parameter (identifier => value)
+                                        // Skip the identifier and => , update current token, then parse value
+                                        self.cur = self.lx.next();
+                                        break :blk try self.parseOrExpr();
+                                    } else {
+                                        // Not a named parameter, restore lexer and parse normally
+                                        self.lx.idx = saved_idx;
+                                        self.lx.line = saved_line;
+                                        self.lx.col = saved_col;
+                                        break :blk try self.parseOrExpr();
+                                    }
+                                } else {
+                                    break :blk try self.parseOrExpr();
+                                }
+                            };
+
                             const ap = try self.arena.allocator().create(ast.Expr);
                             ap.* = arg;
                             try args.append(self.arena.allocator(), ap);
