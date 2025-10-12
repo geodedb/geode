@@ -150,11 +150,11 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         // Create and save new transaction session
         var new_session = try txn_session.TransactionSession.init(allocator.*);
         new_session.state = .Active;
-        try txn_session.saveSession(new_session);
+        try txn_session.saveSession(allocator.*, new_session);
         new_session.deinit(allocator.*);
     } else if (is_commit or is_rollback) {
         // Clear transaction session after commit/rollback
-        try txn_session.clearSession();
+        try txn_session.clearSession(allocator.*);
     }
 
     // Convert execution result to JSON

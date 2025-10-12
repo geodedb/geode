@@ -402,22 +402,25 @@ class ParallelTestRunner:
                     stderr=subprocess.PIPE
                 )
                 # Wait for server to be ready with health check
-                startup_timeout_ms = server_config.get("startup_timeout_ms", 5000)
+                startup_timeout_ms = server_config.get("startup_timeout_ms", 15000)  # Increased to 15s
                 max_wait = startup_timeout_ms / 1000.0
                 start_time = time.time()
                 server_ready = False
 
                 while (time.time() - start_time) < max_wait:
                     # Try to connect to verify server is ready
-                    test_result = subprocess.run(
-                        [self.binary, "query", "--server", server_address, "RETURN 1", "--format", "json"],
-                        capture_output=True,
-                        timeout=5  # Increased timeout for QUIC handshake
-                    )
-                    if test_result.returncode == 0:
-                        server_ready = True
-                        break
-                    time.sleep(0.5)
+                    try:
+                        test_result = subprocess.run(
+                            [self.binary, "query", "--server", server_address, "RETURN 1", "--format", "json"],
+                            capture_output=True,
+                            timeout=10  # Increased timeout for QUIC handshake + query
+                        )
+                        if test_result.returncode == 0:
+                            server_ready = True
+                            break
+                    except subprocess.TimeoutExpired:
+                        pass  # Continue trying
+                    time.sleep(1.0)  # Wait longer between retries
 
                 if not server_ready:
                     self.log_progress(f"Server for {spec_file.name} did not become ready in {max_wait}s")

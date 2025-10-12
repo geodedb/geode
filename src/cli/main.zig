@@ -1865,7 +1865,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     // Parse arguments
-    var server: ?[]const u8 = null;  // null means not explicitly set
+    var server: ?[]const u8 = null; // null means not explicitly set
     var format: []const u8 = "json";
     var insecure = false;
     var no_quic = false;

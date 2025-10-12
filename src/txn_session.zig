@@ -3,7 +3,19 @@ const execution = @import("execution.zig");
 
 /// Transaction session persistence for CLI mode
 /// Stores transaction state in a file to persist across CLI invocations
-const SESSION_FILE = "/tmp/geode_transaction_session.txt";
+/// Get session file path based on GEODE_DATA_DIR environment variable
+fn getSessionFilePath(allocator: std.mem.Allocator) ![]const u8 {
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+
+    if (env_map.get("GEODE_DATA_DIR")) |data_dir| {
+        // Use data-dir specific transaction session file
+        return try std.fmt.allocPrint(allocator, "{s}/geode_transaction_session.txt", .{data_dir});
+    }
+
+    // Fall back to global tmp file
+    return try allocator.dupe(u8, "/tmp/geode_transaction_session.txt");
+}
 
 pub const TransactionSession = struct {
     state: execution.TransactionState,
@@ -27,7 +39,10 @@ pub const TransactionSession = struct {
 
 /// Load active transaction session from disk
 pub fn loadSession(allocator: std.mem.Allocator) !?TransactionSession {
-    const file = std.fs.openFileAbsolute(SESSION_FILE, .{}) catch |err| {
+    const session_file = try getSessionFilePath(allocator);
+    defer allocator.free(session_file);
+
+    const file = std.fs.openFileAbsolute(session_file, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return null;
         }
@@ -59,8 +74,11 @@ pub fn loadSession(allocator: std.mem.Allocator) !?TransactionSession {
 }
 
 /// Save transaction session to disk
-pub fn saveSession(session: TransactionSession) !void {
-    const file = try std.fs.createFileAbsolute(SESSION_FILE, .{});
+pub fn saveSession(allocator: std.mem.Allocator, session: TransactionSession) !void {
+    const session_file = try getSessionFilePath(allocator);
+    defer allocator.free(session_file);
+
+    const file = try std.fs.createFileAbsolute(session_file, .{});
     defer file.close();
 
     const state_str = switch (session.state) {
@@ -77,8 +95,11 @@ pub fn saveSession(session: TransactionSession) !void {
 }
 
 /// Clear transaction session from disk
-pub fn clearSession() !void {
-    std.fs.deleteFileAbsolute(SESSION_FILE) catch |err| {
+pub fn clearSession(allocator: std.mem.Allocator) !void {
+    const session_file = try getSessionFilePath(allocator);
+    defer allocator.free(session_file);
+
+    std.fs.deleteFileAbsolute(session_file) catch |err| {
         if (err == error.FileNotFound) {
             return;
         }
@@ -87,8 +108,11 @@ pub fn clearSession() !void {
 }
 
 /// Check if there's an active transaction session
-pub fn hasActiveSession() bool {
-    const file = std.fs.openFileAbsolute(SESSION_FILE, .{}) catch {
+pub fn hasActiveSession(allocator: std.mem.Allocator) bool {
+    const session_file = getSessionFilePath(allocator) catch return false;
+    defer allocator.free(session_file);
+
+    const file = std.fs.openFileAbsolute(session_file, .{}) catch {
         return false;
     };
     defer file.close();
