@@ -6,10 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Geode is an **enterprise-ready graph database** with industry-leading compliance and performance:
 
-- **✅ 93.9% Test Coverage** (1166/1242 geodetestlab tests)
-- **✅ 98.6% GQL Compliance** (69/70 ISO/IEC 39075:2024 tests)  
+- **✅ 88.3% Test Coverage** (1523/1725 geodetestlab tests - improved from 87.0%)
+- **✅ 98.6% GQL Compliance** (69/70 ISO/IEC 39075:2024 tests)
 - **✅ 1016 CANARY Markers** tracking governance compliance
 - **✅ Enterprise Features** complete (TDE, audit, vector search, cloud backup, enhanced RLS)
+- **✅ Recent Improvements** - Test runner fixes (Oct 2025): +23 tests passing, multi-statement execution
 
 ## 📚 Documentation Structure
 
@@ -25,6 +26,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 - **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation
 - **[Types & Functions](docs/TYPES_AND_FUNCTIONS.md)** - 50+ specialized data types
 - **[GQL Compliance](docs/GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
+- **[Test Runner Fixes](docs/TEST_RUNNER_FIXES_OCTOBER_2025.md)** - Recent test infrastructure improvements (Oct 2025)
 
 ### Enterprise & Security
 - **[Advanced Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS implementation
@@ -83,21 +85,29 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 
 ### Evidence-Based Development
 - **CANARY System**: 1016 governance markers tracking all implementations
-- **Geodetestlab**: 1242 comprehensive test scenarios 
+- **Geodetestlab**: 1725 comprehensive test scenarios (1523 passing, 88.3% coverage)
 - **ISO Compliance**: Official test suite verification
 - **Performance Benchmarks**: Automated regression testing
+- **Recent Improvements**: October 2025 test runner fixes (+23 tests, see [TEST_FIXES_SUMMARY.md](TEST_FIXES_SUMMARY.md))
 
 ### Test Execution
 ```bash
 # Run all tests
 python3 extended_test_runner.py
 
-# Generate governance status  
+# Generate governance status
 make status-generate
 
 # Build and verify
 make build && make verify-fast
 ```
+
+### Recent Test Improvements (October 2025)
+- **stdin handling** in test runner fixed (critical issue)
+- **Multi-statement execution** in CLI (session management workflows)
+- **Reserved keywords** as parameter names ($count, $name, etc.)
+- **IF NOT EXISTS** support in parameter clauses
+- See [docs/TEST_RUNNER_FIXES_OCTOBER_2025.md](docs/TEST_RUNNER_FIXES_OCTOBER_2025.md) for details
 
 ## 🔧 Development Commands
 

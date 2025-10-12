@@ -4493,8 +4493,8 @@ pub const Parser = struct {
 
             _ = try self.expect(.GRAPH);
 
-            // If next token is a parameter ($...), parse as GRAPH parameter clause
-            if (self.cur.kind == .dollar) {
+            // If next token is IF NOT EXISTS or a parameter ($...), parse as GRAPH parameter clause
+            if (self.cur.kind == .IF or self.cur.kind == .dollar) {
                 const param_name = try self.parseSessionParameterName();
                 var initializer: ?[]const u8 = null;
                 if (self.cur.kind == .eq) {
@@ -4784,13 +4784,15 @@ pub const Parser = struct {
         // Consume the $ token
         _ = try self.expect(.dollar);
 
-        // Parse parameter specification (identifier after the $)
-        const specification = if (self.cur.kind == .identifier or self.cur.kind == .string_lit) blk: {
+        // Parse parameter specification (identifier or keyword after the $)
+        // Allow any keyword to be used as a parameter name since it follows $
+        const specification = if (self.cur.kind == .string_lit) blk: {
             const spec = self.cur.lexeme;
             self.advance();
             break :blk spec;
-        } else {
-            return error.UnexpectedToken;
+        } else blk: {
+            const token = try self.expectIdentifierOrKeyword();
+            break :blk token.lexeme;
         };
 
         return .{

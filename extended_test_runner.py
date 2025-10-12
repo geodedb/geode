@@ -90,9 +90,13 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             # Insert --no-quic after "query"
             modified_args.insert(1, "--no-quic")
 
+    # Get stdin content if present
+    stdin_content = test_case.get("stdin", None)
+
     try:
         result = subprocess.run(
             [binary] + modified_args,
+            input=stdin_content,
             capture_output=True,
             text=True,
             timeout=5

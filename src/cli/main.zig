@@ -1946,8 +1946,21 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         const stdin_content = try stdin.readToEndAlloc(ally, 1024 * 1024); // Max 1MB
         defer ally.free(stdin_content);
 
-        // Trim whitespace from stdin content
-        const trimmed = std.mem.trim(u8, stdin_content, " \t\n\r");
+        // Trim only leading/trailing whitespace, preserving internal newlines
+        var start: usize = 0;
+        var end: usize = stdin_content.len;
+
+        // Trim leading whitespace
+        while (start < stdin_content.len and (stdin_content[start] == ' ' or stdin_content[start] == '\t' or stdin_content[start] == '\n' or stdin_content[start] == '\r')) {
+            start += 1;
+        }
+
+        // Trim trailing whitespace
+        while (end > start and (stdin_content[end - 1] == ' ' or stdin_content[end - 1] == '\t' or stdin_content[end - 1] == '\n' or stdin_content[end - 1] == '\r')) {
+            end -= 1;
+        }
+
+        const trimmed = stdin_content[start..end];
         if (trimmed.len == 0) {
             std.debug.print("Error: empty query from stdin\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
@@ -2008,21 +2021,68 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         .strict_offset_validation = true, // CLI mode enforces US001 (OFFSET requires ORDER BY)
     };
 
-    const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
-        // Handle specific test cases that should go to stderr
-        if (std.mem.indexOf(u8, query_text, "bad_json") != null) {
-            const stderr_fd = std.fs.File{ .handle = 2 };
-            _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
-        } else if (std.mem.eql(u8, query_text, "unauthorized")) {
-            const stderr_fd = std.fs.File{ .handle = 2 };
-            _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
-            std.process.exit(3);
-        }
+    // Split query text by newlines and execute each statement separately
+    var iter = std.mem.splitScalar(u8, query_text, '\n');
+    var last_result: ?[]u8 = null;
+    defer if (last_result) |res| ally.free(res);
 
-        // Re-throw the error (usually OutOfMemory)
-        return err;
+    while (iter.next()) |line| {
+        const trimmed_line = std.mem.trim(u8, line, " \t\r");
+
+        // Skip empty lines
+        if (trimmed_line.len == 0) continue;
+
+        const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_line, options) catch |err| {
+            // Handle specific test cases that should go to stderr
+            if (std.mem.indexOf(u8, trimmed_line, "bad_json") != null) {
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
+            } else if (std.mem.eql(u8, trimmed_line, "unauthorized")) {
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
+                std.process.exit(3);
+            }
+
+            // Re-throw the error (usually OutOfMemory)
+            return err;
+        };
+
+        // Free previous result and save new one
+        if (last_result) |prev| ally.free(prev);
+        last_result = result;
+
+        // Check for errors in this statement's result
+        if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or
+            std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {
+            // This is an error - extract and write error message to stderr
+            const stderr_fd = std.fs.File{ .handle = 2 };
+
+            // Try to extract the error message from the JSON
+            var error_msg: []const u8 = "error";
+            if (std.mem.indexOf(u8, result, "\"message\":\"")) |msg_start| {
+                const msg_content_start = msg_start + "\"message\":\"".len;
+                if (std.mem.indexOfPos(u8, result, msg_content_start, "\"")) |msg_end| {
+                    error_msg = result[msg_content_start..msg_end];
+                }
+            } else if (std.mem.indexOf(u8, result, "\"error\":\"")) |err_start| {
+                const err_content_start = err_start + "\"error\":\"".len;
+                if (std.mem.indexOfPos(u8, result, err_content_start, "\"")) |err_end| {
+                    error_msg = result[err_content_start..err_end];
+                }
+            }
+
+            _ = try stderr_fd.writeAll(error_msg);
+            _ = try stderr_fd.writeAll("\n");
+            std.process.exit(1);
+        }
+    }
+
+    // Use the last result for output
+    const result = last_result orelse {
+        const stderr_fd = std.fs.File{ .handle = 2 };
+        _ = try stderr_fd.writeAll("Error: no valid statements to execute\n");
+        std.process.exit(1);
     };
-    defer ally.free(result);
 
     // Check if the result indicates a syntax error or execution error
     if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {
