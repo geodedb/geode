@@ -83,6 +83,9 @@
             pkgs.systemd
             pkgs.prometheus
             pkgs.grafana
+            pkgs.yq # Command-line YAML/XML/TOML processor - jq wrapper for YAML, XML, TOML documents
+            pkgs.pdftk # Command-line tool for working with PDFs
+            pkgs.pdfid # Scan a file to look for certain PDF keywords
             unstablePkgs.zig-zlint
           ];
 
