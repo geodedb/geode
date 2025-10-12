@@ -1146,6 +1146,110 @@ fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionRes
     };
 }
 
+fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, with_result: ExecutionResult, context: ExecutionContext) !ExecutionResult {
+    _ = context;
+
+    // We expect only one row from WITH clause, use it as the environment
+    if (with_result.rows.len == 0) {
+        return ExecutionResult{
+            .columns = try allocator.alloc([]const u8, 0),
+            .rows = try allocator.alloc([]eval.Value, 0),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    // Create environment from WITH results
+    const env = eval.Env{
+        .names = with_result.columns,
+        .values = with_result.rows[0], // Use first row
+    };
+
+    const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
+
+    // Extract list items from the collection
+    var items = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+    switch (collection_value) {
+        .List => |list| {
+            for (list) |item| {
+                try items.append(allocator, item);
+            }
+        },
+        else => {
+            // If it's not a list, treat it as a single-item list
+            try items.append(allocator, collection_value);
+        },
+    }
+
+    // Build result rows by iterating over collection
+    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+
+    // Build arrays for iteration environment
+    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+    for (items.items, 0..) |item, idx| {
+        // Clear environment for this iteration
+        env_names_list.clearRetainingCapacity();
+        env_values_list.clearRetainingCapacity();
+
+        // First add WITH clause bindings
+        for (with_result.columns, with_result.rows[0]) |name, value| {
+            try env_names_list.append(allocator, name);
+            try env_values_list.append(allocator, value);
+        }
+
+        // Bind the iteration variable
+        try env_names_list.append(allocator, for_stmt.variable);
+        try env_values_list.append(allocator, item);
+
+        // Bind ordinality variable if present (1-based)
+        if (for_stmt.ordinality_var) |ord_var| {
+            try env_names_list.append(allocator, ord_var);
+            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx + 1) });
+        }
+
+        // Bind offset variable if present (0-based)
+        if (for_stmt.offset_var) |off_var| {
+            try env_names_list.append(allocator, off_var);
+            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx) });
+        }
+
+        // Create environment for this iteration
+        const iteration_env = eval.Env{
+            .names = env_names_list.items,
+            .values = env_values_list.items,
+        };
+
+        // Evaluate RETURN items for this iteration
+        var row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+        for (for_stmt.return_clause.items) |ret_item| {
+            const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
+            try row.append(allocator, value);
+        }
+
+        try result_rows.append(allocator, try row.toOwnedSlice(allocator));
+    }
+
+    // Build column names from RETURN clause
+    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+
+    for (for_stmt.return_clause.items) |ret_item| {
+        const col_name = if (ret_item.alias) |alias|
+            try allocator.dupe(u8, alias)
+        else
+            try allocator.dupe(u8, "?column?");
+        try columns.append(allocator, col_name);
+    }
+
+    return ExecutionResult{
+        .columns = try columns.toOwnedSlice(allocator),
+        .rows = try result_rows.toOwnedSlice(allocator),
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
 fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context: ExecutionContext) !ExecutionResult {
     _ = context;
 
@@ -2076,6 +2180,11 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
 
         // Apply WITH clause to transform the empty row into WITH variables
         const with_result = try executeWithClause(allocator, initial_result, with_clause);
+
+        // Check if there's a FOR statement to execute with WITH bindings
+        if (q.for_statement) |for_stmt| {
+            return executeForWithBindings(allocator, for_stmt.*, with_result, context);
+        }
 
         // Now evaluate RETURN using the WITH results as environment
         var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;

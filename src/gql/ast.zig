@@ -81,6 +81,8 @@ pub const Query = struct {
     // When WITH clause is present and followed by MATCH/CREATE, the next query is stored here
     // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=AST; STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
     next_query: ?*Query = null,
+    // FOR statement that follows WITH (for queries like WITH ... FOR ... RETURN)
+    for_statement: ?*ForStatement = null,
 };
 
 pub const UnionQuery = struct {

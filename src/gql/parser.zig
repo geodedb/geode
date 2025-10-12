@@ -910,8 +910,12 @@ pub const Parser = struct {
 
             // Check for FOR after initial WITH clause
             if (self.cur.kind == .FOR) {
-                // Parse FOR statement and return it wrapped in a Query
+                // Parse FOR statement and store it in the query
                 const for_stmt = try self.parseForStatement();
+                // Allocate ForStatement on arena
+                const for_ptr = try self.arena.allocator().create(ast.ForStatement);
+                for_ptr.* = for_stmt.For;
+
                 return ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} }, // Empty match pattern
@@ -927,6 +931,7 @@ pub const Parser = struct {
                     .next_query = null,
                     .group_by = null,
                     .having = null,
+                    .for_statement = for_ptr,
                 };
             }
         }
@@ -1171,8 +1176,11 @@ pub const Parser = struct {
             if (self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
-                    // Parse the FOR statement and wrap it in a query structure
+                    // Parse the FOR statement and store it in the query
                     const for_stmt = try self.parseForStatement();
+                    // Allocate ForStatement on arena
+                    const for_ptr = try self.arena.allocator().create(ast.ForStatement);
+                    for_ptr.* = for_stmt.For;
                     // Create a query wrapper for the FOR statement
                     const next_query = ast.Query{
                         .optional_match = false,
@@ -1189,6 +1197,7 @@ pub const Parser = struct {
                         .next_query = null,
                         .group_by = null,
                         .having = null,
+                        .for_statement = for_ptr,
                     };
                     // Allocate on arena and store pointer
                     const next_ptr = try self.arena.allocator().create(ast.Query);
