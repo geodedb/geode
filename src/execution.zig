@@ -225,7 +225,7 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
         .List => |list| {
             try writer.writeByte('[');
             for (list, 0..) |item, i| {
-                if (i > 0) try writer.writeAll(",");
+                if (i > 0) try writer.writeAll(", ");
                 try writeValue(writer, item);
             }
             try writer.writeByte(']');

@@ -1237,7 +1237,23 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             }
 
             // Try basic built-in functions if not found in extended registry
-            const result = tryBasicFunction(ally, lowercase_name, call.args, env) catch {
+            const result = tryBasicFunction(ally, lowercase_name, call.args, env) catch |err| {
+                // Propagate validation errors instead of converting to null
+                const err_name = @errorName(err);
+                if (std.mem.eql(u8, err_name, "TypeMismatch")) {
+                    return EvalError.TypeMismatch;
+                } else if (std.mem.eql(u8, err_name, "InvalidFormat")) {
+                    return EvalError.TypeMismatch;
+                } else if (std.mem.eql(u8, err_name, "Unsupported")) {
+                    return EvalError.Unsupported;
+                } else if (std.mem.eql(u8, err_name, "DivisionByZero")) {
+                    return EvalError.DivisionByZero;
+                } else if (std.mem.eql(u8, err_name, "DecimalDivZero")) {
+                    return EvalError.DecimalDivZero;
+                } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
+                    return EvalError.DecimalOverflow;
+                }
+                // For other errors, fall back to null
                 break :blk_call .{ .Null = {} };
             };
 
