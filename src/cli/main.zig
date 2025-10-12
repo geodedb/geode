@@ -2046,23 +2046,24 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         .strict_offset_validation = true, // CLI mode enforces US001 (OFFSET requires ORDER BY)
     };
 
-    // Split query text by newlines and execute each statement separately
-    var iter = std.mem.splitScalar(u8, query_text, '\n');
+    // Split query text by semicolons and execute each statement separately
+    // Note: We split by semicolons, not newlines, to support multi-line statements
+    var iter = std.mem.splitScalar(u8, query_text, ';');
     var last_result: ?[]u8 = null;
     defer if (last_result) |res| ally.free(res);
 
-    while (iter.next()) |line| {
-        const trimmed_line = std.mem.trim(u8, line, " \t\r");
+    while (iter.next()) |stmt| {
+        const trimmed_stmt = std.mem.trim(u8, stmt, " \t\r\n");
 
-        // Skip empty lines
-        if (trimmed_line.len == 0) continue;
+        // Skip empty statements
+        if (trimmed_stmt.len == 0) continue;
 
-        const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_line, options) catch |err| {
+        const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_stmt, options) catch |err| {
             // Handle specific test cases that should go to stderr
-            if (std.mem.indexOf(u8, trimmed_line, "bad_json") != null) {
+            if (std.mem.indexOf(u8, trimmed_stmt, "bad_json") != null) {
                 const stderr_fd = std.fs.File{ .handle = 2 };
                 _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
-            } else if (std.mem.eql(u8, trimmed_line, "unauthorized")) {
+            } else if (std.mem.eql(u8, trimmed_stmt, "unauthorized")) {
                 const stderr_fd = std.fs.File{ .handle = 2 };
                 _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
                 std.process.exit(3);

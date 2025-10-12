@@ -69,9 +69,18 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     setup_commands = test_case.get("setup", [])
     if setup_commands:
         import shlex
-        for cmd_str in setup_commands:
+        for cmd_item in setup_commands:
             try:
-                setup_args = shlex.split(cmd_str)
+                # Handle both string and dict formats
+                if isinstance(cmd_item, dict):
+                    # Dict format: {"args": ["query", "...", "--no-quic"]}
+                    setup_args = cmd_item.get("args", [])
+                    setup_stdin = cmd_item.get("stdin", None)
+                else:
+                    # String format: "geode query '...' --no-quic"
+                    setup_args = shlex.split(cmd_item)
+                    setup_stdin = None
+
                 # Apply variable substitution to setup args
                 setup_processed = []
                 for arg in setup_args:
@@ -87,14 +96,26 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                         processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
                     setup_processed.append(processed_arg)
 
+                # For dict format with args, prepend "query" if not already present
+                if isinstance(cmd_item, dict) and len(setup_processed) > 0:
+                    # Check if first arg looks like a GQL statement (not a subcommand)
+                    if setup_processed[0] not in ["query", "serve", "shell", "backup", "restore", "init", "status", "version"]:
+                        # It's a GQL statement, so we need to add "query" command
+                        setup_processed = ["query"] + setup_processed
+
                 setup_result = subprocess.run(
                     [binary] + setup_processed,
+                    input=setup_stdin,
                     capture_output=True,
                     text=True,
                     timeout=5
                 )
                 if setup_result.returncode != 0:
-                    return False, "setup command failed"
+                    # Include stderr in error message for debugging
+                    error_msg = f"setup command failed (exit {setup_result.returncode})"
+                    if setup_result.stderr:
+                        error_msg += f": {setup_result.stderr[:200]}"
+                    return False, error_msg
             except Exception as e:
                 return False, f"setup error: {str(e)}"
 
