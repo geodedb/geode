@@ -4252,24 +4252,31 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
     }
 
     const items = q.ret.items;
-    var columns = try allocator.alloc([]const u8, items.len);
-    for (items, 0..) |item, i| {
-        const column_name = item.alias orelse blk: {
-            // Use expression-based column name if no alias provided
-            switch (item.expr) {
-                .Ident => |ident| break :blk ident.orig,
-                .PropertyAccess => |prop| break :blk prop.property,
-                .Member => |mem| break :blk mem.field,
-                .Call => |call| {
-                    if (call.callee.* == .Ident) {
-                        break :blk call.callee.Ident.orig;
-                    }
-                    break :blk "column";
-                },
-                else => break :blk "column",
-            }
-        };
-        columns[i] = try allocator.dupe(u8, column_name);
+
+    // When WITH clause exists, columns will be set later based on matched variables
+    // When no WITH clause, set columns from RETURN expressions
+    const has_with = q.with_clause != null;
+    var columns: [][]const u8 = undefined;
+    if (!has_with) {
+        columns = try allocator.alloc([]const u8, items.len);
+        for (items, 0..) |item, i| {
+            const column_name = item.alias orelse blk: {
+                // Use expression-based column name if no alias provided
+                switch (item.expr) {
+                    .Ident => |ident| break :blk ident.orig,
+                    .PropertyAccess => |prop| break :blk prop.property,
+                    .Member => |mem| break :blk mem.field,
+                    .Call => |call| {
+                        if (call.callee.* == .Ident) {
+                            break :blk call.callee.Ident.orig;
+                        }
+                        break :blk "column";
+                    },
+                    else => break :blk "column",
+                }
+            };
+            columns[i] = try allocator.dupe(u8, column_name);
+        }
     }
 
     // Check if we have any aggregations
@@ -4498,6 +4505,8 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
         }
     } else {
         // Non-aggregation query - return one row per matching pattern
+        // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-12
+
         var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
 
         if (has_relationship) {
@@ -5045,11 +5054,23 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                 }
 
                 // Note: env is still valid here since we only free on continue
-                var row = try allocator.alloc(eval.Value, items.len);
+                // If WITH clause exists, build rows with matched variables (not RETURN expressions)
+                // Otherwise, evaluate RETURN expressions directly
+                var row: []eval.Value = undefined;
 
-                for (items, 0..) |item, i| {
-                    // Evaluate expression with node and inline LET bindings in environment
-                    row[i] = try eval.evalExpr(allocator, item.expr, extended_env);
+                if (q.with_clause != null) {
+                    // Build row with matched variables for WITH clause processing
+                    row = try allocator.alloc(eval.Value, extended_env.values.len);
+                    for (extended_env.values, 0..) |val, i| {
+                        row[i] = val;
+                    }
+                } else {
+                    // No WITH clause - evaluate RETURN expressions directly
+                    row = try allocator.alloc(eval.Value, items.len);
+                    for (items, 0..) |item, i| {
+                        // Evaluate expression with node and inline LET bindings in environment
+                        row[i] = try eval.evalExpr(allocator, item.expr, extended_env);
+                    }
                 }
 
                 // Free extended environment memory
@@ -5077,6 +5098,31 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             try rows.append(allocator, null_row);
         }
 
+        // If WITH clause exists, we need to determine columns from matched variables
+        // Otherwise, columns were already set from RETURN expressions
+        if (has_with) {
+            // Extract variable names from the match pattern
+            // For simple node matches, we have match_variable
+            // For relationship matches, we have left_node_var, rel_var, right_node_var
+            var col_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            defer col_list.deinit(allocator);
+
+            if (has_relationship) {
+                if (left_node_var) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+                if (rel_var) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+                if (right_node_var) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+            } else {
+                if (match_variable) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+            }
+
+            // Add inline LET bindings if present
+            for (inline_let_bindings) |binding| {
+                try col_list.append(allocator, try allocator.dupe(u8, binding.variable));
+            }
+
+            columns = try col_list.toOwnedSlice(allocator);
+        }
+
         var result = ExecutionResult{
             .columns = columns,
             .rows = try rows.toOwnedSlice(allocator),
@@ -5093,7 +5139,61 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
 
         // Apply WITH clause for query pipelining if present
         if (q.with_clause) |with_clause| {
-            result = try executeWithClause(allocator, result, with_clause);
+            // Apply WITH clause to transform matched variables
+            const with_result = try executeWithClause(allocator, result, with_clause);
+
+            // Now evaluate RETURN expressions using WITH result as environment
+            var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+            for (q.ret.items, 0..) |item, i| {
+                const col_name = item.alias orelse blk: {
+                    switch (item.expr) {
+                        .Ident => |ident| break :blk ident.orig,
+                        .PropertyAccess => |prop| break :blk prop.property,
+                        .Member => |mem| break :blk mem.field,
+                        .Call => |call| {
+                            if (call.callee.* == .Ident) {
+                                break :blk call.callee.Ident.orig;
+                            }
+                            break :blk "column";
+                        },
+                        else => break :blk "column",
+                    }
+                };
+                return_columns[i] = try allocator.dupe(u8, col_name);
+            }
+
+            // Evaluate RETURN items using WITH result as environment
+            var return_rows = try allocator.alloc([]eval.Value, with_result.rows.len);
+            for (with_result.rows, 0..) |with_row, row_idx| {
+                var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+
+                // Create environment from WITH result columns and this row's values
+                const env = eval.Env{
+                    .names = with_result.columns,
+                    .values = with_row,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                };
+
+                for (q.ret.items, 0..) |item, i| {
+                    return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                }
+
+                return_rows[row_idx] = return_row;
+            }
+
+            // Clean up WITH result
+            allocator.free(with_result.columns);
+            for (with_result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(with_result.rows);
+
+            result = ExecutionResult{
+                .columns = return_columns,
+                .rows = return_rows,
+                .flags = with_result.flags,
+            };
         }
 
         return result;
