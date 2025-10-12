@@ -412,9 +412,61 @@ make build
 - CLI migrate up alias
 - Transaction session isolation
 
-6. **Next Priority:** Type validation (2-3 hours, 3-5 tests)
+6. **Completed Priority:** Type validation (DONE - 3 tests fixed)
+**Next Priority:** Parser enhancements (Phase 3 - see PARSER_ENHANCEMENTS.md)
 
 ---
 
-*Last Updated: October 12, 2025 10:15 AM*
-*Status: Phase 1 Complete, Starting Phase 2*
+*Last Updated: October 12, 2025 2:30 PM*
+*Status: Phase 1 & 2 Complete - Phase 3 Investigation Started*
+
+---
+
+## 📍 Current Session Summary (October 12, 2025)
+
+### ✅ What Was Completed
+
+**Phase 1: Quick Wins**
+- JSON list formatting (1-2 tests)
+- CLI backup cleanup command (1 test)
+- CLI migrate up alias (1 test)
+
+**Phase 2: Type Validation**
+- Fixed error propagation in basic functions (3 tests)
+- Invalid type conversions now properly return exit code 1
+
+**Phase 3A.1: AST Investigation**
+- Reviewed CallStatement and CallSubquery structures
+- **Key Finding**: AST already supports nested CALL blocks via `CallSubquery.query: *Query`
+- Problem is in parser implementation, not AST
+
+### 📊 Test Results
+
+**Current**: 1563/1710 passing (91.4%), 97 failing, 65 skipped
+**Improvement from start**: +3 tests fixed
+
+### 📋 Phase 3 Status
+
+**Remaining Work** (see PARSER_ENHANCEMENTS.md for details):
+1. **Parser Investigation** (2h) - Locate and understand CALL parsing logic
+2. **Nested CALL Implementation** (4h) - Add recursive statement parsing
+3. **Transaction Bodies** (4h) - Similar implementation for transaction blocks
+4. **Testing** (1h) - Comprehensive validation
+
+**Estimated Impact**: 35-45 additional tests
+**Estimated Time**: 11 hours total
+**Complexity**: High - requires deep parser modifications
+
+### 🎯 Next Steps
+
+**For Next Session:**
+1. Read PARSER_ENHANCEMENTS.md for complete context
+2. Start with parser investigation (2-3 hour session)
+3. Document CALL parsing flow
+4. Create detailed implementation plan
+
+**Recommended Approach:**
+- Break Phase 3 into multiple sessions
+- Focus on parser investigation first
+- Implement incrementally with testing
+- Commit frequently with evidence
