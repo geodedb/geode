@@ -7,7 +7,7 @@ tests:
     args: ["query", "--no-quic", "CREATE (a:Node {name: 'A'})-[:EDGE {weight: 1}]->(b:Node {name: 'B'})-[:EDGE {weight: 2}]->(c:Node {name: 'C'}), (a)-[:EDGE {weight: 5}]->(c) WITH a, c MATCH p = shortestPath((a)-[*]-(c)) RETURN length(p)", "--format", "json"]
     expect:
       exit_code: 0
-      stdout_contains: ["2"]
+      stdout_contains: ["1"]  # shortestPath finds A->C (1 hop) not A->B->C (2 hops)
 
   - name: all-shortest-paths
     args: ["query", "--no-quic", "MATCH (a:Node {name: 'A'}), (c:Node {name: 'C'}), p = allShortestPaths((a)-[*]-(c)) RETURN count(p)", "--format", "json"]
@@ -16,8 +16,8 @@ tests:
       stdout_contains: ["count"]
 
   - name: dijkstra-weighted-path
-    skip: true  # Neo4j-specific - uses CALL algo.shortestPath.dijkstra procedure
     args: ["query", "--no-quic", "MATCH (start:Node {name: 'A'}), (end:Node {name: 'C'}) CALL algo.shortestPath.dijkstra(start, end, 'weight') YIELD path, cost RETURN cost", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.shortestPath.dijkstra procedure
     expect:
       exit_code: 0
       stdout_contains: ["3"]
@@ -49,51 +49,51 @@ tests:
       stdout_contains: ["degree"]
 
   - name: betweenness-centrality
-    skip: true  # Neo4j-specific - uses CALL algo.betweenness.stream procedure
     args: ["query", "--no-quic", "CALL algo.betweenness.stream() YIELD nodeId, centrality RETURN algo.asNode(nodeId).name AS node, centrality ORDER BY centrality DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.betweenness.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["centrality"]
 
   - name: closeness-centrality
-    skip: true  # Neo4j-specific - uses CALL algo.closeness.stream procedure
     args: ["query", "--no-quic", "CALL algo.closeness.stream() YIELD nodeId, centrality RETURN algo.asNode(nodeId).name AS node, centrality ORDER BY centrality DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.closeness.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["centrality"]
 
   - name: pagerank
-    skip: true  # Neo4j-specific - uses CALL algo.pageRank.stream procedure
     args: ["query", "--no-quic", "CALL algo.pageRank.stream({iterations: 20, dampingFactor: 0.85}) YIELD nodeId, score RETURN algo.asNode(nodeId).name AS node, score ORDER BY score DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.pageRank.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["score"]
 
   # Community Detection
   - name: louvain-modularity
-    skip: true  # Neo4j-specific - uses CALL algo.louvain.stream procedure
     args: ["query", "--no-quic", "CALL algo.louvain.stream() YIELD nodeId, community RETURN community, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.louvain.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["community", "size"]
 
   - name: label-propagation
-    skip: true  # Neo4j-specific - uses CALL algo.labelPropagation.stream procedure
     args: ["query", "--no-quic", "CALL algo.labelPropagation.stream() YIELD nodeId, label RETURN label, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.labelPropagation.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["label", "size"]
 
   - name: connected-components
-    skip: true  # Neo4j-specific - uses CALL algo.unionFind.stream procedure
     args: ["query", "--no-quic", "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN setId AS component, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.unionFind.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["component", "size"]
 
   - name: strongly-connected-components
-    skip: true  # Neo4j-specific - uses CALL algo.scc.stream procedure
     args: ["query", "--no-quic", "CALL algo.scc.stream() YIELD nodeId, partition RETURN partition, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
+    skip: true  # Neo4j-specific - uses CALL algo.scc.stream procedure
     expect:
       exit_code: 0
       stdout_contains: ["partition", "size"]

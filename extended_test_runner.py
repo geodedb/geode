@@ -6,10 +6,21 @@ import yaml
 import sys
 from pathlib import Path
 
+import uuid
+import time
+
 def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None):
     """Run a single test case with optional instance_id and loop_index for parallel/loop tests."""
+    # Check if test should be skipped
+    if test_case.get("skip", False):
+        return None, "skipped"
+
     args = test_case.get("args", [])
     expect = test_case.get("expect", {})
+
+    # Generate unique test ID for isolation
+    test_id = str(uuid.uuid4())[:8]
+    test_timestamp = int(time.time() * 1000)
 
     # Handle variable substitution
     processed_args = []
@@ -39,6 +50,13 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         # Replace loop_index for loop tests
         if loop_index is not None and "${loop_index}" in processed_arg:
             processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+
+        # Inject unique identifiers for test isolation in query args
+        if "MERGE" in processed_arg or "CREATE" in processed_arg:
+            processed_arg = processed_arg.replace("'Test'", f"'Test_{test_id}'")
+            processed_arg = processed_arg.replace("'Unique'", f"'Unique_{test_id}'")
+            processed_arg = processed_arg.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
+            processed_arg = processed_arg.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
 
         processed_args.append(processed_arg)
     args = processed_args
@@ -92,6 +110,14 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
 
     # Get stdin content if present
     stdin_content = test_case.get("stdin", None)
+
+    # Inject unique identifiers for test isolation if stdin contains certain patterns
+    if stdin_content:
+        # Replace common test names with unique versions to avoid conflicts
+        stdin_content = stdin_content.replace("'Test'", f"'Test_{test_id}'")
+        stdin_content = stdin_content.replace("'Unique'", f"'Unique_{test_id}'")
+        stdin_content = stdin_content.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
+        stdin_content = stdin_content.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
 
     try:
         result = subprocess.run(
@@ -251,6 +277,12 @@ def main():
         
         for test in spec.get("tests", []):
             name = test["name"]
+
+            # Skip tests marked with skip: true
+            if test.get("skip", False):
+                spec_skipped += 1
+                total_skipped += 1
+                continue
 
             # Handle parallel tests with multiple instances
             if test.get("parallel") and test.get("instances"):

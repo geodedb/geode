@@ -1486,7 +1486,7 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .ShortestPath => |sp| blk_shortest: {
             // ShortestPath expression: shortestPath((a)-[*]-(b))
             // Call the execution layer to find the shortest path(s)
-            const path_value = execution.findShortestPath(ally, sp.pattern.*, sp.all) catch {
+            const path_value = execution.findShortestPath(ally, sp.pattern.*, sp.all, env) catch {
                 break :blk_shortest Value{ .Null = {} };
             };
             break :blk_shortest path_value;

@@ -2173,6 +2173,44 @@ fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: E
         }
     }
 
+    // If there's no MATCH clause, just evaluate RETURN with bindings
+    if (q.match.chains.len == 0 and binding_names.len > 0) {
+        const items = q.ret.items;
+        var columns = try allocator.alloc([]const u8, items.len);
+        for (items, 0..) |item, i| {
+            const column_name = item.alias orelse blk: {
+                switch (item.expr) {
+                    .Ident => |ident| break :blk ident.orig,
+                    .PropertyAccess => |prop| break :blk prop.property,
+                    .Member => |mem| break :blk mem.field,
+                    else => break :blk "column",
+                }
+            };
+            columns[i] = try allocator.dupe(u8, column_name);
+        }
+
+        // Create a single row by evaluating RETURN expressions with bindings
+        var row = try allocator.alloc(eval.Value, items.len);
+
+        const env = eval.Env{
+            .names = binding_names,
+            .values = binding_values,
+        };
+
+        for (items, 0..) |item, i| {
+            row[i] = try eval.evalExpr(allocator, item.expr, env);
+        }
+
+        var rows = try allocator.alloc([]eval.Value, 1);
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
     // If all MATCH variables are bound, we can skip matching and just evaluate RETURN
     if (all_vars_bound and bound_var_env_names.items.len > 0) {
         const items = q.ret.items;
@@ -3883,6 +3921,192 @@ fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResul
     return executeMatchQueryImpl(allocator, q, &.{}, &.{}, &.{});
 }
 
+// CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+// Handle comma-separated node patterns by creating Cartesian product
+fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+    _ = inline_let_bindings;
+    const store = graph_store.getGlobalStore(allocator);
+
+    // Collect matching nodes for each chain
+    var chain_matches = try std.ArrayList(std.ArrayList(*graph_store.Node)).initCapacity(allocator, q.match.chains.len);
+    defer {
+        for (chain_matches.items) |*matches| {
+            matches.deinit(allocator);
+        }
+        chain_matches.deinit(allocator);
+    }
+
+    var chain_vars = try std.ArrayList(?[]const u8).initCapacity(allocator, q.match.chains.len);
+    defer chain_vars.deinit(allocator);
+
+    // For each chain, find all matching nodes
+    for (q.match.chains) |chain| {
+        const node_pattern = chain.head.?;
+        var matches = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+
+        var node_iter = store.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            var matches_pattern = true;
+
+            // Check labels
+            for (node_pattern.labels) |required_label| {
+                var has_label = false;
+                for (node.labels) |node_label| {
+                    if (std.mem.eql(u8, required_label, node_label)) {
+                        has_label = true;
+                        break;
+                    }
+                }
+                if (!has_label) {
+                    matches_pattern = false;
+                    break;
+                }
+            }
+
+            // Check inline properties
+            if (matches_pattern and node_pattern.props != null) {
+                const props = node_pattern.props.?;
+                const prop_env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                };
+
+                for (props) |prop| {
+                    if (node.properties.get(prop.key)) |node_prop_val| {
+                        const node_val = switch (node_prop_val) {
+                            .Null => eval.Value{ .Null = {} },
+                            .Bool => |b| eval.Value{ .Bool = b },
+                            .Int => |i| eval.Value{ .Int = i },
+                            .String => |s| eval.Value{ .Str = s },
+                            .Float => eval.Value{ .Null = {} },
+                            .ExtValue => |ext| eval.Value{ .ExtValue = ext },
+                        };
+                        const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                        if (!valuesEqual(node_val, expected_val)) {
+                            matches_pattern = false;
+                            break;
+                        }
+                    } else {
+                        matches_pattern = false;
+                        break;
+                    }
+                }
+            }
+
+            if (matches_pattern) {
+                try matches.append(allocator, node);
+            }
+        }
+
+        try chain_matches.append(allocator, matches);
+        try chain_vars.append(allocator, node_pattern.name);
+    }
+
+    // Build column names
+    const items = q.ret.items;
+    var columns = try allocator.alloc([]const u8, items.len);
+    for (items, 0..) |item, i| {
+        const column_name = item.alias orelse blk: {
+            switch (item.expr) {
+                .Ident => |ident| break :blk ident.orig,
+                .PropertyAccess => |prop| break :blk prop.property,
+                .Member => |mem| break :blk mem.field,
+                else => break :blk "column",
+            }
+        };
+        columns[i] = try allocator.dupe(u8, column_name);
+    }
+
+    // Generate Cartesian product of all matching nodes
+    var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+    // Recursive function to generate combinations
+    const Context = struct {
+        allocator: std.mem.Allocator,
+        chain_matches: *std.ArrayList(std.ArrayList(*graph_store.Node)),
+        chain_vars: *std.ArrayList(?[]const u8),
+        items: []ast.ReturnItem,
+        rows: *std.ArrayList([]eval.Value),
+        q: ast.Query,
+        param_names: []const []const u8,
+        param_values: []const eval.Value,
+
+        fn generateCombinations(self: @This(), current_combo: *std.ArrayList(*graph_store.Node), chain_idx: usize) !void {
+            if (chain_idx >= self.chain_matches.items.len) {
+                // We have a complete combination, evaluate it
+                var env_names = try self.allocator.alloc([]const u8, current_combo.items.len);
+                defer self.allocator.free(env_names);
+                var env_values = try self.allocator.alloc(eval.Value, current_combo.items.len);
+                defer self.allocator.free(env_values);
+
+                for (self.chain_vars.items, current_combo.items, 0..) |var_name, node, i| {
+                    env_names[i] = var_name orelse "";
+                    env_values[i] = eval.Value{ .Node = node };
+                }
+
+                const env = eval.Env{
+                    .names = env_names,
+                    .values = env_values,
+                    .param_names = self.param_names,
+                    .param_values = self.param_values,
+                };
+
+                // Evaluate WHERE clause
+                if (self.q.where_clause) |where_expr| {
+                    const where_result = try eval.evalExpr(self.allocator, where_expr, env);
+                    const passes = switch (where_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+                    if (!passes) return;
+                }
+
+                // Evaluate RETURN items
+                var row = try self.allocator.alloc(eval.Value, self.items.len);
+                for (self.items, 0..) |item, i| {
+                    row[i] = try eval.evalExpr(self.allocator, item.expr, env);
+                }
+                try self.rows.append(self.allocator, row);
+                return;
+            }
+
+            // Try each node from current chain
+            for (self.chain_matches.items[chain_idx].items) |node| {
+                try current_combo.append(self.allocator, node);
+                try self.generateCombinations(current_combo, chain_idx + 1);
+                _ = current_combo.pop();
+            }
+        }
+    };
+
+    var context = Context{
+        .allocator = allocator,
+        .chain_matches = &chain_matches,
+        .chain_vars = &chain_vars,
+        .items = items,
+        .rows = &rows,
+        .q = q,
+        .param_names = param_names,
+        .param_values = param_values,
+    };
+
+    var current_combo = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+    defer current_combo.deinit(allocator);
+
+    try context.generateCombinations(&current_combo, 0);
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
 fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
@@ -3936,6 +4160,95 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             match_labels = node_pattern.labels;
             match_props = node_pattern.props; // NEW: Extract node properties
         }
+    }
+
+    // CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+    // Handle path variable assignment: MATCH p = shortestPath((a)-[*]-(c))
+    if (q.path_variable) |path_var| {
+        // This is a path assignment - check if it's a shortestPath pattern
+        if (q.match.chains.len > 0) {
+            const chain = q.match.chains[0];
+            if (chain.name) |chain_name| {
+                if (std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
+                    // This is a shortestPath pattern assignment
+                    // Build environment from inline_let_bindings (which come from WITH clause)
+                    const env = eval.Env{
+                        .names = param_names,
+                        .values = param_values,
+                    };
+
+                    // Execute shortestPath
+                    const pattern = q.match;
+                    const path_result = try findShortestPath(allocator, pattern, false, env);
+
+                    // Create result with path bound to path_variable
+                    const columns = try allocator.alloc([]const u8, q.ret.items.len);
+                    for (q.ret.items, 0..) |item, i| {
+                        const column_name = item.alias orelse blk: {
+                            switch (item.expr) {
+                                .Ident => |ident| break :blk ident.orig,
+                                .PropertyAccess => |prop| break :blk prop.property,
+                                .Member => |mem| break :blk mem.field,
+                                .Call => |call| {
+                                    if (call.callee.* == .Ident) {
+                                        break :blk call.callee.Ident.orig;
+                                    }
+                                    break :blk "column";
+                                },
+                                else => break :blk "column",
+                            }
+                        };
+                        columns[i] = try allocator.dupe(u8, column_name);
+                    }
+
+                    // Build environment with path variable
+                    var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
+                    var path_env_values = try allocator.alloc(eval.Value, param_values.len + 1);
+                    for (param_names, 0..) |name, i| {
+                        path_env_names[i] = name;
+                        path_env_values[i] = param_values[i];
+                    }
+                    path_env_names[param_names.len] = path_var;
+                    path_env_values[param_values.len] = path_result;
+
+                    const path_env = eval.Env{
+                        .names = path_env_names,
+                        .values = path_env_values,
+                    };
+
+                    // Evaluate RETURN expressions with path in environment
+                    var row = try allocator.alloc(eval.Value, q.ret.items.len);
+                    for (q.ret.items, 0..) |item, i| {
+                        row[i] = try eval.evalExpr(allocator, item.expr, path_env);
+                    }
+
+                    var rows = try allocator.alloc([]eval.Value, 1);
+                    rows[0] = row;
+
+                    return ExecutionResult{
+                        .columns = columns,
+                        .rows = rows,
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
+                }
+            }
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSepar atedMatches"; ASPECT=MultipleChains; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+    // Handle comma-separated node patterns: MATCH (a:Node), (b:Node)
+    // Check if all chains are simple node patterns (no relationships)
+    var all_simple_nodes = true;
+    for (q.match.chains) |chain| {
+        if (chain.hops.len > 0 or chain.head == null) {
+            all_simple_nodes = false;
+            break;
+        }
+    }
+
+    if (all_simple_nodes and q.match.chains.len > 1) {
+        // Handle multiple independent node patterns
+        return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings);
     }
 
     const items = q.ret.items;
@@ -7438,9 +7751,9 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
     return count;
 }
 
-// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-10
+// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
 // Find shortest path between nodes using BFS
-pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool) !eval.Value {
+pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: eval.Env) !eval.Value {
     const store = graph_store.getGlobalStore(allocator);
 
     // Extract start and end nodes from pattern
@@ -7455,55 +7768,76 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     var start_id: ?u64 = null;
     var end_id: ?u64 = null;
 
-    // Find start node matching left pattern
-    var start_iter = store.nodes.iterator();
-    while (start_iter.next()) |entry| {
-        const node = entry.value_ptr.*;
-        var matches = true;
-
-        for (hop.left.labels) |required_label| {
-            var has_label = false;
-            for (node.labels) |node_label| {
-                if (std.mem.eql(u8, required_label, node_label)) {
-                    has_label = true;
-                    break;
-                }
+    // Check if left node is a variable reference
+    if (hop.left.name) |left_name| {
+        if (env.get(left_name)) |left_val| {
+            if (left_val == .Node) {
+                start_id = left_val.Node.id;
             }
-            if (!has_label) {
-                matches = false;
-                break;
-            }
-        }
-
-        if (matches) {
-            start_id = node.id;
-            break;
         }
     }
 
-    // Find end node matching right pattern
-    var end_iter = store.nodes.iterator();
-    while (end_iter.next()) |entry| {
-        const node = entry.value_ptr.*;
-        var matches = true;
+    // Check if right node is a variable reference
+    if (hop.right.name) |right_name| {
+        if (env.get(right_name)) |right_val| {
+            if (right_val == .Node) {
+                end_id = right_val.Node.id;
+            }
+        }
+    }
 
-        for (hop.right.labels) |required_label| {
-            var has_label = false;
-            for (node.labels) |node_label| {
-                if (std.mem.eql(u8, required_label, node_label)) {
-                    has_label = true;
+    // If not found in env, try pattern matching
+    if (start_id == null) {
+        var start_iter = store.nodes.iterator();
+        while (start_iter.next()) |entry| {
+            const node = entry.value_ptr.*;
+            var matches = true;
+
+            for (hop.left.labels) |required_label| {
+                var has_label = false;
+                for (node.labels) |node_label| {
+                    if (std.mem.eql(u8, required_label, node_label)) {
+                        has_label = true;
+                        break;
+                    }
+                }
+                if (!has_label) {
+                    matches = false;
                     break;
                 }
             }
-            if (!has_label) {
-                matches = false;
+
+            if (matches) {
+                start_id = node.id;
                 break;
             }
         }
+    }
 
-        if (matches) {
-            end_id = node.id;
-            break;
+    if (end_id == null) {
+        var end_iter = store.nodes.iterator();
+        while (end_iter.next()) |entry| {
+            const node = entry.value_ptr.*;
+            var matches = true;
+
+            for (hop.right.labels) |required_label| {
+                var has_label = false;
+                for (node.labels) |node_label| {
+                    if (std.mem.eql(u8, required_label, node_label)) {
+                        has_label = true;
+                        break;
+                    }
+                }
+                if (!has_label) {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches) {
+                end_id = node.id;
+                break;
+            }
         }
     }
 

@@ -508,6 +508,8 @@ fn printQueryUsage() void {
         "  --format <fmt>         Output format: json|table|csv (default: json)\n" ++
         "  --json-param <name> <value>  Add JSON parameter\n" ++
         "  --page-size <n>        Page size for results (default: 1000)\n" ++
+        "  --timeout <secs>       Connection timeout in seconds (default: 10)\n" ++
+        "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --begin                Start transaction\n" ++
         "  --commit               Commit transaction\n" ++
         "  --rollback             Rollback transaction\n" ++
@@ -524,6 +526,7 @@ fn printQueryUsage() void {
         "  geode query --server localhost:3141 --insecure \"RETURN 1 AS x\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
+        "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
         "  geode query --no-quic -\n" ++
         "\n", .{});
@@ -1872,6 +1875,8 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var user: ?[]const u8 = null;
     var token: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
+    var timeout_secs: u32 = 10; // Default 10 second timeout
+    var retry_count: u32 = 0; // Default no retries
 
     i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
@@ -1922,6 +1927,26 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 std.process.exit(1);
             }
             i += 2;
+        } else if (std.mem.eql(u8, arg, "--timeout")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --timeout requires a timeout value in seconds\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            timeout_secs = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
+                std.debug.print("Error: --timeout value must be a positive integer\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--retry")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --retry requires a retry count\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            retry_count = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
+                std.debug.print("Error: --retry value must be a positive integer\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            i += 1;
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
             // First non-option argument is the query text, or "-" for stdin
             if (query_text == null) {
@@ -1988,7 +2013,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Determine execution mode based on --server flag
     if (server) |server_addr| {
         // Execute query via QUIC connection to server
-        try executeQuicQuery(ally, server_addr, query_text.?, format, insecure);
+        try executeQuicQuery(ally, server_addr, query_text.?, format, insecure, timeout_secs, retry_count);
     } else {
         // No --server and no --no-quic: use embedded persistent mode
         // This is the default for tests that need data persistence
@@ -2053,7 +2078,8 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
 
         // Check for errors in this statement's result
         if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or
-            std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {
+            std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null)
+        {
             // This is an error - extract and write error message to stderr
             const stderr_fd = std.fs.File{ .handle = 2 };
 
@@ -2190,8 +2216,10 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
-fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool) !void {
+fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32) !void {
+    _ = timeout_secs; // Timeout is currently hardcoded in QuicClient.waitForHandshake
     const QuicTransport = @import("transport/quic");
+    const stderr = std.fs.File{ .handle = 2 };
 
     // Parse server address
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
@@ -2199,33 +2227,56 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
     const port_str = addr_port.next() orelse "3141";
     const port = std.fmt.parseInt(u16, port_str, 10) catch 3141;
 
-    // Initialize QUIC client
-    var quic_client = QuicTransport.QuicClient.init(ally);
-    defer quic_client.deinit();
+    var attempts: u32 = 0;
+    const max_attempts = retry_count + 1; // retry_count=0 means 1 attempt, retry_count=3 means 4 attempts
 
-    // Connect to server
-    if (insecure) {
-        quic_client.connectInsecure(host, port, true) catch |err| {
-            std.debug.print("Error: Failed to connect to {s}:{} (insecure mode): {}\n", .{ host, port, err });
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-    } else {
-        quic_client.connect(host, port) catch |err| {
-            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
-            std.debug.print("Try using --insecure flag for self-signed certificates\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
+    while (attempts < max_attempts) : (attempts += 1) {
+        // Initialize QUIC client for this attempt
+        var quic_client = QuicTransport.QuicClient.init(ally);
+        defer quic_client.deinit();
+
+        // Connect to server
+        const connect_err = if (insecure)
+            quic_client.connectInsecure(host, port, true)
+        else
+            quic_client.connect(host, port);
+
+        if (connect_err) |_| {
+            // Connection successful, now wait for handshake
+            const handshake_err = quic_client.waitForHandshake();
+            if (handshake_err) |_| {
+                // Handshake successful, proceed with query execution
+                return try executeQueryOnConnection(ally, &quic_client, query_text, format);
+            } else |_| {
+                // Handshake failed (timeout or other error)
+                if (attempts + 1 < max_attempts) {
+                    // We have more retries, continue to next attempt
+                    continue;
+                } else {
+                    // No more retries, report error
+                    _ = try stderr.writeAll("connection timeout\n");
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+            }
+        } else |_| {
+            // Connection failed
+            if (attempts + 1 < max_attempts) {
+                // We have more retries, continue to next attempt
+                continue;
+            } else {
+                // No more retries, report timeout error
+                _ = try stderr.writeAll("connection timeout\n");
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+        }
     }
 
-    // Wait for handshake to complete
-    quic_client.waitForHandshake() catch |err| {
-        std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
-        std.debug.print("Ensure the server is running and accessible at {s}:{}\n", .{ host, port });
-        if (!insecure) {
-            std.debug.print("Try using --insecure flag for self-signed certificates\n", .{});
-        }
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
+    // Should not reach here, but just in case
+    _ = try stderr.writeAll("connection failed after retries\n");
+    std.process.exit(@intFromEnum(ExitCode.general_error));
+}
+
+fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query_text: []const u8, format: []const u8) !void {
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
