@@ -2384,7 +2384,8 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             if (std.mem.eql(u8, trimmed, ".exit") or
                 std.mem.eql(u8, trimmed, "exit") or
                 std.mem.eql(u8, trimmed, "quit") or
-                std.mem.eql(u8, trimmed, ".quit")) {
+                std.mem.eql(u8, trimmed, ".quit"))
+            {
                 std.debug.print("Goodbye!\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.success));
             }

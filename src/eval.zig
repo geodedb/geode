@@ -1296,24 +1296,39 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             break :blk_isunknown .{ .Bool = if (uz.negated) !is_unknown else is_unknown };
         },
         .PropertyAccess => |pa| blk_property: {
-            // Property access like n.name
+            // Property access like n.name or r.strength
             // First, get the object from the environment
             const object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
 
-            // If it's a Node, access its properties
-            if (object == .Node) {
-                const node = object.Node;
-                if (node.properties.get(pa.property)) |val| {
-                    const result = switch (val) {
-                        .String => |s| Value{ .Str = s },
-                        .Int => |i| Value{ .Int = i },
-                        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                        .Bool => |b| Value{ .Bool = b },
-                        .Null => Value{ .Null = {} },
-                        .ExtValue => |ext| Value{ .ExtValue = ext },
-                    };
-                    break :blk_property result;
-                }
+            // Check what type of object this is and access its properties
+            switch (object) {
+                .Node => |node| {
+                    if (node.properties.get(pa.property)) |val| {
+                        const result = switch (val) {
+                            .String => |s| Value{ .Str = s },
+                            .Int => |i| Value{ .Int = i },
+                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                            .Bool => |b| Value{ .Bool = b },
+                            .Null => Value{ .Null = {} },
+                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                        };
+                        break :blk_property result;
+                    }
+                },
+                .Edge => |edge| {
+                    if (edge.properties.get(pa.property)) |val| {
+                        const result = switch (val) {
+                            .String => |s| Value{ .Str = s },
+                            .Int => |i| Value{ .Int = i },
+                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                            .Bool => |b| Value{ .Bool = b },
+                            .Null => Value{ .Null = {} },
+                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                        };
+                        break :blk_property result;
+                    }
+                },
+                else => {},
             }
 
             // Otherwise return null
@@ -1375,13 +1390,29 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
         .BitLit => |b| Value{ .Str = b },
         .VarBitLit => |vb| Value{ .Str = vb },
         .Member => |member| blk_member: {
-            // Handle member access like n.name (where n is already evaluated)
+            // Handle member access like n.name or r.property (where n/r is already evaluated)
             const target = try evalExpr(ally, member.target.*, env);
 
             // If target is a Node, access its properties
             if (target == .Node) {
                 const node = target.Node;
                 if (node.properties.get(member.field)) |val| {
+                    const result = switch (val) {
+                        .String => |s| Value{ .Str = s },
+                        .Int => |i| Value{ .Int = i },
+                        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                        .Bool => |b| Value{ .Bool = b },
+                        .Null => Value{ .Null = {} },
+                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                    };
+                    break :blk_member result;
+                }
+            }
+
+            // If target is an Edge, access its properties
+            if (target == .Edge) {
+                const edge = target.Edge;
+                if (edge.properties.get(member.field)) |val| {
                     const result = switch (val) {
                         .String => |s| Value{ .Str = s },
                         .Int => |i| Value{ .Int = i },

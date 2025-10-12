@@ -33,6 +33,7 @@ pub const Statement = union(enum) {
     DropIndex: DropIndexStatement,
     // Constraint operations
     CreateConstraint: CreateConstraintStatement,
+    DropConstraint: DropConstraintStatement,
     Show: ShowStatement,
     // Backup operations
     Backup: BackupStatement,
@@ -404,6 +405,11 @@ pub const ConstraintType = enum {
 };
 
 pub const DropIndexStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+};
+
+pub const DropConstraintStatement = struct {
     name: []const u8,
     if_exists: bool = false,
 };

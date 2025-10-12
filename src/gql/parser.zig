@@ -1123,6 +1123,14 @@ pub const Parser = struct {
                 self.advance();
                 where_expr = try self.parseOrExpr();
             }
+
+            // After MATCH ... WHERE, check for CREATE
+            if (self.cur.kind == .CREATE) {
+                have_create = true;
+                self.advance();
+                create_pattern = try self.parseGraphPattern();
+            }
+
             break :blk_pat combined_gp;
         } else if (have_create) blk_create: {
             // CREATE pattern without MATCH: use empty pattern for match
@@ -3476,11 +3484,13 @@ pub const Parser = struct {
                 self.advance();
                 if (self.cur.kind == .NODE) {
                     self.advance();
-                    if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "KEY")) {
+                    if (self.cur.kind == .KEY) {
                         self.advance();
                         return .node_key;
                     }
+                    return error.UnexpectedToken;
                 }
+                return error.UnexpectedToken;
             }
             return error.UnexpectedToken;
         }
@@ -3563,12 +3573,19 @@ pub const Parser = struct {
                 self.advance();
                 if (self.cur.kind == .NODE) {
                     self.advance();
-                    if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "KEY")) {
+                    if (self.cur.kind == .KEY) {
                         self.advance();
                         return .node_key;
                     }
+                    return error.UnexpectedToken;
                 }
+                if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "UNIQUE")) {
+                    self.advance();
+                    return .unique;
+                }
+                return error.UnexpectedToken;
             }
+            return error.UnexpectedToken;
         }
 
         // prop IS UNIQUE
@@ -3890,7 +3907,12 @@ pub const Parser = struct {
             return self.parseDropGraph();
         }
 
-        // Future: handle DROP CONSTRAINT, DROP DATABASE, etc.
+        // Check if this is DROP CONSTRAINT
+        if (self.cur.kind == .CONSTRAINT) {
+            return self.parseDropConstraint();
+        }
+
+        // Future: handle DROP DATABASE, etc.
         return error.UnexpectedToken;
     }
 
@@ -3923,6 +3945,38 @@ pub const Parser = struct {
         self.advance();
 
         return .{ .DropIndex = .{
+            .name = name,
+            .if_exists = if_exists,
+        } };
+    }
+
+    // Parse DROP CONSTRAINT statement
+    fn parseDropConstraint(self: *Parser) ParserError!ast.Statement {
+        // Expect CONSTRAINT keyword
+        if (self.cur.kind == .CONSTRAINT) {
+            self.advance();
+        } else {
+            return error.UnexpectedToken;
+        }
+
+        // Optional IF EXISTS
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind == .EXISTS) {
+                self.advance();
+                if_exists = true;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        // Constraint name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const name = self.cur.lexeme;
+        self.advance();
+
+        return .{ .DropConstraint = .{
             .name = name,
             .if_exists = if_exists,
         } };

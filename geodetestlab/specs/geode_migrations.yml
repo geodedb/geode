@@ -105,19 +105,23 @@ tests:
 
   # Relationship Type Migration Tests
   - name: create-new-relationship-type
-    args: ["query", "MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) CREATE (a)-[:FOLLOWS {since: date()}]->(b) RETURN type(r)", "--format", "json"]
+    args: ["query", "MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) CREATE (a)-[r:FOLLOWS {since: date()}]->(b) RETURN type(r)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["FOLLOWS"]
 
   - name: migrate-relationship-properties
+    setup:
+      - "query \"CREATE (:Person {name: 'A'})-[:KNOWS]->(:Person {name: 'B'})\" --format json --no-quic"
     args: ["query", "MATCH ()-[r:KNOWS]->() SET r.strength = 'strong' RETURN r.strength", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["strong"]
 
   - name: change-relationship-direction
-    args: ["query", "MATCH (a)-[r:FOLLOWS]->(b) DELETE r CREATE (b)-[:FOLLOWED_BY]->(a) RETURN type(r)", "--format", "json"]
+    setup:
+      - "query \"CREATE (:Person {name: 'X'})-[:FOLLOWS]->(:Person {name: 'Y'})\" --format json --no-quic"
+    args: ["query", "MATCH (a)-[old:FOLLOWS]->(b) DELETE old CREATE (b)-[r:FOLLOWED_BY]->(a) RETURN type(r)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["FOLLOWED_BY"]
