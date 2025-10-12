@@ -19,11 +19,12 @@ import threading
 import queue
 import os
 import shlex
+import socket
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 @dataclass
 class TestResult:
@@ -49,6 +50,76 @@ class SpecResult:
     execution_time_ms: int
     test_results: List[TestResult]
 
+class PortAllocator:
+    """Thread-safe port allocation manager for parallel test execution."""
+
+    def __init__(self, start_port: int = 10000, end_port: int = 20000):
+        """Initialize the port allocator with a range of available ports."""
+        self.start_port = start_port
+        self.end_port = end_port
+        self.allocated_ports: Set[int] = set()
+        self.lock = threading.Lock()
+
+    def allocate_port(self) -> Optional[int]:
+        """Allocate a free port from the pool.
+
+        Returns:
+            Port number if available, None if no ports available.
+        """
+        with self.lock:
+            # Try to find a free port by checking if it's actually available
+            max_attempts = 100
+            for _ in range(max_attempts):
+                # Try sequential allocation first for better cache locality
+                if not self.allocated_ports:
+                    candidate = self.start_port
+                else:
+                    # Find first gap in allocated ports
+                    sorted_ports = sorted(self.allocated_ports)
+                    candidate = None
+                    for i, port in enumerate(sorted_ports):
+                        expected = self.start_port + i
+                        if port != expected:
+                            candidate = expected
+                            break
+
+                    if candidate is None:
+                        # No gaps, use next port after highest
+                        candidate = max(self.allocated_ports) + 1
+
+                # Check if candidate is within range
+                if candidate > self.end_port:
+                    # Wrap around or return None
+                    return None
+
+                # Check if port is actually available by trying to bind to it
+                if self._is_port_available(candidate) and candidate not in self.allocated_ports:
+                    self.allocated_ports.add(candidate)
+                    return candidate
+
+            return None
+
+    def release_port(self, port: int) -> None:
+        """Release a previously allocated port back to the pool."""
+        with self.lock:
+            self.allocated_ports.discard(port)
+
+    def _is_port_available(self, port: int) -> bool:
+        """Check if a port is available by attempting to bind to it."""
+        try:
+            # Try both TCP and UDP since QUIC uses UDP
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('127.0.0.1', port))
+
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('127.0.0.1', port))
+
+            return True
+        except OSError:
+            return False
+
 class ParallelTestRunner:
     def __init__(self,
                  specs_dir: Path = Path("/home/benji/src/spyder/geode/geodetestlab/specs"),
@@ -61,21 +132,24 @@ class ParallelTestRunner:
         self.log_dir = log_dir
         self.max_workers = max_workers
         self.test_timeout = test_timeout
-        
+
+        # Initialize thread-safe port allocator
+        self.port_allocator = PortAllocator(start_port=10000, end_port=20000)
+
         # Create log directory
         self.log_dir.mkdir(exist_ok=True)
-        
+
         # Create timestamped run directory
         self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir = self.log_dir / f"run_{self.run_timestamp}"
         self.run_dir.mkdir(exist_ok=True)
-        
+
         # Log files
         self.summary_log = self.run_dir / "summary.json"
         self.failures_log = self.run_dir / "failures.json"
         self.detailed_log = self.run_dir / "detailed.log"
         self.progress_log = self.run_dir / "progress.log"
-        
+
         print(f"Test run started at {self.run_timestamp}")
         print(f"Logs will be written to: {self.run_dir}")
 
@@ -376,56 +450,94 @@ class ParallelTestRunner:
         server_config = spec.get("cli", {}).get("server", {})
         server_enabled = server_config.get("enabled", False)
 
-        # Create per-spec data directory for isolation
-        import random
-        port = random.randint(10000, 20000)
-        spec_data_dir = self.run_dir / f"data_{spec_file.stem}_{port}"
+        # Allocate unique port for this spec from the port pool
+        port = None
+        if server_enabled:
+            port = self.port_allocator.allocate_port()
+            if port is None:
+                self.log_progress(f"Failed to allocate port for {spec_file.name} - no ports available")
+                server_enabled = False
+
+        # Create per-spec data directory for isolation with timestamp to ensure uniqueness
+        import time as time_module
+        unique_id = f"{spec_file.stem}_{port if port else 'noport'}_{int(time_module.time() * 1000)}"
+        spec_data_dir = self.run_dir / f"data_{unique_id}"
         spec_data_dir.mkdir(parents=True, exist_ok=True)
 
         server_process = None
         server_address = None
 
-        if server_enabled:
-            # Use the port from above for server address
-            server_address = f"127.0.0.1:{port}"
-
-            # Start server with data directory isolation
-            server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir)]
-            server_extra_args = server_config.get("args", [])
-            if server_extra_args:
-                server_args.extend(server_extra_args)
-
+        if server_enabled and port:
             try:
+                # Use the allocated port for server address
+                server_address = f"127.0.0.1:{port}"
+
+                # Start server with data directory isolation
+                server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir)]
+                server_extra_args = server_config.get("args", [])
+                if server_extra_args:
+                    server_args.extend(server_extra_args)
+
+                # Log server startup
+                self.log_progress(f"Starting server for {spec_file.name} on port {port}")
+
                 server_process = subprocess.Popen(
                     server_args,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
+
                 # Wait for server to be ready with health check
-                startup_timeout_ms = server_config.get("startup_timeout_ms", 15000)  # Increased to 15s
+                # Enforce minimum 60 seconds to handle QUIC startup under parallel load
+                # Even if spec says less, we need more time when running in parallel
+                spec_timeout = server_config.get("startup_timeout_ms", 45000)
+                startup_timeout_ms = max(spec_timeout, 60000)  # Enforce 60s minimum
                 max_wait = startup_timeout_ms / 1000.0
                 start_time = time.time()
                 server_ready = False
 
+                # More aggressive retry strategy with exponential backoff
+                retry_delays = [0.5, 0.5, 1.0, 1.0, 2.0, 2.0, 3.0]  # Total ~10s for initial retries
+                retry_index = 0
+
                 while (time.time() - start_time) < max_wait:
+                    # Check if server process is still alive
+                    if server_process.poll() is not None:
+                        stdout, stderr = server_process.communicate()
+                        self.log_progress(f"Server process for {spec_file.name} died: {stderr.decode()[:200]}")
+                        break
+
                     # Try to connect to verify server is ready
                     try:
                         test_result = subprocess.run(
                             [self.binary, "query", "--server", server_address, "RETURN 1", "--format", "json"],
                             capture_output=True,
-                            timeout=10  # Increased timeout for QUIC handshake + query
+                            timeout=15  # Increased timeout for QUIC handshake + query under load
                         )
                         if test_result.returncode == 0:
                             server_ready = True
+                            self.log_progress(f"Server ready for {spec_file.name} on port {port}")
                             break
                     except subprocess.TimeoutExpired:
                         pass  # Continue trying
-                    time.sleep(1.0)  # Wait longer between retries
+                    except Exception as e:
+                        pass  # Continue trying
+
+                    # Use exponential backoff for retries
+                    if retry_index < len(retry_delays):
+                        time.sleep(retry_delays[retry_index])
+                        retry_index += 1
+                    else:
+                        time.sleep(3.0)  # Continue with 3s delay after initial retries
 
                 if not server_ready:
                     self.log_progress(f"Server for {spec_file.name} did not become ready in {max_wait}s")
                     if server_process:
                         server_process.terminate()
+                        try:
+                            server_process.wait(timeout=5)
+                        except:
+                            server_process.kill()
                         server_process = None
                     server_enabled = False
                     server_address = None
@@ -433,6 +545,11 @@ class ParallelTestRunner:
                 self.log_progress(f"Failed to start server for {spec_file.name}: {str(e)}")
                 server_enabled = False
                 server_address = None
+            finally:
+                # Always release port when done, even if server failed to start
+                if not server_enabled and port:
+                    self.port_allocator.release_port(port)
+                    port = None
 
         test_results = []
         passed = 0
@@ -516,6 +633,11 @@ class ParallelTestRunner:
                     server_process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     server_process.kill()
+
+            # Release allocated port back to the pool
+            if port is not None:
+                self.port_allocator.release_port(port)
+                self.log_progress(f"Released port {port} for {spec_file.name}")
 
         spec_end_time = time.time()
         
