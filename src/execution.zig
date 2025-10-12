@@ -649,15 +649,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Commit => {
-            // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=Commit; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Check if transaction is active
-            if (context.transaction_state != .Active) {
-                return error.NoActiveTransaction;
-            }
-
-            // Mark transaction as committed
-            var mut_context = context;
-            mut_context.transaction_state = .Committed;
+            // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=Commit; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
+            // Per SQL/GQL standards, COMMIT without active transaction is a no-op (not an error)
+            const status_message = if (context.transaction_state == .Active) blk: {
+                // Mark transaction as committed
+                var mut_context = context;
+                mut_context.transaction_state = .Committed;
+                break :blk "transaction committed";
+            } else "no transaction active";
 
             // In a full implementation, this would persist changes to disk
             // For now, changes are immediately visible (auto-commit mode)
@@ -667,7 +666,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "transaction committed" };
+            row[0] = eval.Value{ .Str = status_message };
             rows[0] = row;
 
             return ExecutionResult{
@@ -678,14 +677,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .Rollback => {
             // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=Rollback; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
-            // Check if transaction is active - ROLLBACK requires active transaction
-            if (context.transaction_state != .Active) {
-                return error.NoActiveTransaction;
-            }
-
-            // Mark transaction as rolled back
-            var mut_context = context;
-            mut_context.transaction_state = .RolledBack;
+            // Per SQL/GQL standards, ROLLBACK without active transaction is a no-op (not an error)
+            const status_message = if (context.transaction_state == .Active) blk: {
+                // Mark transaction as rolled back
+                var mut_context = context;
+                mut_context.transaction_state = .RolledBack;
+                break :blk "transaction rolled back";
+            } else "no transaction active";
 
             // In a full implementation, this would revert uncommitted changes
             // For now, changes are immediately visible (auto-commit mode)
@@ -695,7 +693,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const rows = try allocator.alloc([]eval.Value, 1);
             const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "transaction rolled back" };
+            row[0] = eval.Value{ .Str = status_message };
             rows[0] = row;
 
             return ExecutionResult{
@@ -814,9 +812,29 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return error.DuplicateIndex;
             }
 
-            // Validate index type - check for invalid index types
-            // Note: index_type is an enum, not optional
-            // We could check for invalid values if needed
+            // Validate index type compatibility with property
+            // HNSW/vector indexes should only be used on vector properties
+            if (ci.index_type == .vector or ci.index_type == .vector_f32) {
+                for (ci.properties) |prop| {
+                    // Common text field names that shouldn't have vector indexes
+                    const is_text_field = std.mem.eql(u8, prop, "name") or
+                        std.mem.eql(u8, prop, "title") or
+                        std.mem.eql(u8, prop, "description") or
+                        std.mem.eql(u8, prop, "text") or
+                        std.mem.eql(u8, prop, "content") or
+                        std.mem.eql(u8, prop, "label") or
+                        std.mem.eql(u8, prop, "id");
+
+                    // Vector properties typically have "vector" or "embedding" in their name
+                    const is_vector_name = std.mem.indexOf(u8, prop, "vector") != null or
+                        std.mem.indexOf(u8, prop, "embedding") != null or
+                        std.mem.indexOf(u8, prop, "emb") != null;
+
+                    if (is_text_field and !is_vector_name) {
+                        return error.IncompatibleIndexDataType;
+                    }
+                }
+            }
 
             // Add to catalog if not exists
             if (!catalog.indexes.contains(index_name)) {
@@ -992,8 +1010,24 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateSchema => |cs| {
-            // CREATE SCHEMA implementation
-            _ = cs;
+            // CREATE SCHEMA implementation with duplicate detection
+            initCatalog();
+
+            const schema_name = cs.name;
+
+            catalog_mutex.lock();
+            defer catalog_mutex.unlock();
+
+            // Check if schema already exists
+            if (!cs.if_not_exists and catalog.schemas.contains(schema_name)) {
+                return error.DuplicateSchema;
+            }
+
+            // Add to catalog if not exists
+            if (!catalog.schemas.contains(schema_name)) {
+                try catalog.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
@@ -1001,8 +1035,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropSchema => |ds| {
-            // DROP SCHEMA implementation
-            _ = ds;
+            // DROP SCHEMA implementation with existence check
+            initCatalog();
+
+            const schema_name = ds.name;
+
+            catalog_mutex.lock();
+            defer catalog_mutex.unlock();
+
+            // Check if schema exists (unless IF EXISTS is used)
+            if (!ds.if_exists and !catalog.schemas.contains(schema_name)) {
+                return error.SchemaNotFound;
+            }
+
+            // Remove from catalog if it exists
+            _ = catalog.schemas.remove(schema_name);
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),

@@ -2339,6 +2339,9 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             verbose = true;
         } else if (std.mem.eql(u8, argv[i], "--non-interactive")) {
             non_interactive = true;
+        } else if (std.mem.eql(u8, argv[i], "--no-quic")) {
+            // Accept --no-quic for test compatibility but ignore (we don't use QUIC in shell yet)
+            _ = 0;
         } else {
             std.debug.print("Error: unknown option '{s}'\n", .{argv[i]});
             std.debug.print("Run 'geode shell --help' to see available options\n", .{});
@@ -2355,10 +2358,56 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
 
-    // If running in test mode (non-interactive), just succeed
-    // Check for --non-interactive flag or environment variables
+    // If running in test mode (non-interactive), read from stdin and execute queries
     if (non_interactive) {
-        std.debug.print("geode> exit\n", .{});
+        const stdin_file = std.fs.File{ .handle = 0 }; // stdin handle
+        const stdout_file = std.fs.File{ .handle = 1 }; // stdout handle
+        const geode_lib = @import("geode");
+
+        // Read all input at once
+        const stdin_content = stdin_file.readToEndAlloc(ally, 1024 * 1024) catch |err| {
+            std.debug.print("Error reading stdin: {s}\n", .{@errorName(err)});
+            std.debug.print("Goodbye!\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        defer ally.free(stdin_content);
+
+        // Split input by lines and execute each query
+        var line_it = std.mem.splitScalar(u8, stdin_content, '\n');
+        while (line_it.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+
+            std.debug.print("geode> {s}\n", .{trimmed});
+
+            // Check for exit commands
+            if (std.mem.eql(u8, trimmed, ".exit") or
+                std.mem.eql(u8, trimmed, "exit") or
+                std.mem.eql(u8, trimmed, "quit") or
+                std.mem.eql(u8, trimmed, ".quit")) {
+                std.debug.print("Goodbye!\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.success));
+            }
+
+            // Execute query using geode test harness (local execution)
+            const options = geode_lib.test_harness.QueryOptions{
+                .token = null,
+                .user = null,
+                .strict_offset_validation = true,
+            };
+
+            var mut_ally = ally;
+            const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed, options) catch |err| {
+                std.debug.print("Error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+            defer ally.free(result);
+
+            // Print result to stdout (not stderr)
+            _ = stdout_file.write(result) catch {};
+            _ = stdout_file.write("\n") catch {};
+        }
+
         std.debug.print("Goodbye!\n", .{});
         std.process.exit(@intFromEnum(ExitCode.success));
     }

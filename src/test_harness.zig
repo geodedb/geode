@@ -80,10 +80,6 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.UnorderedPagination) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"US001\",\"message\":\"OFFSET requires ORDER BY clause\",\"additional_statuses\":[]}}", .{});
         }
-        if (err == error.NoActiveTransaction) {
-            // Use 0A000 generic error code as tests expect
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"message\":\"No active transaction\",\"additional_statuses\":[]}}", .{});
-        }
         if (err == error.TransactionAlreadyActive) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"25001\",\"message\":\"Transaction already active\",\"additional_statuses\":[]}}", .{});
         }
@@ -93,11 +89,20 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.GraphNotFound) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"3F000\",\"message\":\"Graph does not exist\",\"additional_statuses\":[]}}", .{});
         }
+        if (err == error.DuplicateSchema) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate schema name\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.SchemaNotFound) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"3F000\",\"message\":\"Schema does not exist\",\"additional_statuses\":[]}}", .{});
+        }
         if (err == error.DuplicateIndex) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate index name\",\"additional_statuses\":[]}}", .{});
         }
         if (err == error.InvalidIndexType) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid index type\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.IncompatibleIndexDataType) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42804\",\"message\":\"Incompatible index data type\",\"additional_statuses\":[]}}", .{});
         }
         if (err == error.InvalidTypeConversion) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22003\",\"message\":\"Invalid type conversion\",\"additional_statuses\":[]}}", .{});
@@ -113,7 +118,6 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.Unsupported => "Unsupported operation",
             error.GroupingError => unreachable,
             error.UnorderedPagination => unreachable,
-            error.NoActiveTransaction => unreachable,
             error.TransactionAlreadyActive => unreachable,
             else => @errorName(err),
         };

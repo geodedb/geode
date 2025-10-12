@@ -230,7 +230,7 @@ pub const Parser = struct {
 
     // Parser operations can fail due to syntax or allocation issues.
     // We’ll thread a tiny error wrapper with a message alongside generic errors when needed.
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType };
 
     fn unexpected(self: *Parser, what: []const u8) ParserError {
         // For now, we just return UnexpectedToken; callers like CLI can add context using 'what'.
@@ -3205,6 +3205,9 @@ pub const Parser = struct {
                 } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
                     // DomainTrie - domain name trie (map to btree for now)
                     index_type = .btree;
+                } else {
+                    // Reject unrecognized index types
+                    return error.InvalidIndexType;
                 }
                 self.advance();
             }
@@ -3282,6 +3285,9 @@ pub const Parser = struct {
                     index_type = .btree;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
                     index_type = .btree;
+                } else {
+                    // Reject unrecognized index types
+                    return error.InvalidIndexType;
                 }
                 self.advance();
             }
