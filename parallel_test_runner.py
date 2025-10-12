@@ -136,9 +136,7 @@ class ParallelTestRunner:
                 if server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
                     # Use server mode
                     processed_args.extend(["--server", server_address])
-                elif not server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
-                    # Use embedded mode
-                    processed_args.append("--no-quic")
+                # Otherwise use default embedded mode with persistence (no --no-quic flag needed)
             elif is_shell_command:
                 # Shell doesn't support --no-quic, remove it if present
                 if "--no-quic" in processed_args:
@@ -149,7 +147,7 @@ class ParallelTestRunner:
 
         return processed_args
 
-    def run_single_test(self, test_case: Dict, spec_name: str, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> TestResult:
+    def run_single_test(self, test_case: Dict, spec_name: str, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, data_dir: Optional[str] = None) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
 
@@ -174,54 +172,30 @@ class ParallelTestRunner:
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin", None)
 
-        # Handle setup commands
+        # Handle setup commands - run them separately with persistence
         setup_commands = test_case.get("setup", [])
         if setup_commands:
-            if server_address:
-                # Run setup commands against the server
-                for cmd_str in setup_commands:
-                    try:
-                        setup_args = shlex.split(cmd_str)
-                        # Process setup args with server address
-                        processed_setup_args = self.process_args(setup_args, server_address=server_address)
-                        subprocess.run(
-                            [self.binary] + processed_setup_args,
-                            capture_output=True,
-                            text=True,
-                            timeout=self.test_timeout
-                        )
-                    except Exception as e:
-                        # Log setup failure but continue
-                        pass
-            else:
-                # For --no-quic mode, combine setup with main query
-                is_query = len(args) > 0 and args[0] == "query"
-                if is_query and "--no-quic" in args:
-                    # Extract setup queries
-                    setup_queries = []
-                    for cmd_str in setup_commands:
-                        try:
-                            setup_args = shlex.split(cmd_str)
-                            # Find the query part (last non-flag argument)
-                            for arg in reversed(setup_args):
-                                if not arg.startswith("--") and arg != "query":
-                                    setup_queries.append(arg)
-                                    break
-                        except:
-                            pass
-
-                    # Get main test query (the argument after "query", before flags)
-                    # Args format: ['query', '<query_string>', '--no-quic']
-                    test_query = args[1] if len(args) > 1 else ""
-
-                    # Combine queries with semicolons
-                    if setup_queries:
-                        combined_query = "; ".join(setup_queries + [test_query])
-                        # Rebuild args: ['query', combined_query, '--no-quic', ...]
-                        # Keep all flags (everything after position 2)
-                        args = ['query', combined_query] + args[2:]
+            for cmd_str in setup_commands:
+                try:
+                    setup_args = shlex.split(cmd_str)
+                    # Process setup args (will use server or embedded persistent mode)
+                    processed_setup_args = self.process_args(setup_args, server_address=server_address)
+                    subprocess.run(
+                        [self.binary] + processed_setup_args,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.test_timeout
+                    )
+                except Exception as e:
+                    # Log setup failure but continue
+                    pass
 
         start_time = time.time()
+
+        # Prepare environment with isolated data directory for embedded mode
+        env = os.environ.copy()
+        if data_dir and not server_address:
+            env['GEODE_DATA_DIR'] = data_dir
 
         try:
             result = subprocess.run(
@@ -229,7 +203,8 @@ class ParallelTestRunner:
                 input=stdin_input,
                 capture_output=True,
                 text=True,
-                timeout=self.test_timeout
+                timeout=self.test_timeout,
+                env=env
             )
             timeout_occurred = False
         except subprocess.TimeoutExpired as e:
@@ -401,17 +376,21 @@ class ParallelTestRunner:
         server_config = spec.get("cli", {}).get("server", {})
         server_enabled = server_config.get("enabled", False)
 
+        # Create per-spec data directory for isolation
+        import random
+        port = random.randint(10000, 20000)
+        spec_data_dir = self.run_dir / f"data_{spec_file.stem}_{port}"
+        spec_data_dir.mkdir(parents=True, exist_ok=True)
+
         server_process = None
         server_address = None
 
         if server_enabled:
-            # Start server with random port
-            import socket
-            import random
-            port = random.randint(10000, 20000)
+            # Use the port from above for server address
             server_address = f"127.0.0.1:{port}"
 
-            server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}"]
+            # Start server with data directory isolation
+            server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir)]
             server_extra_args = server_config.get("args", [])
             if server_extra_args:
                 server_args.extend(server_extra_args)
@@ -498,7 +477,7 @@ class ParallelTestRunner:
                 # Handle parallel tests with multiple instances
                 if test.get("parallel") and test.get("instances"):
                     for instance in range(test["instances"]):
-                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, instance_id=instance)
+                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, instance_id=instance, data_dir=str(spec_data_dir))
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -509,7 +488,7 @@ class ParallelTestRunner:
                 # Handle loop tests
                 elif test.get("loop"):
                     for i in range(test["loop"]):
-                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, loop_index=i)
+                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, loop_index=i, data_dir=str(spec_data_dir))
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -519,7 +498,7 @@ class ParallelTestRunner:
 
                 # Handle normal tests
                 else:
-                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address)
+                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(spec_data_dir))
                     test_results.append(test_result)
 
                     if test_result.success:

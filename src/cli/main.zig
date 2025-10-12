@@ -1865,7 +1865,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     // Parse arguments
-    var server: []const u8 = "127.0.0.1:3141";
+    var server: ?[]const u8 = null;  // null means not explicitly set
     var format: []const u8 = "json";
     var insecure = false;
     var no_quic = false;
@@ -1965,15 +1965,23 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         std.process.exit(3);
     }
 
-    // Handle --no-quic mode (embedded server for testing)
+    // Handle --no-quic mode (embedded in-memory mode for testing)
     if (no_quic) {
-        // Execute query directly using embedded server
+        // Execute query directly using embedded in-memory mode
         try executeNoQuicQuery(ally, query_text.?, format, token);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
-    // Execute query via QUIC connection
-    try executeQuicQuery(ally, server, query_text.?, format, insecure);
+    // Determine execution mode based on --server flag
+    if (server) |server_addr| {
+        // Execute query via QUIC connection to server
+        try executeQuicQuery(ally, server_addr, query_text.?, format, insecure);
+    } else {
+        // No --server and no --no-quic: use embedded persistent mode
+        // This is the default for tests that need data persistence
+        try executeNoQuicQuery(ally, query_text.?, format, token);
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
 }
 
 /// Execute query in no-QUIC mode (embedded server for testing)
