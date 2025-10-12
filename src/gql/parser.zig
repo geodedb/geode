@@ -690,9 +690,9 @@ pub const Parser = struct {
                     // CALL { subquery } syntax
                     self.advance();
 
-                    // Parse the subquery
-                    const subquery = try self.arena.allocator().create(ast.Query);
-                    subquery.* = try self.parseQuery();
+                    // Parse the statement inside CALL { ... }
+                    const stmt = try self.arena.allocator().create(ast.Statement);
+                    stmt.* = try self.parseStatement();
 
                     // Expect closing brace
                     _ = try self.expect(.r_brace);
@@ -716,7 +716,7 @@ pub const Parser = struct {
                     break :blk_call .{
                         .Call = .{
                             .Subquery = .{
-                                .query = subquery,
+                                .statement = stmt,
                                 .imported_vars = null, // TODO: support imported variables
                                 .return_clause = return_clause,
                             },

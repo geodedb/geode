@@ -6594,8 +6594,18 @@ fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weigh
 
 // Execute CALL { subquery } statement - runs subquery in isolated context
 fn executeCallSubquery(allocator: std.mem.Allocator, call_subq: ast.CallSubquery, context: ExecutionContext) !ExecutionResult {
-    // Execute the subquery with context
-    const subquery_result = try executeQueryWithContext(allocator, call_subq.query.*, context);
+    // Execute the statement (can be Query, Call, Create, etc.) with context
+    // Handle statements directly to avoid circular error set inference
+    const subquery_result = switch (call_subq.statement.*) {
+        .Query => |q| try executeQueryWithContext(allocator, q, context),
+        .Call => |c| switch (c) {
+            // Inline executeCallStatement to avoid circular dependency
+            .Procedure => |proc| try executeCallProcedure(allocator, proc, context),
+            .Subquery => |subq| try executeCallSubquery(allocator, subq, context),
+        },
+        .Create => |c| try executeCreate(allocator, c),
+        else => return error.UnsupportedStatementInCallSubquery,
+    };
 
     // If there's a RETURN clause after the subquery, apply it
     if (call_subq.return_clause) |return_clause| {

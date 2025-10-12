@@ -269,7 +269,7 @@ pub const CallProcedure = struct {
 };
 
 pub const CallSubquery = struct {
-    query: *Query, // The subquery inside CALL { ... }
+    statement: *Statement, // The statement inside CALL { ... } (can be Query, Call, Create, etc.)
     imported_vars: ?[][]const u8 = null, // Variables imported from outer scope
     return_clause: ?ReturnClause = null, // Optional RETURN clause after subquery
 };
