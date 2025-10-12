@@ -500,8 +500,12 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         // Propagate transaction state changes to next statement
         // Check if this statement was a transaction control statement
         switch (stmt) {
-            .StartTransaction => {
-                current_context.transaction_state = .Active;
+            .StartTransaction => |txn| {
+                // Only set Active if no body (no auto-commit)
+                // If body exists, transaction auto-commits/rollbacks internally
+                if (txn.body == null) {
+                    current_context.transaction_state = .Active;
+                }
             },
             .Commit, .Rollback => {
                 current_context.transaction_state = .None;
@@ -583,7 +587,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .Merge => |m| {
             return executeMerge(allocator, m);
         },
-        .StartTransaction => {
+        .StartTransaction => |txn| {
             // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=StartTransaction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
             // Check if transaction is already active
             if (context.transaction_state == .Active) {
@@ -594,7 +598,42 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             var mut_context = context;
             mut_context.transaction_state = .Active;
 
-            // Return success message
+            // If transaction has a body, execute statements and auto-commit
+            if (txn.body) |body| {
+                var last_result: ?ExecutionResult = null;
+
+                // Execute all statements in the transaction body
+                for (body) |*body_stmt| {
+                    // Inline switch to handle different statement types (avoids circular error set inference)
+                    last_result = (switch (body_stmt.*) {
+                        .Query => |q| executeQueryWithContext(allocator, q, mut_context),
+                        .Call => |c| switch (c) {
+                            .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
+                            .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
+                        },
+                        .Create => |create_stmt| executeCreate(allocator, create_stmt),
+                        .Merge => |m| executeMerge(allocator, m),
+                        .StartTransaction => return error.NestedTransactionNotAllowed,
+                        .Commit => return error.CommitInTransactionBody,
+                        .Rollback => return error.RollbackInTransactionBody,
+                        else => return error.UnsupportedStatementInTransactionBody,
+                    }) catch |err| {
+                        // On error, rollback (just reset state for now)
+                        mut_context.transaction_state = .None;
+                        return err;
+                    };
+                }
+
+                // Auto-commit: reset transaction state
+                mut_context.transaction_state = .None;
+
+                // Return result from last statement
+                if (last_result) |result| {
+                    return result;
+                }
+            }
+
+            // No body - just return success message
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 

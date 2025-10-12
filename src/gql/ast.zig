@@ -13,7 +13,7 @@ pub const Statement = union(enum) {
     SessionReset: SessionResetStatement,
     SessionClose,
     UseGraph: UseGraphStatement,
-    StartTransaction,
+    StartTransaction: StartTransactionStatement,
     Commit,
     Rollback,
     // Simple DML prototype: INSERT VALUE <expr>
@@ -371,6 +371,11 @@ pub const SessionResetAllType = enum {
 
 pub const UseGraphStatement = struct {
     graph_name: []const u8, // e.g., "my_graph"
+};
+
+// Transaction control statements
+pub const StartTransactionStatement = struct {
+    body: ?[]Statement = null, // Optional body for START TRANSACTION { statements }
 };
 
 // Index operation statements

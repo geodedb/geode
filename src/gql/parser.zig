@@ -654,7 +654,29 @@ pub const Parser = struct {
                             self.advance();
                         }
                     }
-                    break :blk2 .StartTransaction;
+
+                    // Parse optional transaction body: START TRANSACTION { statements }
+                    var body: ?[]ast.Statement = null;
+                    if (self.cur.kind == .l_brace) {
+                        self.advance();
+
+                        // Parse statements until we hit }
+                        var statements = try std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 4);
+                        while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+                            const stmt = try self.parseStatement();
+                            try statements.append(self.arena.allocator(), stmt);
+
+                            // Consume optional semicolon between statements
+                            if (self.cur.kind == .semicolon) {
+                                self.advance();
+                            }
+                        }
+
+                        _ = try self.expect(.r_brace);
+                        body = try statements.toOwnedSlice(self.arena.allocator());
+                    }
+
+                    break :blk2 .{ .StartTransaction = .{ .body = body } };
                 }
                 return error.UnexpectedToken;
             },
@@ -664,7 +686,7 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .StartTransaction;
+                return .{ .StartTransaction = .{ .body = null } };
             },
             .COMMIT => {
                 self.advance();
