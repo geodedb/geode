@@ -2041,9 +2041,27 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         std.process.exit(1);
     }
 
-    // Write result to stdout for successful queries
+    // Write result to stdout
     const stdout_fd = std.fs.File{ .handle = 1 };
     _ = try stdout_fd.writeAll(result);
+
+    // Check for error status_class and exit with code 1
+    // Per ISO GQL: 00xxx=success, 01xxx=warning, 02xxx=no-data, others=error
+    if (std.mem.indexOf(u8, result, "\"status_class\":\"") != null) {
+        // Find the status class value
+        if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
+            const value_start = status_start + "\"status_class\":\"".len;
+            if (value_start + 2 <= result.len) {
+                const status_category = result[value_start..value_start + 2];
+                // Exit with code 1 for error status classes (not 00, 01, or 02)
+                if (!std.mem.eql(u8, status_category, "00") and
+                    !std.mem.eql(u8, status_category, "01") and
+                    !std.mem.eql(u8, status_category, "02")) {
+                    std.process.exit(1);
+                }
+            }
+        }
+    }
 }
 
 /// Escape a string for safe embedding in JSON

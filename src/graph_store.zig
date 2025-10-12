@@ -350,8 +350,12 @@ pub const GraphStore = struct {
 
             // Write each label
             for (node.labels) |label| {
+                // Validate label length fits in u32 (max ~4GB)
+                if (label.len > std.math.maxInt(u32)) {
+                    return error.LabelTooLong;
+                }
                 var len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &len_buf, @intCast(label.len), .little);
+                std.mem.writeInt(u32, &len_buf, @as(u32, @intCast(label.len)), .little);
                 _ = try file.write(&len_buf);
                 _ = try file.write(label);
             }
