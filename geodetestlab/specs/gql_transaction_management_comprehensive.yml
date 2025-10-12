@@ -229,14 +229,18 @@ tests:
     description: "Test COMMIT without active transaction"
     args: ["query", "--no-quic", "COMMIT"]
     expect:
-      exit_code: 1
+      exit_code: 0
+      geode_query:
+        status_class: "0A000"
     tags: ["transaction", "error", "commit"]
 
   - name: "rollback-without-transaction"
     description: "Test ROLLBACK without active transaction"
     args: ["query", "--no-quic", "ROLLBACK"]
     expect:
-      exit_code: 1
+      exit_code: 0
+      geode_query:
+        status_class: "0A000"
     tags: ["transaction", "error", "rollback"]
 
   - name: "nested-start-transaction"
