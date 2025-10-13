@@ -58,6 +58,16 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             processed_arg = processed_arg.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
             processed_arg = processed_arg.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
 
+            # Add unique suffixes to index names for test isolation
+            import re
+            # Match patterns like: CREATE INDEX name_idx
+            index_pattern = r'CREATE\s+INDEX\s+(\w+)'
+            matches = re.finditer(index_pattern, processed_arg, re.IGNORECASE)
+            for match in matches:
+                old_index_name = match.group(1)
+                new_index_name = f"{old_index_name}_{test_id}"
+                processed_arg = processed_arg.replace(f"INDEX {old_index_name}", f"INDEX {new_index_name}")
+
         processed_args.append(processed_arg)
     args = processed_args
     
@@ -139,6 +149,18 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         stdin_content = stdin_content.replace("'Unique'", f"'Unique_{test_id}'")
         stdin_content = stdin_content.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
         stdin_content = stdin_content.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
+
+        # Add unique suffixes to index names in stdin for test isolation
+        import re
+        index_pattern = r'CREATE\s+INDEX\s+(\w+)'
+        matches = re.finditer(index_pattern, stdin_content, re.IGNORECASE)
+        replacements = {}
+        for match in matches:
+            old_index_name = match.group(1)
+            new_index_name = f"{old_index_name}_{test_id}"
+            replacements[f"INDEX {old_index_name}"] = f"INDEX {new_index_name}"
+        for old, new in replacements.items():
+            stdin_content = stdin_content.replace(old, new)
 
     try:
         result = subprocess.run(
