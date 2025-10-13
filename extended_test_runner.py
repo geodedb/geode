@@ -321,7 +321,12 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                         pass
         
         for pattern in expect["stdout_contains"]:
-            if pattern.lower() not in combined.lower():
+            # Strip test IDs from combined output for pattern matching
+            # to handle cases where test isolation injected unique IDs
+            import re
+            combined_stripped = re.sub(r'_[0-9a-f]{8}', '', combined)
+
+            if pattern.lower() not in combined.lower() and pattern.lower() not in combined_stripped.lower():
                 return False, f"missing: '{pattern}'"
     
     # Check stderr_contains

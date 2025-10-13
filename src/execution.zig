@@ -1677,6 +1677,9 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                             allocator.free(match_result.columns);
                         }
 
+                        // Free the rows array (but not the individual rows, which are now owned by final_rows)
+                        allocator.free(match_result.rows);
+
                         // Clean up parameter arrays
                         allocator.free(param_names);
                         allocator.free(param_values);
@@ -2615,6 +2618,17 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
 fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
     const match_result = try executeMatchQueryWithParams(allocator, q, &.{}, &.{}, q.inline_let_bindings);
+    defer {
+        // Clean up match_result to prevent memory leak
+        for (match_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(match_result.columns);
+        for (match_result.rows) |row| {
+            allocator.free(row);
+        }
+        allocator.free(match_result.rows);
+    }
 
     const create_pattern = q.create_pattern.?;
 
