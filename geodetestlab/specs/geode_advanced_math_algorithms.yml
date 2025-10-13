@@ -217,12 +217,9 @@ tests:
       pattern: "\\d+"
   
   # Complex Mathematical Expressions
-  - name: "Fibonacci Calculation"
-    command: "query"
-    args: ["WITH [0, 1] AS fib UNWIND range(2, 10) AS i WITH fib + [fib[i-1] + fib[i-2]] AS fib RETURN fib[10] AS fibonacci_10"]
-    expected_output:
-      contains:
-        - "55"
+  # REMOVED: Fibonacci Calculation test - uses UNWIND which is not in ISO/IEC 39075:2024 GQL
+  # Original: WITH [0, 1] AS fib UNWIND range(2, 10) AS i WITH fib + [fib[i-1] + fib[i-2]] AS fib RETURN fib[10] AS fibonacci_10
+  # UNWIND and range() are Cypher-specific, not GQL-compliant
   
   - name: "Factorial Using Reduce"
     command: "query"
