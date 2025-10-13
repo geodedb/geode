@@ -3989,121 +3989,118 @@ fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Executio
 
 // Execute MATCH + CALL pattern with node binding
 fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
+    // Fix: Handle multiple comma-separated MATCH patterns and bind all matched nodes
+
     const store = graph_store.getGlobalStore(allocator);
     const call_clause = q.call_clause.?;
 
-    // Extract node variables from MATCH pattern
-    var left_node_var: ?[]const u8 = null;
-    var right_node_var: ?[]const u8 = null;
-
-    // Get the first chain from the pattern
-    if (q.match.chains.len > 0) {
-        const chain = q.match.chains[0];
-
-        // Check if this is a relationship pattern (has hops)
-        if (chain.hops.len > 0) {
-            const hop = chain.hops[0];
-            left_node_var = hop.left.name;
-            right_node_var = hop.right.name;
-        } else if (chain.head) |node_pattern| {
-            // Simple node pattern without relationships
-            left_node_var = node_pattern.name;
+    // Match each chain separately and collect bindings
+    var chain_matches = std.ArrayList(std.StringHashMap(u64)).initCapacity(allocator, 0) catch unreachable;
+    defer {
+        for (chain_matches.items) |*chain_match| {
+            chain_match.deinit();
         }
+        chain_matches.deinit(allocator);
     }
 
-    // Find matching nodes based on pattern
-    const MatchedNode = struct { left_id: ?u64, right_id: ?u64 };
-    var matched_nodes = std.ArrayList(MatchedNode).initCapacity(allocator, 0) catch @panic("OOM");
-    defer matched_nodes.deinit(allocator);
+    // Match each chain in the MATCH pattern
+    for (q.match.chains) |chain| {
+        var chain_match = std.StringHashMap(u64).init(allocator);
 
-    // Simple matching: iterate through all nodes
-    var node_iter = store.nodes.iterator();
-    while (node_iter.next()) |entry| {
-        const node_id = entry.key_ptr.*;
-        const node = entry.value_ptr.*;
+        // Get node variable name and match criteria
+        var node_var: ?[]const u8 = null;
+        var labels: [][]const u8 = &.{};
+        var props: ?[]ast.Property = null;
 
-        // Check if node matches the pattern criteria
-        var matches = true;
+        if (chain.head) |head| {
+            node_var = head.name;
+            labels = head.labels;
+            props = head.props;
+        }
 
-        // Check labels if specified
-        if (q.match.chains.len > 0) {
-            const chain = q.match.chains[0];
-            if (chain.head) |head| {
-                if (head.labels.len > 0) {
-                    // Check if node has the required label
-                    const required_label = head.labels[0];
-                    var has_label = false;
-                    for (node.labels) |label| {
-                        if (std.mem.eql(u8, label, required_label)) {
-                            has_label = true;
-                            break;
-                        }
+        // Find matching node
+        var node_iter = store.nodes.iterator();
+        var found = false;
+        while (node_iter.next()) |entry| {
+            const node_id = entry.key_ptr.*;
+            const node = entry.value_ptr.*;
+
+            // Check labels
+            var matches_labels = true;
+            if (labels.len > 0) {
+                const required_label = labels[0];
+                var has_label = false;
+                for (node.labels) |label| {
+                    if (std.mem.eql(u8, label, required_label)) {
+                        has_label = true;
+                        break;
                     }
-                    if (!has_label) matches = false;
                 }
+                if (!has_label) matches_labels = false;
+            }
 
-                // Check properties if specified
-                if (head.props) |props| {
-                    const empty_env = eval.Env{
-                        .names = &.{},
-                        .values = &.{},
-                    };
-                    for (props) |prop| {
-                        if (node.properties.get(prop.key)) |node_prop_val| {
-                            // Convert PropertyValue to eval.Value for comparison
-                            const node_val = switch (node_prop_val) {
-                                .Null => eval.Value{ .Null = {} },
-                                .Bool => |b| eval.Value{ .Bool = b },
-                                .Int => |i| eval.Value{ .Int = i },
-                                .String => |s| eval.Value{ .Str = s },
-                                .Float => eval.Value{ .Null = {} }, // Float not directly supported, skip
-                                .ExtValue => |ext| eval.Value{ .ExtValue = ext },
-                            };
-                            // Evaluate expected value from pattern
-                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
-                            if (!valuesEqual(node_val, prop_val)) {
-                                matches = false;
-                                break;
-                            }
-                        } else {
-                            matches = false;
+            if (!matches_labels) continue;
+
+            // Check properties
+            var matches_props = true;
+            if (props) |properties| {
+                const empty_env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+                for (properties) |prop| {
+                    if (node.properties.get(prop.key)) |node_prop_val| {
+                        const node_val = switch (node_prop_val) {
+                            .Null => eval.Value{ .Null = {} },
+                            .Bool => |b| eval.Value{ .Bool = b },
+                            .Int => |i| eval.Value{ .Int = i },
+                            .String => |s| eval.Value{ .Str = s },
+                            .Float => eval.Value{ .Null = {} },
+                            .ExtValue => |ext| eval.Value{ .ExtValue = ext },
+                        };
+                        const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                        if (!valuesEqual(node_val, prop_val)) {
+                            matches_props = false;
                             break;
                         }
+                    } else {
+                        matches_props = false;
+                        break;
                     }
                 }
             }
+
+            if (matches_props) {
+                // Found a matching node
+                if (node_var) |var_name| {
+                    try chain_match.put(var_name, node_id);
+                }
+                found = true;
+                break; // Use first match for this chain
+            }
         }
 
-        if (matches) {
-            try matched_nodes.append(allocator, .{ .left_id = node_id, .right_id = null });
+        if (!found) {
+            // No match found for this chain - return empty result
+            return ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]eval.Value, 0),
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
         }
+
+        try chain_matches.append(allocator, chain_match);
     }
 
-    // If no matches found, return empty result
-    if (matched_nodes.items.len == 0) {
-        return ExecutionResult{
-            .columns = try allocator.alloc([]const u8, 0),
-            .rows = try allocator.alloc([]eval.Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-        };
-    }
-
-    // Create bindings from first match (for simplicity, we'll use the first match)
-    // In a full implementation, we'd aggregate results from all matches
-    const first_match = matched_nodes.items[0];
-
+    // Merge all chain matches into a single binding map
     var bindings = std.StringHashMap(Binding).init(allocator);
     defer bindings.deinit();
 
-    if (left_node_var) |var_name| {
-        if (first_match.left_id) |node_id| {
-            try bindings.put(var_name, Binding{ .node_id = node_id });
-        }
-    }
-
-    if (right_node_var) |var_name| {
-        if (first_match.right_id) |node_id| {
-            try bindings.put(var_name, Binding{ .node_id = node_id });
+    for (chain_matches.items) |chain_match| {
+        var iter = chain_match.iterator();
+        while (iter.next()) |entry| {
+            try bindings.put(entry.key_ptr.*, Binding{ .node_id = entry.value_ptr.* });
         }
     }
 

@@ -218,7 +218,7 @@ tests:
     args: ["query", "EXPLAIN MATCH (n:TestNode {id: 2}) RETURN n", "--format", "json"]
     expect:
       exit_code: 0
-      stdout_contains: ["Scan"]  # Changed from IndexSeek since explain output may vary
+      stdout_contains: ["Seek"]  # Matches IndexSeek or other seek operations showing index usage
 
   # Cleanup Tests
   - name: drop-test-data
