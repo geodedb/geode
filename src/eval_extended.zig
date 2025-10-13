@@ -430,13 +430,25 @@ fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     };
 
     const ref: heap.AltRef = if (args.len == 4) blk: {
-        if (args[3] != .Str) return error.TypeMismatch;
-        break :blk if (std.mem.eql(u8, args[3].Str, "ellipsoid"))
-            .ellipsoid
-        else if (std.mem.eql(u8, args[3].Str, "geoid"))
-            .geoid
-        else
-            return error.InvalidAltRef;
+        // Support both integer and string ref parameters
+        if (args[3] == .Int) {
+            const ref_int = args[3].Int;
+            break :blk if (ref_int == 0)
+                .ellipsoid
+            else if (ref_int == 1)
+                .geoid
+            else
+                return error.InvalidAltRef;
+        } else if (args[3] == .Str) {
+            break :blk if (std.mem.eql(u8, args[3].Str, "ellipsoid"))
+                .ellipsoid
+            else if (std.mem.eql(u8, args[3].Str, "geoid"))
+                .geoid
+            else
+                return error.InvalidAltRef;
+        } else {
+            return error.TypeMismatch;
+        }
     } else .ellipsoid; // Default
 
     if (lat < -90 or lat > 90) return error.InvalidLatitude;
@@ -606,23 +618,40 @@ fn constructTemperature(allocator: std.mem.Allocator, args: []const ExtValue) !E
         else => return error.TypeMismatch,
     };
 
-    if (args[1] != .Str) return error.TypeMismatch;
-
-    const unit_str = args[1].Str;
     var unit_in: heap.TempUnit = undefined;
     var value_K: f64 = undefined;
 
-    if (std.ascii.eqlIgnoreCase(unit_str, "K")) {
-        unit_in = .K;
-        value_K = value;
-    } else if (std.ascii.eqlIgnoreCase(unit_str, "C")) {
-        unit_in = .C;
-        value_K = value + 273.15;
-    } else if (std.ascii.eqlIgnoreCase(unit_str, "F")) {
-        unit_in = .F;
-        value_K = (value - 32) * 5 / 9 + 273.15;
+    // Support both integer and string unit parameters
+    if (args[1] == .Int) {
+        const unit_int = args[1].Int;
+        if (unit_int == 0) {
+            unit_in = .K;
+            value_K = value;
+        } else if (unit_int == 1) {
+            unit_in = .C;
+            value_K = value + 273.15;
+        } else if (unit_int == 2) {
+            unit_in = .F;
+            value_K = (value - 32) * 5 / 9 + 273.15;
+        } else {
+            return error.InvalidTempUnit;
+        }
+    } else if (args[1] == .Str) {
+        const unit_str = args[1].Str;
+        if (std.ascii.eqlIgnoreCase(unit_str, "K")) {
+            unit_in = .K;
+            value_K = value;
+        } else if (std.ascii.eqlIgnoreCase(unit_str, "C")) {
+            unit_in = .C;
+            value_K = value + 273.15;
+        } else if (std.ascii.eqlIgnoreCase(unit_str, "F")) {
+            unit_in = .F;
+            value_K = (value - 32) * 5 / 9 + 273.15;
+        } else {
+            return error.InvalidTempUnit;
+        }
     } else {
-        return error.InvalidTempUnit;
+        return error.TypeMismatch;
     }
 
     return .{ .Temperature = .{ .value_K = value_K, .unit_in = unit_in } };
@@ -638,26 +667,46 @@ fn constructPressure(allocator: std.mem.Allocator, args: []const ExtValue) !ExtV
         else => return error.TypeMismatch,
     };
 
-    if (args[1] != .Str) return error.TypeMismatch;
-
-    const unit_str = args[1].Str;
     var unit_in: heap.PressureUnit = undefined;
     var value_Pa: f64 = undefined;
 
-    if (std.ascii.eqlIgnoreCase(unit_str, "Pa")) {
-        unit_in = .Pa;
-        value_Pa = value;
-    } else if (std.ascii.eqlIgnoreCase(unit_str, "kPa") or std.ascii.eqlIgnoreCase(unit_str, "hPa")) {
-        unit_in = .kPa;
-        value_Pa = value * 1000;
-    } else if (std.ascii.eqlIgnoreCase(unit_str, "bar")) {
-        unit_in = .bar;
-        value_Pa = value * 100000;
-    } else if (std.ascii.eqlIgnoreCase(unit_str, "atm")) {
-        unit_in = .atm;
-        value_Pa = value * 101325;
+    // Support both integer and string unit parameters
+    if (args[1] == .Int) {
+        const unit_int = args[1].Int;
+        if (unit_int == 0) {
+            unit_in = .Pa;
+            value_Pa = value;
+        } else if (unit_int == 1) {
+            unit_in = .kPa;
+            value_Pa = value * 1000;
+        } else if (unit_int == 2) {
+            unit_in = .bar;
+            value_Pa = value * 100000;
+        } else if (unit_int == 3) {
+            unit_in = .atm;
+            value_Pa = value * 101325;
+        } else {
+            return error.InvalidPressureUnit;
+        }
+    } else if (args[1] == .Str) {
+        const unit_str = args[1].Str;
+        if (std.ascii.eqlIgnoreCase(unit_str, "Pa")) {
+            unit_in = .Pa;
+            value_Pa = value;
+        } else if (std.ascii.eqlIgnoreCase(unit_str, "kPa") or std.ascii.eqlIgnoreCase(unit_str, "hPa")) {
+            unit_in = .kPa;
+            value_Pa = value * 1000;
+        } else if (std.ascii.eqlIgnoreCase(unit_str, "bar")) {
+            unit_in = .bar;
+            value_Pa = value * 100000;
+        } else if (std.ascii.eqlIgnoreCase(unit_str, "atm")) {
+            unit_in = .atm;
+            value_Pa = value * 101325;
+        } else {
+            return error.InvalidPressureUnit;
+        }
     } else {
-        return error.InvalidPressureUnit;
+        return error.TypeMismatch;
     }
 
     return .{ .Pressure = .{ .value_Pa = value_Pa, .unit_in = unit_in } };

@@ -238,6 +238,54 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
+    fn unescapeString(self: *Parser, raw: []const u8) ![]const u8 {
+        // Check if we need to unescape (contains '' or \)
+        var needs_unescape = false;
+        var i: usize = 0;
+        while (i < raw.len) : (i += 1) {
+            if (raw[i] == '\\' or (raw[i] == '\'' and i + 1 < raw.len and raw[i + 1] == '\'')) {
+                needs_unescape = true;
+                break;
+            }
+        }
+        if (!needs_unescape) return raw;
+
+        // Allocate buffer for unescaped string
+        var result = try self.arena.allocator().alloc(u8, raw.len);
+        var write_idx: usize = 0;
+        i = 0;
+        while (i < raw.len) {
+            if (raw[i] == '\'') {
+                // Check for doubled single quote ('')
+                if (i + 1 < raw.len and raw[i + 1] == '\'') {
+                    result[write_idx] = '\'';
+                    write_idx += 1;
+                    i += 2; // Skip both quotes
+                    continue;
+                }
+            } else if (raw[i] == '\\' and i + 1 < raw.len) {
+                // Handle backslash escapes
+                i += 1;
+                result[write_idx] = switch (raw[i]) {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '"' => '"',
+                    else => raw[i], // Unknown escape, keep as-is
+                };
+                write_idx += 1;
+                i += 1;
+                continue;
+            }
+            result[write_idx] = raw[i];
+            write_idx += 1;
+            i += 1;
+        }
+        return result[0..write_idx];
+    }
+
     pub fn parseProgram(self: *Parser) ParserError!ast.Program {
         // initialize alias set arraylist
         self.path_aliases = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
@@ -2298,7 +2346,8 @@ pub const Parser = struct {
             .string_lit => blk: {
                 const tkn = self.cur;
                 self.advance();
-                break :blk .{ .String = tkn.lexeme };
+                const unescaped = try self.unescapeString(tkn.lexeme);
+                break :blk .{ .String = unescaped };
             },
             .integer_lit => blk: {
                 const tkn = self.cur;
@@ -2585,7 +2634,11 @@ pub const Parser = struct {
             return (n == 2 and argIsNumericLike(args[0]) and argIsNumericLike(args[1])) or (n == 1 and argIsStringLike(args[0]));
         }
         if (std.ascii.eqlIgnoreCase(name, "LatLonAlt")) {
-            return (n == 3 and argIsNumericLike(args[0]) and argIsNumericLike(args[1]) and argIsNumericLike(args[2])) or (n == 1 and argIsStringLike(args[0]));
+            // Accept 3 numeric args (lat, lon, alt) or 4 args (lat, lon, alt, ref) or 1 string
+            if (n == 1 and argIsStringLike(args[0])) return true;
+            if (n == 3 and argIsNumericLike(args[0]) and argIsNumericLike(args[1]) and argIsNumericLike(args[2])) return true;
+            if (n == 4 and argIsNumericLike(args[0]) and argIsNumericLike(args[1]) and argIsNumericLike(args[2])) return true;
+            return false;
         }
         if (std.ascii.eqlIgnoreCase(name, "GeoPoint")) {
             return (n == 2 and argIsNumericLike(args[0]) and argIsNumericLike(args[1])) or (n == 1 and argIsStringLike(args[0]));
