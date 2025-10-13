@@ -68,6 +68,31 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                 new_index_name = f"{old_index_name}_{test_id}"
                 processed_arg = processed_arg.replace(f"INDEX {old_index_name}", f"INDEX {new_index_name}")
 
+            # Add unique suffixes to schema names for test isolation
+            schema_pattern = r'(?:CREATE|DROP)\s+SCHEMA\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(\w+)'
+            matches = re.finditer(schema_pattern, processed_arg, re.IGNORECASE)
+            for match in matches:
+                old_schema_name = match.group(1)
+                new_schema_name = f"{old_schema_name}_{test_id}"
+                processed_arg = processed_arg.replace(f"SCHEMA {old_schema_name}", f"SCHEMA {new_schema_name}")
+                processed_arg = processed_arg.replace(f"EXISTS {old_schema_name}", f"EXISTS {new_schema_name}")
+
+            # Add unique suffixes to graph names for test isolation
+            graph_pattern = r'(?:CREATE|DROP)\s+(?:OR\s+REPLACE\s+)?(?:PROPERTY\s+)?GRAPH\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:TYPE\s+)?(\w+)'
+            matches = re.finditer(graph_pattern, processed_arg, re.IGNORECASE)
+            replacements = {}
+            for match in matches:
+                old_graph_name = match.group(1)
+                # Skip reserved keywords
+                if old_graph_name.upper() in ['TYPE', 'IF', 'NOT', 'EXISTS', 'PROPERTY', 'LIKE', 'AS', 'COPY', 'OF', 'TYPED']:
+                    continue
+                new_graph_name = f"{old_graph_name}_{test_id}"
+                # Build replacement pairs to avoid double-replacement
+                replacements[f"GRAPH {old_graph_name}"] = f"GRAPH {new_graph_name}"
+                replacements[f"EXISTS {old_graph_name}"] = f"EXISTS {new_graph_name}"
+            for old, new in replacements.items():
+                processed_arg = processed_arg.replace(old, new)
+
         processed_args.append(processed_arg)
     args = processed_args
     
@@ -91,7 +116,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                     setup_args = shlex.split(cmd_item)
                     setup_stdin = None
 
-                # Apply variable substitution to setup args
+                # Apply variable substitution and isolation to setup args
                 setup_processed = []
                 for arg in setup_args:
                     if not isinstance(arg, str):
@@ -104,6 +129,31 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                         processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
                     if loop_index is not None and "${loop_index}" in processed_arg:
                         processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+
+                    # Apply same test isolation as main args
+                    if "CREATE" in processed_arg or "DROP" in processed_arg:
+                        import re
+                        # Index names
+                        index_pattern = r'CREATE\s+INDEX\s+(\w+)'
+                        for match in re.finditer(index_pattern, processed_arg, re.IGNORECASE):
+                            old_name = match.group(1)
+                            processed_arg = processed_arg.replace(f"INDEX {old_name}", f"INDEX {old_name}_{test_id}")
+
+                        # Schema names
+                        schema_pattern = r'(?:CREATE|DROP)\s+SCHEMA\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(\w+)'
+                        for match in re.finditer(schema_pattern, processed_arg, re.IGNORECASE):
+                            old_name = match.group(1)
+                            processed_arg = processed_arg.replace(f"SCHEMA {old_name}", f"SCHEMA {old_name}_{test_id}")
+                            processed_arg = processed_arg.replace(f"EXISTS {old_name}", f"EXISTS {old_name}_{test_id}")
+
+                        # Graph names
+                        graph_pattern = r'(?:CREATE|DROP)\s+(?:OR\s+REPLACE\s+)?(?:PROPERTY\s+)?GRAPH\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:TYPE\s+)?(\w+)'
+                        for match in re.finditer(graph_pattern, processed_arg, re.IGNORECASE):
+                            old_name = match.group(1)
+                            if old_name.upper() not in ['TYPE', 'IF', 'NOT', 'EXISTS', 'PROPERTY', 'LIKE', 'AS', 'COPY', 'OF', 'TYPED']:
+                                processed_arg = processed_arg.replace(f"GRAPH {old_name}", f"GRAPH {old_name}_{test_id}")
+                                processed_arg = processed_arg.replace(f"EXISTS {old_name}", f"EXISTS {old_name}_{test_id}")
+
                     setup_processed.append(processed_arg)
 
                 # For dict format with args, prepend "query" if not already present
