@@ -2627,39 +2627,48 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
         };
     }
 
-    // Track total count of created items for aggregation
+    // Track all created entities across all matched rows
+    var all_created_nodes = std.StringHashMap(u64).init(allocator);
+    defer all_created_nodes.deinit();
+    var all_created_relationships = std.StringHashMap(eval.Value).init(allocator);
+    defer all_created_relationships.deinit();
+
     var total_created_count: i64 = 0;
 
     // Iterate over ALL matched rows and execute CREATE for each combination
     for (match_result.rows) |row| {
         // Extract bindings from this matched row
         var bindings = std.StringHashMap(u64).init(allocator);
-        defer {
-            // Free duplicated keys
-            var iter = bindings.iterator();
-            while (iter.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-            }
-            bindings.deinit();
-        }
+        defer bindings.deinit();
 
         for (match_result.columns, 0..) |col_name, i| {
             if (i < row.len) {
                 // Extract node ID from matched value
                 if (row[i] == .Node) {
-                    // Duplicate the column name to avoid use-after-free
-                    const col_name_copy = try allocator.dupe(u8, col_name);
-                    try bindings.put(col_name_copy, row[i].Node.id);
+                    try bindings.put(col_name, row[i].Node.id);
+                    // Also add to all_created_nodes for RETURN clause
+                    try all_created_nodes.put(col_name, row[i].Node.id);
                 }
             }
         }
 
-        // Execute CREATE with these bindings (without RETURN processing)
-        const created_count = try executeCreateForBatch(allocator, create_pattern, bindings);
-        total_created_count += created_count;
+        // Execute CREATE with these bindings, tracking created entities
+        const result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings);
+        total_created_count += result.created_count;
+
+        // Merge created entities into all_created collections
+        var node_iter = result.created_nodes.iterator();
+        while (node_iter.next()) |entry| {
+            try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        var rel_iter = result.created_relationships.iterator();
+        while (rel_iter.next()) |entry| {
+            try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
     }
 
-    // Handle RETURN clause with aggregation if needed
+    // Handle RETURN clause
     if (q.ret.items.len > 0) {
         // Check if RETURN uses count(*) aggregation
         if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
@@ -2674,9 +2683,9 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
 
                 var rows = try allocator.alloc([]eval.Value, 1);
-                var row = try allocator.alloc(eval.Value, 1);
-                row[0] = eval.Value{ .Int = total_created_count };
-                rows[0] = row;
+                var ret_row = try allocator.alloc(eval.Value, 1);
+                ret_row[0] = eval.Value{ .Int = total_created_count };
+                rows[0] = ret_row;
 
                 return ExecutionResult{
                     .columns = columns,
@@ -2685,9 +2694,12 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
                 };
             }
         }
+
+        // For non-aggregation RETURN, evaluate with all created entities
+        return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
     }
 
-    // Default: return empty result if no aggregation
+    // Default: return empty result if no RETURN clause
     return ExecutionResult{
         .columns = &.{},
         .rows = &.{},
@@ -2836,6 +2848,148 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
     }
 
     return created_relationships;
+}
+
+// Result struct for tracking created entities
+const CreateBatchResult = struct {
+    created_count: i64,
+    created_nodes: std.StringHashMap(u64),
+    created_relationships: std.StringHashMap(eval.Value),
+};
+
+// Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation
+fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64)) !CreateBatchResult {
+    const store = graph_store.getGlobalStore(allocator);
+    var created_relationships_count: i64 = 0;
+
+    // Track created nodes by variable name
+    var created_nodes = std.StringHashMap(u64).init(allocator);
+    errdefer created_nodes.deinit();
+
+    // Track created relationships by variable name for RETURN clauses
+    var created_relationships = std.StringHashMap(eval.Value).init(allocator);
+    errdefer created_relationships.deinit();
+
+    // Copy matched bindings to created_nodes
+    var iter = matched_bindings.iterator();
+    while (iter.next()) |entry| {
+        try created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    // Process CREATE pattern
+    for (create_pattern.chains) |chain| {
+        // Handle single node creation
+        if (chain.head) |node_pattern| {
+            // Check if this node already exists in matched bindings
+            const node_id = if (node_pattern.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |existing_id| {
+                    // Node already matched from MATCH clause, don't create new
+                    break :blk existing_id;
+                } else {
+                    // Variable not bound, create new node
+                    const new_id = try store.createNode(node_pattern.labels);
+                    try created_nodes.put(var_name, new_id);
+                    break :blk new_id;
+                }
+            } else blk: {
+                // No variable name, always create new node
+                break :blk try store.createNode(node_pattern.labels);
+            };
+
+            // Set properties if present
+            if (node_pattern.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(node_id, prop.key, prop_value);
+                }
+            }
+        }
+
+        // Handle relationship creation
+        for (chain.hops) |hop| {
+            // For batch CREATE from MATCH, nodes must already exist in bindings
+            const left_id = if (hop.left.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |node_id| {
+                    break :blk node_id;
+                } else if (matched_bindings.count() > 0) {
+                    continue; // Skip if node not found in batch mode
+                } else {
+                    const new_id = try store.createNode(hop.left.labels);
+                    try created_nodes.put(var_name, new_id);
+                    break :blk new_id;
+                }
+            } else blk: {
+                break :blk try store.createNode(hop.left.labels);
+            };
+
+            const right_id = if (hop.right.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |node_id| {
+                    break :blk node_id;
+                } else if (matched_bindings.count() > 0) {
+                    continue; // Skip if node not found in batch mode
+                } else {
+                    const new_id = try store.createNode(hop.right.labels);
+                    try created_nodes.put(var_name, new_id);
+                    break :blk new_id;
+                }
+            } else blk: {
+                break :blk try store.createNode(hop.right.labels);
+            };
+
+            // Create the relationship
+            const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
+            const edge_id = try store.createEdge(left_id, right_id, edge_label);
+            created_relationships_count += 1;
+
+            // Set relationship properties if present
+            if (hop.rel.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setEdgeProperty(edge_id, prop.key, prop_value);
+                }
+            }
+
+            // Track created relationship by variable name
+            if (hop.rel.name) |rel_var_name| {
+                const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
+                const edge_value = eval.Value{ .Edge = edge_ptr };
+                try created_relationships.put(rel_var_name, edge_value);
+            }
+        }
+    }
+
+    return CreateBatchResult{
+        .created_count = created_relationships_count,
+        .created_nodes = created_nodes,
+        .created_relationships = created_relationships,
+    };
 }
 
 fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern, matched_bindings: ?std.StringHashMap(u64)) !ExecutionResult {
