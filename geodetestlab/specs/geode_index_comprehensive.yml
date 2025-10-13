@@ -71,7 +71,7 @@ tests:
 
   - name: "index-patricia-trie-create"
     description: "Create Patricia Trie index for CIDR subnet matching"
-    args: ["query", "--no-quic", "CREATE INDEX subnet_trie ON Server USING PatriciaTrie (subnet)"]
+    args: ["query", "--no-quic", "CREATE INDEX subnet_trie ON Server USING network_cidr (subnet)"]
     expect:
       exit_code: 0
     tags: ["index", "patricia", "create"]
@@ -500,6 +500,8 @@ tests:
 
   - name: "index-error-duplicate-index-name"
     description: "Test error handling for duplicate index names"
+    setup:
+      - "query \"CREATE INDEX subnet_trie ON :POI(name) USING BTree\" --format json --no-quic"
     args: ["query", "--no-quic", "CREATE INDEX subnet_trie ON POI USING BTree (name)"]
     expect:
       exit_code: 1

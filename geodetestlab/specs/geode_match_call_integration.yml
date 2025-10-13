@@ -232,6 +232,8 @@ tests:
     exit_code: 0
 - name: match-call-multiple-labels
   description: MATCH specific label + CALL
+  setup:
+    - "query \"CREATE (p:Person:Employee {name: 'Alice', empId: 101}), (q:Person:Manager {name: 'Bob', empId: 102})\" --format json --no-quic"
   args:
   - query
   - --no-quic

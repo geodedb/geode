@@ -98,9 +98,7 @@ tests:
   - name: session-reset-after-set
     description: Test SESSION RESET after SESSION SET
     setup:
-      - query
-      - --no-quic
-      - "SESSION SET TIME ZONE 'UTC'"
+      - "query \"SESSION SET TIME ZONE 'UTC'\" --format json --no-quic"
     args:
       - query
       - --no-quic

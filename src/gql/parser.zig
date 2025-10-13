@@ -1737,6 +1737,10 @@ pub const Parser = struct {
             if (min_len != null and max_len != null and min_len.? > max_len.?) {
                 return self.unexpected("relationship length min>max");
             }
+            // Validate that min and max are not 0 (invalid in GQL)
+            if (min_len != null and min_len.? == 0 and max_len != null and max_len.? == 0) {
+                return self.unexpected("variable-length relationship with length 0 is invalid");
+            }
         }
         var props: ?[]ast.Property = null;
         if (self.cur.kind == .l_brace) {

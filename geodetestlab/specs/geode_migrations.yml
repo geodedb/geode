@@ -17,12 +17,16 @@ tests:
 
   # Property Management Tests
   - name: add-node-property
+    setup:
+      - "query \"CREATE (:Person {name: 'Alice', age: 30})\" --format json --no-quic"
     args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.email = 'alice@example.com' RETURN p", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["alice@example.com"]
 
   - name: modify-property-type
+    setup:
+      - "query \"CREATE (:Person {name: 'Alice', age: 30})\" --format json --no-quic"
     args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.age = toString(p.age) RETURN p.age", "--format", "json"]
     expect:
       exit_code: 0
@@ -86,18 +90,24 @@ tests:
 
   # Label Migration Tests
   - name: add-label-to-nodes
+    setup:
+      - "query \"CREATE (:Person {name: 'Alice'}), (:Person {name: 'Bob'})\" --format json --no-quic"
     args: ["query", "MATCH (p:Person) SET p:Human RETURN labels(p)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["Person", "Human"]
 
   - name: remove-label-from-nodes
+    setup:
+      - "query \"CREATE (:Person:Human {name: 'Alice'})\" --format json --no-quic"
     args: ["query", "MATCH (p:Human) REMOVE p:Human RETURN labels(p)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["Person"]
 
   - name: rename-label-migration
+    setup:
+      - "query \"CREATE (:Person {name: 'Alice'})\" --format json --no-quic"
     args: ["query", "MATCH (p:Person) SET p:User REMOVE p:Person RETURN labels(p)", "--format", "json"]
     expect:
       exit_code: 0
@@ -105,6 +115,8 @@ tests:
 
   # Relationship Type Migration Tests
   - name: create-new-relationship-type
+    setup:
+      - "query \"CREATE (:User {name: 'Alice'}), (:User {name: 'Bob'})\" --format json --no-quic"
     args: ["query", "MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) CREATE (a)-[r:FOLLOWS {since: date()}]->(b) RETURN type(r)", "--format", "json"]
     expect:
       exit_code: 0
@@ -194,6 +206,8 @@ tests:
       stdout_contains: ["3"]
 
   - name: bulk-update-with-index
+    setup:
+      - "query \"CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3})\" --format json --no-quic"
     args: ["query", "CREATE INDEX test_id_idx ON :TestNode(id); MATCH (n:TestNode) WHERE n.id % 2 = 0 SET n.even = true RETURN count(n)", "--format", "json"]
     expect:
       exit_code: 0

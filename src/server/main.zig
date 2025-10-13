@@ -5508,7 +5508,7 @@ pub fn main() !void {
                             .StartTransaction => {
                                 // Handle START TRANSACTION statement
                                 if (state.in_txn) {
-                                    const error_line = protocol.buildErrorLine(gpa, "TransactionError", "Transaction already active", "") catch null;
+                                    const error_line = protocol.buildErrorLineWithFlagsCustomStatus(gpa, "TransactionError", "Transaction already active", "", &.{}, &.{}, "25000") catch null;
                                     if (error_line) |el| {
                                         defer gpa.free(el);
                                         _ = stdout_file.write(el) catch {};

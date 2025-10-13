@@ -22,6 +22,12 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     test_id = str(uuid.uuid4())[:8]
     test_timestamp = int(time.time() * 1000)
 
+    # Check if this test should skip isolation (for error testing)
+    skip_isolation = False
+    test_name = test_case.get("name", "")
+    if "error" in test_name or "duplicate" in test_name or test_case.get("skip_isolation", False):
+        skip_isolation = True
+
     # Handle variable substitution
     processed_args = []
     for arg in args:
@@ -51,8 +57,8 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         if loop_index is not None and "${loop_index}" in processed_arg:
             processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
 
-        # Inject unique identifiers for test isolation in query args
-        if "MERGE" in processed_arg or "CREATE" in processed_arg or "MATCH" in processed_arg:
+        # Inject unique identifiers for test isolation in query args (skip for error tests)
+        if not skip_isolation and ("MERGE" in processed_arg or "CREATE" in processed_arg or "MATCH" in processed_arg):
             processed_arg = processed_arg.replace("'Test'", f"'Test_{test_id}'")
             processed_arg = processed_arg.replace("'Unique'", f"'Unique_{test_id}'")
             processed_arg = processed_arg.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
