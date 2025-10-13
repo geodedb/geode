@@ -2201,6 +2201,21 @@ fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, nex
     var final_columns: [][]const u8 = &.{};
     var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
 
+    // If current result has no rows, still execute next query once with empty bindings
+    if (current_result.rows.len == 0) {
+        const next_result = try executeQueryChainWithBindings(allocator, next_query_ptr.*, context, &.{}, &.{});
+
+        // Clean up current_result properly - columns, rows array, and row contents
+        for (current_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(current_result.columns);
+        // Note: rows.len is 0, so no row contents to free
+        allocator.free(current_result.rows);
+
+        return next_result;
+    }
+
     for (current_result.rows) |current_row| {
         // Create parameter bindings from current row
         // The columns from current result become parameter names
@@ -2208,9 +2223,10 @@ fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, nex
         const next_query_with_bindings = next_query_ptr.*;
 
         // Build parameter arrays from current result
-        var param_names = std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len) catch unreachable;
+        // Use try instead of catch unreachable to handle allocation errors gracefully
+        var param_names = try std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len);
         defer param_names.deinit(allocator);
-        var param_values = std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
+        var param_values = try std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len);
         defer param_values.deinit(allocator);
 
         for (current_result.columns, current_row) |col_name, col_value| {
@@ -5950,6 +5966,16 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
             const with_result = try executeWithClause(allocator, result, with_clause);
+
+            // Clean up original result since it's been transformed by WITH
+            for (result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(result.columns);
+            for (result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(result.rows);
 
             // Now evaluate RETURN expressions using WITH result as environment
             var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
