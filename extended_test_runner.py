@@ -107,6 +107,13 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     json_asserts = "stdout_json_assert" in expect
     geode_query = "geode_query" in expect
     
+    # Clear persistence file before test to ensure clean state
+    import os
+    try:
+        os.remove('/tmp/geode_graph_store.dat')
+    except FileNotFoundError:
+        pass  # File doesn't exist, that's fine
+
     # Execute setup commands if present
     setup_commands = test_case.get("setup", [])
     if setup_commands:

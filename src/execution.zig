@@ -2694,10 +2694,10 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
     };
 }
 
-// Helper function to execute CREATE operations for batch processing (returns count of created items)
+// Helper function to execute CREATE operations for batch processing (returns count of created relationships)
 fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64)) !i64 {
     const store = graph_store.getGlobalStore(allocator);
-    var created_count: i64 = 0;
+    var created_relationships: i64 = 0;
 
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -2732,12 +2732,10 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
                     const new_id = try store.createNode(node_pattern.labels);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
-                    created_count += 1;
                     break :blk new_id;
                 }
             } else blk: {
                 // No variable name, always create new node
-                created_count += 1;
                 break :blk try store.createNode(node_pattern.labels);
             };
 
@@ -2766,46 +2764,52 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
 
         // Handle relationship creation
         for (chain.hops) |hop| {
-            // Get left node (must exist in bindings)
+            // For batch CREATE from MATCH, nodes must already exist in bindings
+            // Only create new nodes if they're anonymous or not from MATCH
             const left_id = if (hop.left.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
+                    // Use existing node from bindings
                     break :blk node_id;
+                } else if (matched_bindings.count() > 0) {
+                    // In batch mode with matched bindings, skip if node not found
+                    // This shouldn't happen if the query is well-formed
+                    continue;
                 } else {
-                    // Create new node if not found
+                    // Not in batch mode - create new node
                     const new_id = try store.createNode(hop.left.labels);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
-                    created_count += 1;
                     break :blk new_id;
                 }
             } else blk: {
-                // Anonymous node - create new
-                created_count += 1;
+                // Anonymous node - always create new
                 break :blk try store.createNode(hop.left.labels);
             };
 
-            // Get right node (must exist in bindings)
             const right_id = if (hop.right.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
+                    // Use existing node from bindings
                     break :blk node_id;
+                } else if (matched_bindings.count() > 0) {
+                    // In batch mode with matched bindings, skip if node not found
+                    // This shouldn't happen if the query is well-formed
+                    continue;
                 } else {
-                    // Create new node if not found
+                    // Not in batch mode - create new node
                     const new_id = try store.createNode(hop.right.labels);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
-                    created_count += 1;
                     break :blk new_id;
                 }
             } else blk: {
-                // Anonymous node - create new
-                created_count += 1;
+                // Anonymous node - always create new
                 break :blk try store.createNode(hop.right.labels);
             };
 
             // Create the relationship
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
             const edge_id = try store.createEdge(left_id, right_id, edge_label);
-            created_count += 1;
+            created_relationships += 1;
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
@@ -2830,7 +2834,7 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
         }
     }
 
-    return created_count;
+    return created_relationships;
 }
 
 fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern, matched_bindings: ?std.StringHashMap(u64)) !ExecutionResult {
