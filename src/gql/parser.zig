@@ -2346,8 +2346,7 @@ pub const Parser = struct {
             .string_lit => blk: {
                 const tkn = self.cur;
                 self.advance();
-                const unescaped = try self.unescapeString(tkn.lexeme);
-                break :blk .{ .String = unescaped };
+                break :blk .{ .String = tkn.lexeme };
             },
             .integer_lit => blk: {
                 const tkn = self.cur;
@@ -4576,7 +4575,7 @@ pub const Parser = struct {
                         }
                         const end_idx = self.lx.idx;
                         initializer = self.lx.src[start_idx..end_idx];
-                    } else if (self.cur.kind == .identifier or self.cur.kind == .string_lit or self.cur.kind == .integer_lit) {
+                    } else if (self.cur.kind == .identifier or self.cur.kind == .string_lit or self.cur.kind == .integer_lit or self.cur.kind == .TRUE or self.cur.kind == .FALSE) {
                         initializer = self.cur.lexeme;
                         self.advance();
                     }
@@ -4743,7 +4742,7 @@ pub const Parser = struct {
             var initializer: ?[]const u8 = null;
             if (self.cur.kind == .eq) {
                 self.advance();
-                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
+                if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit or self.cur.kind == .TRUE or self.cur.kind == .FALSE) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }
@@ -4779,7 +4778,7 @@ pub const Parser = struct {
                     }
                     const end_idx = self.lx.idx;
                     initializer = self.lx.src[start_idx..end_idx];
-                } else if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit) {
+                } else if (self.cur.kind == .string_lit or self.cur.kind == .identifier or self.cur.kind == .integer_lit or self.cur.kind == .TRUE or self.cur.kind == .FALSE) {
                     initializer = self.cur.lexeme;
                     self.advance();
                 }

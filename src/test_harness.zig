@@ -48,12 +48,18 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
     }
 
-    // Check if this program starts with START TRANSACTION (do this before loading session)
-    const is_start_transaction = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .StartTransaction;
+    // Check if this program contains START TRANSACTION anywhere (do this before loading session)
+    var has_start_transaction = false;
+    for (parse_result.program.statements) |stmt| {
+        if (stmt == .StartTransaction) {
+            has_start_transaction = true;
+            break;
+        }
+    }
 
     // Load transaction session if exists, but NOT if we're starting a new transaction
     // (starting a new transaction should clear any previous transaction state)
-    var transaction_session = if (!is_start_transaction) txn_session.loadSession(allocator.*) catch null else null;
+    var transaction_session = if (!has_start_transaction) txn_session.loadSession(allocator.*) catch null else null;
     defer if (transaction_session) |*ts| ts.deinit(allocator.*);
 
     // Create session state for SESSION SET GRAPH support
@@ -68,8 +74,13 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         .session_state = &session_state,
         .transaction_state = if (transaction_session) |ts| ts.state else .None,
     };
-    const is_commit = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .Commit;
-    const is_rollback = parse_result.program.statements.len > 0 and parse_result.program.statements[0] == .Rollback;
+    // Check if program contains COMMIT or ROLLBACK anywhere
+    var has_commit = false;
+    var has_rollback = false;
+    for (parse_result.program.statements) |stmt| {
+        if (stmt == .Commit) has_commit = true;
+        if (stmt == .Rollback) has_rollback = true;
+    }
 
     // Execute the parsed program using Geode's execution engine
     const exec_result = execution.executeProgramWithContext(allocator.*, &parse_result.program, exec_context) catch |err| {
@@ -150,14 +161,20 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     }
 
     // Handle transaction session persistence
-    if (is_start_transaction) {
-        // Create and save new transaction session
+    // If program has both START TRANSACTION and COMMIT/ROLLBACK, the transaction is complete - clear session
+    // If program has only START TRANSACTION, save active session
+    // If program has only COMMIT/ROLLBACK, clear session
+    if (has_start_transaction and (has_commit or has_rollback)) {
+        // Transaction started and ended in same program - clear session
+        try txn_session.clearSession(allocator.*);
+    } else if (has_start_transaction) {
+        // Transaction started but not ended - save active session
         var new_session = try txn_session.TransactionSession.init(allocator.*);
         new_session.state = .Active;
         try txn_session.saveSession(allocator.*, new_session);
         new_session.deinit(allocator.*);
-    } else if (is_commit or is_rollback) {
-        // Clear transaction session after commit/rollback
+    } else if (has_commit or has_rollback) {
+        // Transaction ended - clear session
         try txn_session.clearSession(allocator.*);
     }
 

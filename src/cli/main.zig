@@ -2052,7 +2052,7 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     const options = geode_lib.test_harness.QueryOptions{
         .token = token,
         .user = null,
-        .strict_offset_validation = true, // CLI mode enforces US001 (OFFSET requires ORDER BY)
+        .strict_offset_validation = false, // Allow SKIP without ORDER BY (results in undefined order)
     };
 
     // Split query text by semicolons and execute each statement separately
