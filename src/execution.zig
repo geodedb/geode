@@ -2667,7 +2667,8 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
             // Check if it's a count function
             if (call.callee.* == .Ident and
                 (std.mem.eql(u8, call.callee.Ident.orig, "count") or
-                 std.mem.eql(u8, call.callee.Ident.orig, "COUNT"))) {
+                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")))
+            {
                 // Return the total count
                 var columns = try allocator.alloc([]const u8, 1);
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
@@ -5899,8 +5900,6 @@ fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
 }
 
 fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes: []*graph_store.Node) !eval.Value {
-    _ = allocator;
-
     switch (expr) {
         .Call => |call| {
             if (call.callee.* == .Ident) {
@@ -5915,7 +5914,68 @@ fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes:
                         return eval.Value{ .Int = @intCast(nodes.len) };
                     }
                     // For COUNT(expr), count non-null values
+                    if (call.args.len == 1) {
+                        // Handle property access for COUNT(n.prop)
+                        if (call.args[0].* == .PropertyAccess) {
+                            const prop_access = call.args[0].PropertyAccess;
+                            var count: i64 = 0;
+                            for (nodes) |node| {
+                                if (node.properties.get(prop_access.property)) |prop_val| {
+                                    if (prop_val != .Null) {
+                                        count += 1;
+                                    }
+                                }
+                            }
+                            return eval.Value{ .Int = count };
+                        } else if (call.args[0].* == .Member) {
+                            const member = call.args[0].Member;
+                            var count: i64 = 0;
+                            for (nodes) |node| {
+                                if (node.properties.get(member.field)) |prop_val| {
+                                    if (prop_val != .Null) {
+                                        count += 1;
+                                    }
+                                }
+                            }
+                            return eval.Value{ .Int = count };
+                        } else if (call.args[0].* == .Ident) {
+                            // COUNT(n) - count all non-null nodes
+                            return eval.Value{ .Int = @intCast(nodes.len) };
+                        }
+                    }
                     return eval.Value{ .Int = @intCast(nodes.len) };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+                    // COUNT(DISTINCT expr) - count distinct non-null values
+                    if (call.args.len == 1) {
+                        var unique_values = std.AutoHashMap(i64, void).init(allocator);
+                        defer unique_values.deinit();
+
+                        // Handle property access for COUNT(DISTINCT n.prop)
+                        if (call.args[0].* == .PropertyAccess) {
+                            const prop_access = call.args[0].PropertyAccess;
+                            for (nodes) |node| {
+                                if (node.properties.get(prop_access.property)) |prop_val| {
+                                    if (prop_val == .Int) {
+                                        try unique_values.put(prop_val.Int, {});
+                                    }
+                                    // Note: only counting integer values for uniqueness
+                                }
+                            }
+                        } else if (call.args[0].* == .Member) {
+                            const member = call.args[0].Member;
+                            for (nodes) |node| {
+                                if (node.properties.get(member.field)) |prop_val| {
+                                    if (prop_val == .Int) {
+                                        try unique_values.put(prop_val.Int, {});
+                                    }
+                                    // Note: only counting integer values for uniqueness
+                                }
+                            }
+                        }
+
+                        return eval.Value{ .Int = @intCast(unique_values.count()) };
+                    }
+                    return eval.Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over group
                     if (call.args.len == 1) {

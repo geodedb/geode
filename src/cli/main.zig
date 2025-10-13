@@ -2108,14 +2108,14 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         // Save results that contain actual data (not just status messages)
         // Look for results that contain column names or data fields
         const has_data = std.mem.indexOf(u8, result, "\"columns\"") != null or
-                        std.mem.indexOf(u8, result, "\"data\"") != null or
-                        std.mem.indexOf(u8, result, "\"rows\"") != null;
+            std.mem.indexOf(u8, result, "\"data\"") != null or
+            std.mem.indexOf(u8, result, "\"rows\"") != null;
 
         // Check if this is a transaction control result (which we should skip if we have RETURN results)
         const is_transaction_control = std.mem.indexOf(u8, trimmed_stmt, "COMMIT") != null or
-                                       std.mem.indexOf(u8, trimmed_stmt, "ROLLBACK") != null or
-                                       std.mem.indexOf(u8, trimmed_stmt, "START TRANSACTION") != null or
-                                       std.mem.indexOf(u8, trimmed_stmt, "BEGIN") != null;
+            std.mem.indexOf(u8, trimmed_stmt, "ROLLBACK") != null or
+            std.mem.indexOf(u8, trimmed_stmt, "START TRANSACTION") != null or
+            std.mem.indexOf(u8, trimmed_stmt, "BEGIN") != null;
 
         if (has_data) {
             // If this is a RETURN statement result, clear any previous transaction control results
