@@ -1,0 +1,24 @@
+version: "1"
+subsystem: "core"
+latest: "0.15.1"
+deprecated:
+  symbols: ["OldType", "old_func", "legacy_api"]
+  endpoints: ["/v1/alpha", "/v1/beta"]
+allowed_legacy_refs: false
+endpoints:
+  - path: "/v2/compute"
+    since: "0.15.0"
+  - path: "/v2/query"
+    since: "0.15.0"
+symbols:
+  - name: "pub fn compute"
+    since: "0.15.0"
+  - name: "pub fn query"
+    since: "0.15.0"
+  - name: "pub const VERSION"
+    since: "0.15.1"
+flags:
+  - name: "--fast"
+    since: "0.14.0"
+  - name: "--verbose"
+    since: "0.15.0"

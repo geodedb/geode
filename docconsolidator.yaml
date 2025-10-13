@@ -1,0 +1,30 @@
+# Configuration for docconsolidator
+# Optional overrides for paths and glob patterns
+
+doc_patterns:
+  - "**/*.md"
+  - "**/*.mdx" 
+  - "**/*.rst"
+
+exclude_patterns:
+  - "docs/archive/**"
+  - "node_modules/**"
+  - ".git/**"
+  - "vendor/**"
+
+code_patterns:
+  zig: "**/*.zig"
+  go: "**/*.go"
+  python: "**/*.py"
+  shell: "**/*.sh"
+
+# Paths relative to repo root
+canaries_dir: "agents/canaries"
+docs_dir: "docs"
+archive_dir: "docs/archive"
+
+# README enforcement
+minimal_readme:
+  max_lines: 50
+  required_links:
+    - "docs/"

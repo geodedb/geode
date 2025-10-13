@@ -1,0 +1,18 @@
+version: "1"
+subsystem: "client-go"
+latest: "1.8.0"
+deprecated:
+  symbols: ["OldClient", "DeprecatedMethod"]
+  endpoints: ["/v1/legacy"]
+allowed_legacy_refs: false
+endpoints:
+  - path: "/v2/gql"
+    since: "1.8.0"
+symbols:
+  - name: "NewClient"
+    since: "1.8.0"
+  - name: "Query"
+    since: "1.8.0"
+flags:
+  - name: "--timeout"
+    since: "1.7.0"
