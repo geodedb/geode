@@ -131,8 +131,14 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                         processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
 
                     # Apply same test isolation as main args
-                    if "CREATE" in processed_arg or "DROP" in processed_arg:
+                    if "MERGE" in processed_arg or "CREATE" in processed_arg or "DROP" in processed_arg:
                         import re
+                        # Apply name substitutions for test isolation
+                        processed_arg = processed_arg.replace("'Test'", f"'Test_{test_id}'")
+                        processed_arg = processed_arg.replace("'Unique'", f"'Unique_{test_id}'")
+                        processed_arg = processed_arg.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
+                        processed_arg = processed_arg.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
+
                         # Index names
                         index_pattern = r'CREATE\s+INDEX\s+(\w+)'
                         for match in re.finditer(index_pattern, processed_arg, re.IGNORECASE):

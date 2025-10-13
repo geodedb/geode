@@ -447,6 +447,11 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
         },
         .RegexMatch, .RegexNotMatch => blk7: {
             // Regex matching: left =~ right or left !~ right
+            // Return null if either operand is null (SQL 3VL semantics)
+            if (isNull(l) or isNull(r)) {
+                break :blk7 .{ .Null = {} };
+            }
+
             // Both operands must be strings
             if (l != .Str or r != .Str) return EvalError.TypeMismatch;
 
