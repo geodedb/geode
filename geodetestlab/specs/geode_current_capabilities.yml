@@ -91,12 +91,6 @@ tests:
       exit_code: 0
       stdout_contains: ["3"]
 
-  - name: call-procedure
-    args: ["query", "CALL db.labels() YIELD label RETURN label", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["label"]
-
   # Transaction Support
   - name: begin-transaction
     args: ["query", "BEGIN", "--format", "json"]

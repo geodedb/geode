@@ -134,47 +134,6 @@ tests:
     tags: ["migration", "create"]
 
   # Schema introspection
-  - name: "describe-schema"
-    skip: true  # Neo4j-specific - uses CALL db.schema.visualization procedure
-    description: "Describe database schema"
-    args: ["query", "--no-quic", "CALL db.schema.visualization()"]
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["schema", "introspection"]
-
-  - name: "list-node-labels"
-    skip: true  # Neo4j-specific - uses CALL db.labels procedure
-    description: "List all node labels"
-    args: ["query", "--no-quic", "CALL db.labels()"]
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["schema", "labels"]
-
-  - name: "list-relationship-types"
-    skip: true  # Neo4j-specific - uses CALL db.relationshipTypes procedure
-    description: "List all relationship types"
-    args: ["query", "--no-quic", "CALL db.relationshipTypes()"]
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["schema", "relationships"]
-
-  - name: "database-statistics"
-    skip: true  # Neo4j-specific - uses CALL db.stats procedure
-    description: "Get database statistics"
-    args: ["query", "--no-quic", "CALL db.stats()"]
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["stats", "database"]
-
-  # Index management
   - name: "create-node-index"
     description: "Create index on node property"
     args: ["query", "--no-quic", "CREATE INDEX person_name_idx FOR (p:Person) ON (p.name)"]
@@ -230,16 +189,6 @@ tests:
     tags: ["constraint", "list"]
 
   # Performance and monitoring
-  - name: "query-performance-stats"
-    skip: true  # Neo4j-specific - uses CALL db.queryStats procedure
-    description: "Get query performance statistics"
-    args: ["query", "--no-quic", "CALL db.queryStats()"]
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["performance", "stats"]
-
   - name: "explain-query-plan"
     description: "Explain query execution plan"
     args: ["query", "--no-quic", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WHERE p.age > 30 RETURN p.name, c.name"]
@@ -278,36 +227,6 @@ tests:
     tags: ["transaction", "rollback"]
 
   # Federation testing (if available)
-  - name: "test-federation-setup"
-    skip: true  # Neo4j-specific - uses CALL federation.status procedure
-    description: "Test federation configuration"
-    args: ["query", "--no-quic", "CALL federation.status()"]
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["federation", "setup"]
-
-  # Import/Export operations
-  - name: "export-graph-data"
-    skip: true  # Neo4j-specific - uses CALL apoc.export.graphml.all procedure
-    description: "Export graph data to file"
-    args: ["query", "--no-quic", "CALL apoc.export.graphml.all('/tmp/geode_export.graphml', {})"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["export", "completed"]
-    tags: ["export", "graphml"]
-
-  - name: "import-graph-data"
-    skip: true  # Neo4j-specific - uses CALL apoc.import.graphml procedure
-    description: "Import graph data from file"
-    args: ["query", "--no-quic", "CALL apoc.import.graphml('/tmp/geode_export.graphml', {})"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["import", "completed"]
-    tags: ["import", "graphml"]
-
-  # Bulk operations
   - name: "bulk-data-load"
     description: "Test bulk data loading"
     # UNWIND is not GQL-compliant - replaced with simpler test

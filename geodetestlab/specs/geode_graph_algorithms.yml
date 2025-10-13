@@ -15,14 +15,6 @@ tests:
       exit_code: 0
       stdout_contains: ["count"]
 
-  - name: dijkstra-weighted-path
-    args: ["query", "--no-quic", "MATCH (start:Node {name: 'A'}), (end:Node {name: 'C'}) CALL algo.shortestPath.dijkstra(start, end, 'weight') YIELD path, cost RETURN cost", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.shortestPath.dijkstra procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["3"]
-
-  # Variable Length Patterns
   - name: variable-length-basic
     args: ["query", "--no-quic", "MATCH p = (:Node {name: 'A'})-[*1..3]->(:Node) RETURN length(p)", "--format", "json"]
     expect:
@@ -48,72 +40,6 @@ tests:
       exit_code: 0
       stdout_contains: ["degree"]
 
-  - name: betweenness-centrality
-    args: ["query", "--no-quic", "CALL algo.betweenness.stream() YIELD nodeId, centrality RETURN algo.asNode(nodeId).name AS node, centrality ORDER BY centrality DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.betweenness.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["centrality"]
-
-  - name: closeness-centrality
-    args: ["query", "--no-quic", "CALL algo.closeness.stream() YIELD nodeId, centrality RETURN algo.asNode(nodeId).name AS node, centrality ORDER BY centrality DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.closeness.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["centrality"]
-
-  - name: pagerank
-    args: ["query", "--no-quic", "CALL algo.pageRank.stream({iterations: 20, dampingFactor: 0.85}) YIELD nodeId, score RETURN algo.asNode(nodeId).name AS node, score ORDER BY score DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.pageRank.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["score"]
-
-  # Community Detection
-  - name: louvain-modularity
-    args: ["query", "--no-quic", "CALL algo.louvain.stream() YIELD nodeId, community RETURN community, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.louvain.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["community", "size"]
-
-  - name: label-propagation
-    args: ["query", "--no-quic", "CALL algo.labelPropagation.stream() YIELD nodeId, label RETURN label, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.labelPropagation.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["label", "size"]
-
-  - name: connected-components
-    args: ["query", "--no-quic", "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN setId AS component, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.unionFind.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["component", "size"]
-
-  - name: strongly-connected-components
-    args: ["query", "--no-quic", "CALL algo.scc.stream() YIELD nodeId, partition RETURN partition, count(*) AS size ORDER BY size DESC LIMIT 5", "--format", "json"]
-    skip: true  # Neo4j-specific - uses CALL algo.scc.stream procedure
-    expect:
-      exit_code: 0
-      stdout_contains: ["partition", "size"]
-
-  # Graph Traversals
-  - name: breadth-first-search
-    skip: true  # Neo4j-specific - uses CALL algo.bfs.stream procedure
-    args: ["query", "--no-quic", "MATCH (start:Node {name: 'A'}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth, count(*) AS count GROUP BY depth ORDER BY depth", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["depth", "count"]
-
-  - name: depth-first-search
-    skip: true  # Neo4j-specific - uses CALL algo.dfs.stream procedure
-    args: ["query", "--no-quic", "MATCH (start:Node {name: 'A'}) CALL algo.dfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth, count(*) AS count GROUP BY depth ORDER BY depth", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["depth", "count"]
-
-  # Cycle Detection
   - name: detect-cycles
     args: ["query", "--no-quic", "MATCH p = (n)-[*]-(n) WHERE length(p) > 0 RETURN p LIMIT 5", "--format", "json"]
     expect:
@@ -159,22 +85,6 @@ tests:
       stdout_contains: ["clusteringCoeff"]
 
   # Minimum Spanning Tree
-  - name: minimum-spanning-tree
-    skip: true  # Neo4j-specific - uses CALL algo.spanningTree.minimum procedure
-    args: ["query", "--no-quic", "CALL algo.spanningTree.minimum('Node', 'EDGE', 'weight') YIELD effectiveNodeCount RETURN effectiveNodeCount", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["effectiveNodeCount"]
-
-  # Max Flow
-  - name: max-flow
-    skip: true  # Neo4j-specific - uses CALL algo.maxFlow procedure
-    args: ["query", "--no-quic", "MATCH (source:Node {name: 'A'}), (sink:Node {name: 'C'}) CALL algo.maxFlow(source, sink, 'capacity') YIELD maxFlow RETURN maxFlow", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["maxFlow"]
-
-  # Graph Matching
   - name: subgraph-isomorphism
     args: ["query", "--no-quic", "MATCH pattern = (:Node)-[:EDGE]->(:Node)-[:EDGE]->(:Node) WITH pattern MATCH graph = (:Node)-[*2]->(:Node) WHERE nodes(pattern) = nodes(graph) RETURN count(graph)", "--format", "json"]
     expect:

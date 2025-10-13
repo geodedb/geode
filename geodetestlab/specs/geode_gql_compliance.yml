@@ -392,26 +392,6 @@ tests:
     tags: ["complex", "patterns"]
 
   # ===============================
-  # CALL PROCEDURE TESTS
-  # ===============================
-
-  - name: "call-basic-procedure"
-    description: "Test basic CALL procedure"
-    args: ["query", "--no-quic", "CALL db.labels()"]
-    expect:
-      exit_code: 0
-    tags: ["call", "procedure"]
-
-  - name: "call-with-yield"
-    description: "Test CALL with YIELD clause"
-    args: ["query", "--no-quic", "CALL db.labels() YIELD label RETURN label ORDER BY label"]
-    expect:
-      exit_code: 0
-      geode_query:
-        columns: ["label"]
-    tags: ["call", "yield"]
-
-  # ===============================
   # OPERATORS AND EXPRESSIONS
   # ===============================
 

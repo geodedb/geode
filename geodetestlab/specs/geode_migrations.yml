@@ -162,13 +162,6 @@ tests:
       stdout_contains: ["count"]
 
   # Complex Migration Scenarios
-  - name: merge-duplicate-nodes
-    skip: true  # Neo4j-specific - uses CALL apoc.refactor.mergeNodes procedure
-    args: ["query", "MATCH (u1:User), (u2:User) WHERE u1.email = u2.email AND id(u1) < id(u2) CALL apoc.refactor.mergeNodes([u1, u2]) YIELD node RETURN count(node)", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["count"]
-
   - name: split-node-into-multiple
     setup:
       - "query \"CREATE (:Person {name: 'John', type: 'employee', department: 'Engineering'})\" --format json --no-quic"
@@ -213,21 +206,6 @@ tests:
       exit_code: 0
       stdout_contains: ["1"]  # Only id=2 is even from the 3 created nodes
 
-  - name: parallel-migration-simulation
-    skip: true  # Neo4j-specific - uses CALL apoc.periodic.iterate procedure
-    args: ["query", "CALL apoc.periodic.iterate('MATCH (n:TestNode) RETURN n', 'SET n.processed = true', {batchSize: 100, parallel: true}) YIELD batches RETURN batches", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["batches"]
-
-  # Schema Validation Tests
-  - name: validate-schema-after-migration
-    skip: true  # Neo4j-specific - uses CALL db.schema procedure
-    args: ["query", "CALL db.schema() YIELD nodes, relationships RETURN size(nodes) AS nodeTypes, size(relationships) AS relTypes", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["nodeTypes", "relTypes"]
-
   - name: check-index-usage
     args: ["query", "EXPLAIN MATCH (n:TestNode {id: 2}) RETURN n", "--format", "json"]
     expect:
@@ -241,9 +219,3 @@ tests:
       exit_code: 0
       stdout_contains: ["00000"]  # Just check for success status
 
-  - name: drop-all-indexes
-    skip: true  # Neo4j-specific - uses CALL db.indexes and db.index.drop procedures
-    args: ["query", "CALL db.indexes() YIELD name CALL db.index.drop(name) YIELD name AS dropped RETURN count(dropped)", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["count"]
