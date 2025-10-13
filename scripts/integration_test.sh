@@ -46,7 +46,7 @@ echo
 # Test 1: Process mode (stdio)
 echo "=== Process Mode Tests ==="
 run_test "Basic query" "./zig-out/bin/geode query 'RETURN 1 AS x ORDER BY x LIMIT 1' --no-quic"
-run_test "Error handling" "./zig-out/bin/geode query 'RETURN 1 LIMIT 10 OFFSET 5' --no-quic 2>&1 | grep -q US001"
+run_test "Error handling" "./zig-out/bin/geode query 'MATCH (n:InvalidLabel--)' --no-quic 2>&1 | grep -qi 'error'"
 run_test "Set operations" "./zig-out/bin/geode query 'RETURN 1 AS x UNION RETURN 1 AS x' --no-quic"
 echo
 

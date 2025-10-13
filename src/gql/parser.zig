@@ -1336,6 +1336,13 @@ pub const Parser = struct {
             // Query chaining: WITH followed by MATCH/CREATE
             // Use WITH items as implicit RETURN to pass bindings forward
             return_clause = .{ .items = with_clause.?.items, .distinct = false };
+        } else if (!have_match and !have_create) {
+            // No pattern - check if we have RETURN
+            if (self.cur.kind != .RETURN) {
+                _ = try self.expect(.RETURN);
+                unreachable;
+            }
+            // RETURN-only query without pattern is allowed
         } else {
             // No SET/REMOVE/CREATE, no chaining, and no RETURN - error
             _ = try self.expect(.RETURN);
