@@ -476,7 +476,123 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
         return wkb;
     }
 
-    // TODO: Support more geometry types
+    // POLYGON parser: POLYGON((x1 y1, x2 y2, ..., xn yn))
+    if (std.mem.startsWith(u8, wkt, "POLYGON((") and std.mem.endsWith(u8, wkt, "))")) {
+        const coords_str = wkt[9 .. wkt.len - 2]; // Extract coordinate string
+
+        const Point = struct { x: f64, y: f64 };
+
+        // Parse all coordinate pairs
+        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        defer points.deinit(allocator);
+
+        var pairs = std.mem.tokenizeAny(u8, coords_str, ",");
+        while (pairs.next()) |pair| {
+            const trimmed = std.mem.trim(u8, pair, " \t\n\r");
+            var coords = std.mem.tokenizeAny(u8, trimmed, " ");
+
+            const x_str = coords.next() orelse return error.InvalidWkt;
+            const y_str = coords.next() orelse return error.InvalidWkt;
+
+            const x = try std.fmt.parseFloat(f64, x_str);
+            const y = try std.fmt.parseFloat(f64, y_str);
+
+            try points.append(allocator, .{ .x = x, .y = y });
+        }
+
+        if (points.items.len < 4) return error.InvalidWkt; // Need at least 4 points (triangle + closing point)
+
+        // Calculate WKB size: 1 (endian) + 4 (type) + 4 (num_rings) + 4 (num_points) + (num_points * 16)
+        const num_points: u32 = @intCast(points.items.len);
+        const wkb_size: usize = 1 + 4 + 4 + 4 + (@as(usize, num_points) * 16);
+        var wkb = try allocator.alloc(u8, wkb_size);
+
+        var offset: usize = 0;
+
+        // Byte order (little endian)
+        wkb[offset] = 1;
+        offset += 1;
+
+        // Geometry type (3 = Polygon)
+        std.mem.writeInt(u32, wkb[offset..][0..4], 3, .little);
+        offset += 4;
+
+        // Number of rings (1 for simple polygon)
+        std.mem.writeInt(u32, wkb[offset..][0..4], 1, .little);
+        offset += 4;
+
+        // Number of points in ring
+        std.mem.writeInt(u32, wkb[offset..][0..4], num_points, .little);
+        offset += 4;
+
+        // Write all coordinates
+        for (points.items) |point| {
+            std.mem.writeInt(u64, wkb[offset..][0..8], @bitCast(point.x), .little);
+            offset += 8;
+            std.mem.writeInt(u64, wkb[offset..][0..8], @bitCast(point.y), .little);
+            offset += 8;
+        }
+
+        return wkb;
+    }
+
+    // LINESTRING parser: LINESTRING(x1 y1, x2 y2, ..., xn yn)
+    if (std.mem.startsWith(u8, wkt, "LINESTRING(") and std.mem.endsWith(u8, wkt, ")")) {
+        const coords_str = wkt[11 .. wkt.len - 1]; // Extract coordinate string
+
+        const Point = struct { x: f64, y: f64 };
+
+        // Parse all coordinate pairs
+        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        defer points.deinit(allocator);
+
+        var pairs = std.mem.tokenizeAny(u8, coords_str, ",");
+        while (pairs.next()) |pair| {
+            const trimmed = std.mem.trim(u8, pair, " \t\n\r");
+            var coords = std.mem.tokenizeAny(u8, trimmed, " ");
+
+            const x_str = coords.next() orelse return error.InvalidWkt;
+            const y_str = coords.next() orelse return error.InvalidWkt;
+
+            const x = try std.fmt.parseFloat(f64, x_str);
+            const y = try std.fmt.parseFloat(f64, y_str);
+
+            try points.append(allocator, .{ .x = x, .y = y });
+        }
+
+        if (points.items.len < 2) return error.InvalidWkt; // Need at least 2 points
+
+        // Calculate WKB size: 1 (endian) + 4 (type) + 4 (num_points) + (num_points * 16)
+        const num_points: u32 = @intCast(points.items.len);
+        const wkb_size: usize = 1 + 4 + 4 + (@as(usize, num_points) * 16);
+        var wkb = try allocator.alloc(u8, wkb_size);
+
+        var offset: usize = 0;
+
+        // Byte order (little endian)
+        wkb[offset] = 1;
+        offset += 1;
+
+        // Geometry type (2 = LineString)
+        std.mem.writeInt(u32, wkb[offset..][0..4], 2, .little);
+        offset += 4;
+
+        // Number of points
+        std.mem.writeInt(u32, wkb[offset..][0..4], num_points, .little);
+        offset += 4;
+
+        // Write all coordinates
+        for (points.items) |point| {
+            std.mem.writeInt(u64, wkb[offset..][0..8], @bitCast(point.x), .little);
+            offset += 8;
+            std.mem.writeInt(u64, wkb[offset..][0..8], @bitCast(point.y), .little);
+            offset += 8;
+        }
+
+        return wkb;
+    }
+
+    // TODO: Support MULTIPOINT, MULTILINESTRING, MULTIPOLYGON and other geometry types
     return error.UnsupportedGeometry;
 }
 

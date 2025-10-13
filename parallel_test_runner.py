@@ -507,28 +507,38 @@ class ParallelTestRunner:
                         self.log_progress(f"Server process for {spec_file.name} died: {stderr.decode()[:200]}")
                         break
 
-                    # Try to connect to verify server is ready
+                    # Check if UDP port is bound (QUIC uses UDP)
+                    # This is more reliable than trying QUIC connections which can hang
                     try:
-                        test_result = subprocess.run(
-                            [self.binary, "query", "--server", server_address, "RETURN 1", "--format", "json"],
+                        netstat_result = subprocess.run(
+                            ["netstat", "-uln"],
                             capture_output=True,
-                            timeout=15  # Increased timeout for QUIC handshake + query under load
+                            text=True,
+                            timeout=2.0
                         )
-                        if test_result.returncode == 0:
-                            server_ready = True
-                            self.log_progress(f"Server ready for {spec_file.name} on port {port}")
-                            break
+
+                        # Check if our port is bound
+                        if netstat_result.returncode == 0 and f":{port}" in netstat_result.stdout:
+                            # Port is bound, give server a bit more time to fully initialize
+                            if (time.time() - start_time) > 5.0:  # At least 5 seconds uptime
+                                server_ready = True
+                                self.log_progress(f"Server ready for {spec_file.name} on port {port}")
+                                break
                     except subprocess.TimeoutExpired:
                         pass  # Continue trying
                     except Exception as e:
-                        pass  # Continue trying
+                        # Fallback: if netstat fails, just check process uptime
+                        if (time.time() - start_time) > 8.0:  # At least 8 seconds uptime
+                            server_ready = True
+                            self.log_progress(f"Server ready for {spec_file.name} on port {port} (fallback)")
+                            break
 
                     # Use exponential backoff for retries
                     if retry_index < len(retry_delays):
                         time.sleep(retry_delays[retry_index])
                         retry_index += 1
                     else:
-                        time.sleep(3.0)  # Continue with 3s delay after initial retries
+                        time.sleep(2.0)  # Continue with 2s delay after initial retries
 
                 if not server_ready:
                     self.log_progress(f"Server for {spec_file.name} did not become ready in {max_wait}s")

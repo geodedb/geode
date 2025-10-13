@@ -509,8 +509,20 @@ pub const GraphStore = struct {
                             .Currency => |cur| {
                                 _ = try file.write(&cur.code);
                             },
+                            .VectorF32 => |vec| {
+                                // Write dimension (u16)
+                                var dim_buf: [2]u8 = undefined;
+                                std.mem.writeInt(u16, &dim_buf, vec.dim, .little);
+                                _ = try file.write(&dim_buf);
+                                // Write each f32 value
+                                for (vec.data) |f| {
+                                    var f_buf: [4]u8 = undefined;
+                                    std.mem.writeInt(u32, &f_buf, @bitCast(f), .little);
+                                    _ = try file.write(&f_buf);
+                                }
+                            },
                             else => {
-                                // TODO: Implement serialization for remaining types (Hash, LanguageTag, Temperature, Pressure, VectorF32, Date, Time, TimestampTZ, List)
+                                // TODO: Implement serialization for remaining types (Hash, LanguageTag, Temperature, Pressure, Date, Time, TimestampTZ, List)
                             },
                         }
                     },
@@ -792,6 +804,22 @@ pub const GraphStore = struct {
                                 var code_buf: [3]u8 = undefined;
                                 if ((try file.read(&code_buf)) < 3) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .Currency = .{ .code = code_buf } };
+                            },
+                            16 => blk2: { // VectorF32
+                                // Read dimension (u16)
+                                var dim_buf: [2]u8 = undefined;
+                                if ((try file.read(&dim_buf)) < 2) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const dim = std.mem.readInt(u16, &dim_buf, .little);
+
+                                // Allocate and read f32 data
+                                const data = try self.allocator.alloc(f32, dim);
+                                for (data) |*f| {
+                                    var f_buf: [4]u8 = undefined;
+                                    if ((try file.read(&f_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    f.* = @bitCast(std.mem.readInt(u32, &f_buf, .little));
+                                }
+
+                                break :blk2 ext_eval.ExtValue{ .VectorF32 = .{ .dim = dim, .data = data } };
                             },
                             else => ext_eval.ExtValue{ .Null = {} }, // TODO: Implement remaining types
                         };

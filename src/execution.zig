@@ -31,7 +31,177 @@ fn initCatalog() void {
             catalog.graphs = std.StringHashMap(void).init(allocator);
             catalog.indexes = std.StringHashMap(IndexInfo).init(allocator);
             catalog_initialized = true;
+            // Load persisted catalog if it exists
+            loadCatalog() catch {};
         }
+    }
+}
+
+fn saveCatalog() !void {
+    const file = try std.fs.cwd().createFile("/tmp/geode_catalog.dat", .{});
+    defer file.close();
+
+    const allocator = std.heap.page_allocator;
+
+    // Write header: schema_count, graph_count, index_count
+    var header: [12]u8 = undefined;
+    std.mem.writeInt(u32, header[0..4], @intCast(catalog.schemas.count()), .little);
+    std.mem.writeInt(u32, header[4..8], @intCast(catalog.graphs.count()), .little);
+    std.mem.writeInt(u32, header[8..12], @intCast(catalog.indexes.count()), .little);
+    _ = try file.write(&header);
+
+    // Write schemas (just names)
+    var schema_iter = catalog.schemas.iterator();
+    while (schema_iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
+        _ = try file.write(&len_buf);
+        _ = try file.write(name);
+    }
+
+    // Write graphs (just names)
+    var graph_iter = catalog.graphs.iterator();
+    while (graph_iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
+        _ = try file.write(&len_buf);
+        _ = try file.write(name);
+    }
+
+    // Write indexes
+    var index_iter = catalog.indexes.iterator();
+    while (index_iter.next()) |entry| {
+        const index_info = entry.value_ptr.*;
+
+        // Write index name
+        var name_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &name_len_buf, @intCast(index_info.name.len), .little);
+        _ = try file.write(&name_len_buf);
+        _ = try file.write(index_info.name);
+
+        // Write index type
+        var type_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &type_len_buf, @intCast(index_info.index_type.len), .little);
+        _ = try file.write(&type_len_buf);
+        _ = try file.write(index_info.index_type);
+
+        // Write table name
+        var table_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &table_len_buf, @intCast(index_info.table_name.len), .little);
+        _ = try file.write(&table_len_buf);
+        _ = try file.write(index_info.table_name);
+
+        // Write column count and columns
+        var col_count_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &col_count_buf, @intCast(index_info.columns.len), .little);
+        _ = try file.write(&col_count_buf);
+
+        for (index_info.columns) |col| {
+            var col_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &col_len_buf, @intCast(col.len), .little);
+            _ = try file.write(&col_len_buf);
+            _ = try file.write(col);
+        }
+    }
+
+    _ = allocator;
+}
+
+fn loadCatalog() !void {
+    const file = std.fs.cwd().openFile("/tmp/geode_catalog.dat", .{}) catch |err| {
+        if (err == error.FileNotFound) return;
+        return err;
+    };
+    defer file.close();
+
+    const allocator = std.heap.page_allocator;
+
+    // Read header
+    var header: [12]u8 = undefined;
+    const bytes_read = try file.read(&header);
+    if (bytes_read < 12) return error.InvalidCatalogFile;
+
+    const schema_count = std.mem.readInt(u32, header[0..4], .little);
+    const graph_count = std.mem.readInt(u32, header[4..8], .little);
+    const index_count = std.mem.readInt(u32, header[8..12], .little);
+
+    // Read schemas
+    var i: u32 = 0;
+    while (i < schema_count) : (i += 1) {
+        var len_buf: [4]u8 = undefined;
+        if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+        const name_len = std.mem.readInt(u32, &len_buf, .little);
+
+        const name = try allocator.alloc(u8, name_len);
+        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+        try catalog.schemas.put(name, {});
+    }
+
+    // Read graphs
+    i = 0;
+    while (i < graph_count) : (i += 1) {
+        var len_buf: [4]u8 = undefined;
+        if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+        const name_len = std.mem.readInt(u32, &len_buf, .little);
+
+        const name = try allocator.alloc(u8, name_len);
+        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+        try catalog.graphs.put(name, {});
+    }
+
+    // Read indexes
+    i = 0;
+    while (i < index_count) : (i += 1) {
+        // Read index name
+        var name_len_buf: [4]u8 = undefined;
+        if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
+        const name_len = std.mem.readInt(u32, &name_len_buf, .little);
+        const name = try allocator.alloc(u8, name_len);
+        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+        // Read index type
+        var type_len_buf: [4]u8 = undefined;
+        if ((try file.read(&type_len_buf)) < 4) return error.InvalidCatalogFile;
+        const type_len = std.mem.readInt(u32, &type_len_buf, .little);
+        const index_type = try allocator.alloc(u8, type_len);
+        if ((try file.read(index_type)) < type_len) return error.InvalidCatalogFile;
+
+        // Read table name
+        var table_len_buf: [4]u8 = undefined;
+        if ((try file.read(&table_len_buf)) < 4) return error.InvalidCatalogFile;
+        const table_len = std.mem.readInt(u32, &table_len_buf, .little);
+        const table_name = try allocator.alloc(u8, table_len);
+        if ((try file.read(table_name)) < table_len) return error.InvalidCatalogFile;
+
+        // Read column count
+        var col_count_buf: [4]u8 = undefined;
+        if ((try file.read(&col_count_buf)) < 4) return error.InvalidCatalogFile;
+        const col_count = std.mem.readInt(u32, &col_count_buf, .little);
+
+        // Read columns
+        const columns = try allocator.alloc([]const u8, col_count);
+        var col_idx: u32 = 0;
+        while (col_idx < col_count) : (col_idx += 1) {
+            var col_len_buf: [4]u8 = undefined;
+            if ((try file.read(&col_len_buf)) < 4) return error.InvalidCatalogFile;
+            const col_len = std.mem.readInt(u32, &col_len_buf, .little);
+            const col = try allocator.alloc(u8, col_len);
+            if ((try file.read(col)) < col_len) return error.InvalidCatalogFile;
+            columns[col_idx] = col;
+        }
+
+        const index_info = IndexInfo{
+            .name = name,
+            .index_type = index_type,
+            .table_name = table_name,
+            .columns = columns,
+        };
+
+        try catalog.indexes.put(name, index_info);
     }
 }
 
@@ -862,6 +1032,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     },
                 };
                 try catalog.indexes.put(try std.heap.page_allocator.dupe(u8, index_name), index_info);
+                // Save catalog to disk after creating index
+                saveCatalog() catch {};
             }
 
             return ExecutionResult{
@@ -973,6 +1145,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Add to catalog
             try catalog.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
+            // Save catalog to disk after creating graph
+            saveCatalog() catch {};
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1038,6 +1212,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Add to catalog if not exists
             if (!catalog.schemas.contains(schema_name)) {
                 try catalog.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
+                // Save catalog to disk after creating schema
+                saveCatalog() catch {};
             }
 
             return ExecutionResult{
@@ -1726,6 +1902,14 @@ fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, cont
     var stats = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
     defer stats.deinit(allocator);
 
+    // Profile type indicator
+    {
+        const row = try allocator.alloc(eval.Value, 2);
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "profile_type") };
+        row[1] = eval.Value{ .Str = try allocator.dupe(u8, "query_profile") };
+        try stats.append(allocator, row);
+    }
+
     // Row count
     {
         const row = try allocator.alloc(eval.Value, 2);
@@ -2290,9 +2474,14 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
     // Check for GROUP BY validation first
     try validateGroupBy(q.ret, q.group_by);
 
+    // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
+    if (q.match.chains.len > 0 and q.create_pattern != null) {
+        return executeMatchCreateQuery(allocator, q);
+    }
+
     // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
     if (q.create_pattern) |create_pattern| {
-        return executeCreateQuery(allocator, q, create_pattern);
+        return executeCreateQuery(allocator, q, create_pattern, null);
     }
 
     // Check if there's a MATCH + CALL pattern
@@ -2389,12 +2578,55 @@ fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: 
     return result;
 }
 
-fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern) !ExecutionResult {
+// Execute MATCH ... CREATE pattern - first match nodes, then create relationships using matched bindings
+fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
+    // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
+    const match_result = try executeMatchQueryWithParams(allocator, q, &.{}, &.{}, q.inline_let_bindings);
+
+    const create_pattern = q.create_pattern.?;
+
+    // For simplicity, use first matched row to create relationships
+    // (typically MATCH...CREATE pattern matches specific nodes to connect)
+    if (match_result.rows.len == 0) {
+        return ExecutionResult{
+            .columns = &.{},
+            .rows = &.{},
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    // Extract bindings from first matched row
+    var bindings = std.StringHashMap(u64).init(allocator);
+    defer bindings.deinit();
+
+    const row = match_result.rows[0];
+    for (match_result.columns, 0..) |col_name, i| {
+        if (i < row.len) {
+            // Extract node ID from matched value
+            if (row[i] == .Node) {
+                try bindings.put(col_name, row[i].Node.id);
+            }
+        }
+    }
+
+    // Execute CREATE with these bindings - CREATE handles RETURN clause
+    return try executeCreateQuery(allocator, q, create_pattern, bindings);
+}
+
+fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern, matched_bindings: ?std.StringHashMap(u64)) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
     // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
     var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
+
+    // If we have matched bindings, copy them to created_nodes
+    if (matched_bindings) |bindings| {
+        var iter = bindings.iterator();
+        while (iter.next()) |entry| {
+            try created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
 
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(eval.Value).init(allocator);
@@ -2404,7 +2636,21 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
     for (create_pattern.chains) |chain| {
         // Handle single node creation
         if (chain.head) |node_pattern| {
-            const node_id = try store.createNode(node_pattern.labels);
+            // Check if this node already exists in matched bindings
+            const node_id = if (node_pattern.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |existing_id| {
+                    // Node already matched from MATCH clause, don't create new
+                    break :blk existing_id;
+                } else {
+                    // Variable not bound, create new node
+                    const new_id = try store.createNode(node_pattern.labels);
+                    try created_nodes.put(var_name, new_id);
+                    break :blk new_id;
+                }
+            } else blk: {
+                // No variable name, always create new node
+                break :blk try store.createNode(node_pattern.labels);
+            };
 
             // Set properties if present
             if (node_pattern.props) |props| {
@@ -2426,19 +2672,41 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                     try store.setNodeProperty(node_id, prop.key, prop_value);
                 }
             }
-
-            // Track created node by variable name if present
-            if (node_pattern.name) |var_name| {
-                try created_nodes.put(var_name, node_id);
-            }
         }
 
         // Handle relationship creation
         for (chain.hops) |hop| {
-            const left_id = try store.createNode(hop.left.labels);
-            const right_id = try store.createNode(hop.right.labels);
+            // Check if left node exists in bindings (from MATCH), otherwise create new
+            const left_id = blk: {
+                if (hop.left.name) |var_name| {
+                    if (created_nodes.get(var_name)) |node_id| {
+                        break :blk node_id;
+                    }
+                }
+                // Variable not bound - create new node
+                const new_id = try store.createNode(hop.left.labels);
+                if (hop.left.name) |var_name| {
+                    try created_nodes.put(var_name, new_id);
+                }
+                break :blk new_id;
+            };
 
-            // Set properties for left node
+            // Check if right node exists in bindings (from MATCH), otherwise create new
+            const right_id = blk: {
+                if (hop.right.name) |var_name| {
+                    if (created_nodes.get(var_name)) |node_id| {
+                        break :blk node_id;
+                    }
+                }
+                // Variable not bound - create new node
+                const new_id = try store.createNode(hop.right.labels);
+                if (hop.right.name) |var_name| {
+                    try created_nodes.put(var_name, new_id);
+                }
+                break :blk new_id;
+            };
+
+            // Set properties for left node (only if newly created or has props to set)
             if (hop.left.props) |props| {
                 const env = eval.Env{
                     .names = &.{},
@@ -2459,7 +2727,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 }
             }
 
-            // Set properties for right node
+            // Set properties for right node (only if newly created or has props to set)
             if (hop.right.props) |props| {
                 const env = eval.Env{
                     .names = &.{},
@@ -4007,17 +4275,33 @@ fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names
 
     // Build column names
     const items = q.ret.items;
-    var columns = try allocator.alloc([]const u8, items.len);
-    for (items, 0..) |item, i| {
-        const column_name = item.alias orelse blk: {
-            switch (item.expr) {
-                .Ident => |ident| break :blk ident.orig,
-                .PropertyAccess => |prop| break :blk prop.property,
-                .Member => |mem| break :blk mem.field,
-                else => break :blk "column",
+    var columns: [][]const u8 = undefined;
+
+    if (items.len == 0) {
+        // No RETURN clause - return matched variables
+        var col_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        defer col_list.deinit(allocator);
+
+        for (chain_vars.items) |var_name| {
+            if (var_name) |name| {
+                try col_list.append(allocator, try allocator.dupe(u8, name));
             }
-        };
-        columns[i] = try allocator.dupe(u8, column_name);
+        }
+        columns = try col_list.toOwnedSlice(allocator);
+    } else {
+        // RETURN clause exists - use expression names
+        columns = try allocator.alloc([]const u8, items.len);
+        for (items, 0..) |item, i| {
+            const column_name = item.alias orelse blk: {
+                switch (item.expr) {
+                    .Ident => |ident| break :blk ident.orig,
+                    .PropertyAccess => |prop| break :blk prop.property,
+                    .Member => |mem| break :blk mem.field,
+                    else => break :blk "column",
+                }
+            };
+            columns[i] = try allocator.dupe(u8, column_name);
+        }
     }
 
     // Generate Cartesian product of all matching nodes
@@ -4066,10 +4350,20 @@ fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names
                     if (!passes) return;
                 }
 
-                // Evaluate RETURN items
-                var row = try self.allocator.alloc(eval.Value, self.items.len);
-                for (self.items, 0..) |item, i| {
-                    row[i] = try eval.evalExpr(self.allocator, item.expr, env);
+                // Evaluate RETURN items or return matched nodes
+                var row: []eval.Value = undefined;
+                if (self.items.len == 0) {
+                    // No RETURN clause - return matched nodes
+                    row = try self.allocator.alloc(eval.Value, current_combo.items.len);
+                    for (current_combo.items, 0..) |node, i| {
+                        row[i] = eval.Value{ .Node = node };
+                    }
+                } else {
+                    // RETURN clause exists - evaluate expressions
+                    row = try self.allocator.alloc(eval.Value, self.items.len);
+                    for (self.items, 0..) |item, i| {
+                        row[i] = try eval.evalExpr(self.allocator, item.expr, env);
+                    }
                 }
                 try self.rows.append(self.allocator, row);
                 return;
@@ -5098,9 +5392,9 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             try rows.append(allocator, null_row);
         }
 
-        // If WITH clause exists, we need to determine columns from matched variables
+        // If WITH clause exists OR no RETURN clause, determine columns from matched variables
         // Otherwise, columns were already set from RETURN expressions
-        if (has_with) {
+        if (has_with or items.len == 0) {
             // Extract variable names from the match pattern
             // For simple node matches, we have match_variable
             // For relationship matches, we have left_node_var, rel_var, right_node_var
