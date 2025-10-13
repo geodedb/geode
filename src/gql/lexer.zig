@@ -304,8 +304,9 @@ pub const Lexer = struct {
             self.col = save_col;
             return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
         }
-        // Special handling for VALUES/KEYS/LABELS: if followed by '(', treat as function call (identifier)
-        if (kind == .VALUES or kind == .KEYS or kind == .LABELS) {
+        // Special handling for KEYS/LABELS: if followed by '(', treat as function call (identifier)
+        // Note: VALUES removed from this check as it's needed as a keyword for VALUES statements
+        if (kind == .KEYS or kind == .LABELS) {
             const save_idx = self.idx;
             const save_line = self.line;
             const save_col = self.col;
@@ -579,6 +580,13 @@ pub const Lexer = struct {
             }
 
             if (c == quote) {
+                // Check for doubled quote escape ('' or "")
+                if (self.idx + 1 < self.src.len and self.src[self.idx + 1] == quote) {
+                    // Doubled quote - treat as escaped quote within string
+                    self.idx += 2; // Skip both quotes
+                    self.col += 2;
+                    continue;
+                }
                 // Found closing quote
                 const content = self.src[content_start..self.idx];
                 self.idx += 1; // Skip closing quote

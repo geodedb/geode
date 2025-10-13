@@ -282,6 +282,11 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
         .Add => blk: {
             // NULL + anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk .{ .Null = {} };
+            // String concatenation: string + string
+            if (l == .Str and r == .Str) {
+                const concat = try std.fmt.allocPrint(alloc, "{s}{s}", .{ l.Str, r.Str });
+                break :blk .{ .Str = concat };
+            }
             if (l == .Int and r == .Int) break :blk .{ .Int = l.Int + r.Int };
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {

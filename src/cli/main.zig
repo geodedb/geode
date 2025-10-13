@@ -515,6 +515,7 @@ fn printQueryUsage() void {
         "  --rollback             Rollback transaction\n" ++
         "  --no-quic              Disable QUIC, use embedded server\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
+        "  -P, --password <pass>  Authentication password\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Arguments:\n" ++
@@ -1873,6 +1874,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var insecure = false;
     var no_quic = false;
     var user: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
     var token: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
     var timeout_secs: u32 = 10; // Default 10 second timeout
@@ -1905,6 +1907,13 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             user = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--password") or std.mem.eql(u8, arg, "-P")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --password requires a password\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            password = argv[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, arg, "--token")) {
             if (i + 1 >= argv.len) {
