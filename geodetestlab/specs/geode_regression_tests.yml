@@ -139,6 +139,8 @@ tests:
       stdout_contains: ["name"]
 
   - name: where-with-regex
+    setup:
+      - "query \"CREATE (a:Person {name: 'Alice', age: 25}), (b:Person {name: 'Bob', age: 30})\" --format json --no-quic"
     args: ["query", "MATCH (n:Person) WHERE n.name =~ 'A.*' RETURN n.name", "--format", "json"]
     expect:
       exit_code: 0

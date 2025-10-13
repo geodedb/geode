@@ -7527,7 +7527,10 @@ fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weigh
     var edge_iter = store.edges.iterator();
     while (edge_iter.next()) |entry| {
         const edge = entry.value_ptr.*;
-        if (edge.from_id == from_id and edge.to_id == to_id) {
+        // Check both directions since getNeighbors returns bidirectional neighbors
+        if ((edge.from_id == from_id and edge.to_id == to_id) or
+            (edge.from_id == to_id and edge.to_id == from_id))
+        {
             // Try to extract weight from edge properties
             if (edge.properties.get(weight_prop)) |prop_value| {
                 // Extract numeric value from property
