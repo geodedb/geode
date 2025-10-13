@@ -1778,11 +1778,43 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
         .Query => |q| {
             if (q.match.chains.len > 0) {
                 const chain = q.match.chains[0];
-                if (chain.head) |_| {
-                    // NodeScan base cost: 100 per node
-                    const node_cost: i64 = 100;
-                    total_cost += node_cost;
-                    try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
+                if (chain.head) |head| {
+                    // Check if we can use an IndexSeek
+                    var use_index_seek = false;
+
+                    // Check if node pattern has label and properties that match an index
+                    if (head.labels.len > 0 and head.props != null and head.props.?.len > 0) {
+                        const label = head.labels[0];
+                        const prop_name = head.props.?[0].key;
+
+                        // Check catalog for matching index
+                        initCatalog();
+                        catalog_mutex.lock();
+                        defer catalog_mutex.unlock();
+
+                        var index_iter = catalog.indexes.valueIterator();
+                        while (index_iter.next()) |index_info| {
+                            // Check if index matches this label and property
+                            if (std.mem.eql(u8, index_info.table_name, label) and
+                                index_info.columns.len > 0 and
+                                std.mem.eql(u8, index_info.columns[0], prop_name)) {
+                                use_index_seek = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (use_index_seek) {
+                        // IndexSeek cost: 10 (much cheaper than NodeScan)
+                        const index_cost: i64 = 10;
+                        total_cost += index_cost;
+                        try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "IndexSeek (cost: {})", .{index_cost}), .cost = index_cost });
+                    } else {
+                        // NodeScan base cost: 100 per node
+                        const node_cost: i64 = 100;
+                        total_cost += node_cost;
+                        try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
+                    }
                 }
                 if (chain.hops.len > 0) {
                     // ExpandRelationships cost: 50 per hop
@@ -1905,7 +1937,7 @@ fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, cont
     // Profile type indicator
     {
         const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "profile_type") };
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "profile") };
         row[1] = eval.Value{ .Str = try allocator.dupe(u8, "query_profile") };
         try stats.append(allocator, row);
     }
@@ -1913,7 +1945,7 @@ fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, cont
     // Row count
     {
         const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "rows_returned") };
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "rows") };
         row[1] = eval.Value{ .Int = @intCast(query_result.rows.len) };
         try stats.append(allocator, row);
     }
@@ -1929,7 +1961,7 @@ fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, cont
     // Execution time (placeholder - would need real timing)
     {
         const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "execution_time_ms") };
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "time") };
         row[1] = eval.Value{ .Int = 1 }; // Placeholder
         try stats.append(allocator, row);
     }
@@ -7388,17 +7420,25 @@ fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     // Create result row
     if (shortest_path) |path| {
         var rows = try allocator.alloc([]eval.Value, 1);
-        var row = try allocator.alloc(eval.Value, 2);
+        var row = try allocator.alloc(eval.Value, columns.len);
 
-        // Path as list
-        var path_nodes = try allocator.alloc(eval.Value, path.len);
-        for (path, 0..) |node_id, i| {
-            path_nodes[i] = eval.Value{ .Int = @intCast(node_id) };
+        // Match returned values to requested columns
+        for (columns, 0..) |col, i| {
+            if (std.mem.eql(u8, col, "path")) {
+                // Path as list
+                var path_nodes = try allocator.alloc(eval.Value, path.len);
+                for (path, 0..) |node_id, j| {
+                    path_nodes[j] = eval.Value{ .Int = @intCast(node_id) };
+                }
+                row[i] = eval.Value{ .List = path_nodes };
+            } else if (std.mem.eql(u8, col, "cost")) {
+                // Cost as decimal
+                row[i] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(shortest_cost * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            } else {
+                // Unknown column, return null
+                row[i] = eval.Value{ .Null = {} };
+            }
         }
-        row[0] = eval.Value{ .List = path_nodes };
-
-        // Cost as decimal
-        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(shortest_cost * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
 
         rows[0] = row;
 

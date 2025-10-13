@@ -45,7 +45,7 @@ pub const Date = struct {
         return days;
     }
 
-    fn dateFromDays(days: i32) struct { year: i32, month: u8, day: u8 } {
+    pub fn dateFromDays(days: i32) struct { year: i32, month: u8, day: u8 } {
         var year: i32 = 1970 + @divFloor(days, 365);
         while (daysSinceEpoch(year, 1, 1) catch 0 > days) year -= 1;
         while (daysSinceEpoch(year + 1, 1, 1) catch std.math.maxInt(i32) <= days) year += 1;

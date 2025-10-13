@@ -1433,6 +1433,68 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 }
             }
 
+            // If target is an ExtValue, handle datetime property access
+            if (target == .ExtValue) {
+                const ext = target.ExtValue;
+                switch (ext) {
+                    .TimestampTZ => |ts| {
+                        // Extract date and time components from timestamp
+                        const days = @divFloor(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
+                        const time_micros = @rem(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
+
+                        // Get date components
+                        const datetime_module = @import("types/datetime.zig");
+                        const date = datetime_module.Date{ .days_since_epoch = @intCast(days) };
+                        const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
+
+                        // Get time components
+                        const hours = @divFloor(time_micros, 3600_000_000);
+                        const minutes = @divFloor(@rem(time_micros, 3600_000_000), 60_000_000);
+                        const seconds = @divFloor(@rem(time_micros, 60_000_000), 1_000_000);
+
+                        if (std.mem.eql(u8, member.field, "year")) {
+                            break :blk_member Value{ .Int = ymd.year };
+                        } else if (std.mem.eql(u8, member.field, "month")) {
+                            break :blk_member Value{ .Int = ymd.month };
+                        } else if (std.mem.eql(u8, member.field, "day")) {
+                            break :blk_member Value{ .Int = ymd.day };
+                        } else if (std.mem.eql(u8, member.field, "hour")) {
+                            break :blk_member Value{ .Int = @intCast(hours) };
+                        } else if (std.mem.eql(u8, member.field, "minute")) {
+                            break :blk_member Value{ .Int = @intCast(minutes) };
+                        } else if (std.mem.eql(u8, member.field, "second")) {
+                            break :blk_member Value{ .Int = @intCast(seconds) };
+                        }
+                    },
+                    .Date => |d| {
+                        const datetime_module = @import("types/datetime.zig");
+                        const ymd = datetime_module.Date.dateFromDays(d.days_since_epoch);
+
+                        if (std.mem.eql(u8, member.field, "year")) {
+                            break :blk_member Value{ .Int = ymd.year };
+                        } else if (std.mem.eql(u8, member.field, "month")) {
+                            break :blk_member Value{ .Int = ymd.month };
+                        } else if (std.mem.eql(u8, member.field, "day")) {
+                            break :blk_member Value{ .Int = ymd.day };
+                        }
+                    },
+                    .Time => |t| {
+                        const hours = @divFloor(t.micros_since_midnight, 3600_000_000);
+                        const minutes = @divFloor(@rem(t.micros_since_midnight, 3600_000_000), 60_000_000);
+                        const seconds = @divFloor(@rem(t.micros_since_midnight, 60_000_000), 1_000_000);
+
+                        if (std.mem.eql(u8, member.field, "hour")) {
+                            break :blk_member Value{ .Int = @intCast(hours) };
+                        } else if (std.mem.eql(u8, member.field, "minute")) {
+                            break :blk_member Value{ .Int = @intCast(minutes) };
+                        } else if (std.mem.eql(u8, member.field, "second")) {
+                            break :blk_member Value{ .Int = @intCast(seconds) };
+                        }
+                    },
+                    else => {},
+                }
+            }
+
             // Otherwise return null
             break :blk_member Value{ .Null = {} };
         },
@@ -2058,6 +2120,75 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         if (args.len != 0) return null;
         const result = evaluator_functions.current_timestamp();
         return heapValueToEvalValue(result);
+    }
+
+    // Handle datetime(string) function that parses ISO datetime strings
+    if (std.mem.eql(u8, function_name, "datetime")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(ally, args[0].*, env);
+        const str = switch (arg) {
+            .Str => |s| s,
+            else => return null,
+        };
+
+        // Parse the datetime string using the Timestamp parser
+        const datetime_module = @import("types/datetime.zig");
+        const ts = datetime_module.Timestamp.fromStr(str) catch return null;
+
+        // Convert to TimestampTZ ExtValue
+        const eval_ext = @import("eval_extended.zig");
+        const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
+        return Value{ .ExtValue = tz_ts };
+    }
+
+    // Handle date(string) function that parses ISO date strings
+    if (std.mem.eql(u8, function_name, "date")) {
+        if (args.len == 0) {
+            // date() with no args returns current date
+            const result = evaluator_functions.current_date();
+            return heapValueToEvalValue(result);
+        } else if (args.len == 1) {
+            // date(string) parses ISO date string
+            const arg = try evalExpr(ally, args[0].*, env);
+            const str = switch (arg) {
+                .Str => |s| s,
+                else => return null,
+            };
+
+            const datetime_module = @import("types/datetime.zig");
+            const d = datetime_module.Date.fromStr(str) catch return null;
+
+            const eval_ext = @import("eval_extended.zig");
+            const date_val = eval_ext.ExtValue{ .Date = d };
+            return Value{ .ExtValue = date_val };
+        } else {
+            return null;
+        }
+    }
+
+    // Handle time(string) function that parses ISO time strings
+    if (std.mem.eql(u8, function_name, "time")) {
+        if (args.len == 0) {
+            // time() with no args returns current time
+            const result = evaluator_functions.current_time();
+            return heapValueToEvalValue(result);
+        } else if (args.len == 1) {
+            // time(string) parses ISO time string
+            const arg = try evalExpr(ally, args[0].*, env);
+            const str = switch (arg) {
+                .Str => |s| s,
+                else => return null,
+            };
+
+            const datetime_module = @import("types/datetime.zig");
+            const t = datetime_module.Time.fromStr(str) catch return null;
+
+            const eval_ext = @import("eval_extended.zig");
+            const time_val = eval_ext.ExtValue{ .Time = t };
+            return Value{ .ExtValue = time_val };
+        } else {
+            return null;
+        }
     }
 
     // Evaluate arguments first
