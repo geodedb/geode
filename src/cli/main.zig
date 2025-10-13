@@ -2049,8 +2049,13 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     // Split query text by semicolons and execute each statement separately
     // Note: We split by semicolons, not newlines, to support multi-line statements
     var iter = std.mem.splitScalar(u8, query_text, ';');
-    var last_result: ?[]u8 = null;
-    defer if (last_result) |res| ally.free(res);
+    var accumulated_results = try std.ArrayList([]u8).initCapacity(ally, 0);
+    defer {
+        for (accumulated_results.items) |res| {
+            ally.free(res);
+        }
+        accumulated_results.deinit(ally);
+    }
 
     while (iter.next()) |stmt| {
         const trimmed_stmt = std.mem.trim(u8, stmt, " \t\r\n");
@@ -2072,10 +2077,6 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
             // Re-throw the error (usually OutOfMemory)
             return err;
         };
-
-        // Free previous result and save new one
-        if (last_result) |prev| ally.free(prev);
-        last_result = result;
 
         // Check for errors in this statement's result
         if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or
@@ -2100,16 +2101,54 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
 
             _ = try stderr_fd.writeAll(error_msg);
             _ = try stderr_fd.writeAll("\n");
+            ally.free(result);
             std.process.exit(1);
+        }
+
+        // Save results that contain actual data (not just status messages)
+        // Look for results that contain column names or data fields
+        const has_data = std.mem.indexOf(u8, result, "\"columns\"") != null or
+                        std.mem.indexOf(u8, result, "\"data\"") != null or
+                        std.mem.indexOf(u8, result, "\"rows\"") != null;
+
+        // Check if this is a transaction control result (which we should skip if we have RETURN results)
+        const is_transaction_control = std.mem.indexOf(u8, trimmed_stmt, "COMMIT") != null or
+                                       std.mem.indexOf(u8, trimmed_stmt, "ROLLBACK") != null or
+                                       std.mem.indexOf(u8, trimmed_stmt, "START TRANSACTION") != null or
+                                       std.mem.indexOf(u8, trimmed_stmt, "BEGIN") != null;
+
+        if (has_data) {
+            // If this is a RETURN statement result, clear any previous transaction control results
+            if (std.mem.indexOf(u8, trimmed_stmt, "RETURN") != null) {
+                // Free any previously accumulated transaction control results
+                for (accumulated_results.items) |prev_result| {
+                    ally.free(prev_result);
+                }
+                accumulated_results.clearRetainingCapacity();
+            }
+
+            // Only accumulate non-transaction control results, or if we have no other results
+            if (!is_transaction_control or accumulated_results.items.len == 0) {
+                try accumulated_results.append(ally, result);
+            } else {
+                // Skip transaction control results if we already have data
+                ally.free(result);
+            }
+        } else {
+            // For statements without data output, just free the result
+            ally.free(result);
         }
     }
 
-    // Use the last result for output
-    const result = last_result orelse {
+    // Use the last result that had actual data
+    if (accumulated_results.items.len == 0) {
         const stderr_fd = std.fs.File{ .handle = 2 };
         _ = try stderr_fd.writeAll("Error: no valid statements to execute\n");
         std.process.exit(1);
-    };
+    }
+
+    const result = try ally.dupe(u8, accumulated_results.items[accumulated_results.items.len - 1]);
+    defer ally.free(result);
 
     // Check if the result indicates a syntax error or execution error
     if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {

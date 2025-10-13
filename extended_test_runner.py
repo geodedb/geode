@@ -52,11 +52,18 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
 
         # Inject unique identifiers for test isolation in query args
-        if "MERGE" in processed_arg or "CREATE" in processed_arg:
+        if "MERGE" in processed_arg or "CREATE" in processed_arg or "MATCH" in processed_arg:
             processed_arg = processed_arg.replace("'Test'", f"'Test_{test_id}'")
             processed_arg = processed_arg.replace("'Unique'", f"'Unique_{test_id}'")
             processed_arg = processed_arg.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
             processed_arg = processed_arg.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
+
+            # Also replace common node names used in Dijkstra and other graph algo tests
+            # to avoid conflicts between tests
+            for node_name in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']:
+                processed_arg = processed_arg.replace(f"name: '{node_name}'", f"name: '{node_name}_{test_id}'")
+                processed_arg = processed_arg.replace(f'name: "{node_name}"', f'name: "{node_name}_{test_id}"')
+                processed_arg = processed_arg.replace(f"name: ''{node_name}''", f"name: ''{node_name}_{test_id}''")
 
             # Add unique suffixes to index names for test isolation
             import re

@@ -2618,8 +2618,7 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
 
     const create_pattern = q.create_pattern.?;
 
-    // For simplicity, use first matched row to create relationships
-    // (typically MATCH...CREATE pattern matches specific nodes to connect)
+    // If no matches, return empty result
     if (match_result.rows.len == 0) {
         return ExecutionResult{
             .columns = &.{},
@@ -2628,22 +2627,210 @@ fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Executio
         };
     }
 
-    // Extract bindings from first matched row
-    var bindings = std.StringHashMap(u64).init(allocator);
-    defer bindings.deinit();
+    // Track total count of created items for aggregation
+    var total_created_count: i64 = 0;
 
-    const row = match_result.rows[0];
-    for (match_result.columns, 0..) |col_name, i| {
-        if (i < row.len) {
-            // Extract node ID from matched value
-            if (row[i] == .Node) {
-                try bindings.put(col_name, row[i].Node.id);
+    // Iterate over ALL matched rows and execute CREATE for each combination
+    for (match_result.rows) |row| {
+        // Extract bindings from this matched row
+        var bindings = std.StringHashMap(u64).init(allocator);
+        defer {
+            // Free duplicated keys
+            var iter = bindings.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+            }
+            bindings.deinit();
+        }
+
+        for (match_result.columns, 0..) |col_name, i| {
+            if (i < row.len) {
+                // Extract node ID from matched value
+                if (row[i] == .Node) {
+                    // Duplicate the column name to avoid use-after-free
+                    const col_name_copy = try allocator.dupe(u8, col_name);
+                    try bindings.put(col_name_copy, row[i].Node.id);
+                }
+            }
+        }
+
+        // Execute CREATE with these bindings (without RETURN processing)
+        const created_count = try executeCreateForBatch(allocator, create_pattern, bindings);
+        total_created_count += created_count;
+    }
+
+    // Handle RETURN clause with aggregation if needed
+    if (q.ret.items.len > 0) {
+        // Check if RETURN uses count(*) aggregation
+        if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
+            const call = q.ret.items[0].expr.Call;
+            // Check if it's a count function
+            if (call.callee.* == .Ident and
+                (std.mem.eql(u8, call.callee.Ident.orig, "count") or
+                 std.mem.eql(u8, call.callee.Ident.orig, "COUNT"))) {
+                // Return the total count
+                var columns = try allocator.alloc([]const u8, 1);
+                columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
+
+                var rows = try allocator.alloc([]eval.Value, 1);
+                var row = try allocator.alloc(eval.Value, 1);
+                row[0] = eval.Value{ .Int = total_created_count };
+                rows[0] = row;
+
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = rows,
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
             }
         }
     }
 
-    // Execute CREATE with these bindings - CREATE handles RETURN clause
-    return try executeCreateQuery(allocator, q, create_pattern, bindings);
+    // Default: return empty result if no aggregation
+    return ExecutionResult{
+        .columns = &.{},
+        .rows = &.{},
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+// Helper function to execute CREATE operations for batch processing (returns count of created items)
+fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64)) !i64 {
+    const store = graph_store.getGlobalStore(allocator);
+    var created_count: i64 = 0;
+
+    // Track created nodes by variable name
+    var created_nodes = std.StringHashMap(u64).init(allocator);
+    defer {
+        // Free all duplicated keys (both from matched_bindings and new creates)
+        var key_iter = created_nodes.iterator();
+        while (key_iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+        }
+        created_nodes.deinit();
+    }
+
+    // Copy matched bindings to created_nodes (keys are already duplicated by caller)
+    var iter = matched_bindings.iterator();
+    while (iter.next()) |entry| {
+        // Duplicate the key since we need our own copy for created_nodes
+        const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
+        try created_nodes.put(key_copy, entry.value_ptr.*);
+    }
+
+    // Process CREATE pattern
+    for (create_pattern.chains) |chain| {
+        // Handle single node creation
+        if (chain.head) |node_pattern| {
+            // Check if this node already exists in matched bindings
+            const node_id = if (node_pattern.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |existing_id| {
+                    // Node already matched from MATCH clause, don't create new
+                    break :blk existing_id;
+                } else {
+                    // Variable not bound, create new node
+                    const new_id = try store.createNode(node_pattern.labels);
+                    const var_name_copy = try allocator.dupe(u8, var_name);
+                    try created_nodes.put(var_name_copy, new_id);
+                    created_count += 1;
+                    break :blk new_id;
+                }
+            } else blk: {
+                // No variable name, always create new node
+                created_count += 1;
+                break :blk try store.createNode(node_pattern.labels);
+            };
+
+            // Set properties if present
+            if (node_pattern.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        .Null => graph_store.PropertyValue{ .Null = {} },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setNodeProperty(node_id, prop.key, prop_value);
+                }
+            }
+        }
+
+        // Handle relationship creation
+        for (chain.hops) |hop| {
+            // Get left node (must exist in bindings)
+            const left_id = if (hop.left.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |node_id| {
+                    break :blk node_id;
+                } else {
+                    // Create new node if not found
+                    const new_id = try store.createNode(hop.left.labels);
+                    const var_name_copy = try allocator.dupe(u8, var_name);
+                    try created_nodes.put(var_name_copy, new_id);
+                    created_count += 1;
+                    break :blk new_id;
+                }
+            } else blk: {
+                // Anonymous node - create new
+                created_count += 1;
+                break :blk try store.createNode(hop.left.labels);
+            };
+
+            // Get right node (must exist in bindings)
+            const right_id = if (hop.right.name) |var_name| blk: {
+                if (created_nodes.get(var_name)) |node_id| {
+                    break :blk node_id;
+                } else {
+                    // Create new node if not found
+                    const new_id = try store.createNode(hop.right.labels);
+                    const var_name_copy = try allocator.dupe(u8, var_name);
+                    try created_nodes.put(var_name_copy, new_id);
+                    created_count += 1;
+                    break :blk new_id;
+                }
+            } else blk: {
+                // Anonymous node - create new
+                created_count += 1;
+                break :blk try store.createNode(hop.right.labels);
+            };
+
+            // Create the relationship
+            const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
+            const edge_id = try store.createEdge(left_id, right_id, edge_label);
+            created_count += 1;
+
+            // Set relationship properties if present
+            if (hop.rel.props) |props| {
+                const env = eval.Env{
+                    .names = &.{},
+                    .values = &.{},
+                };
+
+                for (props) |prop| {
+                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const prop_value = switch (value) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        else => graph_store.PropertyValue{ .Null = {} },
+                    };
+                    try store.setEdgeProperty(edge_id, prop.key, prop_value);
+                }
+            }
+        }
+    }
+
+    return created_count;
 }
 
 fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern, matched_bindings: ?std.StringHashMap(u64)) !ExecutionResult {
