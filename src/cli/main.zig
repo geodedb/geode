@@ -2079,9 +2079,19 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         };
 
         // Check for errors in this statement's result
-        if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or
-            std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null)
-        {
+        // Any status_class that's not "00000" (success) indicates an error
+        const has_error = blk: {
+            if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |sc_start| {
+                const sc_value_start = sc_start + "\"status_class\":\"".len;
+                if (sc_value_start + 5 <= result.len) {
+                    const status_code = result[sc_value_start .. sc_value_start + 5];
+                    break :blk !std.mem.eql(u8, status_code, "00000");
+                }
+            }
+            break :blk false;
+        };
+
+        if (has_error) {
             // This is an error - extract and write error message to stderr
             const stderr_fd = std.fs.File{ .handle = 2 };
 
@@ -2150,8 +2160,19 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     const result = try ally.dupe(u8, accumulated_results.items[accumulated_results.items.len - 1]);
     defer ally.free(result);
 
-    // Check if the result indicates a syntax error or execution error
-    if (std.mem.indexOf(u8, result, "\"status_class\":\"42000\"") != null or std.mem.indexOf(u8, result, "\"status_class\":\"0A000\"") != null) {
+    // Check if the result indicates any error (any status_class != "00000")
+    const has_error_final = blk: {
+        if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |sc_start| {
+            const sc_value_start = sc_start + "\"status_class\":\"".len;
+            if (sc_value_start + 5 <= result.len) {
+                const status_code = result[sc_value_start .. sc_value_start + 5];
+                break :blk !std.mem.eql(u8, status_code, "00000");
+            }
+        }
+        break :blk false;
+    };
+
+    if (has_error_final) {
         // This is an error - extract and write error message to stderr
         const stderr_fd = std.fs.File{ .handle = 2 };
 

@@ -72,7 +72,7 @@ tests:
       stdout_contains: ["Unique"]
 
   - name: merge-with-on-create
-    args: ["query", "MERGE (n:Person {name: 'Test'}) ON CREATE SET n.created = true RETURN n", "--format", "json"]
+    args: ["query", "MERGE (n:Person {name: 'TestOnCreate'}) ON CREATE SET n.created = true RETURN n", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["created"]
