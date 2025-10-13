@@ -4812,10 +4812,135 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             return result;
         } else {
             // No GROUP BY - aggregate all matching rows into single result
+            // CANARY: REQ=REQ-GQL-AGGREGATE-WHERE; FEATURE="AggregateWithWHERE"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
+            // Fix: Collect matched nodes that pass WHERE clause before aggregating
+
+            var matched_nodes = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+            defer matched_nodes.deinit(allocator);
+
+            // Collect all nodes that match the pattern and WHERE clause
+            var node_iter = store.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                const node = entry.value_ptr;
+
+                // Filter by labels if specified
+                if (match_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (match_labels) |required_label| {
+                        var found = false;
+                        for (node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
+
+                // Create environment with matched node for WHERE clause evaluation
+                var env_names: [][]const u8 = &.{};
+                var env_values: []eval.Value = &.{};
+
+                if (match_variable) |var_name| {
+                    env_names = try allocator.alloc([]const u8, 1);
+                    env_values = try allocator.alloc(eval.Value, 1);
+                    env_names[0] = var_name;
+                    env_values[0] = eval.Value{ .Node = node };
+                }
+
+                const env = eval.Env{
+                    .names = env_names,
+                    .values = env_values,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                };
+
+                // Evaluate WHERE clause if present
+                if (q.where_clause) |where_expr| {
+                    const where_result = try eval.evalExpr(allocator, where_expr, env);
+                    const passes_where = switch (where_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+
+                    if (!passes_where) {
+                        if (match_variable != null) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                        }
+                        continue;
+                    }
+                }
+
+                // Evaluate FILTER clause if present
+                if (q.filter_clause) |filter_expr| {
+                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const passes_filter = switch (filter_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+
+                    if (!passes_filter) {
+                        if (match_variable != null) {
+                            allocator.free(env_names);
+                            allocator.free(env_values);
+                        }
+                        continue;
+                    }
+                }
+
+                // Apply SET clauses if present
+                for (q.set_clauses) |set_clause| {
+                    switch (set_clause) {
+                        .Property => |prop| {
+                            if (std.mem.eql(u8, prop.target.object, match_variable orelse "")) {
+                                const value = try eval.evalExpr(allocator, prop.value, env);
+                                const prop_value = switch (value) {
+                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                    .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                    .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                    .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                    else => graph_store.PropertyValue{ .Null = {} },
+                                };
+                                try store.setNodeProperty(node.id, prop.target.property, prop_value);
+                            }
+                        },
+                        .Labels => |label_set| {
+                            if (std.mem.eql(u8, label_set.node, match_variable orelse "")) {
+                                for (label_set.labels) |label| {
+                                    try store.addNodeLabel(node.id, label);
+                                }
+                            }
+                        },
+                        .AllProperties => {},
+                    }
+                }
+
+                // Free environment memory
+                if (match_variable != null) {
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                }
+
+                // Add node to matched list
+                try matched_nodes.append(allocator, node);
+            }
+
+            // Now compute aggregations over the matched nodes
             var row = try allocator.alloc(eval.Value, items.len);
 
             for (items, 0..) |item, i| {
-                row[i] = try evaluateAggregationWithLabels(allocator, item.expr, store, match_labels);
+                row[i] = try evaluateGroupAggregation(allocator, item.expr, matched_nodes.items);
             }
 
             var rows = try allocator.alloc([]eval.Value, 1);
