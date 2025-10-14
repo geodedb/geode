@@ -1248,8 +1248,11 @@ pub const Parser = struct {
         }
 
         // Check for SELECT at the beginning (for queries like: SELECT 1 AS x)
-        // SELECT maps to RETURN semantics with empty match pattern
+        // SELECT maps to RETURN semantics - treat as RETURN to allow variable access
+        // When SELECT appears in UNION after CREATE, it should access CREATE variables
+        var select_mode = false;
         if (self.cur.kind == .SELECT) {
+            select_mode = true;
             self.advance();
             var distinct = false;
             if (self.cur.kind == .DISTINCT) {
@@ -1258,46 +1261,67 @@ pub const Parser = struct {
             }
             var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             try self.parseProjectionItems(&items);
-            // Return minimal query with SELECT-based return clause
-            return ast.Query{
-                .optional_match = false,
-                .match = .{ .chains = &.{} },
-                .where_clause = null,
-                .with_clause = null,
-                .ret = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct },
+
+            // Instead of returning immediately, store as initial_with_clause
+            // This allows SELECT to access variables from enclosing scope (like CREATE variables in UNION)
+            initial_with_clause = .{
+                .items = try items.toOwnedSlice(self.arena.allocator()),
                 .order_by = null,
                 .limit = null,
                 .offset = null,
-                .next_query = null,
             };
+            // Continue parsing - SELECT acts like WITH, making variables available to RETURN
         }
 
-        // Check for CALL at the beginning (for queries starting with CALL)
+        // Check for CALL { subquery } at the beginning
         if (self.cur.kind == .CALL) {
-            // Parse CALL as a statement, then continue with WITH/WHERE/RETURN
-            // This creates a query with an empty match pattern but starting with CALL
-            // The CALL statement will be in the initial_with_clause or handled separately
-            // For now, we create a minimal empty query and let WITH follow
-            const empty_match = ast.GraphPattern{ .chains = &.{} };
+            const peek_ahead = self.peekToken();
+            if (peek_ahead == .l_brace) {
+                // CALL { subquery } syntax - parse the subquery and continue with WITH/WHERE/RETURN
+                self.advance(); // consume CALL
+                self.advance(); // consume {
 
-            // After CALL statement, allow WITH to continue the query
-            // Return minimal query structure - the CALL will be part of the statement sequence
-            return ast.Query{
-                .optional_match = false,
-                .match = empty_match,
-                .create_pattern = null,
-                .where_clause = null,
-                .with_clause = null,
-                .set_clauses = &.{},
-                .remove_clauses = &.{},
-                .ret = .{ .items = &.{}, .distinct = false },
-                .order_by = null,
-                .limit = null,
-                .offset = null,
-                .next_query = null,
-                .group_by = null,
-                .having = null,
-            };
+                // Parse the inner query
+                const inner_query = try self.parseQuery();
+
+                // Consume closing brace
+                _ = try self.expect(.r_brace);
+
+                // Now continue parsing WITH/WHERE/RETURN after the CALL block
+                // The inner query results become available to the following clauses
+                // We treat this as if the inner query's RETURN produced a WITH clause
+
+                // Store the inner query's return items as an implicit WITH clause
+                initial_with_clause = .{
+                    .items = inner_query.ret.items,
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                };
+
+                // Continue parsing - don't return yet, let the rest of parseQuery handle
+                // any WITH/WHERE/RETURN that follows
+            } else {
+                // Regular procedure CALL - return empty query for now
+                // This will be handled elsewhere in the query body
+                const empty_match = ast.GraphPattern{ .chains = &.{} };
+                return ast.Query{
+                    .optional_match = false,
+                    .match = empty_match,
+                    .create_pattern = null,
+                    .where_clause = null,
+                    .with_clause = null,
+                    .set_clauses = &.{},
+                    .remove_clauses = &.{},
+                    .ret = .{ .items = &.{}, .distinct = false },
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                    .next_query = null,
+                    .group_by = null,
+                    .having = null,
+                };
+            }
         }
 
         // Check for CREATE at the beginning
@@ -1711,6 +1735,10 @@ pub const Parser = struct {
             // Query chaining: WITH followed by MATCH/CREATE
             // Use WITH items as implicit RETURN to pass bindings forward
             return_clause = .{ .items = with_clause.?.items, .distinct = false };
+        } else if (select_mode and initial_with_clause != null) {
+            // SELECT was parsed and stored in initial_with_clause
+            // Use SELECT items as implicit RETURN
+            return_clause = .{ .items = initial_with_clause.?.items, .distinct = false };
         } else if (!have_match and !have_create) {
             // No pattern - check if we have RETURN
             if (self.cur.kind != .RETURN) {
