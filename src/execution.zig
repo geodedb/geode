@@ -365,6 +365,54 @@ pub const ExecutionResult = struct {
     }
 };
 
+// Helper function to duplicate an ExecutionResult
+fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) !ExecutionResult {
+    // Duplicate columns
+    const columns = try allocator.alloc([]const u8, original.columns.len);
+    for (original.columns, 0..) |col, i| {
+        columns[i] = try allocator.dupe(u8, col);
+    }
+
+    // Duplicate rows
+    const rows = try allocator.alloc([]eval.Value, original.rows.len);
+    for (original.rows, 0..) |row, i| {
+        const new_row = try allocator.alloc(eval.Value, row.len);
+        for (row, 0..) |val, j| {
+            new_row[j] = try duplicateValue(allocator, val);
+        }
+        rows[i] = new_row;
+    }
+
+    // Duplicate flags
+    var flags = try std.ArrayList([]const u8).initCapacity(allocator, original.flags.items.len);
+    for (original.flags.items) |flag| {
+        try flags.append(allocator, try allocator.dupe(u8, flag));
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = flags,
+    };
+}
+
+// Helper function to duplicate a Value
+fn duplicateValue(allocator: std.mem.Allocator, value: eval.Value) !eval.Value {
+    return switch (value) {
+        .Null, .Int, .Bool, .Decimal => value, // These are copy-by-value
+        .Str => |s| .{ .Str = try allocator.dupe(u8, s) },
+        .List => |list| blk: {
+            const new_list = try allocator.alloc(eval.Value, list.len);
+            for (list, 0..) |item, i| {
+                new_list[i] = try duplicateValue(allocator, item);
+            }
+            break :blk .{ .List = new_list };
+        },
+        .Node, .Edge, .Path => value, // These contain pointers but we'll shallow copy for now
+        else => value, // Fallback for any other types
+    };
+}
+
 fn writeValue(writer: anytype, value: eval.Value) !void {
     switch (value) {
         .Null => try writer.writeAll("null"),
@@ -654,10 +702,13 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         };
     }
 
-    // Execute all statements and return the result of the last one
+    // Execute all statements and return the result of the last data-bearing statement
+    // Transaction control statements (START TRANSACTION, COMMIT, ROLLBACK) produce status messages
+    // but should not override data results (like RETURN) in multi-statement programs
     // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=StatePropagation; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
     // Maintain mutable context to propagate transaction state changes across statements
     var last_result: ?ExecutionResult = null;
+    var last_data_result: ?ExecutionResult = null; // Last non-transaction-control result
     var current_context = context;
 
     for (program.statements) |stmt| {
@@ -667,6 +718,23 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         }
 
         last_result = try executeStatementWithContext(allocator, stmt, current_context);
+
+        // Track last data-bearing result (not transaction control)
+        const is_transaction_control = switch (stmt) {
+            .StartTransaction, .Commit, .Rollback => true,
+            else => false,
+        };
+
+        if (!is_transaction_control) {
+            // Free previous data result if any
+            if (last_data_result) |*result| {
+                result.deinit(allocator);
+            }
+            // Duplicate the result since we're tracking two pointers
+            if (last_result) |res| {
+                last_data_result = try duplicateResult(allocator, res);
+            }
+        }
 
         // Propagate transaction state changes to next statement
         // Check if this statement was a transaction control statement
@@ -683,6 +751,19 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             },
             else => {},
         }
+    }
+
+    // If we have multiple statements and a data-bearing result, return that instead of transaction control
+    if (program.statements.len > 1 and last_data_result != null) {
+        if (last_result) |*result| {
+            result.deinit(allocator);
+        }
+        return last_data_result.?;
+    }
+
+    // Otherwise return the last result
+    if (last_data_result) |*result| {
+        result.deinit(allocator);
     }
 
     return last_result orelse ExecutionResult{

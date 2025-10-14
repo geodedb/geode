@@ -2055,122 +2055,35 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         .strict_offset_validation = false, // Allow SKIP without ORDER BY (results in undefined order)
     };
 
-    // Split query text by semicolons and execute each statement separately
-    // Note: We split by semicolons, not newlines, to support multi-line statements
-    var iter = std.mem.splitScalar(u8, query_text, ';');
-    var accumulated_results = try std.ArrayList([]u8).initCapacity(ally, 0);
-    defer {
-        for (accumulated_results.items) |res| {
-            ally.free(res);
-        }
-        accumulated_results.deinit(ally);
+    // Execute the entire query as-is - the parser handles semicolons as statement separators
+    // This preserves transaction state across multiple statements
+    const trimmed_query = std.mem.trim(u8, query_text, " \t\r\n");
+
+    // Skip empty queries
+    if (trimmed_query.len == 0) {
+        const stdout_fd = std.fs.File{ .handle = 1 };
+        _ = try stdout_fd.writeAll("{\"status_class\":\"00000\",\"columns\":[],\"rows\":[],\"flagger_findings\":[]}\n");
+        return;
     }
 
-    while (iter.next()) |stmt| {
-        const trimmed_stmt = std.mem.trim(u8, stmt, " \t\r\n");
-
-        // Skip empty statements
-        if (trimmed_stmt.len == 0) continue;
-
-        const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_stmt, options) catch |err| {
-            // Handle specific test cases that should go to stderr
-            if (std.mem.indexOf(u8, trimmed_stmt, "bad_json") != null) {
-                const stderr_fd = std.fs.File{ .handle = 2 };
-                _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
-            } else if (std.mem.eql(u8, trimmed_stmt, "unauthorized")) {
-                const stderr_fd = std.fs.File{ .handle = 2 };
-                _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
-                std.process.exit(3);
-            }
-
-            // Re-throw the error (usually OutOfMemory)
-            return err;
-        };
-
-        // Check for errors in this statement's result
-        // Any status_class that's not "00000" (success) indicates an error
-        const has_error = blk: {
-            if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |sc_start| {
-                const sc_value_start = sc_start + "\"status_class\":\"".len;
-                if (sc_value_start + 5 <= result.len) {
-                    const status_code = result[sc_value_start .. sc_value_start + 5];
-                    break :blk !std.mem.eql(u8, status_code, "00000");
-                }
-            }
-            break :blk false;
-        };
-
-        if (has_error) {
-            // This is an error - extract and write error message to stderr
+    const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_query, options) catch |err| {
+        // Handle specific test cases that should go to stderr
+        if (std.mem.indexOf(u8, trimmed_query, "bad_json") != null) {
             const stderr_fd = std.fs.File{ .handle = 2 };
-
-            // Try to extract the error message from the JSON
-            var error_msg: []const u8 = "error";
-            if (std.mem.indexOf(u8, result, "\"message\":\"")) |msg_start| {
-                const msg_content_start = msg_start + "\"message\":\"".len;
-                if (std.mem.indexOfPos(u8, result, msg_content_start, "\"")) |msg_end| {
-                    error_msg = result[msg_content_start..msg_end];
-                }
-            } else if (std.mem.indexOf(u8, result, "\"error\":\"")) |err_start| {
-                const err_content_start = err_start + "\"error\":\"".len;
-                if (std.mem.indexOfPos(u8, result, err_content_start, "\"")) |err_end| {
-                    error_msg = result[err_content_start..err_end];
-                }
-            }
-
-            _ = try stderr_fd.writeAll(error_msg);
-            _ = try stderr_fd.writeAll("\n");
-            ally.free(result);
-            std.process.exit(1);
+            _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
+        } else if (std.mem.eql(u8, trimmed_query, "unauthorized")) {
+            const stderr_fd = std.fs.File{ .handle = 2 };
+            _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
+            std.process.exit(3);
         }
 
-        // Save results that contain actual data (not just status messages)
-        // Look for results that contain column names or data fields
-        const has_data = std.mem.indexOf(u8, result, "\"columns\"") != null or
-            std.mem.indexOf(u8, result, "\"data\"") != null or
-            std.mem.indexOf(u8, result, "\"rows\"") != null;
-
-        // Check if this is a transaction control result (which we should skip if we have RETURN results)
-        const is_transaction_control = std.mem.indexOf(u8, trimmed_stmt, "COMMIT") != null or
-            std.mem.indexOf(u8, trimmed_stmt, "ROLLBACK") != null or
-            std.mem.indexOf(u8, trimmed_stmt, "START TRANSACTION") != null or
-            std.mem.indexOf(u8, trimmed_stmt, "BEGIN") != null;
-
-        if (has_data) {
-            // If this is a RETURN statement result, clear any previous transaction control results
-            if (std.mem.indexOf(u8, trimmed_stmt, "RETURN") != null) {
-                // Free any previously accumulated transaction control results
-                for (accumulated_results.items) |prev_result| {
-                    ally.free(prev_result);
-                }
-                accumulated_results.clearRetainingCapacity();
-            }
-
-            // Only accumulate non-transaction control results, or if we have no other results
-            if (!is_transaction_control or accumulated_results.items.len == 0) {
-                try accumulated_results.append(ally, result);
-            } else {
-                // Skip transaction control results if we already have data
-                ally.free(result);
-            }
-        } else {
-            // For statements without data output, just free the result
-            ally.free(result);
-        }
-    }
-
-    // Use the last result that had actual data
-    if (accumulated_results.items.len == 0) {
-        const stderr_fd = std.fs.File{ .handle = 2 };
-        _ = try stderr_fd.writeAll("Error: no valid statements to execute\n");
-        std.process.exit(1);
-    }
-
-    const result = try ally.dupe(u8, accumulated_results.items[accumulated_results.items.len - 1]);
+        // Re-throw the error (usually OutOfMemory)
+        return err;
+    };
     defer ally.free(result);
 
     // Check if the result indicates any error (any status_class != "00000")
-    const has_error_final = blk: {
+    const has_error = blk: {
         if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |sc_start| {
             const sc_value_start = sc_start + "\"status_class\":\"".len;
             if (sc_value_start + 5 <= result.len) {
@@ -2181,12 +2094,11 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         break :blk false;
     };
 
-    if (has_error_final) {
+    if (has_error) {
         // This is an error - extract and write error message to stderr
         const stderr_fd = std.fs.File{ .handle = 2 };
 
         // Try to extract the error message from the JSON
-        // Look for "message":"..." or "error":"..." pattern
         var error_msg: []const u8 = "error";
         if (std.mem.indexOf(u8, result, "\"message\":\"")) |msg_start| {
             const msg_content_start = msg_start + "\"message\":\"".len;

@@ -48,17 +48,24 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
     }
 
-    // Check if this is a single START TRANSACTION statement (allowing it to replace previous session)
-    const is_single_start_transaction = parse_result.program.statements.len == 1 and
+    // Check if the FIRST statement is START TRANSACTION
+    // If so, and there's a previous Active session, we have two cases:
+    // 1. This is a nested transaction (should fail) - detected by context in executeProgramWithContext
+    // 2. This is a new CLI invocation starting fresh - clear the stale session
+    // We assume case 2 for CLI usage
+    const first_stmt_is_start_txn = parse_result.program.statements.len > 0 and
         parse_result.program.statements[0] == .StartTransaction;
 
-    // Load transaction session if exists, UNLESS this is a single START TRANSACTION
-    // (single START TRANSACTION is allowed to replace previous session)
-    var transaction_session = if (!is_single_start_transaction)
-        txn_session.loadSession(allocator.*) catch null
-    else
-        null;
+    var transaction_session = txn_session.loadSession(allocator.*) catch null;
     defer if (transaction_session) |*ts| ts.deinit(allocator.*);
+
+    // If we're starting a transaction as the first statement, clear stale sessions
+    // This allows tests to be isolated and CLI invocations to start fresh
+    if (first_stmt_is_start_txn and transaction_session != null) {
+        // Clear the loaded session - we're starting fresh
+        if (transaction_session) |*ts| ts.deinit(allocator.*);
+        transaction_session = null;
+    }
 
     // Create session state for SESSION SET GRAPH support
     var session_state = execution.SessionState.init(allocator.*);
