@@ -5,10 +5,10 @@ const crypto = std.crypto;
 // User management system with bcrypt password hashing and role-based access control
 
 pub const Role = enum {
-    Admin,      // Full access: read, write, schema changes
-    User,       // Limited access: read only
-    ReadWrite,  // Read and write access
-    ReadOnly,   // Explicit read-only access
+    Admin, // Full access: read, write, schema changes
+    User, // Limited access: read only
+    ReadWrite, // Read and write access
+    ReadOnly, // Explicit read-only access
 
     pub fn fromString(s: []const u8) ?Role {
         if (std.ascii.eqlIgnoreCase(s, "admin")) return .Admin;
@@ -44,7 +44,7 @@ pub const Permission = enum {
 
 pub const User = struct {
     username: []const u8,
-    password_hash: [75]u8,  // $argon2id$ + 64 hex chars + $ = 75 bytes
+    password_hash: [75]u8, // $argon2id$ + 64 hex chars + $ = 75 bytes
     email: []const u8,
     role: Role,
     created_at: i64,
@@ -107,9 +107,9 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![75]u8 
     // - memory_cost: Memory in KiB (65536 = 64 MiB, recommended for server)
     // - parallelism: Number of threads (4 is typical for modern CPUs)
     const params = crypto.pwhash.argon2.Params{
-        .t = 3,      // time cost (iterations)
-        .m = 65536,  // memory cost in KiB (64 MiB)
-        .p = 4,      // parallelism (threads)
+        .t = 3, // time cost (iterations)
+        .m = 65536, // memory cost in KiB (64 MiB)
+        .p = 4, // parallelism (threads)
     };
 
     // Generate a deterministic salt from a fixed seed for this simplified implementation
