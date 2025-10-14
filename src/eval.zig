@@ -748,9 +748,55 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             break :blk5 try evalContains(v, n);
         },
         .Call => |call| blk_call: {
-            // Extract function name from callee (should be an Ident expression)
+            // CANARY: REQ=REQ-GQL-087; FEATURE="NamespacedFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
+            // Extract function name from callee (Ident or Member for namespaced functions)
+            var full_function_name_buf: [256]u8 = undefined;
             const function_name = switch (call.callee.*) {
                 .Ident => |ident| ident.orig,
+                .Member => |member| blk_member: {
+                    // Handle namespaced functions like algo.similarity.jaccard
+                    // Build full name by traversing the member chain
+                    // Store parts in reverse order first
+                    var parts_buf: [8][]const u8 = undefined;
+                    var parts_count: usize = 0;
+
+                    // Start with the rightmost member
+                    parts_buf[parts_count] = member.field;
+                    parts_count += 1;
+
+                    // Walk up the chain
+                    var current = member.target.*;
+                    while (parts_count < 8) {
+                        switch (current) {
+                            .Ident => |ident| {
+                                parts_buf[parts_count] = ident.orig;
+                                parts_count += 1;
+                                break;
+                            },
+                            .Member => |m| {
+                                parts_buf[parts_count] = m.field;
+                                parts_count += 1;
+                                current = m.target.*;
+                            },
+                            else => break :blk_call .{ .Null = {} },
+                        }
+                    }
+
+                    // Build the string by joining parts in reverse order with dots
+                    var name_len: usize = 0;
+                    var i: usize = parts_count;
+                    while (i > 0) {
+                        i -= 1;
+                        const part = parts_buf[i];
+                        if (i < parts_count - 1) {
+                            full_function_name_buf[name_len] = '.';
+                            name_len += 1;
+                        }
+                        @memcpy(full_function_name_buf[name_len..][0..part.len], part);
+                        name_len += part.len;
+                    }
+                    break :blk_member full_function_name_buf[0..name_len];
+                },
                 else => break :blk_call .{ .Null = {} }, // Not a simple function call
             };
 
@@ -2287,6 +2333,44 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         }
     }
 
+    // CANARY: REQ=REQ-GQL-088; FEATURE="GraphSimilarityFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
+    // Handle algo.similarity.jaccard(list1, list2) - Jaccard similarity coefficient
+    if (std.mem.eql(u8, function_name, "algo.similarity.jaccard") or std.mem.eql(u8, function_name, "jaccard")) {
+        if (args.len != 2) return null;
+        const arg1 = try evalExpr(ally, args[0].*, env);
+        const arg2 = try evalExpr(ally, args[1].*, env);
+
+        const list1 = switch (arg1) {
+            .List => |l| l,
+            else => return Value{ .Decimal = .{ .coeff = 0, .scale = 0 } },
+        };
+        const list2 = switch (arg2) {
+            .List => |l| l,
+            else => return Value{ .Decimal = .{ .coeff = 0, .scale = 0 } },
+        };
+
+        // Count intersection
+        var intersection: usize = 0;
+        for (list1) |item1| {
+            for (list2) |item2| {
+                if (eqVals(item1, item2)) {
+                    intersection += 1;
+                    break;
+                }
+            }
+        }
+
+        // Calculate union size
+        const union_size = list1.len + list2.len - intersection;
+        if (union_size == 0) {
+            return Value{ .Decimal = .{ .coeff = 0, .scale = 0 } };
+        }
+
+        // Return as decimal with 2 decimal places
+        const jaccard_coeff = @divTrunc(@as(i128, @intCast(intersection)) * 100, @as(i128, @intCast(union_size)));
+        return Value{ .Decimal = .{ .coeff = jaccard_coeff, .scale = 2 } };
+    }
+
     // Evaluate arguments first
     if (args.len == 0) return null;
 
@@ -2436,7 +2520,8 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
             else => return Value{ .Str = "" },
         }
-    } else if (std.mem.eql(u8, function_name, "tofloat") or std.mem.eql(u8, function_name, "todouble")) {
+    } else if (std.mem.eql(u8, function_name, "tofloat") or std.mem.eql(u8, function_name, "toFloat") or std.mem.eql(u8, function_name, "todouble") or std.mem.eql(u8, function_name, "toDouble")) {
+        // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
         // Convert to float
         switch (first_arg) {
             .Int => |i| return Value{ .Decimal = .{ .coeff = i * 10, .scale = 1 } },

@@ -65,6 +65,7 @@ pub const Query = struct {
     with_clause: ?WithClause,
     set_clauses: []SetClause = &.{},
     remove_clauses: []RemoveClause = &.{},
+    delete_items: []DeleteItem = &.{},
     group_by: ?GroupBy = null,
     having: ?Expr = null,
     ret: ReturnClause,

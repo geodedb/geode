@@ -135,6 +135,32 @@ test "JSON verbose temporals includes kind/raw/parsed" {
     // Error cases would require lower-level parser access which isn't exposed
 }
 
+test "CREATE INDEX parsing" {
+    const test_queries = [_][]const u8{
+        "CREATE INDEX test_idx FOR (n:Test) ON (n.value)",
+        "CREATE INDEX test_idx ON Test (value)",
+    };
+
+    for (test_queries) |query| {
+        var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {
+            std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{query, err});
+            return err;
+        };
+        defer result.deinit();
+        try std.testing.expect(result.program.statements.len == 1);
+    }
+}
+
+test "Parenthesized UNION with INTERSECT" {
+    const query = "(MATCH (a:MixedA) RETURN a.id AS id UNION MATCH (b:MixedB) RETURN b.id AS id) INTERSECT MATCH (c:MixedC) RETURN c.id AS id";
+    var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {
+        std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{query, err});
+        return err;
+    };
+    defer result.deinit();
+    try std.testing.expect(result.program.statements.len == 1);
+}
+
 test "DATE literal format validation (rejects bad format)" {
     const src = "MATCH (n) WHERE n.dob = DATE\"2024/08/12\" RETURN n";
     // This test would require expecting parse errors which lib.parse doesn't expose

@@ -1027,6 +1027,70 @@ pub const Parser = struct {
                     } } };
                 }
             },
+            .l_paren => blk_paren: {
+                // CANARY: REQ=REQ-GQL-085; FEATURE="ParenthesizedSetOperations"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
+                // Parse parenthesized statement: (MATCH ... UNION ...) INTERSECT ...
+                self.advance(); // consume (
+                const inner_stmt = try self.parseStatement();
+                _ = try self.expect(.r_paren);
+
+                // Check if this is followed by set operations
+                if (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+                    // Extract the first query from the inner statement
+                    const first = switch (inner_stmt) {
+                        .Query => |q| q,
+                        .Union => |u| blk_first: {
+                            // Convert Union statement back to a query by wrapping it
+                            // For now, we'll just use the first query from the union
+                            break :blk_first u.first;
+                        },
+                        else => return error.UnexpectedToken,
+                    };
+
+                    // Parse the rest of the set operations
+                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+                    // If inner_stmt was a Union, add its tails first
+                    if (inner_stmt == .Union) {
+                        for (inner_stmt.Union.tails) |tail| {
+                            try parts.append(self.arena.allocator(), tail);
+                        }
+                    }
+
+                    // Parse additional set operations
+                    while (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+                        const operation = switch (self.cur.kind) {
+                            .UNION => ast.SetOperation.union_op,
+                            .INTERSECT => ast.SetOperation.intersect,
+                            .EXCEPT => ast.SetOperation.except,
+                            else => unreachable,
+                        };
+                        self.advance();
+                        var all = false;
+                        var distinct = false;
+                        if (self.cur.kind == .ALL) {
+                            all = true;
+                            self.advance();
+                        } else if (self.cur.kind == .DISTINCT) {
+                            distinct = true;
+                            self.advance();
+                        }
+                        const q = try self.parseQuery();
+                        try parts.append(self.arena.allocator(), .{ .operation = operation, .all = all, .distinct = distinct, .query = q });
+                    }
+
+                    break :blk_paren .{ .Union = .{
+                        .first = first,
+                        .tails = try parts.toOwnedSlice(self.arena.allocator()),
+                        .order_by = null,
+                        .limit = null,
+                        .offset = null,
+                    } };
+                }
+
+                // No set operations, just return the inner statement
+                break :blk_paren inner_stmt;
+            },
             else => return error.UnexpectedToken,
         };
     }
@@ -1678,6 +1742,21 @@ pub const Parser = struct {
             remove_clauses = try self.parseRemoveClauses();
         }
 
+        // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
+        // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
+        var delete_items: []ast.DeleteItem = &.{};
+        if (self.cur.kind == .DELETE) {
+            self.advance();
+            delete_items = try self.parseDeleteItems();
+
+            // After DELETE, we can have another CREATE pattern
+            // This allows queries like: CREATE (n) WITH ... DELETE n CREATE (m) RETURN ...
+            if (self.cur.kind == .CREATE) {
+                self.advance();
+                create_pattern = try self.parseGraphPattern();
+            }
+        }
+
         // Parse CALL clause if present (for MATCH ... CALL ... YIELD pattern)
         var call_clause: ?ast.CallClause = null;
         if (self.cur.kind == .CALL) {
@@ -1728,8 +1807,8 @@ pub const Parser = struct {
                     having_expr = try self.parseOrExpr();
                 }
             }
-        } else if (set_clauses.len > 0 or remove_clauses.len > 0 or create_pattern != null) {
-            // SET/REMOVE/CREATE without RETURN - create empty return clause
+        } else if (set_clauses.len > 0 or remove_clauses.len > 0 or delete_items.len > 0 or create_pattern != null) {
+            // SET/REMOVE/DELETE/CREATE without RETURN - create empty return clause
             return_clause = .{ .items = &.{}, .distinct = false };
         } else if (next_query_ptr != null and with_clause != null) {
             // Query chaining: WITH followed by MATCH/CREATE
@@ -1881,6 +1960,7 @@ pub const Parser = struct {
             .with_clause = if (with_clause) |wc| wc else initial_with_clause,
             .set_clauses = set_clauses,
             .remove_clauses = remove_clauses,
+            .delete_items = delete_items,
             .group_by = group_by,
             .having = having_expr,
             .ret = return_clause,
@@ -3162,8 +3242,8 @@ pub const Parser = struct {
         const pattern = try self.parseGraphPattern();
 
         // CANARY: REQ=REQ-GQL-083; FEATURE="CreateWithClause"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-09
-        // Check if this is followed by WITH, SET, or REMOVE - if so, this should be a Query, not a standalone CREATE
-        if (self.cur.kind == .WITH or self.cur.kind == .SET or self.cur.kind == .REMOVE) {
+        // Check if this is followed by WITH, SET, REMOVE, or DELETE - if so, this should be a Query, not a standalone CREATE
+        if (self.cur.kind == .WITH or self.cur.kind == .SET or self.cur.kind == .REMOVE or self.cur.kind == .DELETE) {
             // This is CREATE ... WITH/SET/REMOVE ... RETURN
             // We need to construct a Query with create_pattern set
 
@@ -3281,6 +3361,14 @@ pub const Parser = struct {
                 remove_clauses = try self.parseRemoveClauses();
             }
 
+            // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
+            // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=ParserCreateStatement; STATUS=IMPLEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
+            var delete_items: []ast.DeleteItem = &.{};
+            if (self.cur.kind == .DELETE) {
+                self.advance();
+                delete_items = try self.parseDeleteItems();
+            }
+
             // Parse RETURN clause (required for Query)
             var return_clause: ast.ReturnClause = undefined;
             if (self.cur.kind == .RETURN) {
@@ -3292,11 +3380,11 @@ pub const Parser = struct {
                 var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                 try self.parseProjectionItems(&items);
                 return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
-            } else if (set_clauses.len > 0 or remove_clauses.len > 0) {
-                // SET/REMOVE without RETURN - create empty return clause
+            } else if (set_clauses.len > 0 or remove_clauses.len > 0 or delete_items.len > 0) {
+                // SET/REMOVE/DELETE without RETURN - create empty return clause
                 return_clause = .{ .items = &.{}, .distinct = false };
             } else {
-                // No SET/REMOVE and no RETURN after WITH - error
+                // No SET/REMOVE/DELETE and no RETURN after WITH - error
                 _ = try self.expect(.RETURN);
                 unreachable;
             }
@@ -3311,6 +3399,7 @@ pub const Parser = struct {
                     .with_clause = with_clause,
                     .set_clauses = set_clauses,
                     .remove_clauses = remove_clauses,
+                    .delete_items = delete_items,
                     .ret = return_clause,
                     .order_by = null,
                     .limit = null,
@@ -3597,6 +3686,23 @@ pub const Parser = struct {
         }
     }
 
+    fn parseDeleteItems(self: *Parser) ParserError![]ast.DeleteItem {
+        var items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
+
+        // Parse first item
+        const first = try self.parseDeleteItem();
+        try items.append(self.arena.allocator(), first);
+
+        // Parse additional items
+        while (self.cur.kind == .comma) {
+            self.advance();
+            const item = try self.parseDeleteItem();
+            try items.append(self.arena.allocator(), item);
+        }
+
+        return items.toOwnedSlice(self.arena.allocator());
+    }
+
     // Parse CREATE INDEX statement
     fn parseCreateIndex(self: *Parser) ParserError!ast.Statement {
         var unique = false;
@@ -3766,18 +3872,21 @@ pub const Parser = struct {
         var properties = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1) catch unreachable;
 
         // Parse properties - handle both (property) and (n.property) syntax
+        // CANARY: REQ=REQ-GQL-084; FEATURE="CreateIndexKeywordProperties"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
         while (true) {
-            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            // Allow keywords as property names (common case: "value", "type", etc.)
+            if (self.cur.kind != .identifier and !self.isKeyword(self.cur.kind)) return error.UnexpectedToken;
 
             // Check for qualified property (n.property)
-            if (pattern_variable != null and self.cur.kind == .identifier) {
+            if (pattern_variable != null) {
                 const first_part = self.cur.lexeme;
                 self.advance();
 
                 // Check for dot
                 if (self.cur.kind == .dot) {
                     self.advance();
-                    if (self.cur.kind != .identifier) return error.UnexpectedToken;
+                    // Allow keywords as property names after dot
+                    if (self.cur.kind != .identifier and !self.isKeyword(self.cur.kind)) return error.UnexpectedToken;
                     // Use the property name after the dot
                     try properties.append(self.arena.allocator(), self.cur.lexeme);
                     self.advance();
