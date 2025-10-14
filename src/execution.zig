@@ -8,12 +8,20 @@ var catalog_mutex = std.Thread.Mutex{};
 var catalog_initialized = false;
 
 // IndexInfo stores metadata about an index
+// CANARY: REQ=REQ-INDEX-001; FEATURE="IndexManagement"; ASPECT=Catalog; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
 const IndexInfo = struct {
-    name: []const u8,
-    index_type: []const u8,
-    table_name: []const u8,
-    columns: [][]const u8,
+    name: []const u8,           // Index name (user-provided)
+    index_type: []const u8,     // btree, hash, fulltext, etc.
+    table_name: []const u8,     // Label/table name
+    columns: [][]const u8,      // Property names
 };
+
+/// Generate a scoped index key for catalog storage
+/// Format: "label:index_name" to allow same index name on different labels
+/// This follows database best practices where indexes are scoped per table/label
+fn getScopedIndexKey(allocator: std.mem.Allocator, label: []const u8, index_name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}:{s}", .{ label, index_name });
+}
 
 var catalog: struct {
     schemas: std.StringHashMap(void),
@@ -201,7 +209,10 @@ fn loadCatalog() !void {
             .columns = columns,
         };
 
-        try catalog.indexes.put(name, index_info);
+        // Reconstruct scoped key: "label:index_name"
+        // This ensures compatibility with new scoped key format
+        const scoped_key = try getScopedIndexKey(allocator, table_name, name);
+        try catalog.indexes.put(scoped_key, index_info);
     }
 }
 
@@ -1184,15 +1195,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .CreateIndex => |ci| {
             // CREATE INDEX implementation with validation
+            // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
             initCatalog();
 
             const index_name = ci.name;
+            const label = ci.label;
 
             catalog_mutex.lock();
             defer catalog_mutex.unlock();
 
-            // Check if index already exists
-            if (!ci.if_not_exists and catalog.indexes.contains(index_name)) {
+            // Generate scoped key: "label:index_name"
+            // This allows the same index name on different labels (e.g., Person:idx and Company:idx)
+            const scoped_key = try getScopedIndexKey(std.heap.page_allocator, label, index_name);
+            defer std.heap.page_allocator.free(scoped_key);
+
+            // Check if index already exists for this label
+            if (!ci.if_not_exists and catalog.indexes.contains(scoped_key)) {
                 return error.DuplicateIndex;
             }
 
@@ -1221,7 +1239,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             }
 
             // Add to catalog if not exists
-            if (!catalog.indexes.contains(index_name)) {
+            if (!catalog.indexes.contains(scoped_key)) {
                 // Create IndexInfo with all the details
                 const index_info = IndexInfo{
                     .name = try std.heap.page_allocator.dupe(u8, index_name),
@@ -1236,7 +1254,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .network_cidr => "network_cidr",
                         .signature_crypto => "signature_crypto",
                     },
-                    .table_name = try std.heap.page_allocator.dupe(u8, ci.label),
+                    .table_name = try std.heap.page_allocator.dupe(u8, label),
                     .columns = blk: {
                         var cols = try std.heap.page_allocator.alloc([]const u8, ci.properties.len);
                         for (ci.properties, 0..) |prop, i| {
@@ -1245,7 +1263,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         break :blk cols;
                     },
                 };
-                try catalog.indexes.put(try std.heap.page_allocator.dupe(u8, index_name), index_info);
+                // Use scoped key for storage: "label:index_name"
+                const stored_key = try getScopedIndexKey(std.heap.page_allocator, label, index_name);
+                try catalog.indexes.put(stored_key, index_info);
                 // Save catalog to disk after creating index
                 saveCatalog() catch {};
             }
@@ -1277,7 +1297,44 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .DropIndex => |di| {
             // DROP INDEX implementation
-            _ = di;
+            // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
+            initCatalog();
+
+            const index_name = di.name;
+
+            catalog_mutex.lock();
+            defer catalog_mutex.unlock();
+
+            // Search for index by name across all labels
+            // Since we use scoped keys ("label:index_name"), we need to find the matching entry
+            var found_key: ?[]const u8 = null;
+            var iter = catalog.indexes.iterator();
+            while (iter.next()) |entry| {
+                const info = entry.value_ptr.*;
+                if (std.mem.eql(u8, info.name, index_name)) {
+                    found_key = entry.key_ptr.*;
+                    break;
+                }
+            }
+
+            if (found_key) |key| {
+                // Found the index, remove it
+                if (catalog.indexes.fetchRemove(key)) |removed| {
+                    // Free the allocated memory
+                    std.heap.page_allocator.free(removed.key);
+                    std.heap.page_allocator.free(removed.value.name);
+                    std.heap.page_allocator.free(removed.value.table_name);
+                    for (removed.value.columns) |col| {
+                        std.heap.page_allocator.free(col);
+                    }
+                    std.heap.page_allocator.free(removed.value.columns);
+                }
+                // Save catalog after dropping index
+                saveCatalog() catch {};
+            } else if (!di.if_exists) {
+                return error.IndexNotFound;
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
