@@ -300,6 +300,7 @@ pub const ExecutionResult = struct {
     columns: [][]const u8,
     rows: [][]eval.Value,
     flags: std.ArrayList([]const u8),
+    owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
 
     pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
         for (self.columns) |col| {
@@ -308,10 +309,23 @@ pub const ExecutionResult = struct {
         allocator.free(self.columns);
 
         for (self.rows) |row| {
+            // Only free values if this result owns the memory (was duplicated)
+            if (self.owns_value_memory) {
+                for (row) |val| {
+                    freeValue(allocator, val);
+                }
+            }
             allocator.free(row);
         }
         allocator.free(self.rows);
 
+        // Only free flag strings if this result owns them (was duplicated)
+        // Original results have string literal flags that can't be freed
+        if (self.owns_value_memory) {
+            for (self.flags.items) |flag| {
+                allocator.free(flag);
+            }
+        }
         self.flags.deinit(allocator);
     }
 
@@ -393,6 +407,7 @@ fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) !Exe
         .columns = columns,
         .rows = rows,
         .flags = flags,
+        .owns_value_memory = true, // Duplicated result owns its value memory
     };
 }
 
@@ -413,6 +428,20 @@ fn duplicateValue(allocator: std.mem.Allocator, value: eval.Value) !eval.Value {
     };
 }
 
+// Helper function to free a Value's allocated memory
+fn freeValue(allocator: std.mem.Allocator, value: eval.Value) void {
+    switch (value) {
+        .Str => |s| allocator.free(s),
+        .List => |list| {
+            for (list) |item| {
+                freeValue(allocator, item);
+            }
+            allocator.free(list);
+        },
+        else => {}, // Other types don't own memory or are shallow copies
+    }
+}
+
 fn writeValue(writer: anytype, value: eval.Value) !void {
     switch (value) {
         .Null => try writer.writeAll("null"),
@@ -420,8 +449,52 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .Str => |s| {
             try writer.writeByte('"');
-            // TODO: Proper JSON escaping
-            try writer.writeAll(s);
+            // Unescape GQL doubled single quotes ('') to single quotes (')
+            // and escape JSON special characters
+            var i: usize = 0;
+            while (i < s.len) {
+                const c = s[i];
+                switch (c) {
+                    '\'' => {
+                        // Check for doubled single quote (GQL escape)
+                        if (i + 1 < s.len and s[i + 1] == '\'') {
+                            // Skip the second quote - output only one
+                            try writer.writeByte('\'');
+                            i += 2;
+                        } else {
+                            // Single quote not doubled
+                            try writer.writeByte('\'');
+                            i += 1;
+                        }
+                    },
+                    '"' => {
+                        // JSON requires escaping double quotes
+                        try writer.writeAll("\\\"");
+                        i += 1;
+                    },
+                    '\\' => {
+                        // JSON requires escaping backslashes
+                        try writer.writeAll("\\\\");
+                        i += 1;
+                    },
+                    '\n' => {
+                        try writer.writeAll("\\n");
+                        i += 1;
+                    },
+                    '\r' => {
+                        try writer.writeAll("\\r");
+                        i += 1;
+                    },
+                    '\t' => {
+                        try writer.writeAll("\\t");
+                        i += 1;
+                    },
+                    else => {
+                        try writer.writeByte(c);
+                        i += 1;
+                    },
+                }
+            }
             try writer.writeByte('"');
         },
         .Decimal => |d| {
@@ -711,28 +784,39 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     var last_data_result: ?ExecutionResult = null; // Last non-transaction-control result
     var current_context = context;
 
+    // Only track data results separately if we have multiple statements
+    const track_data_results = program.statements.len > 1;
+
     for (program.statements) |stmt| {
         // Free previous result if any
         if (last_result) |*result| {
             result.deinit(allocator);
         }
 
-        last_result = try executeStatementWithContext(allocator, stmt, current_context);
-
-        // Track last data-bearing result (not transaction control)
-        const is_transaction_control = switch (stmt) {
-            .StartTransaction, .Commit, .Rollback => true,
-            else => false,
-        };
-
-        if (!is_transaction_control) {
-            // Free previous data result if any
+        last_result = executeStatementWithContext(allocator, stmt, current_context) catch |err| {
+            // On error, clean up both result pointers before returning
             if (last_data_result) |*result| {
                 result.deinit(allocator);
             }
-            // Duplicate the result since we're tracking two pointers
-            if (last_result) |res| {
-                last_data_result = try duplicateResult(allocator, res);
+            return err;
+        };
+
+        // Track last data-bearing result (not transaction control) only for multi-statement programs
+        if (track_data_results) {
+            const is_transaction_control = switch (stmt) {
+                .StartTransaction, .Commit, .Rollback => true,
+                else => false,
+            };
+
+            if (!is_transaction_control) {
+                // Free previous data result if any
+                if (last_data_result) |*result| {
+                    result.deinit(allocator);
+                }
+                // Duplicate the result since we're tracking two pointers
+                if (last_result) |res| {
+                    last_data_result = try duplicateResult(allocator, res);
+                }
             }
         }
 
@@ -753,15 +837,15 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         }
     }
 
-    // If we have multiple statements and a data-bearing result, return that instead of transaction control
-    if (program.statements.len > 1 and last_data_result != null) {
+    // If we tracked data results and have one, return that instead of transaction control
+    if (track_data_results and last_data_result != null) {
         if (last_result) |*result| {
             result.deinit(allocator);
         }
         return last_data_result.?;
     }
 
-    // Otherwise return the last result
+    // Otherwise return the last result (and clean up data result if any)
     if (last_data_result) |*result| {
         result.deinit(allocator);
     }
