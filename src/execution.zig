@@ -301,6 +301,8 @@ pub const ExecutionResult = struct {
     rows: [][]eval.Value,
     flags: std.ArrayList([]const u8),
     owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
+    // Variable bindings from CREATE patterns (for passing to UNION parts)
+    variable_bindings: ?*std.StringHashMap(u64) = null,
 
     pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
         for (self.columns) |col| {
@@ -327,6 +329,12 @@ pub const ExecutionResult = struct {
             }
         }
         self.flags.deinit(allocator);
+
+        // Free variable bindings if present
+        if (self.variable_bindings) |bindings| {
+            bindings.deinit();
+            allocator.destroy(bindings);
+        }
     }
 
     pub fn toJson(self: ExecutionResult, allocator: std.mem.Allocator) ![]u8 {
@@ -3207,7 +3215,8 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
 
     // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
     var created_nodes = std.StringHashMap(u64).init(allocator);
-    defer created_nodes.deinit();
+    // Don't defer deinit - we'll transfer ownership to ExecutionResult for UNION support
+    errdefer created_nodes.deinit();
 
     // If we have matched bindings, copy them to created_nodes
     if (matched_bindings) |bindings| {
@@ -3619,14 +3628,36 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
         }
         allocator.free(result.rows);
 
+        // Clone created_nodes for variable_bindings
+        const bindings_ptr = try allocator.create(std.StringHashMap(u64));
+        bindings_ptr.* = try created_nodes.clone();
+        errdefer {
+            bindings_ptr.deinit();
+            allocator.destroy(bindings_ptr);
+        }
+
+        // Clean up local created_nodes
+        created_nodes.deinit();
+
         return ExecutionResult{
             .columns = return_columns,
             .rows = return_rows,
             .flags = result.flags,
+            .variable_bindings = bindings_ptr,
         };
     } else {
         // No WITH clause - use created nodes and relationships directly for RETURN
-        return executeReturnClauseWithNodes(allocator, q.ret, created_nodes, created_relationships);
+        var ret_result = try executeReturnClauseWithNodes(allocator, q.ret, created_nodes, created_relationships);
+
+        // Clone created_nodes for variable_bindings before they get freed
+        const bindings_ptr = try allocator.create(std.StringHashMap(u64));
+        bindings_ptr.* = try created_nodes.clone();
+        ret_result.variable_bindings = bindings_ptr;
+
+        // Clean up local created_nodes
+        created_nodes.deinit();
+
+        return ret_result;
     }
 }
 
@@ -7129,6 +7160,10 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
     var result = try executeQueryNoLimit(allocator, union_query.first);
     errdefer result.deinit(allocator);
 
+    // Extract variable bindings from first query (if any) to pass to subsequent UNION parts
+    // This allows SELECT in UNION to access variables from CREATE in first query
+    const shared_bindings = result.variable_bindings;
+
     // Execute and append results from tail queries
     for (union_query.tails) |part| {
         // Determine the operation type
@@ -7137,7 +7172,11 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
         if (operation == .union_op) {
             if (part.all) {
                 // UNION ALL - append all rows
-                var part_result = try executeQueryNoLimit(allocator, part.query);
+                // Use shared bindings if available (for accessing CREATE variables in SELECT)
+                var part_result = if (shared_bindings) |bindings|
+                    try executeQueryWithBindings(allocator, part.query, bindings)
+                else
+                    try executeQueryNoLimit(allocator, part.query);
                 defer part_result.deinit(allocator);
 
                 // Validate column count match
@@ -7168,7 +7207,10 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
                 allocator.free(old_rows);
             } else {
                 // UNION DISTINCT - deduplicate rows
-            var part_result = try executeQueryNoLimit(allocator, part.query);
+            var part_result = if (shared_bindings) |bindings|
+                try executeQueryWithBindings(allocator, part.query, bindings)
+            else
+                try executeQueryNoLimit(allocator, part.query);
             defer part_result.deinit(allocator);
 
             // Validate column count match
@@ -7234,7 +7276,10 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
             }
         } else if (operation == .intersect) {
             // INTERSECT - keep only rows that appear in both result sets
-            var part_result = try executeQueryNoLimit(allocator, part.query);
+            var part_result = if (shared_bindings) |bindings|
+                try executeQueryWithBindings(allocator, part.query, bindings)
+            else
+                try executeQueryNoLimit(allocator, part.query);
             defer part_result.deinit(allocator);
 
             // Validate column count match
@@ -7316,7 +7361,10 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
             result.rows = try new_rows.toOwnedSlice(allocator);
         } else if (operation == .except) {
             // EXCEPT - keep rows from left that don't appear in right
-            var part_result = try executeQueryNoLimit(allocator, part.query);
+            var part_result = if (shared_bindings) |bindings|
+                try executeQueryWithBindings(allocator, part.query, bindings)
+            else
+                try executeQueryNoLimit(allocator, part.query);
             defer part_result.deinit(allocator);
 
             // Validate column count match
@@ -7496,6 +7544,18 @@ fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !ExecutionRes
     // Execute query without applying limit/offset
     const ret = q.ret;
     return executeReturnClause(allocator, ret);
+}
+
+fn executeQueryWithBindings(allocator: std.mem.Allocator, q: ast.Query, bindings: *std.StringHashMap(u64)) !ExecutionResult {
+    // Execute query with provided variable bindings (for UNION parts accessing CREATE variables)
+    const ret = q.ret;
+
+    // Create empty relationships map (UNION parts don't create relationships, just access variables)
+    var relationships = std.StringHashMap(eval.Value).init(allocator);
+    defer relationships.deinit();
+
+    // Use executeReturnClauseWithNodes which creates an environment from the bindings
+    return executeReturnClauseWithNodes(allocator, ret, bindings.*, relationships);
 }
 
 fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {
