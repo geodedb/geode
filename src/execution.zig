@@ -2383,6 +2383,14 @@ fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, nex
 
     const current_result = try executeQueryWithContext(allocator, current_query_standalone, context);
 
+    // CANARY(memory-safety): Validate current_result structure before accessing
+    // Prevent corrupted column length from causing OutOfMemory errors
+    if (current_result.columns.len > 1000000) {
+        // Suspiciously large column count - likely corrupted memory
+        std.debug.print("ERROR: Corrupted columns.len = {d}\n", .{current_result.columns.len});
+        return error.CorruptedExecutionResult;
+    }
+
     // Now execute the next query with the current result as bindings
     // For each row in current_result, execute next_query with those bindings
     var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
@@ -2411,6 +2419,12 @@ fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, nex
         const next_query_with_bindings = next_query_ptr.*;
 
         // Build parameter arrays from current result
+        // Validate that current_row length matches columns length
+        if (current_row.len != current_result.columns.len) {
+            std.debug.print("ERROR: Row length {d} != columns length {d}\n", .{current_row.len, current_result.columns.len});
+            return error.MismatchedRowColumnLength;
+        }
+
         // Use try instead of catch unreachable to handle allocation errors gracefully
         var param_names = try std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len);
         defer param_names.deinit(allocator);
@@ -2489,12 +2503,26 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
         const current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
 
+        // CANARY(memory-safety): Validate current_result structure before accessing
+        // Prevent corrupted column length from causing OutOfMemory errors
+        if (current_result.columns.len > 1000000) {
+            // Suspiciously large column count - likely corrupted memory
+            std.debug.print("ERROR: Corrupted columns.len = {d} in executeQueryChainWithBindings\n", .{current_result.columns.len});
+            return error.CorruptedExecutionResult;
+        }
+
         // Chain to next query using the result as bindings
         var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
         var final_columns: [][]const u8 = &.{};
         var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
 
         for (current_result.rows) |current_row| {
+            // Validate that current_row length matches columns length
+            if (current_row.len != current_result.columns.len) {
+                std.debug.print("ERROR: Row length {d} != columns length {d} in executeQueryChainWithBindings\n", .{current_row.len, current_result.columns.len});
+                return error.MismatchedRowColumnLength;
+            }
+
             var param_names = std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len) catch unreachable;
             defer param_names.deinit(allocator);
             var param_values = std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
@@ -5021,6 +5049,8 @@ fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names
 fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
+    // CANARY(memory-safety): Debug output to trace execution
+
     // Extract pattern information from MATCH
     var match_variable: ?[]const u8 = null;
     var match_labels: [][]const u8 = &.{};
@@ -5035,10 +5065,12 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
     // Variable-length path pattern support
     var var_len_min: ?u32 = null;
     var var_len_max: ?u32 = null;
+    var chain_path_var: ?[]const u8 = null;
 
     // Get the first chain from the pattern
     if (q.match.chains.len > 0) {
         const chain = q.match.chains[0];
+        chain_path_var = chain.name;
 
         // Check if this is a relationship pattern (has hops)
         if (chain.hops.len > 0) {
@@ -5167,27 +5199,26 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
     // When WITH clause exists, columns will be set later based on matched variables
     // When no WITH clause, set columns from RETURN expressions
     const has_with = q.with_clause != null;
-    var columns: [][]const u8 = undefined;
-    if (!has_with) {
-        columns = try allocator.alloc([]const u8, items.len);
-        for (items, 0..) |item, i| {
-            const column_name = item.alias orelse blk: {
-                // Use expression-based column name if no alias provided
-                switch (item.expr) {
-                    .Ident => |ident| break :blk ident.orig,
-                    .PropertyAccess => |prop| break :blk prop.property,
-                    .Member => |mem| break :blk mem.field,
-                    .Call => |call| {
-                        if (call.callee.* == .Ident) {
-                            break :blk call.callee.Ident.orig;
-                        }
-                        break :blk "column";
-                    },
-                    else => break :blk "column",
-                }
-            };
-            columns[i] = try allocator.dupe(u8, column_name);
-        }
+    // CANARY(memory-safety): Always initialize columns from RETURN items
+    // Even with WITH clauses, we need column names for the intermediate result
+    var columns = try allocator.alloc([]const u8, items.len);
+    for (items, 0..) |item, i| {
+        const column_name = item.alias orelse blk: {
+            // Use expression-based column name if no alias provided
+            switch (item.expr) {
+                .Ident => |ident| break :blk ident.orig,
+                .PropertyAccess => |prop| break :blk prop.property,
+                .Member => |mem| break :blk mem.field,
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        break :blk call.callee.Ident.orig;
+                    }
+                    break :blk "column";
+                },
+                else => break :blk "column",
+            }
+        };
+        columns[i] = try allocator.dupe(u8, column_name);
     }
 
     // Check if we have any aggregations
@@ -5198,6 +5229,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             break;
         }
     }
+
 
     if (has_aggregation) {
         // Check if we have GROUP BY
@@ -5527,17 +5559,107 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                 row[i] = try evaluateGroupAggregation(allocator, item.expr, matched_nodes.items);
             }
 
-            var rows = try allocator.alloc([]eval.Value, 1);
-            rows[0] = row;
+            var rows_slice = try allocator.alloc([]eval.Value, 1);
+            rows_slice[0] = row;
 
-            return ExecutionResult{
+            // CANARY(memory-safety): Don't return early if there's a WITH clause
+            // We need to process the WITH clause before returning
+            if (!has_with) {
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = rows_slice,
+                    .flags = blk: {
+                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        break :blk list;
+                    },
+                };
+            }
+
+            // Convert to result that can be processed by WITH clause
+            var result = ExecutionResult{
                 .columns = columns,
-                .rows = rows,
+                .rows = rows_slice,
                 .flags = blk: {
                     const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     break :blk list;
                 },
             };
+
+
+            // Apply WITH clause for query pipelining if present
+            if (q.with_clause) |with_clause| {
+                // Apply WITH clause to transform matched variables
+                const with_result = try executeWithClause(allocator, result, with_clause);
+
+                // Clean up original result since it's been transformed by WITH
+                for (result.columns) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(result.columns);
+                for (result.rows) |r| {
+                    allocator.free(r);
+                }
+                allocator.free(result.rows);
+
+                // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
+                // Now evaluate RETURN expressions using WITH result as environment
+                var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+                for (q.ret.items, 0..) |item, i| {
+                    const col_name = item.alias orelse blk: {
+                        switch (item.expr) {
+                            .Ident => |ident| break :blk ident.orig,
+                            .PropertyAccess => |prop| break :blk prop.property,
+                            .Member => |mem| break :blk mem.field,
+                            .Call => |call| {
+                                if (call.callee.* == .Ident) {
+                                    break :blk call.callee.Ident.orig;
+                                }
+                                break :blk "column";
+                            },
+                            else => break :blk "column",
+                        }
+                    };
+                    return_columns[i] = try allocator.dupe(u8, col_name);
+                }
+
+                // Evaluate RETURN items using WITH result as environment
+                var return_rows = try allocator.alloc([]eval.Value, with_result.rows.len);
+                for (with_result.rows, 0..) |with_row, row_idx| {
+                    var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+
+                    // Create environment from WITH result columns and this row's values
+                    const env = eval.Env{
+                        .names = with_result.columns,
+                        .values = with_row,
+                        .param_names = param_names,
+                        .param_values = param_values,
+                    };
+
+                    for (q.ret.items, 0..) |item, i| {
+                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    }
+
+                    return_rows[row_idx] = return_row;
+                }
+
+                // Clean up WITH result
+                for (with_result.columns) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(with_result.columns);
+                for (with_result.rows) |r| {
+                    allocator.free(r);
+                }
+                allocator.free(with_result.rows);
+
+                result = ExecutionResult{
+                    .columns = return_columns,
+                    .rows = return_rows,
+                    .flags = with_result.flags,
+                };
+            }
+
+            return result;
         }
     } else {
         // Non-aggregation query - return one row per matching pattern
@@ -5593,15 +5715,17 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
+                        // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
                         // For variable-length paths, bind the entire path or the last edge
                         const last_edge_id = if (path.edges.items.len > 0) path.edges.items[path.edges.items.len - 1] else continue;
                         const edge_ptr = store.edges.getPtr(last_edge_id);
 
-                        // Create environment with all matched elements
+                        // Create environment with all matched elements (including path variable if present)
                         var env_count: usize = 0;
                         if (left_node_var != null) env_count += 1;
                         if (right_node_var != null) env_count += 1;
                         if (rel_var != null) env_count += 1;
+                        if (chain_path_var != null) env_count += 1;
 
                         const env_names = try allocator.alloc([]const u8, env_count);
                         const env_values = try allocator.alloc(eval.Value, env_count);
@@ -5624,6 +5748,25 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                             } else {
                                 env_values[env_idx] = eval.Value{ .Null = {} };
                             }
+                            env_idx += 1;
+                        }
+                        if (chain_path_var) |var_name| {
+                            // Build the path value from the PathInfo
+                            var path_nodes = try allocator.alloc(*const graph_store.Node, path.nodes.items.len);
+                            var path_edges = try allocator.alloc(*const graph_store.Edge, path.edges.items.len);
+
+                            for (path.nodes.items, 0..) |node_id, i| {
+                                path_nodes[i] = store.nodes.getPtr(node_id) orelse continue;
+                            }
+                            for (path.edges.items, 0..) |edge_id, i| {
+                                path_edges[i] = store.edges.getPtr(edge_id) orelse continue;
+                            }
+
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = eval.Value{ .Path = .{
+                                .nodes = path_nodes,
+                                .edges = path_edges,
+                            } };
                             env_idx += 1;
                         }
 
@@ -6137,6 +6280,12 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
         // If WITH clause exists OR no RETURN clause, determine columns from matched variables
         // Otherwise, columns were already set from RETURN expressions
         if (has_with or items.len == 0) {
+            // Free the previously allocated columns from RETURN items
+            for (columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(columns);
+
             // Extract variable names from the match pattern
             // For simple node matches, we have match_variable
             // For relationship matches, we have left_node_var, rel_var, right_node_var
@@ -6157,6 +6306,10 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             }
 
             columns = try col_list.toOwnedSlice(allocator);
+
+            // CANARY(memory-safety): Debug columns construction
+            if (rows.items.len > 0) {
+            }
         }
 
         var result = ExecutionResult{
@@ -6188,6 +6341,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             }
             allocator.free(result.rows);
 
+            // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
             // Now evaluate RETURN expressions using WITH result as environment
             var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
             for (q.ret.items, 0..) |item, i| {
@@ -6229,6 +6383,9 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             }
 
             // Clean up WITH result
+            for (with_result.columns) |col| {
+                allocator.free(col);
+            }
             allocator.free(with_result.columns);
             for (with_result.rows) |row| {
                 allocator.free(row);
@@ -6247,6 +6404,13 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
 }
 
 fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause) !ExecutionResult {
+    // CANARY(memory-safety): Validate input_result structure
+    if (input_result.columns.len > 1000000) {
+        std.debug.print("ERROR: Corrupted input_result.columns.len = {d} in executeWithClause\n", .{input_result.columns.len});
+        return error.CorruptedExecutionResult;
+    }
+
+
     // Transform the input result according to WITH clause items
     const with_items = with_clause.items;
 
@@ -9690,4 +9854,204 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             .edges = try path_edges.toOwnedSlice(allocator),
         } };
     }
+}
+
+// CANARY: REQ=REQ-GQL-166; FEATURE="Pattern Comprehension Execution"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
+// Execute a pattern comprehension: [(pattern) WHERE filter | map_expr]
+// Returns a list of values generated by evaluating map_expr for each pattern match
+pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: eval.Env) !eval.Value {
+    const store = graph_store.getGlobalStore(allocator);
+
+    // Collect all results in a list
+    var results = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+
+    // Handle simple patterns like (a)--() or (a)-[r]->(b)
+    if (pattern.chains.len == 0) {
+        return eval.Value{ .List = try results.toOwnedSlice(allocator) };
+    }
+
+    const chain = pattern.chains[0];
+
+    // If pattern has no hops, it's just a node pattern
+    if (chain.hops.len == 0) {
+        if (chain.head) |node_pattern| {
+            // Iterate over all nodes matching the pattern
+            var iter = store.nodes.iterator();
+            while (iter.next()) |entry| {
+                const node_ptr = entry.value_ptr;
+                const node = node_ptr.*;
+
+                // Check if node matches the pattern
+                var matches = true;
+                for (node_pattern.labels) |required_label| {
+                    var has_label = false;
+                    for (node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (!has_label) {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (!matches) continue;
+
+                // Create environment with node binding
+                var new_env = env;
+                if (node_pattern.name) |name| {
+                    new_env = try env.withBinding(allocator, name, eval.Value{ .Node = node_ptr });
+                }
+
+                // Apply WHERE filter if present
+                if (where_filter) |filter| {
+                    const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
+                    if (filter_result != .Bool or !filter_result.Bool) {
+                        continue;
+                    }
+                }
+
+                // Evaluate map expression
+                const map_result = try eval.evalExpr(allocator, map_expr, new_env);
+                try results.append(allocator, map_result);
+            }
+        }
+    } else {
+        // Pattern with edges like (a)--() or (a)-[r]->(b)
+        const hop = chain.hops[0];
+
+        // Get source node from environment or find all matching nodes
+        var source_nodes = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, 0);
+        defer source_nodes.deinit(allocator);
+
+        // If left node has a name that's bound in env, use that node
+        if (hop.left.name) |left_name| {
+            if (env.get(left_name)) |left_val| {
+                if (left_val == .Node) {
+                    try source_nodes.append(allocator, left_val.Node);
+                }
+            }
+        }
+
+        // If no source nodes from env, find all matching the left pattern
+        if (source_nodes.items.len == 0) {
+            var iter = store.nodes.iterator();
+            while (iter.next()) |entry| {
+                const node_ptr: *const graph_store.Node = entry.value_ptr;
+                const node = node_ptr.*;
+
+                var matches = true;
+                for (hop.left.labels) |required_label| {
+                    var has_label = false;
+                    for (node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (!has_label) {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (matches) {
+                    try source_nodes.append(allocator, node_ptr);
+                }
+            }
+        }
+
+        // For each source node, find connected nodes
+        for (source_nodes.items) |source_node| {
+            var edge_iter = store.edges.iterator();
+            while (edge_iter.next()) |edge_entry| {
+                const edge_ptr = edge_entry.value_ptr;
+                const edge = edge_ptr.*;
+
+                // Check if this edge connects to our source node
+                var target_id: ?u64 = null;
+                const matches_direction = blk: {
+                    switch (hop.rel.dir) {
+                        .right => {
+                            if (edge.from_id == source_node.id) {
+                                target_id = edge.to_id;
+                                break :blk true;
+                            }
+                        },
+                        .left => {
+                            if (edge.to_id == source_node.id) {
+                                target_id = edge.from_id;
+                                break :blk true;
+                            }
+                        },
+                        .undirected => {
+                            if (edge.from_id == source_node.id) {
+                                target_id = edge.to_id;
+                                break :blk true;
+                            } else if (edge.to_id == source_node.id) {
+                                target_id = edge.from_id;
+                                break :blk true;
+                            }
+                        },
+                    }
+                    break :blk false;
+                };
+
+                if (!matches_direction or target_id == null) continue;
+
+                // Get target node
+                const target_node_ptr = store.nodes.getPtr(target_id.?) orelse continue;
+                const target_node = target_node_ptr.*;
+
+                // Check if target node matches the right pattern
+                var matches = true;
+                for (hop.right.labels) |required_label| {
+                    var has_label = false;
+                    for (target_node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (!has_label) {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (!matches) continue;
+
+                // Create environment with bindings
+                var new_env = env;
+                if (hop.left.name) |left_name| {
+                    new_env = try env.withBinding(allocator, left_name, eval.Value{ .Node = source_node });
+                }
+                if (hop.right.name) |right_name| {
+                    new_env = try new_env.withBinding(allocator, right_name, eval.Value{ .Node = target_node_ptr });
+                } else {
+                    // For shorthand syntax [(a)--()], bind target to synthetic variable
+                    new_env = try new_env.withBinding(allocator, "__pattern_target__", eval.Value{ .Node = target_node_ptr });
+                }
+                if (hop.rel.name) |rel_name| {
+                    new_env = try new_env.withBinding(allocator, rel_name, eval.Value{ .Edge = edge_ptr });
+                }
+
+                // Apply WHERE filter if present
+                if (where_filter) |filter| {
+                    const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
+                    if (filter_result != .Bool or !filter_result.Bool) {
+                        continue;
+                    }
+                }
+
+                // Evaluate map expression
+                const map_result = try eval.evalExpr(allocator, map_expr, new_env);
+                try results.append(allocator, map_result);
+            }
+        }
+    }
+
+    return eval.Value{ .List = try results.toOwnedSlice(allocator) };
 }

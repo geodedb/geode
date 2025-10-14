@@ -2498,8 +2498,38 @@ pub const Parser = struct {
             },
         };
         self.advance();
-        const right = try self.parseAddExpr();
-        return self.makeBinary(op_kind, left, right);
+        var right = try self.parseAddExpr();
+
+        // CANARY: REQ=REQ-GQL-090; FEATURE="ChainedComparisons"; ASPECT=Parser; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-10-14
+        // Handle chained comparisons: a < b < c becomes (a < b) AND (b < c)
+        var result = try self.makeBinary(op_kind, left, right);
+
+        // Check if another comparison operator follows
+        while (true) {
+            const next_op = switch (self.cur.kind) {
+                .eq => ast.BinOp.Eq,
+                .ne => ast.BinOp.Ne,
+                .lt => ast.BinOp.Lt,
+                .le => ast.BinOp.Le,
+                .gt => ast.BinOp.Gt,
+                .ge => ast.BinOp.Ge,
+                else => break,
+            };
+
+            self.advance();
+            const next_right = try self.parseAddExpr();
+
+            // Create the next comparison: right op next_right
+            const next_comp = try self.makeBinary(next_op, right, next_right);
+
+            // Combine with AND: result AND next_comp
+            result = try self.makeBinary(.And, result, next_comp);
+
+            // Update right for next iteration
+            right = next_right;
+        }
+
+        return result;
     }
 
     fn parseAddExpr(self: *Parser) ParserError!ast.Expr {
@@ -2617,6 +2647,64 @@ pub const Parser = struct {
                 }
                 // function call: base(args)
                 self.advance();
+
+                // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Parser; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-10-14
+                // Special handling: all(x IN list WHERE condition) or any(x IN list WHERE condition)
+                if (base == .Ident and (std.ascii.eqlIgnoreCase(base.Ident.orig, "all") or std.ascii.eqlIgnoreCase(base.Ident.orig, "any")) and self.cur.kind == .identifier) {
+                    // Check if this is a list comprehension: identifier IN ...
+                    const saved_idx = self.lx.idx;
+                    const saved_line = self.lx.line;
+                    const saved_col = self.lx.col;
+                    const saved_cur = self.cur;
+
+                    const var_token = self.cur;
+                    self.advance(); // Move to token after identifier
+
+                    if (self.cur.kind == .IN) {
+                        // This is a list comprehension: all(x IN list WHERE condition)
+                        self.advance(); // consume IN
+
+                        const source_expr = try self.parseOrExpr();
+                        const a = self.arena.allocator();
+                        const sp = try a.create(ast.Expr);
+                        sp.* = source_expr;
+
+                        var filter: ?*ast.Expr = null;
+                        if (self.cur.kind == .WHERE) {
+                            self.advance(); // consume WHERE
+                            const filter_expr = try self.parseOrExpr();
+                            const fp = try a.create(ast.Expr);
+                            fp.* = filter_expr;
+                            filter = fp;
+                        }
+
+                        _ = try self.expect(.r_paren);
+
+                        // Create ListComprehension node
+                        const comp_expr = ast.Expr{ .ListComprehension = .{
+                            .variable = var_token.lexeme,
+                            .source = sp,
+                            .filter = filter
+                        }};
+
+                        // Wrap in Call node with function name as callee
+                        const cp = try a.create(ast.Expr);
+                        cp.* = base;
+                        const comp_ptr = try a.create(ast.Expr);
+                        comp_ptr.* = comp_expr;
+                        const args_arr = try a.alloc(*ast.Expr, 1);
+                        args_arr[0] = comp_ptr;
+                        base = .{ .Call = .{ .callee = cp, .args = args_arr } };
+                        continue;
+                    } else {
+                        // Not a list comprehension, restore lexer state and current token
+                        self.lx.idx = saved_idx;
+                        self.lx.line = saved_line;
+                        self.lx.col = saved_col;
+                        self.cur = saved_cur;
+                    }
+                }
+
                 var args = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                 var saw_distinct = false;
                 if (self.cur.kind != .r_paren) {
@@ -2927,6 +3015,7 @@ pub const Parser = struct {
                     const elements_slice = try elements.toOwnedSlice(self.arena.allocator());
                     break :blk_pc .{ .ArrayLit = elements_slice };
                 }
+                // CANARY: REQ=REQ-GQL-164; FEATURE="Pattern Comprehension Shorthand"; ASPECT=Parser; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
                 self.pattern_comp_depth += 1;
                 const pat_val = try self.parseGraphPattern();
                 var where_expr: ?*ast.Expr = null;
@@ -2937,8 +3026,25 @@ pub const Parser = struct {
                     wp.* = w;
                     where_expr = wp;
                 }
-                _ = try self.expect(.bar);
-                const map_expr_v = try self.parseOrExpr();
+
+                // Make | optional - when omitted, return the matched path/nodes
+                // Syntax: [(a)--()]  is shorthand for  [(a)--(x) | x]
+                // We'll create a synthetic identifier for the last node in the pattern
+                var map_expr_v: ast.Expr = undefined;
+                if (self.cur.kind == .bar) {
+                    self.advance();
+                    map_expr_v = try self.parseOrExpr();
+                } else {
+                    // No | provided - create synthetic expression to return matched nodes
+                    // Find the last node variable in the pattern to return
+                    // For pattern (a)--(), the unnamed node should be bound to a synthetic var
+                    // We'll use a special marker to indicate "return all matched nodes"
+                    // The execution engine will interpret this as returning the target node
+                    const unicode = @import("../unicode/unicode_tables.zig");
+                    const synthetic_name = "__pattern_target__";
+                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), synthetic_name) catch synthetic_name;
+                    map_expr_v = .{ .Ident = .{ .orig = synthetic_name, .cnf = cnf } };
+                }
                 const mp = try self.arena.allocator().create(ast.Expr);
                 mp.* = map_expr_v;
                 _ = try self.expect(.r_bracket);

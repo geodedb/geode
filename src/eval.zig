@@ -95,6 +95,26 @@ pub const Env = struct {
         while (i < self.param_names.len) : (i += 1) if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
         return null;
     }
+
+    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-14
+    // Create a new environment with an additional binding (for list comprehension variable scopes)
+    pub fn withBinding(self: Env, ally: std.mem.Allocator, name: []const u8, value: Value) !Env {
+        var new_names = try ally.alloc([]const u8, self.names.len + 1);
+        var new_values = try ally.alloc(Value, self.values.len + 1);
+
+        @memcpy(new_names[0..self.names.len], self.names);
+        @memcpy(new_values[0..self.values.len], self.values);
+
+        new_names[self.names.len] = name;
+        new_values[self.values.len] = value;
+
+        return Env{
+            .names = new_names,
+            .values = new_values,
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+        };
+    }
 };
 
 fn isNull(v: Value) bool {
@@ -799,6 +819,117 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 },
                 else => break :blk_call .{ .Null = {} }, // Not a simple function call
             };
+
+            // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-14
+            // Handle all(x IN list WHERE condition) - returns true if all elements match the condition
+            if (std.mem.eql(u8, function_name, "all")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = call.args[0].*;
+
+                if (arg == .ListComprehension) {
+                    const comp = arg.ListComprehension;
+                    const source_val = try evalExpr(ally, comp.source.*, env);
+
+                    const list = switch (source_val) {
+                        .List => |l| l,
+                        else => break :blk_call .{ .Bool = true }, // Empty or non-list -> vacuously true
+                    };
+
+                    // Iterate through each element
+                    for (list) |item| {
+                        // Create new environment with variable binding
+                        const new_env = try env.withBinding(ally, comp.variable, item);
+
+                        // Evaluate filter condition if present
+                        if (comp.filter) |filter| {
+                            const filter_result = try evalExpr(ally, filter.*, new_env);
+                            const matches = switch (filter_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                else => false,
+                            };
+
+                            if (!matches) {
+                                break :blk_call .{ .Bool = false };
+                            }
+                        }
+                    }
+
+                    break :blk_call .{ .Bool = true };
+                } else {
+                    // Fallback: all(list) - returns true if all elements are truthy
+                    const list_val = try evalExpr(ally, call.args[0].*, env);
+                    const list = switch (list_val) {
+                        .List => |l| l,
+                        else => break :blk_call .{ .Bool = false },
+                    };
+
+                    for (list) |item| {
+                        const is_truthy = switch (item) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            else => true,
+                        };
+                        if (!is_truthy) break :blk_call .{ .Bool = false };
+                    }
+                    break :blk_call .{ .Bool = true };
+                }
+            }
+
+            // Handle any(x IN list WHERE condition) - returns true if any element matches the condition
+            if (std.mem.eql(u8, function_name, "any")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = call.args[0].*;
+
+                if (arg == .ListComprehension) {
+                    const comp = arg.ListComprehension;
+                    const source_val = try evalExpr(ally, comp.source.*, env);
+
+                    const list = switch (source_val) {
+                        .List => |l| l,
+                        else => break :blk_call .{ .Bool = false },
+                    };
+
+                    // Iterate through each element
+                    for (list) |item| {
+                        // Create new environment with variable binding
+                        const new_env = try env.withBinding(ally, comp.variable, item);
+
+                        // Evaluate filter condition if present
+                        if (comp.filter) |filter| {
+                            const filter_result = try evalExpr(ally, filter.*, new_env);
+                            const matches = switch (filter_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                else => false,
+                            };
+
+                            if (matches) {
+                                break :blk_call .{ .Bool = true };
+                            }
+                        }
+                    }
+
+                    break :blk_call .{ .Bool = false };
+                } else {
+                    // Fallback: any(list) - returns true if any element is truthy
+                    const list_val = try evalExpr(ally, call.args[0].*, env);
+                    const list = switch (list_val) {
+                        .List => |l| l,
+                        else => break :blk_call .{ .Bool = false },
+                    };
+
+                    for (list) |item| {
+                        const is_truthy = switch (item) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            else => true,
+                        };
+                        if (is_truthy) break :blk_call .{ .Bool = true };
+                    }
+                    break :blk_call .{ .Bool = false };
+                }
+            }
 
             // Handle special case string functions directly for better nesting support
             if (std.mem.eql(u8, function_name, "substring")) {
@@ -1755,6 +1886,16 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             }
 
             break :blk_projection Value{ .Map = map };
+        },
+        .PatternComp => |pc| blk_patterncomp: {
+            // CANARY: REQ=REQ-GQL-165; FEATURE="Pattern Comprehension Execution"; ASPECT=Evaluator; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
+            // Pattern comprehension: [ (pattern) WHERE condition | expression ]
+            // Shorthand: [(a)--()]  means  [(a)--(x) | x]
+            // Execute the pattern and collect results based on the map expression
+            const result_list = execution.executePatternComprehension(ally, pc.pattern.*, pc.where, pc.map.*, env) catch {
+                break :blk_patterncomp Value{ .List = &.{} };
+            };
+            break :blk_patterncomp result_list;
         },
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },

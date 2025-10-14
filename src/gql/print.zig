@@ -692,5 +692,14 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             }
             try w.print("}}", .{});
         },
+        // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Printing; STATUS=IMPLEMENTED; OWNER=print; UPDATED=2025-10-14
+        .ListComprehension => |lc| {
+            try w.print("{s} IN ", .{lc.variable});
+            try printExprWith(w, lc.source.*, 0, opts);
+            if (lc.filter) |filter| {
+                try w.print(" WHERE ", .{});
+                try printExprWith(w, filter.*, 0, opts);
+            }
+        },
     }
 }
