@@ -7207,72 +7207,72 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
                 allocator.free(old_rows);
             } else {
                 // UNION DISTINCT - deduplicate rows
-            var part_result = if (shared_bindings) |bindings|
-                try executeQueryWithBindings(allocator, part.query, bindings)
-            else
-                try executeQueryNoLimit(allocator, part.query);
-            defer part_result.deinit(allocator);
+                var part_result = if (shared_bindings) |bindings|
+                    try executeQueryWithBindings(allocator, part.query, bindings)
+                else
+                    try executeQueryNoLimit(allocator, part.query);
+                defer part_result.deinit(allocator);
 
-            // Validate column count match
-            if (part_result.columns.len != result.columns.len) {
-                return error.UnionColumnCountMismatch;
-            }
+                // Validate column count match
+                if (part_result.columns.len != result.columns.len) {
+                    return error.UnionColumnCountMismatch;
+                }
 
-            // Build a combined result with deduplication
-            var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+                // Build a combined result with deduplication
+                var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
 
-            // Add existing rows
-            for (result.rows) |row| {
-                var is_duplicate = false;
+                // Add existing rows
+                for (result.rows) |row| {
+                    var is_duplicate = false;
 
-                // Check if this row already exists in new_rows
-                for (new_rows.items) |existing_row| {
-                    if (rowsEqual(row, existing_row)) {
-                        is_duplicate = true;
-                        break;
+                    // Check if this row already exists in new_rows
+                    for (new_rows.items) |existing_row| {
+                        if (rowsEqual(row, existing_row)) {
+                            is_duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!is_duplicate) {
+                        // Duplicate the row since we're building a new array
+                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        for (row, 0..) |val, j| {
+                            new_row[j] = val;
+                        }
+                        try new_rows.append(allocator, new_row);
                     }
                 }
 
-                if (!is_duplicate) {
-                    // Duplicate the row since we're building a new array
-                    const new_row = try allocator.alloc(eval.Value, row.len);
-                    for (row, 0..) |val, j| {
-                        new_row[j] = val;
+                // Add new rows from part_result that aren't duplicates
+                for (part_result.rows) |row| {
+                    var is_duplicate = false;
+
+                    // Check if this row already exists
+                    for (new_rows.items) |existing_row| {
+                        if (rowsEqual(row, existing_row)) {
+                            is_duplicate = true;
+                            break;
+                        }
                     }
-                    try new_rows.append(allocator, new_row);
-                }
-            }
 
-            // Add new rows from part_result that aren't duplicates
-            for (part_result.rows) |row| {
-                var is_duplicate = false;
-
-                // Check if this row already exists
-                for (new_rows.items) |existing_row| {
-                    if (rowsEqual(row, existing_row)) {
-                        is_duplicate = true;
-                        break;
+                    if (!is_duplicate) {
+                        // Duplicate the row since part_result will be freed
+                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        for (row, 0..) |val, j| {
+                            new_row[j] = val;
+                        }
+                        try new_rows.append(allocator, new_row);
                     }
                 }
 
-                if (!is_duplicate) {
-                    // Duplicate the row since part_result will be freed
-                    const new_row = try allocator.alloc(eval.Value, row.len);
-                    for (row, 0..) |val, j| {
-                        new_row[j] = val;
-                    }
-                    try new_rows.append(allocator, new_row);
+                // Free old result rows
+                for (result.rows) |row| {
+                    allocator.free(row);
                 }
-            }
+                allocator.free(result.rows);
 
-            // Free old result rows
-            for (result.rows) |row| {
-                allocator.free(row);
-            }
-            allocator.free(result.rows);
-
-            // Set new deduplicated rows
-            result.rows = try new_rows.toOwnedSlice(allocator);
+                // Set new deduplicated rows
+                result.rows = try new_rows.toOwnedSlice(allocator);
             }
         } else if (operation == .intersect) {
             // INTERSECT - keep only rows that appear in both result sets

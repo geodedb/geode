@@ -2378,10 +2378,10 @@ pub const Parser = struct {
                             while (true) {
                                 const it = try self.parseOrExpr();
                                 const ap = try self.arena.allocator().create(ast.Expr);
-                            ap.* = it;
-                            try elems.append(self.arena.allocator(), ap);
-                            if (self.cur.kind != .comma) break;
-                            self.advance();
+                                ap.* = it;
+                                try elems.append(self.arena.allocator(), ap);
+                                if (self.cur.kind != .comma) break;
+                                self.advance();
                             }
                         }
                         _ = try self.expect(.r_bracket);
