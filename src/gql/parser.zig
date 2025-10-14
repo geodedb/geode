@@ -2010,10 +2010,11 @@ pub const Parser = struct {
             // parse a chain with one-or-more hops
             var hops = std.ArrayList(ast.Hop).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             // Optional path alias: ident '=' before a node pattern or shortestPath function
+            // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
             var chain_name: ?[]const u8 = null;
-            if ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq) {
+            if ((self.cur.kind == .identifier or self.cur.kind == .PATH or self.isKeyword(self.cur.kind)) and self.peekKind() == .eq) {
                 chain_name = self.cur.lexeme;
-                self.advance(); // ident or PATH
+                self.advance(); // ident, PATH, or keyword
                 _ = try self.expect(.eq);
 
                 // Check if this is a shortestPath or allShortestPaths function call
