@@ -131,6 +131,15 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.CharLengthExceeded) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22001\",\"message\":\"String data right truncation\",\"additional_statuses\":[]}}", .{});
         }
+        if (err == error.InvalidKeyProvider) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid TDE key provider\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.InvalidGuardrailConfiguration) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid CDC guardrail configuration\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.UnknownProcedure) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42883\",\"message\":\"Unknown procedure\",\"additional_statuses\":[]}}", .{});
+        }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
             error.TypeMismatch => "Type mismatch in expression",
@@ -141,6 +150,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.UnorderedPagination => unreachable,
             error.TransactionAlreadyActive => unreachable,
             error.UnionColumnCountMismatch => unreachable,
+            error.InvalidKeyProvider => unreachable,
+            error.InvalidGuardrailConfiguration => unreachable,
+            error.UnknownProcedure => unreachable,
             else => @errorName(err),
         };
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"error\":\"{s}\",\"additional_statuses\":[]}}", .{error_msg});

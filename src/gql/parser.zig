@@ -2420,6 +2420,42 @@ pub const Parser = struct {
                 // Let parseCmpExpr handle NOT IN
                 return self.parseCmpExpr();
             }
+
+            // Check if this is NOT followed by a graph pattern - e.g., NOT (n)--()
+            // Patterns start with (identifier or colon or closing paren for anonymous nodes
+            if (self.peekToken() == .l_paren) {
+                // Look ahead two tokens to see if this looks like a node pattern start
+                const saved_lx = self.lx.*;
+                const saved_cur = self.cur;
+
+                self.advance(); // consume NOT
+                self.advance(); // consume (
+
+                // Check if this looks like a node pattern: (identifier), (:Label), or ()
+                const looks_like_pattern = self.cur.kind == .identifier or self.cur.kind == .colon or self.cur.kind == .r_paren;
+
+                // Restore position
+                self.lx.* = saved_lx;
+                self.cur = saved_cur;
+
+                if (looks_like_pattern) {
+                    // Parse as NOT followed by a graph pattern
+                    self.advance(); // consume NOT
+                    const pattern = try self.parseGraphPattern();
+
+                    // Create EXISTS predicate
+                    const a = self.arena.allocator();
+                    const pattern_ptr = try a.create(ast.GraphPattern);
+                    pattern_ptr.* = pattern;
+                    const exists_expr = ast.Expr{ .Exists = .{ .pattern = pattern_ptr } };
+
+                    // Wrap in NOT
+                    const ep = try a.create(ast.Expr);
+                    ep.* = exists_expr;
+                    return .{ .Unary = .{ .op = .Not, .expr = ep } };
+                }
+            }
+
             self.advance();
             const e = try self.parseNotExpr();
             const a = self.arena.allocator();
