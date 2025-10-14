@@ -48,18 +48,16 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
     }
 
-    // Check if this program contains START TRANSACTION anywhere (do this before loading session)
-    var has_start_transaction = false;
-    for (parse_result.program.statements) |stmt| {
-        if (stmt == .StartTransaction) {
-            has_start_transaction = true;
-            break;
-        }
-    }
+    // Check if this is a single START TRANSACTION statement (allowing it to replace previous session)
+    const is_single_start_transaction = parse_result.program.statements.len == 1 and
+        parse_result.program.statements[0] == .StartTransaction;
 
-    // Load transaction session if exists, but NOT if we're starting a new transaction
-    // (starting a new transaction should clear any previous transaction state)
-    var transaction_session = if (!has_start_transaction) txn_session.loadSession(allocator.*) catch null else null;
+    // Load transaction session if exists, UNLESS this is a single START TRANSACTION
+    // (single START TRANSACTION is allowed to replace previous session)
+    var transaction_session = if (!is_single_start_transaction)
+        txn_session.loadSession(allocator.*) catch null
+    else
+        null;
     defer if (transaction_session) |*ts| ts.deinit(allocator.*);
 
     // Create session state for SESSION SET GRAPH support
@@ -74,10 +72,12 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         .session_state = &session_state,
         .transaction_state = if (transaction_session) |ts| ts.state else .None,
     };
-    // Check if program contains COMMIT or ROLLBACK anywhere
+    // Check if program contains transaction control statements
+    var has_start_transaction = false;
     var has_commit = false;
     var has_rollback = false;
     for (parse_result.program.statements) |stmt| {
+        if (stmt == .StartTransaction) has_start_transaction = true;
         if (stmt == .Commit) has_commit = true;
         if (stmt == .Rollback) has_rollback = true;
     }
@@ -93,6 +93,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         }
         if (err == error.TransactionAlreadyActive) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"25001\",\"message\":\"Transaction already active\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.UnionColumnCountMismatch) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42601\",\"message\":\"UNION column count mismatch\",\"additional_statuses\":[]}}", .{});
         }
         if (err == error.DuplicateGraph) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate graph name\",\"additional_statuses\":[]}}", .{});
@@ -130,6 +133,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.GroupingError => unreachable,
             error.UnorderedPagination => unreachable,
             error.TransactionAlreadyActive => unreachable,
+            error.UnionColumnCountMismatch => unreachable,
             else => @errorName(err),
         };
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"error\":\"{s}\",\"additional_statuses\":[]}}", .{error_msg});

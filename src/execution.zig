@@ -293,6 +293,7 @@ pub const ExecutionError = error{
     UnorderedPagination,
     NoActiveTransaction,
     TransactionAlreadyActive,
+    UnionColumnCountMismatch,
 };
 
 pub const ExecutionResult = struct {
@@ -6713,6 +6714,11 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
             // UNION DISTINCT - deduplicate rows
             var part_result = try executeQueryNoLimit(allocator, part.query);
             defer part_result.deinit(allocator);
+
+            // Validate column count match
+            if (part_result.columns.len != result.columns.len) {
+                return error.UnionColumnCountMismatch;
+            }
 
             // Build a combined result with deduplication
             var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
