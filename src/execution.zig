@@ -911,6 +911,12 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .Union => |u| {
             return executeUnionWithContext(allocator, u, context);
         },
+        .Intersect => |i| {
+            return executeIntersect(allocator, i);
+        },
+        .Except => |e| {
+            return executeExcept(allocator, e);
+        },
         .Create => |c| {
             return executeCreate(allocator, c);
         },
@@ -6244,6 +6250,116 @@ fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult
         try new_rows.append(allocator, new_row);
     }
 
+    // Apply ORDER BY if present
+    if (with_clause.order_by) |order_by| {
+        const columns_slice = try new_columns.toOwnedSlice(allocator);
+        const rows_slice = try new_rows.toOwnedSlice(allocator);
+
+        // Sort rows according to ORDER BY keys
+        const SortContext = struct {
+            order_keys: []ast.OrderBy.OrderKey,
+            columns: []const []const u8,
+            rows: [][]eval.Value,
+            allocator: std.mem.Allocator,
+        };
+
+        const ctx = SortContext{
+            .order_keys = order_by.keys,
+            .columns = columns_slice,
+            .rows = rows_slice,
+            .allocator = allocator,
+        };
+
+        std.mem.sort([]eval.Value, rows_slice, ctx, struct {
+            fn lessThan(context: SortContext, a: []eval.Value, b: []eval.Value) bool {
+                for (context.order_keys) |key| {
+                    // Create environment for evaluating order key expression
+                    const env_a = eval.Env{
+                        .names = context.columns,
+                        .values = a,
+                    };
+                    const env_b = eval.Env{
+                        .names = context.columns,
+                        .values = b,
+                    };
+
+                    const val_a = eval.evalExpr(context.allocator, key.expr, env_a) catch eval.Value{ .Null = {} };
+                    const val_b = eval.evalExpr(context.allocator, key.expr, env_b) catch eval.Value{ .Null = {} };
+
+                    // Compare values: returns -1 if a < b, 0 if a == b, 1 if a > b
+                    const cmp: i8 = blk: {
+                        // Handle NULL comparisons based on NULLS policy
+                        const a_is_null = val_a == .Null;
+                        const b_is_null = val_b == .Null;
+                        if (a_is_null and b_is_null) break :blk 0;
+                        if (a_is_null) {
+                            // NULL handling: by default NULLs sort last
+                            break :blk if (key.nulls == .first) -1 else 1;
+                        }
+                        if (b_is_null) {
+                            break :blk if (key.nulls == .first) 1 else -1;
+                        }
+
+                        // Compare non-null values
+                        if (val_a == .Int and val_b == .Int) {
+                            if (val_a.Int < val_b.Int) break :blk -1;
+                            if (val_a.Int > val_b.Int) break :blk 1;
+                            break :blk 0;
+                        }
+                        if (val_a == .Str and val_b == .Str) {
+                            const ord = std.mem.order(u8, val_a.Str, val_b.Str);
+                            break :blk switch (ord) {
+                                .lt => -1,
+                                .eq => 0,
+                                .gt => 1,
+                            };
+                        }
+                        if (val_a == .Bool and val_b == .Bool) {
+                            if (val_a.Bool == val_b.Bool) break :blk 0;
+                            break :blk if (val_a.Bool) 1 else -1;
+                        }
+                        // For other types, treat as equal
+                        break :blk 0;
+                    };
+
+                    if (cmp != 0) {
+                        return if (key.desc) cmp > 0 else cmp < 0;
+                    }
+                }
+                return false; // Equal on all keys
+            }
+        }.lessThan);
+
+        new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
+        new_rows = std.ArrayList([]eval.Value).fromOwnedSlice(rows_slice);
+    }
+
+    // Apply OFFSET if present
+    if (with_clause.offset) |offset_val| {
+        const offset_usize = @min(offset_val, new_rows.items.len);
+        if (offset_usize > 0) {
+            // Remove the first offset_usize rows
+            const remaining = new_rows.items[offset_usize..];
+            var remaining_rows = std.ArrayList([]eval.Value).initCapacity(allocator, remaining.len) catch unreachable;
+            try remaining_rows.appendSlice(allocator, remaining);
+            new_rows.deinit(allocator);
+            new_rows = remaining_rows;
+        }
+    }
+
+    // Apply LIMIT if present
+    if (with_clause.limit) |limit_val| {
+        const limit_usize = @min(limit_val, new_rows.items.len);
+        if (limit_usize < new_rows.items.len) {
+            // Keep only the first limit_usize rows
+            const limited = new_rows.items[0..limit_usize];
+            var limited_rows = std.ArrayList([]eval.Value).initCapacity(allocator, limited.len) catch unreachable;
+            try limited_rows.appendSlice(allocator, limited);
+            new_rows.deinit(allocator);
+            new_rows = limited_rows;
+        }
+    }
+
     // Create a new flags list to avoid sharing references
     var new_flags = try std.ArrayList([]const u8).initCapacity(allocator, input_result.flags.items.len);
     for (input_result.flags.items) |flag| {
@@ -6840,51 +6956,218 @@ fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !Exec
     return executeUnionWithContext(allocator, union_query, .{});
 }
 
+fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.BinarySet) !ExecutionResult {
+    // Execute left and right queries
+    var left_result = try executeQueryNoLimit(allocator, intersect_query.left);
+    errdefer left_result.deinit(allocator);
+
+    var right_result = try executeQueryNoLimit(allocator, intersect_query.right);
+    defer right_result.deinit(allocator);
+
+    // Validate column count match
+    if (left_result.columns.len != right_result.columns.len) {
+        return error.UnionColumnCountMismatch;
+    }
+
+    var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+    if (intersect_query.all) {
+        // INTERSECT ALL - keep minimum occurrence count for each row
+        for (left_result.rows) |row| {
+            var count_in_left: usize = 0;
+            var count_in_right: usize = 0;
+
+            for (left_result.rows) |r| {
+                if (rowsEqual(row, r)) count_in_left += 1;
+            }
+
+            for (right_result.rows) |r| {
+                if (rowsEqual(row, r)) count_in_right += 1;
+            }
+
+            const min_count = @min(count_in_left, count_in_right);
+            var added_count: usize = 0;
+            for (new_rows.items) |r| {
+                if (rowsEqual(row, r)) added_count += 1;
+            }
+
+            if (added_count < min_count) {
+                const new_row = try allocator.alloc(eval.Value, row.len);
+                for (row, 0..) |val, j| {
+                    new_row[j] = val;
+                }
+                try new_rows.append(allocator, new_row);
+            }
+        }
+    } else {
+        // INTERSECT DISTINCT - keep only unique rows present in both
+        for (left_result.rows) |row| {
+            var found_in_right = false;
+            for (right_result.rows) |right_row| {
+                if (rowsEqual(row, right_row)) {
+                    found_in_right = true;
+                    break;
+                }
+            }
+
+            if (found_in_right) {
+                var already_added = false;
+                for (new_rows.items) |existing_row| {
+                    if (rowsEqual(row, existing_row)) {
+                        already_added = true;
+                        break;
+                    }
+                }
+
+                if (!already_added) {
+                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    for (row, 0..) |val, j| {
+                        new_row[j] = val;
+                    }
+                    try new_rows.append(allocator, new_row);
+                }
+            }
+        }
+    }
+
+    // Free old result rows
+    for (left_result.rows) |row| {
+        allocator.free(row);
+    }
+    allocator.free(left_result.rows);
+
+    // Set new intersected rows
+    left_result.rows = try new_rows.toOwnedSlice(allocator);
+    return left_result;
+}
+
+fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) !ExecutionResult {
+    // Execute left and right queries
+    var left_result = try executeQueryNoLimit(allocator, except_query.left);
+    errdefer left_result.deinit(allocator);
+
+    var right_result = try executeQueryNoLimit(allocator, except_query.right);
+    defer right_result.deinit(allocator);
+
+    // Validate column count match
+    if (left_result.columns.len != right_result.columns.len) {
+        return error.UnionColumnCountMismatch;
+    }
+
+    var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+    if (except_query.all) {
+        // EXCEPT ALL - remove one occurrence for each match in right
+        for (left_result.rows) |row| {
+            var count_in_right: usize = 0;
+            for (right_result.rows) |right_row| {
+                if (rowsEqual(row, right_row)) count_in_right += 1;
+            }
+
+            var count_in_new: usize = 0;
+            for (new_rows.items) |new_row| {
+                if (rowsEqual(row, new_row)) count_in_new += 1;
+            }
+
+            var count_in_left: usize = 0;
+            for (left_result.rows) |r| {
+                if (rowsEqual(row, r)) count_in_left += 1;
+            }
+
+            if (count_in_new < count_in_left - count_in_right) {
+                const new_row = try allocator.alloc(eval.Value, row.len);
+                for (row, 0..) |val, j| {
+                    new_row[j] = val;
+                }
+                try new_rows.append(allocator, new_row);
+            }
+        }
+    } else {
+        // EXCEPT DISTINCT - remove all occurrences of rows that appear in right
+        for (left_result.rows) |row| {
+            var found_in_right = false;
+            for (right_result.rows) |right_row| {
+                if (rowsEqual(row, right_row)) {
+                    found_in_right = true;
+                    break;
+                }
+            }
+
+            if (!found_in_right) {
+                var already_added = false;
+                for (new_rows.items) |existing_row| {
+                    if (rowsEqual(row, existing_row)) {
+                        already_added = true;
+                        break;
+                    }
+                }
+
+                if (!already_added) {
+                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    for (row, 0..) |val, j| {
+                        new_row[j] = val;
+                    }
+                    try new_rows.append(allocator, new_row);
+                }
+            }
+        }
+    }
+
+    // Free old result rows
+    for (left_result.rows) |row| {
+        allocator.free(row);
+    }
+    allocator.free(left_result.rows);
+
+    // Set new excepted rows
+    left_result.rows = try new_rows.toOwnedSlice(allocator);
+    return left_result;
+}
+
 fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQuery, context: ExecutionContext) !ExecutionResult {
     // Execute first query (but don't apply its limit/offset yet)
     var result = try executeQueryNoLimit(allocator, union_query.first);
     errdefer result.deinit(allocator);
 
-    // Keep track of the last query for limit/offset
-    var last_query = union_query.first;
-
     // Execute and append results from tail queries
     for (union_query.tails) |part| {
-        last_query = part.query;
+        // Determine the operation type
+        const operation = part.operation;
 
-        if (part.all) {
-            // UNION ALL - append all rows
-            var part_result = try executeQueryNoLimit(allocator, part.query);
-            defer part_result.deinit(allocator);
+        if (operation == .union_op) {
+            if (part.all) {
+                // UNION ALL - append all rows
+                var part_result = try executeQueryNoLimit(allocator, part.query);
+                defer part_result.deinit(allocator);
 
-            // Validate column count match
-            if (part_result.columns.len != result.columns.len) {
-                return error.UnionColumnCountMismatch;
-            }
-
-            // Append rows to result
-            const old_rows = result.rows;
-            result.rows = try allocator.alloc([]eval.Value, old_rows.len + part_result.rows.len);
-
-            // Copy old rows (transfer ownership)
-            for (old_rows, 0..) |row, i| {
-                result.rows[i] = row;
-            }
-
-            // Copy new rows (need to duplicate since part_result will be freed)
-            for (part_result.rows, 0..) |row, i| {
-                // Need to duplicate the row data
-                const new_row = try allocator.alloc(eval.Value, row.len);
-                for (row, 0..) |val, j| {
-                    new_row[j] = val;
+                // Validate column count match
+                if (part_result.columns.len != result.columns.len) {
+                    return error.UnionColumnCountMismatch;
                 }
-                result.rows[old_rows.len + i] = new_row;
-            }
 
-            // Free the old rows array (but not the rows themselves - they're transferred)
-            allocator.free(old_rows);
-        } else {
-            // UNION DISTINCT - deduplicate rows
+                // Append rows to result
+                const old_rows = result.rows;
+                result.rows = try allocator.alloc([]eval.Value, old_rows.len + part_result.rows.len);
+
+                // Copy old rows (transfer ownership)
+                for (old_rows, 0..) |row, i| {
+                    result.rows[i] = row;
+                }
+
+                // Copy new rows (need to duplicate since part_result will be freed)
+                for (part_result.rows, 0..) |row, i| {
+                    // Need to duplicate the row data
+                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    for (row, 0..) |val, j| {
+                        new_row[j] = val;
+                    }
+                    result.rows[old_rows.len + i] = new_row;
+                }
+
+                // Free the old rows array (but not the rows themselves - they're transferred)
+                allocator.free(old_rows);
+            } else {
+                // UNION DISTINCT - deduplicate rows
             var part_result = try executeQueryNoLimit(allocator, part.query);
             defer part_result.deinit(allocator);
 
@@ -6948,21 +7231,183 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
 
             // Set new deduplicated rows
             result.rows = try new_rows.toOwnedSlice(allocator);
+            }
+        } else if (operation == .intersect) {
+            // INTERSECT - keep only rows that appear in both result sets
+            var part_result = try executeQueryNoLimit(allocator, part.query);
+            defer part_result.deinit(allocator);
+
+            // Validate column count match
+            if (part_result.columns.len != result.columns.len) {
+                return error.UnionColumnCountMismatch;
+            }
+
+            var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+            if (part.all) {
+                // INTERSECT ALL - keep minimum occurrence count for each row
+                for (result.rows) |row| {
+                    // Count occurrences in both result sets
+                    var count_in_result: usize = 0;
+                    var count_in_part: usize = 0;
+
+                    for (result.rows) |r| {
+                        if (rowsEqual(row, r)) count_in_result += 1;
+                    }
+
+                    for (part_result.rows) |r| {
+                        if (rowsEqual(row, r)) count_in_part += 1;
+                    }
+
+                    // Add minimum count to result
+                    const min_count = @min(count_in_result, count_in_part);
+                    var added_count: usize = 0;
+                    for (new_rows.items) |r| {
+                        if (rowsEqual(row, r)) added_count += 1;
+                    }
+
+                    if (added_count < min_count) {
+                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        for (row, 0..) |val, j| {
+                            new_row[j] = val;
+                        }
+                        try new_rows.append(allocator, new_row);
+                    }
+                }
+            } else {
+                // INTERSECT DISTINCT - keep only unique rows present in both
+                for (result.rows) |row| {
+                    var found_in_part = false;
+                    for (part_result.rows) |part_row| {
+                        if (rowsEqual(row, part_row)) {
+                            found_in_part = true;
+                            break;
+                        }
+                    }
+
+                    if (found_in_part) {
+                        // Check if already added (for distinctness)
+                        var already_added = false;
+                        for (new_rows.items) |existing_row| {
+                            if (rowsEqual(row, existing_row)) {
+                                already_added = true;
+                                break;
+                            }
+                        }
+
+                        if (!already_added) {
+                            const new_row = try allocator.alloc(eval.Value, row.len);
+                            for (row, 0..) |val, j| {
+                                new_row[j] = val;
+                            }
+                            try new_rows.append(allocator, new_row);
+                        }
+                    }
+                }
+            }
+
+            // Free old result rows
+            for (result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(result.rows);
+
+            // Set new intersected rows
+            result.rows = try new_rows.toOwnedSlice(allocator);
+        } else if (operation == .except) {
+            // EXCEPT - keep rows from left that don't appear in right
+            var part_result = try executeQueryNoLimit(allocator, part.query);
+            defer part_result.deinit(allocator);
+
+            // Validate column count match
+            if (part_result.columns.len != result.columns.len) {
+                return error.UnionColumnCountMismatch;
+            }
+
+            var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+            if (part.all) {
+                // EXCEPT ALL - remove one occurrence for each match in right
+                for (result.rows) |row| {
+                    var count_in_part: usize = 0;
+                    for (part_result.rows) |part_row| {
+                        if (rowsEqual(row, part_row)) count_in_part += 1;
+                    }
+
+                    var count_in_new: usize = 0;
+                    for (new_rows.items) |new_row| {
+                        if (rowsEqual(row, new_row)) count_in_new += 1;
+                    }
+
+                    // Add if we haven't reached the exclusion limit
+                    var count_in_result: usize = 0;
+                    for (result.rows) |r| {
+                        if (rowsEqual(row, r)) count_in_result += 1;
+                    }
+
+                    if (count_in_new < count_in_result - count_in_part) {
+                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        for (row, 0..) |val, j| {
+                            new_row[j] = val;
+                        }
+                        try new_rows.append(allocator, new_row);
+                    }
+                }
+            } else {
+                // EXCEPT DISTINCT - remove all occurrences of rows that appear in right
+                for (result.rows) |row| {
+                    var found_in_part = false;
+                    for (part_result.rows) |part_row| {
+                        if (rowsEqual(row, part_row)) {
+                            found_in_part = true;
+                            break;
+                        }
+                    }
+
+                    if (!found_in_part) {
+                        // Check if already added (for distinctness)
+                        var already_added = false;
+                        for (new_rows.items) |existing_row| {
+                            if (rowsEqual(row, existing_row)) {
+                                already_added = true;
+                                break;
+                            }
+                        }
+
+                        if (!already_added) {
+                            const new_row = try allocator.alloc(eval.Value, row.len);
+                            for (row, 0..) |val, j| {
+                                new_row[j] = val;
+                            }
+                            try new_rows.append(allocator, new_row);
+                        }
+                    }
+                }
+            }
+
+            // Free old result rows
+            for (result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(result.rows);
+
+            // Set new excepted rows
+            result.rows = try new_rows.toOwnedSlice(allocator);
         }
     }
 
-    // Apply ORDER BY from the last query to the entire result
-    if (last_query.order_by) |order| {
-        try sortRows(allocator, &result, order);
+    // Apply ORDER BY from the union query to the entire result
+    if (union_query.order_by) |order| {
+        try sortRows(allocator, &result, order.*);
     }
 
     // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
-    if (context.strict_offset_validation and last_query.offset != null and last_query.order_by == null) {
+    if (context.strict_offset_validation and union_query.offset != null and union_query.order_by == null) {
         return ExecutionError.UnorderedPagination;
     }
 
-    // Apply SKIP and LIMIT from the LAST query in the union (applies to entire result)
-    if (last_query.offset) |skip_count| {
+    // Apply SKIP and LIMIT from the union query (applies to entire result)
+    if (union_query.offset) |skip_count| {
         if (skip_count < result.rows.len) {
             const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
             // Free the skipped rows
@@ -6985,11 +7430,11 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
         }
     }
 
-    if (last_query.limit) |limit_count| {
+    if (union_query.limit) |limit_count| {
         // Check if LIMIT without ORDER BY - need to flag it and sort
         // But only if we don't have SKIP (which makes ordering deterministic in UNION context)
         // And only add once
-        if (last_query.order_by == null and last_query.offset == null) {
+        if (union_query.order_by == null and union_query.offset == null) {
             // Check if we haven't already added this flag
             var has_flag = false;
             for (result.flags.items) |flag| {

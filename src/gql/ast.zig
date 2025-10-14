@@ -90,6 +90,9 @@ pub const UnionQuery = struct {
     pub const Part = struct { operation: SetOperation = .union_op, all: bool, distinct: bool, query: Query };
     first: Query,
     tails: []Part,
+    order_by: ?*OrderBy = null,
+    limit: ?u64 = null,
+    offset: ?u64 = null,
 };
 
 pub const SetOperation = enum {
@@ -142,7 +145,12 @@ pub const ReturnItem = struct { expr: Expr, alias: ?[]const u8 };
 
 pub const ReturnClause = struct { items: []ReturnItem, distinct: bool };
 
-pub const WithClause = struct { items: []ReturnItem };
+pub const WithClause = struct {
+    items: []ReturnItem,
+    order_by: ?*OrderBy = null,
+    limit: ?u64 = null,
+    offset: ?u64 = null,
+};
 
 pub const LetBinding = struct { variable: []const u8, value: Expr };
 
