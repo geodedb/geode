@@ -7541,9 +7541,9 @@ fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQ
 }
 
 fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
-    // Execute query without applying limit/offset
-    const ret = q.ret;
-    return executeReturnClause(allocator, ret);
+    // Execute full query (including CREATE/MATCH patterns) without applying limit/offset
+    // This is used for UNION parts where we need to execute the full query to populate bindings
+    return executeQueryWithContext(allocator, q, .{});
 }
 
 fn executeQueryWithBindings(allocator: std.mem.Allocator, q: ast.Query, bindings: *std.StringHashMap(u64)) !ExecutionResult {
