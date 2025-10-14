@@ -209,7 +209,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                     input=setup_stdin,
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=2  # Reduced from 5 to 2 seconds
                 )
                 if setup_result.returncode != 0:
                     # Include stderr in error message for debugging
@@ -259,7 +259,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             input=stdin_content,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=2  # Reduced from 5 to 2 seconds to fail faster
         )
     except subprocess.TimeoutExpired:
         return False, "timeout"

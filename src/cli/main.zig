@@ -2061,16 +2061,15 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         std.process.exit(1);
     }
 
-    // Initialize user management (always initialize, but only enable auth if requested)
-    const geode_lib_auth = @import("geode");
-    const user_mgmt = geode_lib_auth.user_management;
-    try user_mgmt.initUserStore(ally);
-    try user_mgmt.ensureDefaultUser(ally);
-
-    // Enable auth if credentials are provided or if --enable-auth was set
-    // For CLI query command, we enable auth only if credentials are explicitly provided
-    const auth_required = user != null or password != null;
+    // Initialize user management ONLY if credentials are provided
+    // This avoids spawning Argon2ID threads (4 threads for password hashing) on every query
+    // which was causing Python subprocess to hang waiting for threads to terminate
+    const auth_required = user != null or password != null or token != null;
     if (auth_required) {
+        const geode_lib_auth = @import("geode");
+        const user_mgmt = geode_lib_auth.user_management;
+        try user_mgmt.initUserStore(ally);
+        try user_mgmt.ensureDefaultUser(ally);
         user_mgmt.setAuthEnabled(true);
     }
 
@@ -2153,6 +2152,8 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     // Write result to stdout
     const stdout_fd = std.fs.File{ .handle = 1 };
     _ = try stdout_fd.writeAll(result);
+    // Add newline to ensure Python TextIOWrapper detects end of output
+    _ = try stdout_fd.writeAll("\n");
 
     // Check for error status_class and exit with code 1
     // Per ISO GQL: 00xxx=success, 01xxx=warning, 02xxx=no-data, others=error
