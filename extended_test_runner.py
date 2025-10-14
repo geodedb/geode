@@ -113,12 +113,27 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     json_asserts = "stdout_json_assert" in expect
     geode_query = "geode_query" in expect
     
-    # Clear persistence file before test to ensure clean state
+    # Clear persistence files before test to ensure clean state
     import os
     try:
         os.remove('/tmp/geode_graph_store.dat')
     except FileNotFoundError:
         pass  # File doesn't exist, that's fine
+
+    # Clear catalog file to prevent duplicate graph/index/schema errors
+    # But only if not a duplicate-testing test
+    if not skip_isolation:
+        home_dir = os.path.expanduser('~')
+        catalog_paths = [
+            f'{home_dir}/.geode/catalog.json',
+            f'{home_dir}/.geode/catalog_indexes.json',
+            f'{home_dir}/.geode/catalog_schemas.json',
+        ]
+        for catalog_path in catalog_paths:
+            try:
+                os.remove(catalog_path)
+            except FileNotFoundError:
+                pass  # File doesn't exist, that's fine
 
     # Execute setup commands if present
     setup_commands = test_case.get("setup", [])

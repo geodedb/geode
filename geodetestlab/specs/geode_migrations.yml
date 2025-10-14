@@ -90,9 +90,7 @@ tests:
 
   # Label Migration Tests
   - name: add-label-to-nodes
-    setup:
-      - "query \"CREATE (:Person {name: 'Alice'}), (:Person {name: 'Bob'})\" --format json --no-quic"
-    args: ["query", "MATCH (p:Person) SET p:Human RETURN labels(p)", "--format", "json"]
+    args: ["query", "CREATE (:Person {name: 'Alice'}), (:Person {name: 'Bob'}) MATCH (p:Person) SET p:Human RETURN labels(p)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["Person", "Human"]
@@ -148,9 +146,7 @@ tests:
       stdout_contains: ["1"]  # Alice doesn't have age
 
   - name: batch-create-relationships
-    setup:
-      - "query \"CREATE (:User {name: 'Alice'}), (:User {name: 'Bob'}), (:User {name: 'Charlie'})\" --format json --no-quic"
-    args: ["query", "MATCH (u1:User), (u2:User) WHERE u1.name < u2.name CREATE (u1)-[:POTENTIAL_FRIEND]->(u2) RETURN count(*)", "--format", "json"]
+    args: ["query", "CREATE (:User {name: 'Alice'}), (:User {name: 'Bob'}), (:User {name: 'Charlie'}) MATCH (u1:User), (u2:User) WHERE u1.name < u2.name CREATE (u1)-[:POTENTIAL_FRIEND]->(u2) RETURN count(*)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["3"]  # Alice->Bob, Alice->Charlie, Bob->Charlie

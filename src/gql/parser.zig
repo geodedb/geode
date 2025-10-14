@@ -93,7 +93,7 @@ pub const Parser = struct {
             .CLOSE,
             .INSERT,
             .VALUE,
-            // .VALUES - Removed to allow values() function calls
+            .VALUES, // Re-added to allow values() function calls in expression context
             .SCAN,
             .START,
             .TRANSACTION,
@@ -1882,14 +1882,31 @@ pub const Parser = struct {
     }
 
     fn parseAndExpr(self: *Parser) ParserError!ast.Expr {
-        var left = try self.parseCmpExpr();
+        var left = try self.parseNotExpr();
         while (self.cur.kind == .AND) {
             self.advance();
-            const right = try self.parseCmpExpr();
+            const right = try self.parseNotExpr();
             const node = try self.makeBinary(.And, left, right);
             left = node;
         }
         return left;
+    }
+
+    fn parseNotExpr(self: *Parser) ParserError!ast.Expr {
+        if (self.cur.kind == .NOT) {
+            // Check if this is NOT IN (handled in parseCmpExpr)
+            if (self.peekToken() == .IN) {
+                // Let parseCmpExpr handle NOT IN
+                return self.parseCmpExpr();
+            }
+            self.advance();
+            const e = try self.parseNotExpr();
+            const a = self.arena.allocator();
+            const ep = try a.create(ast.Expr);
+            ep.* = e;
+            return .{ .Unary = .{ .op = .Not, .expr = ep } };
+        }
+        return self.parseCmpExpr();
     }
 
     fn parseCmpExpr(self: *Parser) ParserError!ast.Expr {
@@ -2049,14 +2066,7 @@ pub const Parser = struct {
     }
 
     fn parseUnaryExpr(self: *Parser) ParserError!ast.Expr {
-        if (self.cur.kind == .NOT) {
-            self.advance();
-            const e = try self.parseUnaryExpr();
-            const a = self.arena.allocator();
-            const ep = try a.create(ast.Expr);
-            ep.* = e;
-            return .{ .Unary = .{ .op = .Not, .expr = ep } };
-        }
+        // NOT is now handled in parseNotExpr at correct precedence level
         if (self.cur.kind == .EXISTS and self.peekToken() == .l_brace) {
             // This is EXISTS { pattern } - EXISTS predicate
             self.advance(); // consume EXISTS
