@@ -2289,45 +2289,79 @@ pub const Parser = struct {
             else => {
                 if (self.cur.kind == .IN) {
                     self.advance();
-                    _ = try self.expect(.l_bracket);
-                    var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    if (self.cur.kind != .r_bracket) {
-                        while (true) {
-                            const it = try self.parseOrExpr();
-                            const ap = try self.arena.allocator().create(ast.Expr);
-                            ap.* = it;
-                            try elems.append(self.arena.allocator(), ap);
-                            if (self.cur.kind != .comma) break;
-                            self.advance();
+
+                    // Check if this is IN (subquery) or IN [list]
+                    if (self.cur.kind == .l_paren) {
+                        // IN (subquery) - parse as subquery
+                        self.advance(); // consume (
+                        const subquery = try self.parseQuery();
+                        _ = try self.expect(.r_paren);
+
+                        const a = self.arena.allocator();
+                        const vp = try a.create(ast.Expr);
+                        vp.* = left;
+                        const qp = try a.create(ast.Query);
+                        qp.* = subquery;
+                        return .{ .InSubquery = .{ .value = vp, .subquery = qp } };
+                    } else {
+                        // IN [list] - parse as list
+                        _ = try self.expect(.l_bracket);
+                        var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        if (self.cur.kind != .r_bracket) {
+                            while (true) {
+                                const it = try self.parseOrExpr();
+                                const ap = try self.arena.allocator().create(ast.Expr);
+                                ap.* = it;
+                                try elems.append(self.arena.allocator(), ap);
+                                if (self.cur.kind != .comma) break;
+                                self.advance();
+                            }
                         }
+                        _ = try self.expect(.r_bracket);
+                        const a = self.arena.allocator();
+                        const vp = try a.create(ast.Expr);
+                        vp.* = left;
+                        return .{ .In = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                     }
-                    _ = try self.expect(.r_bracket);
-                    const a = self.arena.allocator();
-                    const vp = try a.create(ast.Expr);
-                    vp.* = left;
-                    return .{ .In = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                 }
                 if (self.cur.kind == .NOT) {
                     // NOT IN
                     self.advance();
                     _ = try self.expect(.IN);
-                    _ = try self.expect(.l_bracket);
-                    var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-                    if (self.cur.kind != .r_bracket) {
-                        while (true) {
-                            const it = try self.parseOrExpr();
-                            const ap = try self.arena.allocator().create(ast.Expr);
+
+                    // Check if this is NOT IN (subquery) or NOT IN [list]
+                    if (self.cur.kind == .l_paren) {
+                        // NOT IN (subquery)
+                        self.advance(); // consume (
+                        const subquery = try self.parseQuery();
+                        _ = try self.expect(.r_paren);
+
+                        const a = self.arena.allocator();
+                        const vp = try a.create(ast.Expr);
+                        vp.* = left;
+                        const qp = try a.create(ast.Query);
+                        qp.* = subquery;
+                        return .{ .NotInSubquery = .{ .value = vp, .subquery = qp } };
+                    } else {
+                        // NOT IN [list]
+                        _ = try self.expect(.l_bracket);
+                        var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        if (self.cur.kind != .r_bracket) {
+                            while (true) {
+                                const it = try self.parseOrExpr();
+                                const ap = try self.arena.allocator().create(ast.Expr);
                             ap.* = it;
                             try elems.append(self.arena.allocator(), ap);
                             if (self.cur.kind != .comma) break;
                             self.advance();
+                            }
                         }
+                        _ = try self.expect(.r_bracket);
+                        const a = self.arena.allocator();
+                        const vp = try a.create(ast.Expr);
+                        vp.* = left;
+                        return .{ .NotIn = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                     }
-                    _ = try self.expect(.r_bracket);
-                    const a = self.arena.allocator();
-                    const vp = try a.create(ast.Expr);
-                    vp.* = left;
-                    return .{ .NotIn = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                 }
                 if (self.cur.kind == .IS) {
                     self.advance();

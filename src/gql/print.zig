@@ -241,9 +241,17 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
                     try walkExpr(ally_inner, dst, inn.value.*);
                     for (inn.set) |it| try walkExpr(ally_inner, dst, it.*);
                 },
+                .InSubquery => |isq| {
+                    try walkExpr(ally_inner, dst, isq.value.*);
+                    // Note: subquery walking not implemented yet
+                },
                 .NotIn => |nin| {
                     try walkExpr(ally_inner, dst, nin.value.*);
                     for (nin.set) |it| try walkExpr(ally_inner, dst, it.*);
+                },
+                .NotInSubquery => |nisq| {
+                    try walkExpr(ally_inner, dst, nisq.value.*);
+                    // Note: subquery walking not implemented yet
                 },
                 .IsNull => |nz| try walkExpr(ally_inner, dst, nz.target.*),
                 .Case => |c| {
@@ -583,6 +591,10 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             }
             try w.writeByte(']');
         },
+        .InSubquery => |isq| {
+            try printExprWith(w, isq.value.*, 0, opts);
+            try w.print(" IN (subquery)", .{});
+        },
         .NotIn => |nin| {
             try printExprWith(w, nin.value.*, 0, opts);
             try w.print(" NOT IN ", .{});
@@ -592,6 +604,10 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 try printExprWith(w, it.*, 0, opts);
             }
             try w.writeByte(']');
+        },
+        .NotInSubquery => |nisq| {
+            try printExprWith(w, nisq.value.*, 0, opts);
+            try w.print(" NOT IN (subquery)", .{});
         },
         .IsNull => |nz| {
             try printExprWith(w, nz.target.*, 0, opts);

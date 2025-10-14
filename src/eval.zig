@@ -1292,6 +1292,86 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 else => res,
             };
         },
+        .InSubquery => |isq| {
+            // Evaluate the left-hand value
+            const v = try evalExpr(ally, isq.value.*, env);
+            if (isNull(v)) return Value{ .Null = {} };
+
+            // Execute the subquery
+            var result = execution.executeQueryWithContext(ally, isq.subquery.*, .{}) catch |err| {
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.Unsupported,
+                };
+            };
+            defer result.deinit(ally);
+
+            // Check if value is in the first column of results
+            var saw_null = false;
+            for (result.rows) |row| {
+                if (row.len == 0) continue;
+                const cell = row[0];
+
+                if (isNull(cell)) {
+                    saw_null = true;
+                    continue;
+                }
+
+                // Compare value with cell
+                if (v == .Int and cell == .Int and v.Int == cell.Int) return .{ .Bool = true };
+                if (v == .Str and cell == .Str and std.mem.eql(u8, v.Str, cell.Str)) return .{ .Bool = true };
+                if ((v == .Str and cell == .Int) or (v == .Int and cell == .Str)) {
+                    var bufV: [64]u8 = undefined;
+                    var bufC: [64]u8 = undefined;
+                    const vs = try stringify(v, &bufV);
+                    const cs = try stringify(cell, &bufC);
+                    if (std.mem.eql(u8, vs, cs)) return .{ .Bool = true };
+                }
+            }
+
+            if (saw_null) return Value{ .Null = {} };
+            return .{ .Bool = false };
+        },
+        .NotInSubquery => |nisq| {
+            // Evaluate the left-hand value
+            const v = try evalExpr(ally, nisq.value.*, env);
+            if (isNull(v)) return Value{ .Null = {} };
+
+            // Execute the subquery
+            var result = execution.executeQueryWithContext(ally, nisq.subquery.*, .{}) catch |err| {
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.Unsupported,
+                };
+            };
+            defer result.deinit(ally);
+
+            // Check if value is NOT in the first column of results
+            var saw_null = false;
+            for (result.rows) |row| {
+                if (row.len == 0) continue;
+                const cell = row[0];
+
+                if (isNull(cell)) {
+                    saw_null = true;
+                    continue;
+                }
+
+                // Compare value with cell
+                if (v == .Int and cell == .Int and v.Int == cell.Int) return .{ .Bool = false };
+                if (v == .Str and cell == .Str and std.mem.eql(u8, v.Str, cell.Str)) return .{ .Bool = false };
+                if ((v == .Str and cell == .Int) or (v == .Int and cell == .Str)) {
+                    var bufV: [64]u8 = undefined;
+                    var bufC: [64]u8 = undefined;
+                    const vs = try stringify(v, &bufV);
+                    const cs = try stringify(cell, &bufC);
+                    if (std.mem.eql(u8, vs, cs)) return .{ .Bool = false };
+                }
+            }
+
+            if (saw_null) return Value{ .Null = {} };
+            return .{ .Bool = true };
+        },
         .IsNull => |nz| blk_isnull: {
             const v = try evalExpr(ally, nz.target.*, env);
             const is_null = isNull(v);

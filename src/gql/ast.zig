@@ -207,6 +207,7 @@ pub const Expr = union(enum) {
     Unary: struct { op: UnaryOp, expr: *Expr },
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
     In: struct { value: *Expr, set: []*Expr },
+    InSubquery: struct { value: *Expr, subquery: *Query },
     IsNull: struct { target: *Expr, negated: bool },
     IsUnknown: struct { target: *Expr, negated: bool },
     // String predicates
@@ -214,6 +215,7 @@ pub const Expr = union(enum) {
     EndsWith: struct { value: *Expr, suffix: *Expr },
     Contains: struct { value: *Expr, needle: *Expr },
     NotIn: struct { value: *Expr, set: []*Expr },
+    NotInSubquery: struct { value: *Expr, subquery: *Query },
     // CASE expression
     Case: struct { operand: ?*Expr, whens: []CaseWhen, else_expr: ?*Expr },
     // Parameter reference: $name

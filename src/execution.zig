@@ -2676,7 +2676,7 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     return executeQueryWithContext(allocator, q, .{});
 }
 
-fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution;
     //         STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2025-10-10
 
