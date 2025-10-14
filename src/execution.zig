@@ -1304,9 +1304,17 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             catalog_mutex.lock();
             defer catalog_mutex.unlock();
 
-            // Check if graph already exists
-            if (catalog.graphs.contains(graph_name)) {
-                return error.DuplicateGraph;
+            // Handle OR REPLACE
+            if (cg.or_replace) {
+                // Remove existing graph if it exists
+                if (catalog.graphs.fetchRemove(graph_name)) |entry| {
+                    std.heap.page_allocator.free(entry.key);
+                }
+            } else {
+                // Check if graph already exists
+                if (catalog.graphs.contains(graph_name)) {
+                    return error.DuplicateGraph;
+                }
             }
 
             // Add to catalog

@@ -1,52 +1,103 @@
 # TODO - Current Development Priorities
 
-> **Status**: Updated October 2025 based on CANARY analysis and test coverage
-> **Test Coverage**: 1166/1242 tests passing (93.9%)  
+> **Status**: Updated October 13, 2025 - Post Phase 1 Quick Wins
+> **Test Coverage**: 1626/1655 tests passing (98.3%) - Up from 97.2%
+> **Build Status**: ✅ Passes `make verify-all` with **0 memory leaks**
 > **CANARY Status**: 1016 tracked requirements
 
-## ✅ Recently Completed (October 2025)
+## 🎉 Critical Fixes Completed (October 13, 2025)
 
-### 🚀 Major Achievements
+### 🔥 Phase 1: Quick Wins - COMPLETED ✅
+- **CREATE OR REPLACE Support**: ✅ Graph and schema creation with replacement logic
+- **Boolean Property Comparison**: ✅ Fixed type mismatch in WHERE clause boolean comparisons
+- **Test Infrastructure**: ✅ Fixed values-with-match test (multi-statement approach)
+- **Test Pass Rate**: ✅ Improved from 98.1% → **98.3%** (+3 tests)
+
+### 🔥 Memory Leak & Transaction Fixes (Previous Session)
+- **Memory Leak Resolution**: ✅ **Zero memory leaks** - Build now passes all verification
+- **Transaction State Propagation**: ✅ Fixed CLI semicolon splitting breaking GQL transactions
+- **String Escaping**: ✅ Proper GQL `''` unescaping and JSON compliance
+- **Test Pass Rate**: ✅ Improved from 97.2% → **98.1%** (+15 tests)
+
+### 📖 Detailed Documentation
+See comprehensive documentation:
+- **[TEST_FIXES_OCTOBER_2025_PHASE1.md](./TEST_FIXES_OCTOBER_2025_PHASE1.md)** - Phase 1 quick wins (CREATE OR REPLACE, boolean comparison, test infrastructure)
+- **[TEST_FIXES_SUMMARY_OCTOBER_2025_PART2.md](./TEST_FIXES_SUMMARY_OCTOBER_2025_PART2.md)** - Memory leak and transaction fixes
+- **[IMPLEMENTATION_PLAN_REMAINING_FIXES.md](./IMPLEMENTATION_PLAN_REMAINING_FIXES.md)** - Prioritized roadmap for 29 remaining failures
+
+## ✅ Previously Completed (October 2025)
+
+### 🚀 Major Feature Achievements
 - **S3 Backup Implementation**: Complete cloud backup system with Digital Ocean Spaces integration
-- **REPL QUIC Integration**: Production-ready interactive shell with real transport  
+- **REPL QUIC Integration**: Production-ready interactive shell with real transport
 - **Cardinality Estimation**: Statistical query optimization with real performance data
 - **Performance Optimization**: Phase 1 (13.18x I/O improvement) and Phase 2 (memory-mapped I/O)
 - **Vector Operations**: Complete HNSW integration with 6 distance metrics
 - **IndexOptimizer**: Cost-based query planning with statistics integration
 - **Advanced Security Features**: Enhanced RLS with policy evaluation, expression compilation, and optimization
 
-### 📊 Evidence-Based Status
+### 📊 Current Evidence-Based Status
 - **1016 CANARY markers** tracking implementation progress
-- **93.9% test pass rate** (1166/1242 geodetestlab tests)
+- **98.3% test pass rate** (1626/1655 geodetestlab tests)
 - **98.6% GQL compliance** (69/70 ISO/IEC 39075:2024 tests)
+- **Zero memory leaks** in test suite
+- **Production-ready** for core graph database operations
 
-## 🎯 High Priority (Immediate)
+## 🎯 High Priority (Next 1-2 Weeks)
 
-### 1. CLI Subprocess Elimination  
-**Status**: Partially completed - REPL integrated, CLI still spawns subprocesses
-```
-Priority: HIGH - Breaks unified binary design
-Location: src/cli/main.zig (L659-667, L736-744, L805-813)
-Evidence: geodetestlab integration tests require separate binaries
-```
+### ✅ Phase 1: Quick Wins (P0) - COMPLETED
+**Achieved**: 1626/1655 passing (98.3%)
+**Tests Fixed**: +3 (create-or-replace-graph, label-test-or-with-property, values-with-match)
 
-### 2. Vector Index Population
-**Status**: HNSW framework complete, needs existing data population  
-```
-Priority: HIGH - Vector queries return empty results
-Location: src/index/vector_f32.zig
-Evidence: vector_operations_comprehensive.yml tests passing but no data
-```
+See [TEST_FIXES_OCTOBER_2025_PHASE1.md](./TEST_FIXES_OCTOBER_2025_PHASE1.md) for complete implementation details.
 
-### 3. Full-Text Search BM25 Integration
-**Status**: BM25 implementation exists, needs IndexOptimizer integration
+### Phase 2: Parser Extensions (P1) - 2 tests, 1 week
+**Target**: 1629/1655 passing (98.4%)
+
+#### 2.1 Map Literal Syntax
 ```
-Priority: HIGH - Limited text search capabilities  
-Location: src/fts/bm25.zig
-Evidence: Missing cost estimation in query planner
+Status: DESIGN READY
+Priority: MEDIUM - Standard GQL feature
+Files: src/gql/parser.zig, src/gql/ast.zig, src/eval.zig
+Effort: 10 hours
+Tests: type-map-values
 ```
 
-## 🔧 Medium Priority (Next Sprint)
+**Implementation**: Add `{key: value}` syntax parsing and `values()` function.
+
+#### 2.2 Deep Nesting Support
+```
+Status: READY TO IMPLEMENT
+Priority: LOW - Edge case
+Files: src/test_harness.zig or src/execution.zig
+Effort: 5 hours
+Tests: extremely-deep-nesting
+```
+
+**Implementation**: Increase `@setEvalBranchQuota` or convert to iterative evaluation.
+
+## 🔧 Medium Priority (Weeks 3-4)
+
+### Phase 3: Set Operations (P2) - 2 tests
+**Target**: 1631/1655 passing (98.5%)
+
+#### 3.1 Mixed Set Operations
+```
+Priority: MEDIUM
+Files: src/execution.zig (set operation evaluation)
+Effort: 7 hours
+Tests: mixed-set-operations
+```
+
+#### 3.2 Set Operations with Subqueries
+```
+Priority: MEDIUM
+Files: src/execution.zig (IN with subquery)
+Effort: 5 hours
+Tests: set-operations-with-subqueries
+```
+
+## 🏗️ Long-term (Weeks 5-8)
 
 ### 4. Transaction Isolation Improvements
 **Status**: Basic MVCC working, needs phantom read prevention

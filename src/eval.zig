@@ -428,6 +428,12 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
                 const eq = std.mem.eql(u8, ls, rs);
                 return .{ .Bool = if (op == .Eq) eq else !eq };
             }
+            // Boolean comparisons: only equality/inequality supported
+            if (l == .Bool and r == .Bool) {
+                if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
+                const eq = l.Bool == r.Bool;
+                return .{ .Bool = if (op == .Eq) eq else !eq };
+            }
             // Comparing NULLs: NULL = NULL true; otherwise NULL compares false
             if (l == .Null or r == .Null) {
                 if (op == .Eq) return .{ .Bool = eqVals(l, r) };

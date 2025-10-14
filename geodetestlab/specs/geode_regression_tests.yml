@@ -288,7 +288,20 @@ tests:
       stdout_contains: ["2", "4", "6", "8", "10"]
 
   - name: values-with-match
-    args: ["query", "VALUES ('Alice'), ('Bob'), ('Charlie') AS (name) MATCH (p:Person {name: name}) RETURN p", "--format", "json"]
+    args: ["query", "-"]
+    stdin: |
+      CREATE (:Person {name: 'Alice'})
+      CREATE (:Person {name: 'Bob'})
+      CREATE (:Person {name: 'Charlie'})
+      VALUES ('Alice'), ('Bob'), ('Charlie') AS (name)
+      MATCH (p:Person {name: name})
+      RETURN p
     expect:
       exit_code: 0
-      stdout_contains: ["Person"]
+      geode_query:
+        status_class: "00000"
+        columns: ["p"]
+        rows:
+          - contains_properties: {name: "Alice"}
+          - contains_properties: {name: "Bob"}
+          - contains_properties: {name: "Charlie"}
