@@ -317,36 +317,57 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     
     # Check stdout_contains (geodetestlab checks both stdout and stderr)
     if "stdout_contains" in expect:
-        # Use filtered output for contains checks
-        combined = filtered_stdout + filtered_stderr + result.stdout + result.stderr
-        
-        # For table format tests, also check JSON output for column names and values
-        if "--format" in args and "table" in args:
-            import json
-            for line in result.stdout.split('\n'):
-                if line.startswith('{"status_class":"00000"'):
-                    try:
-                        data = json.loads(line)
-                        if 'result' in data:
-                            # Add column names
-                            if 'columns' in data['result']:
-                                for col in data['result']['columns']:
-                                    if 'name' in col:
-                                        combined += " " + col['name']
-                            # Add row values
-                            if 'rows' in data['result']:
-                                for row in data['result']['rows']:
-                                    for key, val in row.items():
-                                        combined += " " + str(key) + " " + str(val)
-                    except:
-                        pass
-        
-        for pattern in expect["stdout_contains"]:
-            # Strip test IDs from combined output for pattern matching
-            # to handle cases where test isolation injected unique IDs
-            import re
-            combined_stripped = re.sub(r'_[0-9a-f]{8}', '', combined)
+        import json
+        import re
 
+        # Try JSON parsing first for structured output
+        json_values = []
+        for line in result.stdout.split('\n'):
+            if line.startswith('{'):
+                try:
+                    data = json.loads(line)
+                    # Extract values from JSON structure
+                    if 'rows' in data:
+                        # Geode JSON format: {"status_class":"00000","columns":[...],"rows":[[...]]}
+                        for row in data['rows']:
+                            if isinstance(row, list):
+                                # Row is a list of values
+                                for val in row:
+                                    json_values.append(str(val))
+                            elif isinstance(row, dict):
+                                # Row is a dict of key-value pairs
+                                for val in row.values():
+                                    json_values.append(str(val))
+
+                    # Also extract from legacy 'result' structure
+                    if 'result' in data:
+                        if 'rows' in data['result']:
+                            for row in data['result']['rows']:
+                                if isinstance(row, dict):
+                                    for val in row.values():
+                                        json_values.append(str(val))
+                                elif isinstance(row, list):
+                                    for val in row:
+                                        json_values.append(str(val))
+                except:
+                    pass  # Not valid JSON, will fall back to string matching
+
+        # Build combined output for pattern matching
+        combined = filtered_stdout + filtered_stderr + result.stdout + result.stderr
+
+        # Add JSON-extracted values to combined output
+        if json_values:
+            combined += " " + " ".join(json_values)
+
+        # Strip test IDs from combined output
+        combined_stripped = re.sub(r'_[0-9a-f]{8}', '', combined)
+
+        for pattern in expect["stdout_contains"]:
+            # Try exact match in JSON values first (most reliable)
+            if json_values and pattern in json_values:
+                continue  # Pattern found in JSON values
+
+            # Fall back to case-insensitive string matching
             if pattern.lower() not in combined.lower() and pattern.lower() not in combined_stripped.lower():
                 return False, f"missing: '{pattern}'"
     
