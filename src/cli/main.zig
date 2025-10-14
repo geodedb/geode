@@ -1753,6 +1753,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var listen_addr: []const u8 = "0.0.0.0:3141";
     var log_level: []const u8 = "info";
     var use_stdio = false;
+    var enable_auth = false;
 
     i = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -1768,6 +1769,8 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             i += 1;
         } else if (std.mem.eql(u8, arg, "--stdio")) {
             use_stdio = true;
+        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
+            enable_auth = true;
         } else if (std.mem.eql(u8, arg, "--cert") and i + 1 < argv.len) {
             try server_args.append(ally, "--cert");
             try server_args.append(ally, argv[i + 1]);
@@ -1834,6 +1837,22 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         .log_level = log_level,
         .force_no_tls = force_no_tls,
     };
+
+    // Initialize user management if auth is enabled
+    if (enable_auth) {
+        const geode_lib = @import("geode");
+        const user_mgmt = geode_lib.user_management;
+        user_mgmt.initUserStore(ally) catch |err| {
+            std.debug.print("Failed to initialize user store: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        user_mgmt.setAuthEnabled(true);
+        user_mgmt.ensureDefaultUser(ally) catch |err| {
+            std.debug.print("Failed to create default users: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        std.debug.print("Authentication enabled\n", .{});
+    }
 
     std.debug.print("Starting Geode server...\n", .{});
     if (config.listen_quic) |addr| {
@@ -2015,7 +2034,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Handle --no-quic mode (embedded in-memory mode for testing)
     if (no_quic) {
         // Execute query directly using embedded in-memory mode
-        try executeNoQuicQuery(ally, query_text.?, format, token);
+        try executeNoQuicQuery(ally, query_text.?, format, token, user, password);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
@@ -2026,13 +2045,13 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     } else {
         // No --server and no --no-quic: use embedded persistent mode
         // This is the default for tests that need data persistence
-        try executeNoQuicQuery(ally, query_text.?, format, token);
+        try executeNoQuicQuery(ally, query_text.?, format, token, user, password);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 }
 
 /// Execute query in no-QUIC mode (embedded server for testing)
-fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8) !void {
+fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8, user: ?[]const u8, password: ?[]const u8) !void {
     _ = format;
 
     // Handle empty queries
@@ -2040,6 +2059,19 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
         const stderr_fd = std.fs.File{ .handle = 2 };
         _ = try stderr_fd.writeAll("Error: empty query provided\n");
         std.process.exit(1);
+    }
+
+    // Initialize user management (always initialize, but only enable auth if requested)
+    const geode_lib_auth = @import("geode");
+    const user_mgmt = geode_lib_auth.user_management;
+    try user_mgmt.initUserStore(ally);
+    try user_mgmt.ensureDefaultUser(ally);
+
+    // Enable auth if credentials are provided or if --enable-auth was set
+    // For CLI query command, we enable auth only if credentials are explicitly provided
+    const auth_required = user != null or password != null;
+    if (auth_required) {
+        user_mgmt.setAuthEnabled(true);
     }
 
     // Use the geode module to execute the query via test harness
@@ -2051,7 +2083,8 @@ fn executeNoQuicQuery(ally: std.mem.Allocator, query_text: []const u8, format: [
     // Prepare authentication options
     const options = geode_lib.test_harness.QueryOptions{
         .token = token,
-        .user = null,
+        .user = user,
+        .password = password,
         .strict_offset_validation = false, // Allow SKIP without ORDER BY (results in undefined order)
     };
 

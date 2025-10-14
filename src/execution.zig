@@ -272,6 +272,7 @@ pub const TransactionState = enum {
 
 pub const ExecutionContext = struct {
     user: ?[]const u8 = null,
+    role: ?@import("security/user_management.zig").Role = null, // User role for permission checking
     token: ?[]const u8 = null,
     strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY
     // Node/edge bindings from MATCH clauses (variable name -> node/edge ID)
@@ -297,6 +298,8 @@ pub const ExecutionError = error{
     InvalidKeyProvider,
     InvalidGuardrailConfiguration,
     UnknownProcedure,
+    Unauthenticated,
+    Unauthorized,
 };
 
 pub const ExecutionResult = struct {
@@ -770,6 +773,26 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
     }
 }
 
+/// Check if user has required permission for operation
+fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
+    const user_mgmt = @import("security/user_management.zig");
+
+    // If auth is not enabled, allow all operations
+    if (!user_mgmt.isAuthEnabled()) {
+        return;
+    }
+
+    // If auth is enabled, user must be authenticated
+    if (context.role == null) {
+        return error.Unauthenticated;
+    }
+
+    // Check if user has required permission
+    if (!user_mgmt.hasPermission(context.role.?, permission)) {
+        return error.Unauthorized;
+    }
+}
+
 pub fn executeProgram(allocator: std.mem.Allocator, program: *const ast.Program) !ExecutionResult {
     return executeProgramWithContext(allocator, program, .{});
 }
@@ -929,15 +952,23 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeExcept(allocator, e);
         },
         .Create => |c| {
+            // Check write permission
+            try checkPermission(context, .Write);
             return executeCreate(allocator, c);
         },
         .Insert => |ins| {
+            // Check write permission
+            try checkPermission(context, .Write);
             return executeInsert(allocator, ins);
         },
         .Delete => |d| {
+            // Check write permission
+            try checkPermission(context, .Write);
             return executeDelete(allocator, d);
         },
         .Merge => |m| {
+            // Check write permission
+            try checkPermission(context, .Write);
             return executeMerge(allocator, m);
         },
         .StartTransaction => |txn| {

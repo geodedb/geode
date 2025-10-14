@@ -12,6 +12,7 @@ pub fn cleanupTestCatalog() void {
 pub const QueryOptions = struct {
     token: ?[]const u8 = null,
     user: ?[]const u8 = null,
+    password: ?[]const u8 = null,
     strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY (US001)
 };
 
@@ -71,9 +72,26 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     var session_state = execution.SessionState.init(allocator.*);
     defer session_state.deinit();
 
+    // Authenticate user if credentials provided
+    const user_mgmt = @import("security/user_management.zig");
+    var authenticated_user: ?[]const u8 = null;
+    var user_role: ?user_mgmt.Role = null;
+
+    if (options.user != null and options.password != null) {
+        // Attempt authentication
+        user_role = user_mgmt.authenticate(options.user.?, options.password.?) catch {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
+        };
+        authenticated_user = options.user;
+    } else if (options.user != null or options.password != null) {
+        // Partial credentials provided - invalid
+        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
+    }
+
     // Create execution context with authentication and transaction state
     const exec_context = execution.ExecutionContext{
-        .user = if (options.token != null) "authenticated_user" else null,
+        .user = authenticated_user,
+        .role = user_role,
         .token = options.token,
         .strict_offset_validation = options.strict_offset_validation,
         .session_state = &session_state,
@@ -140,6 +158,12 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.UnknownProcedure) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42883\",\"message\":\"Unknown procedure\",\"additional_statuses\":[]}}", .{});
         }
+        if (err == error.Unauthenticated) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication required\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.Unauthorized) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42501\",\"message\":\"Permission denied\",\"additional_statuses\":[]}}", .{});
+        }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
             error.TypeMismatch => "Type mismatch in expression",
@@ -153,6 +177,8 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.InvalidKeyProvider => unreachable,
             error.InvalidGuardrailConfiguration => unreachable,
             error.UnknownProcedure => unreachable,
+            error.Unauthenticated => unreachable,
+            error.Unauthorized => unreachable,
             else => @errorName(err),
         };
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"error\":\"{s}\",\"additional_statuses\":[]}}", .{error_msg});

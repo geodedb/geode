@@ -339,6 +339,9 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
 
+// User management and authentication
+pub const user_management = @import("security/user_management.zig");
+
 test "lib.parseGql basic" {
     const ally = std.testing.allocator;
     var res = try parseGql("MATCH (a)-[r]->(b) RETURN a", ally);
