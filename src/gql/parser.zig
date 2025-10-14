@@ -534,8 +534,21 @@ pub const Parser = struct {
             },
             .WITH => blk_with: {
                 // Handle WITH as statement starter: WITH expr AS alias [WITH ...] RETURN ...
-                const first = try self.parseQuery();
+                var first = try self.parseQuery();
                 if (self.cur.kind == .UNION) {
+                    // Move ORDER BY/LIMIT/OFFSET from first query to UNION level
+                    var order_by: ?*ast.OrderBy = null;
+                    if (first.order_by) |ord| {
+                        const order_by_ptr = try self.arena.allocator().create(ast.OrderBy);
+                        order_by_ptr.* = ord;
+                        order_by = order_by_ptr;
+                    }
+                    var limit_val: ?u64 = if (first.limit) |l| @as(u64, @intCast(l)) else null;
+                    var offset_val: ?u64 = if (first.offset) |o| @as(u64, @intCast(o)) else null;
+                    first.order_by = null;
+                    first.limit = null;
+                    first.offset = null;
+
                     var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     while (self.cur.kind == .UNION) {
                         self.advance();
@@ -549,14 +562,25 @@ pub const Parser = struct {
                             self.advance();
                         }
                         if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-                        const q2 = try self.parseQuery();
+                        var q2 = try self.parseQuery();
+                        // If this is the last part, move its ORDER BY/LIMIT/OFFSET to UNION level
+                        if (self.cur.kind != .UNION) {
+                            if (q2.order_by) |ord| {
+                                const order_by_ptr = try self.arena.allocator().create(ast.OrderBy);
+                                order_by_ptr.* = ord;
+                                order_by = order_by_ptr;
+                            }
+                            if (q2.limit) |lim| limit_val = @intCast(lim);
+                            if (q2.offset) |off| offset_val = @intCast(off);
+                        }
+                        // Strip ORDER BY/LIMIT/OFFSET from tail queries
+                        q2.order_by = null;
+                        q2.limit = null;
+                        q2.offset = null;
                         try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
                     }
 
-                    // Parse optional ORDER BY, LIMIT, OFFSET after UNION
-                    var order_by: ?*ast.OrderBy = null;
-                    var limit_val: ?u64 = null;
-                    var offset_val: ?u64 = null;
+                    // Parse optional ORDER BY, LIMIT, OFFSET after UNION (if not already set)
 
                     if (self.cur.kind == .ORDER) {
                         self.advance();
@@ -621,9 +645,14 @@ pub const Parser = struct {
                 // Parenthesized set expression grouping: (RETURN ... UNION ...)
                 if (self.cur.kind == .l_paren) {
                     self.advance();
-                    const first = try self.parseQuery();
+                    var first = try self.parseQuery();
                     var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     if (self.cur.kind != .UNION) return error.UnexpectedToken;
+                    // Strip ORDER BY/LIMIT/OFFSET from first query - they apply outside the parentheses
+                    first.order_by = null;
+                    first.limit = null;
+                    first.offset = null;
+
                     while (self.cur.kind == .UNION) {
                         self.advance();
                         var all = false;
@@ -636,15 +665,32 @@ pub const Parser = struct {
                             self.advance();
                         }
                         if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-                        const q2 = try self.parseQuery();
+                        var q2 = try self.parseQuery();
+                        // Strip ORDER BY/LIMIT/OFFSET from tail queries too
+                        q2.order_by = null;
+                        q2.limit = null;
+                        q2.offset = null;
                         try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
                     }
                     _ = try self.expect(.r_paren);
                     // After grouped set expr, allow ORDER/LIMIT/OFFSET handled by outer caller; here we return a Union statement
                     break :blk_r .{ .Union = .{ .first = first, .tails = try parts.toOwnedSlice(self.arena.allocator()) } };
                 }
-                const first = try self.parseQuery();
+                var first = try self.parseQuery();
                 if (self.cur.kind == .UNION) {
+                    // Move ORDER BY/LIMIT/OFFSET from first query to UNION level
+                    var order_by: ?*ast.OrderBy = null;
+                    if (first.order_by) |ord| {
+                        const order_by_ptr = try self.arena.allocator().create(ast.OrderBy);
+                        order_by_ptr.* = ord;
+                        order_by = order_by_ptr;
+                    }
+                    var limit_val: ?u64 = if (first.limit) |l| @as(u64, @intCast(l)) else null;
+                    var offset_val: ?u64 = if (first.offset) |o| @as(u64, @intCast(o)) else null;
+                    first.order_by = null;
+                    first.limit = null;
+                    first.offset = null;
+
                     var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                     while (self.cur.kind == .UNION) {
                         self.advance();
@@ -658,14 +704,25 @@ pub const Parser = struct {
                             self.advance();
                         }
                         if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-                        const q2 = try self.parseQuery();
+                        var q2 = try self.parseQuery();
+                        // If this is the last part, move its ORDER BY/LIMIT/OFFSET to UNION level
+                        if (self.cur.kind != .UNION) {
+                            if (q2.order_by) |ord| {
+                                const order_by_ptr = try self.arena.allocator().create(ast.OrderBy);
+                                order_by_ptr.* = ord;
+                                order_by = order_by_ptr;
+                            }
+                            if (q2.limit) |lim| limit_val = @intCast(lim);
+                            if (q2.offset) |off| offset_val = @intCast(off);
+                        }
+                        // Strip ORDER BY/LIMIT/OFFSET from tail queries
+                        q2.order_by = null;
+                        q2.limit = null;
+                        q2.offset = null;
                         try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
                     }
 
-                    // Parse optional ORDER BY, LIMIT, OFFSET after UNION
-                    var order_by: ?*ast.OrderBy = null;
-                    var limit_val: ?u64 = null;
-                    var offset_val: ?u64 = null;
+                    // Parse optional ORDER BY, LIMIT, OFFSET after UNION (if not already set)
 
                     if (self.cur.kind == .ORDER) {
                         self.advance();
@@ -1097,6 +1154,23 @@ pub const Parser = struct {
 
     fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
         if (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
+            // CANARY: REQ=REQ-GQL-100; FEATURE="UNION Query Operations"; ASPECT=Parser; STATUS=FIXED; TEST=gql_conformance.T1; OWNER=parser; UPDATED=2025-10-14
+            // When we have set operations, individual queries should not have their own ORDER BY/LIMIT/OFFSET
+            // Those clauses apply to the entire set operation result
+            // If the first query has these, they should be moved to the UNION level
+            var first_query = first;
+            var order_by: ?*ast.OrderBy = null;
+            if (first.order_by) |ord| {
+                const order_by_ptr = try self.arena.allocator().create(ast.OrderBy);
+                order_by_ptr.* = ord;
+                order_by = order_by_ptr;
+            }
+            var limit_val: ?u64 = if (first.limit) |l| @as(u64, @intCast(l)) else null;
+            var offset_val: ?u64 = if (first.offset) |o| @as(u64, @intCast(o)) else null;
+            first_query.order_by = null;
+            first_query.limit = null;
+            first_query.offset = null;
+
             var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             while (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
                 const operation = switch (self.cur.kind) {
@@ -1117,14 +1191,25 @@ pub const Parser = struct {
                 }
                 // Disallow both modifiers at once
                 if (self.cur.kind == .ALL or self.cur.kind == .DISTINCT) return self.unexpected("both ALL and DISTINCT specified");
-                const q = try self.parseQuery();
+                var q = try self.parseQuery();
+                // If this is the last part and it has ORDER BY/LIMIT/OFFSET, use those for the UNION level
+                if (self.cur.kind != .UNION and self.cur.kind != .INTERSECT and self.cur.kind != .EXCEPT) {
+                    if (q.order_by) |ord| {
+                        const order_by_ptr = try self.arena.allocator().create(ast.OrderBy);
+                        order_by_ptr.* = ord;
+                        order_by = order_by_ptr;
+                    }
+                    if (q.limit) |lim| limit_val = @intCast(lim);
+                    if (q.offset) |off| offset_val = @intCast(off);
+                }
+                // Strip ORDER BY/LIMIT/OFFSET from tail queries - they apply at set operation level
+                q.order_by = null;
+                q.limit = null;
+                q.offset = null;
                 try parts.append(self.arena.allocator(), .{ .operation = operation, .all = all, .distinct = distinct, .query = q });
             }
 
-            // Parse optional ORDER BY, LIMIT, OFFSET after set operations
-            var order_by: ?*ast.OrderBy = null;
-            var limit_val: ?u64 = null;
-            var offset_val: ?u64 = null;
+            // Parse optional ORDER BY, LIMIT, OFFSET after set operations (if not already set from last query)
 
             if (self.cur.kind == .ORDER) {
                 self.advance();
@@ -1174,7 +1259,7 @@ pub const Parser = struct {
             }
 
             return .{ .Union = .{
-                .first = first,
+                .first = first_query,
                 .tails = try parts.toOwnedSlice(self.arena.allocator()),
                 .order_by = order_by,
                 .limit = limit_val,
@@ -2682,11 +2767,7 @@ pub const Parser = struct {
                         _ = try self.expect(.r_paren);
 
                         // Create ListComprehension node
-                        const comp_expr = ast.Expr{ .ListComprehension = .{
-                            .variable = var_token.lexeme,
-                            .source = sp,
-                            .filter = filter
-                        }};
+                        const comp_expr = ast.Expr{ .ListComprehension = .{ .variable = var_token.lexeme, .source = sp, .filter = filter } };
 
                         // Wrap in Call node with function name as callee
                         const cp = try a.create(ast.Expr);

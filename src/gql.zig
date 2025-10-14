@@ -143,7 +143,7 @@ test "CREATE INDEX parsing" {
 
     for (test_queries) |query| {
         var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {
-            std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{query, err});
+            std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{ query, err });
             return err;
         };
         defer result.deinit();
@@ -154,7 +154,7 @@ test "CREATE INDEX parsing" {
 test "Parenthesized UNION with INTERSECT" {
     const query = "(MATCH (a:MixedA) RETURN a.id AS id UNION MATCH (b:MixedB) RETURN b.id AS id) INTERSECT MATCH (c:MixedC) RETURN c.id AS id";
     var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {
-        std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{query, err});
+        std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{ query, err });
         return err;
     };
     defer result.deinit();

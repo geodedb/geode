@@ -2421,7 +2421,7 @@ fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, nex
         // Build parameter arrays from current result
         // Validate that current_row length matches columns length
         if (current_row.len != current_result.columns.len) {
-            std.debug.print("ERROR: Row length {d} != columns length {d}\n", .{current_row.len, current_result.columns.len});
+            std.debug.print("ERROR: Row length {d} != columns length {d}\n", .{ current_row.len, current_result.columns.len });
             return error.MismatchedRowColumnLength;
         }
 
@@ -2519,7 +2519,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         for (current_result.rows) |current_row| {
             // Validate that current_row length matches columns length
             if (current_row.len != current_result.columns.len) {
-                std.debug.print("ERROR: Row length {d} != columns length {d} in executeQueryChainWithBindings\n", .{current_row.len, current_result.columns.len});
+                std.debug.print("ERROR: Row length {d} != columns length {d} in executeQueryChainWithBindings\n", .{ current_row.len, current_result.columns.len });
                 return error.MismatchedRowColumnLength;
             }
 
@@ -5230,7 +5230,6 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
         }
     }
 
-
     if (has_aggregation) {
         // Check if we have GROUP BY
         if (q.group_by) |group_by| {
@@ -5584,7 +5583,6 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     break :blk list;
                 },
             };
-
 
             // Apply WITH clause for query pipelining if present
             if (q.with_clause) |with_clause| {
@@ -6308,8 +6306,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             columns = try col_list.toOwnedSlice(allocator);
 
             // CANARY(memory-safety): Debug columns construction
-            if (rows.items.len > 0) {
-            }
+            if (rows.items.len > 0) {}
         }
 
         var result = ExecutionResult{
@@ -6409,7 +6406,6 @@ fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult
         std.debug.print("ERROR: Corrupted input_result.columns.len = {d} in executeWithClause\n", .{input_result.columns.len});
         return error.CorruptedExecutionResult;
     }
-
 
     // Transform the input result according to WITH clause items
     const with_items = with_clause.items;
@@ -7748,6 +7744,7 @@ fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.O
             var should_swap = false;
 
             for (order.keys) |key| {
+                // CANARY: REQ=REQ-GQL-101; FEATURE="ORDER BY Expression Evaluation"; ASPECT=Execution; STATUS=FIXED; TEST=gql_conformance.T3; OWNER=execution; UPDATED=2025-10-14
                 // Handle ordinal references (ORDER BY 2 means second column)
                 var val1: eval.Value = undefined;
                 var val2: eval.Value = undefined;
@@ -7763,11 +7760,39 @@ fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.O
                         val1 = .{ .Null = {} };
                         val2 = .{ .Null = {} };
                     }
+                } else if (key.expr == .Ident) {
+                    // Simple column reference - look up by name
+                    const col_name = key.expr.Ident.orig;
+                    var col_idx_opt: ?usize = null;
+                    for (result.columns, 0..) |result_col, idx| {
+                        if (std.mem.eql(u8, result_col, col_name)) {
+                            col_idx_opt = idx;
+                            break;
+                        }
+                    }
+                    if (col_idx_opt) |col_idx| {
+                        val1 = result.rows[i][col_idx];
+                        val2 = result.rows[i + 1][col_idx];
+                    } else {
+                        // Column not found
+                        val1 = .{ .Null = {} };
+                        val2 = .{ .Null = {} };
+                    }
                 } else {
-                    // For now, just use first column for non-ordinal expressions
-                    // TODO: Properly evaluate ORDER BY expressions
-                    val1 = result.rows[i][0];
-                    val2 = result.rows[i + 1][0];
+                    // Complex expression - need to evaluate it for each row
+                    // Create environment from row values
+                    const env1 = eval.Env{
+                        .names = result.columns,
+                        .values = result.rows[i],
+                    };
+                    const env2 = eval.Env{
+                        .names = result.columns,
+                        .values = result.rows[i + 1],
+                    };
+
+                    // Evaluate expressions (errors default to Null)
+                    val1 = eval.evalExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                    val2 = eval.evalExpr(allocator, key.expr, env2) catch .{ .Null = {} };
                 }
 
                 const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
