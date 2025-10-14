@@ -44,7 +44,7 @@ pub const Permission = enum {
 
 pub const User = struct {
     username: []const u8,
-    password_hash: [72]u8,  // $geode$ + 64 hex chars + $ = 72 bytes
+    password_hash: [75]u8,  // $argon2id$ + 64 hex chars + $ = 75 bytes
     email: []const u8,
     role: Role,
     created_at: i64,
@@ -98,44 +98,63 @@ pub fn deinitUserStore() void {
     }
 }
 
-/// Hash password using bcrypt-compatible algorithm
-/// For simplicity, we use SHA256 as a stand-in (real impl would use bcrypt)
-pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![72]u8 {
-    // Use SHA256 with salt for password hashing
-    // This is a simplified version - production would use bcrypt/argon2
-    var hasher = crypto.hash.sha2.Sha256.init(.{});
+/// Hash password using Argon2id
+/// Argon2id is the recommended password hashing algorithm (combines Argon2i and Argon2d)
+/// Resistant to both side-channel and GPU cracking attacks
+pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![75]u8 {
+    // Argon2id parameters (OWASP recommendations for server-side hashing)
+    // - time_cost: Number of iterations (3 is recommended minimum)
+    // - memory_cost: Memory in KiB (65536 = 64 MiB, recommended for server)
+    // - parallelism: Number of threads (4 is typical for modern CPUs)
+    const params = crypto.pwhash.argon2.Params{
+        .t = 3,      // time cost (iterations)
+        .m = 65536,  // memory cost in KiB (64 MiB)
+        .p = 4,      // parallelism (threads)
+    };
 
-    // Add salt
-    const salt = "geode_salt_v1"; // In production, use random per-user salt
-    hasher.update(salt);
-    hasher.update(password);
+    // Generate a deterministic salt from a fixed seed for this simplified implementation
+    // PRODUCTION NOTE: Each user should have a unique random 16-byte salt stored with their hash
+    var salt: [16]u8 = undefined;
+    @memcpy(&salt, "geode_salt_v1_16"); // 16-byte salt
 
+    // Hash the password with Argon2id - produces 32-byte output
     var hash: [32]u8 = undefined;
-    hasher.final(&hash);
+    crypto.pwhash.argon2.kdf(
+        allocator,
+        &hash,
+        password,
+        &salt,
+        params,
+        .argon2id,
+    ) catch |err| {
+        // If allocation fails, return the error
+        if (err == error.OutOfMemory) return err;
+        // For other errors, treat as OutOfMemory
+        return error.OutOfMemory;
+    };
 
-    // Convert to hex format: $geode$ + 64 hex chars + $
-    var result: [72]u8 = undefined;
+    // Encode as: $argon2id$ + 64 hex chars + $ = 75 bytes total
+    var result: [75]u8 = undefined;
     const hex_chars = "0123456789abcdef";
-    _ = std.fmt.bufPrint(result[0..7], "$geode$", .{}) catch unreachable;
-    var idx: usize = 7;
+    _ = std.fmt.bufPrint(result[0..11], "$argon2id$", .{}) catch unreachable;
+    var idx: usize = 10;
     for (hash) |b| {
         result[idx] = hex_chars[b >> 4];
         result[idx + 1] = hex_chars[b & 0x0F];
         idx += 2;
     }
-    result[71] = '$';
+    result[74] = '$';
 
-    _ = allocator;
     return result;
 }
 
-/// Verify password against stored hash
-pub fn verifyPassword(password: []const u8, hash: [72]u8) bool {
-    // Hash the provided password
+/// Verify password against stored hash using Argon2id
+pub fn verifyPassword(password: []const u8, hash: [75]u8) bool {
+    // Hash the provided password with same parameters
     const computed = hashPassword(std.heap.page_allocator, password) catch return false;
 
     // Constant-time comparison to prevent timing attacks
-    return crypto.timing_safe.eql([72]u8, computed, hash);
+    return crypto.timing_safe.eql([75]u8, computed, hash);
 }
 
 /// Create a new user
