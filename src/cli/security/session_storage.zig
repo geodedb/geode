@@ -340,9 +340,7 @@ test "SessionToken.toHexString produces 64 character hex" {
 
     // Should only contain valid hex characters
     for (hex) |c| {
-        try std.testing.expect(
-            (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f')
-        );
+        try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
     }
 }
 

@@ -10,10 +10,10 @@ var catalog_initialized = false;
 // IndexInfo stores metadata about an index
 // CANARY: REQ=REQ-INDEX-001; FEATURE="IndexManagement"; ASPECT=Catalog; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
 const IndexInfo = struct {
-    name: []const u8,           // Index name (user-provided)
-    index_type: []const u8,     // btree, hash, fulltext, etc.
-    table_name: []const u8,     // Label/table name
-    columns: [][]const u8,      // Property names
+    name: []const u8, // Index name (user-provided)
+    index_type: []const u8, // btree, hash, fulltext, etc.
+    table_name: []const u8, // Label/table name
+    columns: [][]const u8, // Property names
 };
 
 /// Generate a scoped index key for catalog storage
