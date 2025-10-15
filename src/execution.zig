@@ -1,8 +1,12 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
+const fle_catalog = @import("schema/catalog.zig");
+const fle_annotations = @import("schema/annotations.zig");
 
 // CANARY: FLE_EXECUTION_INTEGRATION - Field-Level Encryption Execution Hooks
 // CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: FLE_CATALOG_REGISTRATION - Schema Catalog Registration During Execution
+// CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=CATALOG; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
 const ast = @import("gql/ast.zig");
 const eval = @import("eval.zig");
 const graph_store = @import("graph_store.zig");
@@ -1542,8 +1546,49 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateGraphType => |cgt| {
-            // CREATE GRAPH TYPE implementation
-            _ = cgt;
+            // CREATE GRAPH TYPE implementation with FLE catalog registration
+
+            // Get global FLE catalog
+            const fle_cat = try fle_catalog.globalCatalog(allocator);
+
+            // Create type metadata
+            var type_meta = fle_annotations.TypeMetadata.init(allocator, cgt.name);
+            errdefer type_meta.deinit();
+
+            // Process field definitions and apply annotations
+            for (cgt.fields) |field_def| {
+                // Build full annotation text by concatenating all annotations
+                var annotation_text_builder = std.ArrayList(u8).initCapacity(allocator, 256) catch @panic("OOM");
+                defer annotation_text_builder.deinit(allocator);
+
+                for (field_def.annotations) |annot| {
+                    try annotation_text_builder.appendSlice(allocator, annot.text);
+                    try annotation_text_builder.append(allocator, ' ');
+                }
+
+                const full_annotation_text = try annotation_text_builder.toOwnedSlice(allocator);
+                defer allocator.free(full_annotation_text);
+
+                // Apply annotations to field and add to type metadata
+                if (full_annotation_text.len > 0) {
+                    try fle_annotations.applyAnnotations(
+                        allocator,
+                        &type_meta,
+                        field_def.name,
+                        full_annotation_text,
+                    );
+                } else {
+                    // Field has no annotations - add as plaintext field
+                    const field_meta = fle_annotations.FieldMetadata{
+                        .field_name = field_def.name,
+                    };
+                    try type_meta.fields.put(field_def.name, field_meta);
+                }
+            }
+
+            // Register type in catalog
+            try fle_cat.registerType(cgt.name, type_meta);
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
