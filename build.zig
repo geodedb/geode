@@ -78,6 +78,34 @@ pub fn build(b: *std.Build) void {
 
     const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
+
+    // Field-Level Encryption modules
+    // CANARY: REQ=REQ-FLE-BUILD-001; FEATURE="FieldLevelEncryption"; ASPECT=BUILD; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+    const fle_aead_mod = b.createModule(.{ .root_source_file = b.path("src/crypto/aead.zig"), .target = target, .optimize = optimize });
+    const fle_hkdf_mod = b.createModule(.{ .root_source_file = b.path("src/crypto/hkdf.zig"), .target = target, .optimize = optimize });
+    const fle_hmac_mod = b.createModule(.{ .root_source_file = b.path("src/crypto/hmac.zig"), .target = target, .optimize = optimize });
+    const fle_key_types_mod = b.createModule(.{ .root_source_file = b.path("src/keys/types.zig"), .target = target, .optimize = optimize });
+    const fle_key_manager_mod = b.createModule(.{ .root_source_file = b.path("src/keys/manager.zig"), .target = target, .optimize = optimize });
+    const fle_blind_index_mod = b.createModule(.{ .root_source_file = b.path("src/index/blind_index.zig"), .target = target, .optimize = optimize });
+    const fle_annotations_mod = b.createModule(.{ .root_source_file = b.path("src/schema/annotations.zig"), .target = target, .optimize = optimize });
+    const fle_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/schema/catalog.zig"), .target = target, .optimize = optimize });
+
+    // Add dependencies for FLE modules
+    fle_key_manager_mod.addImport("fle_hkdf", fle_hkdf_mod);
+    fle_key_manager_mod.addImport("fle_key_types", fle_key_types_mod);
+    fle_blind_index_mod.addImport("fle_hmac", fle_hmac_mod);
+    fle_catalog_mod.addImport("annotations", fle_annotations_mod);
+
+    // Import FLE modules into root module for global access
+    root_mod.addImport("fle_aead", fle_aead_mod);
+    root_mod.addImport("fle_hkdf", fle_hkdf_mod);
+    root_mod.addImport("fle_hmac", fle_hmac_mod);
+    root_mod.addImport("fle_key_types", fle_key_types_mod);
+    root_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    root_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    root_mod.addImport("fle_annotations", fle_annotations_mod);
+    root_mod.addImport("fle_catalog", fle_catalog_mod);
+
     gql_exe.root_module.addImport("geode", root_mod);
     if (target.result.os.tag == .windows) {
         gql_exe.linkLibC();
