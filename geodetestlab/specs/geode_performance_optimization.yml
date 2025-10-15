@@ -296,7 +296,7 @@ integration_tests:
   - name: "performance_with_indexing"
     description: "Test performance optimizations work with indexing"
     setup_queries:
-      - "CREATE INDEX perf_idx ON TestNode (performance_id)"
+      - "CREATE INDEX IF NOT EXISTS perf_idx ON TestNode (performance_id)"
     query: |
       CREATE (n1:TestNode {performance_id: 1, data: 'indexed_performance_test'})
       CREATE (n2:TestNode {performance_id: 2, data: 'indexed_performance_test'})

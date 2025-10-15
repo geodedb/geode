@@ -112,7 +112,7 @@ tests:
 
   # Index Operations  
   - name: create-simple-index
-    args: ["query", "CREATE INDEX idx_person_name ON :Person(name)", "--format", "json"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS idx_person_name ON :Person(name)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["status_class\":\"00000"]

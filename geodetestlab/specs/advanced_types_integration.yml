@@ -300,19 +300,19 @@ tests:
   - name: "vector_index_similarity_search"
     description: "Test vector index creation and similarity search"
     command: "geode"
-    args: ["query", "CREATE INDEX vector_embeddings FOR (d:Document) ON (d.embedding) OPTIONS {type: 'vector', metric: 'cosine', dimensions: 3}"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS vector_embeddings FOR (d:Document) ON (d.embedding) OPTIONS {type: 'vector', metric: 'cosine', dimensions: 3}"]
     expect_exit_code: 0
 
   - name: "spatial_index_geographic_search"
     description: "Test spatial index creation for geographic queries"
     command: "geode"
-    args: ["query", "CREATE INDEX location_spatial FOR (p:Place) ON (p.location) OPTIONS {type: 'spatial'}"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS location_spatial FOR (p:Place) ON (p.location) OPTIONS {type: 'spatial'}"]
     expect_exit_code: 0
 
   - name: "network_index_cidr_search"
     description: "Test network index creation for CIDR queries"
     command: "geode"
-    args: ["query", "CREATE INDEX ip_addresses FOR (n:NetworkNode) ON (n.ip_address) OPTIONS {type: 'patricia_trie'}"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS ip_addresses FOR (n:NetworkNode) ON (n.ip_address) OPTIONS {type: 'patricia_trie'}"]
     expect_exit_code: 0
 
 cleanup:

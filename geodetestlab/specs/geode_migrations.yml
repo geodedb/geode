@@ -40,13 +40,13 @@ tests:
 
   # Index Management Tests
   - name: create-btree-index
-    args: ["query", "CREATE INDEX person_name_idx ON :Person(name) USING BTREE", "--format", "json"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS person_name_idx ON :Person(name) USING BTREE", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["status_class\":\"00000"]
 
   - name: create-hash-index
-    args: ["query", "CREATE INDEX person_email_idx ON :Person(email) USING HASH", "--format", "json"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS person_email_idx ON :Person(email) USING HASH", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["status_class\":\"00000"]
