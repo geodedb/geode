@@ -976,7 +976,7 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     if (!initialized or needs_reinit) {
         // Clean up previous instance if it exists
         if (initialized and global_store != null) {
-            global_store.?.clearNodes();  // Clear all data before reinitializing
+            global_store.?.clearNodes(); // Clear all data before reinitializing
             global_store.?.deinit();
             global_store = null;
             if (global_arena != null) {
