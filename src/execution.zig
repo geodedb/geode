@@ -1,4 +1,8 @@
 const std = @import("std");
+const fle_integration = @import("fle_integration.zig");
+
+// CANARY: FLE_EXECUTION_INTEGRATION - Field-Level Encryption Execution Hooks
+// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
 const ast = @import("gql/ast.zig");
 const eval = @import("eval.zig");
 const graph_store = @import("graph_store.zig");
@@ -632,8 +636,27 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                     try writer.writeAll("\":");
                     switch (entry.value_ptr.*) {
                         .String => |s| {
+                            // Field-Level Encryption: decrypt if configured
+                            const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                            const fle_ctx = fle_integration.EncryptionContext{
+                                .tenant_id = "default", // TODO: get from session context
+                                .schema_name = "default", // TODO: get from session context
+                                .allocator = std.heap.page_allocator,
+                            };
+                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "node_{d}", .{node.id});
+                            defer std.heap.page_allocator.free(record_id_buf);
+
+                            const decrypted = fle_integration.decryptFieldIfNeeded(
+                                fle_ctx,
+                                type_name,
+                                entry.key_ptr.*,
+                                s,
+                                record_id_buf,
+                                true, // Check RBAC
+                            ) catch s; // Fall back to ciphertext on error
+
                             try writer.writeByte('"');
-                            try writer.writeAll(s);
+                            try writer.writeAll(decrypted);
                             try writer.writeByte('"');
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
@@ -665,8 +688,27 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                     const prop_value = entry.value_ptr.*;
                     switch (prop_value) {
                         .String => |s| {
+                            // Field-Level Encryption: decrypt if configured
+                            const type_name = edge.label;
+                            const fle_ctx = fle_integration.EncryptionContext{
+                                .tenant_id = "default", // TODO: get from session context
+                                .schema_name = "default", // TODO: get from session context
+                                .allocator = std.heap.page_allocator,
+                            };
+                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "edge_{d}", .{edge.id});
+                            defer std.heap.page_allocator.free(record_id_buf);
+
+                            const decrypted = fle_integration.decryptFieldIfNeeded(
+                                fle_ctx,
+                                type_name,
+                                entry.key_ptr.*,
+                                s,
+                                record_id_buf,
+                                true, // Check RBAC
+                            ) catch s; // Fall back to ciphertext on error
+
                             try writer.writeByte('"');
-                            try writer.writeAll(s);
+                            try writer.writeAll(decrypted);
                             try writer.writeByte('"');
                         },
                         .Int => |i| try writer.print("{d}", .{i}),

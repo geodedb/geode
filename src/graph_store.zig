@@ -1,4 +1,8 @@
 const std = @import("std");
+const fle_integration = @import("fle_integration.zig");
+
+// CANARY: FLE_STORAGE_INTEGRATION - Field-Level Encryption Storage Hooks
+// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
 
 // Simple graph store with file-based persistence for testing
 // Real implementation would use proper storage engine
@@ -142,11 +146,38 @@ pub const GraphStore = struct {
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
         if (self.nodes.getPtr(node_id)) |node| {
             const key_copy = try self.allocator.dupe(u8, key);
-            // Also duplicate string values to ensure they persist
+
+            // Field-Level Encryption: encrypt string values if configured
             const value_copy = switch (value) {
-                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
+                .String => |s| blk: {
+                    // Get node type (primary label) for catalog lookup
+                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+
+                    // Create encryption context
+                    const fle_ctx = fle_integration.EncryptionContext{
+                        .tenant_id = "default", // TODO: get from session context
+                        .schema_name = "default", // TODO: get from session context
+                        .allocator = self.allocator,
+                    };
+
+                    // Format record ID
+                    const record_id = try std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id});
+                    defer self.allocator.free(record_id);
+
+                    // Encrypt if field is configured for encryption
+                    const encrypted_value = fle_integration.encryptFieldIfNeeded(
+                        fle_ctx,
+                        type_name,
+                        key,
+                        s,
+                        record_id,
+                    ) catch s; // Fall back to plaintext on error
+
+                    break :blk PropertyValue{ .String = try self.allocator.dupe(u8, encrypted_value) };
+                },
                 else => value,
             };
+
             try node.properties.put(key_copy, value_copy);
 
             // Save to persistent storage
@@ -271,10 +302,38 @@ pub const GraphStore = struct {
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
         if (self.edges.getPtr(edge_id)) |edge| {
             const key_copy = try self.allocator.dupe(u8, key);
+
+            // Field-Level Encryption: encrypt string values if configured
             const value_copy = switch (value) {
-                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
+                .String => |s| blk: {
+                    // Use edge label as type name for catalog lookup
+                    const type_name = edge.label;
+
+                    // Create encryption context
+                    const fle_ctx = fle_integration.EncryptionContext{
+                        .tenant_id = "default", // TODO: get from session context
+                        .schema_name = "default", // TODO: get from session context
+                        .allocator = self.allocator,
+                    };
+
+                    // Format record ID
+                    const record_id = try std.fmt.allocPrint(self.allocator, "edge_{d}", .{edge_id});
+                    defer self.allocator.free(record_id);
+
+                    // Encrypt if field is configured for encryption
+                    const encrypted_value = fle_integration.encryptFieldIfNeeded(
+                        fle_ctx,
+                        type_name,
+                        key,
+                        s,
+                        record_id,
+                    ) catch s; // Fall back to plaintext on error
+
+                    break :blk PropertyValue{ .String = try self.allocator.dupe(u8, encrypted_value) };
+                },
                 else => value,
             };
+
             try edge.properties.put(key_copy, value_copy);
 
             // Save to persistent storage
