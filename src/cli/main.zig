@@ -2105,7 +2105,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Determine execution mode based on --server flag
     if (server) |server_addr| {
         // Execute query via QUIC connection to server
-        try executeQuicQuery(ally, server_addr, query_text.?, format, insecure, timeout_secs, retry_count);
+        try executeQuicQuery(ally, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
     } else {
         // No --server and no --no-quic: use embedded persistent mode
         // This is the default for tests that need data persistence
@@ -2289,7 +2289,7 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
-fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32) !void {
+fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
     _ = timeout_secs; // Timeout is currently hardcoded in QuicClient.waitForHandshake
     const QuicTransport = @import("transport/quic");
     const stderr = std.fs.File{ .handle = 2 };
@@ -2319,7 +2319,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
             const handshake_err = quic_client.waitForHandshake();
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
-                return try executeQueryOnConnection(ally, &quic_client, query_text, format);
+                return try executeQueryOnConnection(ally, &quic_client, query_text, format, username, password);
             } else |_| {
                 // Handshake failed (timeout or other error)
                 if (attempts + 1 < max_attempts) {
@@ -2349,7 +2349,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
-fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query_text: []const u8, format: []const u8) !void {
+fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
@@ -2357,6 +2357,33 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer stream.deinit();
+
+    // Send HELLO message with authentication credentials
+    const hello_msg = if (username != null and password != null)
+        try std.fmt.allocPrint(ally, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n", .{ username.?, password.? })
+    else
+        try std.fmt.allocPrint(ally, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}}\n", .{});
+    defer ally.free(hello_msg);
+
+    std.debug.print("DEBUG: Client sending HELLO: {s}\n", .{hello_msg});
+    stream.writeAll(hello_msg) catch |err| {
+        std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    // Read HELLO response
+    const hello_response = stream.readLine(65536) catch |err| {
+        std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer ally.free(hello_response);
+    std.debug.print("DEBUG: Client received HELLO response: {s}\n", .{hello_response});
+
+    // Check for authentication errors
+    if (std.mem.indexOf(u8, hello_response, "\"type\":\"ERROR\"") != null or std.mem.indexOf(u8, hello_response, "Authentication failed") != null) {
+        std.debug.print("Error: {s}\n", .{hello_response});
+        std.process.exit(@intFromEnum(ExitCode.auth_error));
+    }
 
     // Escape query text for JSON
     const escaped_text = try escapeJsonString(ally, query_text);

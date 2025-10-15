@@ -2942,7 +2942,33 @@ fn processMessage(
     defer arena.deinit();
     const msg = protocol.parseClientMessage(arena.allocator(), _line) catch return try gpa.dupe(u8, "");
     switch (msg) {
-        .HELLO => |_| {
+        .HELLO => |hello| {
+            // Check if authentication is enabled
+            const user_mgmt = geode.user_management;
+            const auth_enabled = user_mgmt.isAuthEnabled();
+
+            // If auth is enabled, validate credentials
+            if (auth_enabled) {
+                if (hello.username == null or hello.password == null) {
+                    // Authentication required but no credentials provided
+                    const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication required\"}\n";
+                    return try gpa.dupe(u8, error_response);
+                }
+
+                // Validate credentials
+                const username = hello.username.?;
+                const password = hello.password.?;
+
+                _ = user_mgmt.authenticate(username, password) catch {
+                    // Authentication failed
+                    const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication failed: invalid username or password\"}\n";
+                    return try gpa.dupe(u8, error_response);
+                };
+
+                // Authentication successful - store session info if needed
+                std.debug.print("Authenticated user: {s}\n", .{username});
+            }
+
             // Return HELLO response with capabilities
             const hello_response = "{\"status_class\":\"00000\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}\n";
             return try gpa.dupe(u8, hello_response);

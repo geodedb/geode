@@ -16,6 +16,8 @@ pub const Hello = struct {
     client_name: []const u8,
     client_ver: []const u8,
     wanted_conformance: []const u8,
+    username: ?[]const u8 = null,
+    password: ?[]const u8 = null,
 };
 
 pub const RunGql = struct {
@@ -459,7 +461,22 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         const cn = try ally.dupe(u8, cnv.string);
         const cv = try ally.dupe(u8, cvv.string);
         const wc = try ally.dupe(u8, wcv.string);
-        return .{ .HELLO = .{ .client_name = cn, .client_ver = cv, .wanted_conformance = wc } };
+
+        // Extract optional authentication fields
+        var username: ?[]const u8 = null;
+        var password: ?[]const u8 = null;
+        if (obj.get("username")) |unv| {
+            if (unv == .string) {
+                username = try ally.dupe(u8, unv.string);
+            }
+        }
+        if (obj.get("password")) |pwv| {
+            if (pwv == .string) {
+                password = try ally.dupe(u8, pwv.string);
+            }
+        }
+
+        return .{ .HELLO = .{ .client_name = cn, .client_ver = cv, .wanted_conformance = wc, .username = username, .password = password } };
     } else if (std.mem.eql(u8, typ, "RUN_GQL")) {
         const txtv = obj.get("text") orelse return error.Invalid;
         if (txtv != .string) return error.Invalid;
