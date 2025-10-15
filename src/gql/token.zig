@@ -33,6 +33,7 @@ pub const TokenKind = enum {
     arrow_r, // ->
     arrow_l, // <-
     double_arrow, // =>
+    at, // @ (for field annotations - Geode extension)
 
     // literals & identifiers
     identifier,

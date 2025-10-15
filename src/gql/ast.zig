@@ -496,12 +496,31 @@ pub const DropGraphStatement = struct {
     property_graph: bool = true, // GQL property graphs are default
 };
 
+// CANARY: FLE_AST_FIELD_DEFINITIONS - Field-Level Encryption AST Extensions
+// CANARY: REQ=REQ-FLE-AST-001; FEATURE="FieldLevelEncryption"; ASPECT=AST; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+
+/// Field annotation for FLE (e.g., @encrypted, @searchable)
+pub const FieldAnnotation = struct {
+    name: []const u8, // Annotation name (e.g., "encrypted", "searchable")
+    text: []const u8, // Full annotation text with parameters
+};
+
+/// Field definition within a graph type
+pub const FieldDefinition = struct {
+    name: []const u8,
+    type_name: []const u8, // e.g., "STRING", "INT", "UUID"
+    nullable: bool = true,
+    primary_key: bool = false,
+    annotations: []FieldAnnotation = &.{}, // FLE annotations
+};
+
 pub const CreateGraphTypeStatement = struct {
     name: []const u8,
     if_not_exists: bool = false,
     or_replace: bool = false,
     property_graph: bool = true, // GQL property graphs are default
-    type_definition: []const u8, // The graph type definition (e.g., "{ }")
+    type_definition: []const u8, // The graph type definition (e.g., "{ }") - DEPRECATED, use fields
+    fields: []FieldDefinition = &.{}, // Parsed field definitions (NEW for FLE)
     like_source: ?[]const u8 = null, // LIKE source_graph
     copy_source: ?[]const u8 = null, // AS COPY OF source_type
 };

@@ -5043,6 +5043,108 @@ pub const Parser = struct {
     }
 
     // Parse CREATE GRAPH TYPE statement
+    // CANARY: FLE_PARSER_FIELD_DEFINITIONS - Field-Level Encryption Parser Extensions
+    // CANARY: REQ=REQ-FLE-PARSER-001; FEATURE="FieldLevelEncryption"; ASPECT=PARSER; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+
+    /// Parse field definitions within graph type: { field1 TYPE, field2 TYPE @annotations, ... }
+    fn parseFieldDefinitions(self: *Parser) ParserError![]ast.FieldDefinition {
+        _ = try self.expect(.l_brace); // Consume opening brace
+
+        var fields = std.ArrayList(ast.FieldDefinition).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+
+        // Parse fields until we hit closing brace
+        while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+            // Field name
+            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            const field_name = self.cur.lexeme;
+            self.advance();
+
+            // Field type (required)
+            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            const type_name = self.cur.lexeme;
+            self.advance();
+
+            // Optional PRIMARY KEY
+            var primary_key = false;
+            if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PRIMARY")) {
+                self.advance();
+                if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "KEY")) {
+                    self.advance();
+                    primary_key = true;
+                }
+            }
+
+            // Parse annotations (e.g., @encrypted(...), @searchable(...))
+            var annotations = std.ArrayList(ast.FieldAnnotation).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            while (self.cur.kind == .at) {
+                // Track start of annotation (@)
+                const at_lexeme = self.cur.lexeme;
+                const annotation_start = @intFromPtr(at_lexeme.ptr) - @intFromPtr(self.lx.src.ptr);
+                self.advance(); // Skip @
+
+                // Annotation name
+                if (self.cur.kind != .identifier) return error.UnexpectedToken;
+                const annot_name = self.cur.lexeme;
+                var annotation_end = @intFromPtr(annot_name.ptr) - @intFromPtr(self.lx.src.ptr) + annot_name.len;
+                self.advance();
+
+                // Annotation parameters (optional)
+                if (self.cur.kind == .l_paren) {
+                    self.advance(); // Skip opening paren
+
+                    // Skip until matching closing paren
+                    var paren_count: i32 = 1;
+                    while (paren_count > 0 and self.cur.kind != .eof) {
+                        if (self.cur.kind == .l_paren) {
+                            paren_count += 1;
+                        } else if (self.cur.kind == .r_paren) {
+                            paren_count -= 1;
+                        }
+                        annotation_end = @intFromPtr(self.cur.lexeme.ptr) - @intFromPtr(self.lx.src.ptr) + self.cur.lexeme.len;
+                        if (paren_count > 0) {
+                            self.advance();
+                        }
+                    }
+
+                    if (paren_count != 0) return error.UnexpectedToken;
+                    self.advance(); // Skip closing paren
+                }
+
+                // Extract full annotation text from source
+                const annot_text = self.lx.src[annotation_start..annotation_end];
+
+                try annotations.append(self.arena.allocator(), .{
+                    .name = annot_name,
+                    .text = annot_text,
+                });
+            }
+
+            // Add field definition
+            try fields.append(self.arena.allocator(), .{
+                .name = field_name,
+                .type_name = type_name,
+                .nullable = true, // Default to nullable
+                .primary_key = primary_key,
+                .annotations = try annotations.toOwnedSlice(self.arena.allocator()),
+            });
+
+            // Expect comma or closing brace
+            if (self.cur.kind == .comma) {
+                self.advance();
+                // Allow trailing comma before closing brace
+                if (self.cur.kind == .r_brace) break;
+            } else if (self.cur.kind == .r_brace) {
+                break;
+            } else {
+                return error.UnexpectedToken;
+            }
+        }
+
+        _ = try self.expect(.r_brace); // Consume closing brace
+
+        return try fields.toOwnedSlice(self.arena.allocator());
+    }
+
     fn parseCreateGraphType(self: *Parser, or_replace: bool, property_graph: bool) ParserError!ast.Statement {
         // Expect TYPE keyword
         if (self.cur.kind != .TYPE and
@@ -5077,7 +5179,7 @@ pub const Parser = struct {
         // Initialize optional fields
         var like_source: ?[]const u8 = null;
         var copy_source: ?[]const u8 = null;
-        var type_definition: []const u8 = "{ }"; // Default empty type definition
+        const type_definition: []const u8 = "{ }"; // Default empty type definition
 
         // Check for AS keyword (COPY OF or type definition)
         if (self.cur.kind == .AS) {
@@ -5102,25 +5204,18 @@ pub const Parser = struct {
             } else {
                 // This should be a type definition starting with {
                 if (self.cur.kind == .l_brace) {
-                    // For now, we'll just use "{ }" as placeholder and advance past the braces
-                    // TODO: Implement proper type definition parsing
-                    type_definition = "{ }";
-                    self.advance(); // Skip opening brace
-
-                    // Skip until matching closing brace
-                    var brace_count: i32 = 1;
-                    while (brace_count > 0 and self.cur.kind != .eof) {
-                        if (self.cur.kind == .l_brace) {
-                            brace_count += 1;
-                        } else if (self.cur.kind == .r_brace) {
-                            brace_count -= 1;
-                        }
-                        self.advance();
-                    }
-
-                    if (brace_count != 0) {
-                        return error.UnexpectedToken;
-                    }
+                    // Parse field definitions
+                    const fields = try self.parseFieldDefinitions();
+                    return .{ .CreateGraphType = .{
+                        .name = name,
+                        .if_not_exists = if_not_exists,
+                        .or_replace = or_replace,
+                        .property_graph = property_graph,
+                        .type_definition = "{ }", // Keep for backward compatibility
+                        .fields = fields,
+                        .like_source = like_source,
+                        .copy_source = copy_source,
+                    } };
                 } else {
                     return error.UnexpectedToken;
                 }
@@ -5143,6 +5238,7 @@ pub const Parser = struct {
             .or_replace = or_replace,
             .property_graph = property_graph,
             .type_definition = type_definition,
+            .fields = &.{}, // Empty fields for LIKE/COPY OF cases
             .like_source = like_source,
             .copy_source = copy_source,
         } };
