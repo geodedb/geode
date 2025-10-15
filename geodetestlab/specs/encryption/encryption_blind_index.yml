@@ -12,11 +12,11 @@ setup:
 steps:
   - name: seed
     gql: |
-      INSERT INTO Account { id:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email:"alice@example.com" };
-      INSERT INTO Account { id:"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", email:"bob@example.com" };
+      CREATE (a1:Account {id:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email:"alice@example.com"})
+      CREATE (a2:Account {id:"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", email:"bob@example.com"})
   - name: query_by_email
     gql: |
-      MATCH (a:Account WHERE a.email = "alice@example.com") RETURN a.id;
+      MATCH (a:Account) WHERE a.email = "alice@example.com" RETURN a.id
     expect:
       rows_exact:
         - { "a.id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }

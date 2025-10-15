@@ -12,11 +12,11 @@ setup:
 steps:
   - name: insert_encrypted_data
     gql: |
-      INSERT INTO Patient { id:"x", diagnosis:"hypertension" }
+      CREATE (p:Patient {id:"x", diagnosis:"hypertension"})
   - name: verify_migration_command
     cmd: geode fle migrate-encrypt default Patient diagnosis 1000
   - name: read_after_migration
     gql: |
-      MATCH (p:Patient WHERE p.id = "x") RETURN p.diagnosis
+      MATCH (p:Patient) WHERE p.id = "x" RETURN p.diagnosis
     expect:
       json_contains: [{ "p.diagnosis": "hypertension" }]

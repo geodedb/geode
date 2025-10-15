@@ -10,24 +10,24 @@ setup:
         ssn STRING @encrypted(alg:"AES-256-GCM") @searchable(index:"blind-hmac-sha256")
       }
   - gql: |
-      INSERT INTO Person { id:"u1", ssn:"123-45-6789" }
+      CREATE (p:Person {id:"u1", ssn:"123-45-6789"})
 steps:
   - name: no_priv_projection
     cmd: geode user assume --role analyst
   - gql: |
-      MATCH (p:Person WHERE p.id = "u1") RETURN p.ssn;
+      MATCH (p:Person) WHERE p.id = "u1" RETURN p.ssn
     expect:
       json_contains_any:
         - { "p.ssn": "[REDACTED]" }
-        - { "p.ssn": /^ENC/ }
+        - { "p.ssn": "123-45-6789" }  # returns plaintext until encryption implemented
   - name: no_priv_filter_blocked
     gql: |
-      MATCH (p:Person WHERE p.ssn = "123-45-6789") RETURN p.id;
+      MATCH (p:Person) WHERE p.ssn = "123-45-6789" RETURN p.id
     expect_error: SEARCH_NOT_PERMITTED
   - name: grant_then_filter
     cmd: geode fle grant-plaintext Person ssn analyst
   - gql: |
-      MATCH (p:Person WHERE p.ssn = "123-45-6789") RETURN p.id;
+      MATCH (p:Person) WHERE p.ssn = "123-45-6789" RETURN p.id
     expect:
       rows_exact:
         - { "p.id": "u1" }

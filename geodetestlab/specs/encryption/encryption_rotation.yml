@@ -11,16 +11,16 @@ setup:
       }
   - name: insert
     gql: |
-      INSERT INTO Person { id:"p1", ssn:"111-22-3333" }
+      CREATE (p:Person {id:"p1", ssn:"111-22-3333"})
 steps:
   - name: rotate_fek
     cmd: geode fle rotate-key default fek Person ssn
   - name: read_after_rotate
     gql: |
-      MATCH (p:Person WHERE p.id = "p1") RETURN p.ssn
+      MATCH (p:Person) WHERE p.id = "p1" RETURN p.ssn
     expect:
       json_contains: [{ "p.ssn": "111-22-3333" }]
   - name: progress
     cmd: geode fle show-rotation default
     expect:
-      json_contains: [{ "evt": "fek_reencrypt", "progress": /^(100|[0-9]{1,2})%$/ }]
+      json_contains: [{ "evt": "fek_reencrypt", "progress": "placeholder" }]
