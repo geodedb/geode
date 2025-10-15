@@ -1,0 +1,22 @@
+# CANARY: FLE_GEODETESTLAB_SPECS - Plaintext to Encrypted Migration Tests
+# CANARY: REQ=REQ-FLE-TEST-004; FEATURE="FieldLevelEncryption"; ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+
+suite: encryption_migration
+description: Plaintext → @encrypted backfill path; transparent reads.
+setup:
+  - gql: |
+      CREATE NODE TYPE Patient ( id STRING PRIMARY KEY, diagnosis STRING );
+  - gql: |
+      INSERT INTO Patient { id:"x", diagnosis:"hypertension" };
+steps:
+  - name: alter_encrypt
+    gql: |
+      ALTER NODE TYPE Patient ALTER PROPERTY diagnosis
+        SET @encrypted(alg:"AES-256-GCM") @classify(tags:["PHI"]);
+  - name: backfill
+    cmd: geode migrate encrypt --tenant default --field Patient.diagnosis --batch 1000
+  - name: read_plaintext_after
+    gql: |
+      MATCH (p:Patient WHERE p.id = "x") RETURN p.diagnosis;
+    expect:
+      json_contains: [{ "p.diagnosis": "hypertension" }]

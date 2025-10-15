@@ -1,4 +1,9 @@
-Below is the **commit‑by‑commit PR plan** with focused diffs and new files, followed by a **GeodeTestLab YAML suite** that matches the acceptance criteria from the design docs. I’ve written the diffs to be **surgical and anchor‑based** so you can apply them even if the exact line numbers differ slightly in `main`.
+<!-- CANARY: FLE_PR_PLAN - Field-Level Encryption PR Implementation Plan -->
+<!-- CANARY: FLE_MODULE_SCAFFOLDING - Core Module Structure -->
+<!-- CANARY: FLE_PLANNER_REWRITE - Query Planner Predicate Rewriting -->
+<!-- CANARY: FLE_GEODETESTLAB_SPECS - Integration Test Specifications -->
+
+Below is the **commit‑by‑commit PR plan** with focused diffs and new files, followed by a **GeodeTestLab YAML suite** that matches the acceptance criteria from the design docs. I've written the diffs to be **surgical and anchor‑based** so you can apply them even if the exact line numbers differ slightly in `main`.
 
 > **Scope note (pragmatic):** Because I don’t have live code access to your private repo in this chat, I’m using **search‑and‑insert anchors** in diffs (`// GEODE_FLE_*`) rather than absolute line numbers. Each hunk clearly shows **where** to place changes (function name + nearby lines). This keeps the plan **actionable** without guessing your current line offsets.
 

@@ -1,3 +1,10 @@
+<!-- CANARY: FLE_CORE - Field-Level Encryption Core Research & Requirements -->
+<!-- CANARY: FLE_AEAD - AEAD Encryption with AAD Binding -->
+<!-- CANARY: FLE_KEY_MANAGEMENT - Hierarchical Key Management (TRK/SK/FEK/BIK) -->
+<!-- CANARY: FLE_BLIND_INDEX - Blind Index for Searchable Encryption -->
+<!-- CANARY: FLE_RBAC - RBAC/ABAC Field-Level Access Control -->
+<!-- CANARY: FLE_GQL_EXTENSIONS - Geode GQL Schema Annotations -->
+
 ## Research Prompt — Geode Field‑Level Encryption & Key Management
 
 ### 0) Objective (what success looks like)

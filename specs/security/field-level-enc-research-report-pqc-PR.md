@@ -1,3 +1,10 @@
+<!-- CANARY: FLE_PQC_INTEGRATION - Post-Quantum Cryptography Integration -->
+<!-- CANARY: FLE_KYBER - Kyber KEM for Key Wrapping -->
+<!-- CANARY: FLE_DILITHIUM - Dilithium Digital Signatures -->
+<!-- CANARY: FLE_GEODE_INTEGRATION - Integration with Geode Storage & Execution -->
+<!-- CANARY: FLE_ENCRYPT_ON_WRITE - Property Encryption Hook Points -->
+<!-- CANARY: FLE_DECRYPT_ON_PROJECTION - Query Result Decryption -->
+
 # Geode — Field-Level Encryption (FLE) & Quantum-Resistant TDE
 
 *(Implementation report for `main` branch — code-level guidance with file/line references)*

@@ -1,3 +1,10 @@
+<!-- CANARY: FLE_IMPLEMENTATION - Field-Level Encryption Implementation Specification -->
+<!-- CANARY: FLE_CRYPTO_PRIMITIVES - Zig std.crypto AEAD/HKDF/HMAC Wrappers -->
+<!-- CANARY: FLE_KEY_MANAGER - KeyManager Implementation with Cache -->
+<!-- CANARY: FLE_ENVELOPE - Binary Envelope V1 Serialization Format -->
+<!-- CANARY: FLE_EXTERNAL_KMS - External KMS Integration for TRK -->
+<!-- CANARY: FLE_ACCEPTANCE_TESTS - Deterministic Acceptance Test Vectors -->
+
 ## T — Task & Role
 
 You are a senior **Zig 0.15.1** engineer. Build a **library + minimal CLI** that implements **Geode Field‑Level Encryption (FLE)** with blind‑index equality search, per‑tenant key hierarchy (TRK/SK/FEK/BIK), online rotation, RBAC/ABAC gates, and a **Design Report (Markdown)** that clearly marks **Geode‑only GQL extensions**. **Use `std.crypto` only** for cryptography.

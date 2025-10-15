@@ -1,0 +1,26 @@
+# CANARY: FLE_GEODETESTLAB_SPECS - Key Rotation Tests
+# CANARY: REQ=REQ-FLE-TEST-003; FEATURE="FieldLevelEncryption"; ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+
+suite: encryption_rotation
+description: Online FEK re-encrypt; mixed-version reads OK.
+setup:
+  - gql: |
+      CREATE NODE TYPE Person (
+        id UUID PRIMARY KEY,
+        ssn STRING @encrypted(alg:"AES-256-GCM") @searchable(index:"blind-hmac-sha256")
+      );
+  - name: insert
+    gql: |
+      INSERT INTO Person { id:"p1", ssn:"111-22-3333" };
+steps:
+  - name: rotate_fek
+    cmd: geode key rotate --tenant default --schema Person --field ssn --scope FEK
+  - name: read_after_rotate
+    gql: |
+      MATCH (p:Person WHERE p.id = "p1") RETURN p.ssn;
+    expect:
+      json_contains: [{ "p.ssn": "111-22-3333" }]
+  - name: progress
+    cmd: geode show rotation-status --tenant default
+    expect:
+      json_contains: [{ "evt": "fek_reencrypt", "progress": /^(100|[0-9]{1,2})%$/ }]

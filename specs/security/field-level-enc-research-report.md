@@ -1,3 +1,11 @@
+<!-- CANARY: FLE_DESIGN - Field-Level Encryption Design Document -->
+<!-- CANARY: FLE_AEAD - AEAD Encryption (AES-256-GCM, ChaCha20-Poly1305) -->
+<!-- CANARY: FLE_KEY_HIERARCHY - TRK → SK → FEK → BIK Key Hierarchy -->
+<!-- CANARY: FLE_ROTATION - Online Key Rotation (Rewrap & Re-encrypt) -->
+<!-- CANARY: FLE_BLIND_INDEX - Blind Index Equality Search -->
+<!-- CANARY: FLE_GQL_EXTENSIONS - Geode GQL Schema Annotations -->
+<!-- CANARY: FLE_RBAC - Field-Level RBAC/ABAC Enforcement -->
+
 # Geode Field-Level Encryption & Key Management — Design Report (Markdown)
 
 > **Scope:** Native, application-level, **field-level encryption** for Geode that is transparent to authorized users, queryable (equality), rotatable at scale, tenant-aware, RBAC/ABAC-governed, and implemented in **Zig 0.15.1** using **`std.crypto`** only.
