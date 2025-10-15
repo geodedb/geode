@@ -208,8 +208,8 @@ class ParallelTestRunner:
             is_shell_command = command == "shell"
 
             if is_query_command:
-                if server_address and "--no-quic" not in processed_args and "--server" not in processed_args:
-                    # Use server mode
+                if server_address and "--no-quic" not in processed_args and "--server" not in processed_args and "--embedded" not in processed_args:
+                    # Use server mode (only if not using embedded or no-quic mode)
                     processed_args.extend(["--server", server_address])
                 # Otherwise use default embedded mode with persistence (no --no-quic flag needed)
             elif is_shell_command:
@@ -247,6 +247,11 @@ class ParallelTestRunner:
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin", None)
 
+        # Prepare environment with isolated data directory for embedded mode
+        env = os.environ.copy()
+        if data_dir and not server_address:
+            env['GEODE_DATA_DIR'] = data_dir
+
         # Handle setup commands - run them separately with persistence
         setup_commands = test_case.get("setup", [])
         if setup_commands:
@@ -259,18 +264,14 @@ class ParallelTestRunner:
                         [self.binary] + processed_setup_args,
                         capture_output=True,
                         text=True,
-                        timeout=self.test_timeout
+                        timeout=self.test_timeout,
+                        env=env  # Pass the same env with isolated data_dir
                     )
                 except Exception as e:
                     # Log setup failure but continue
                     pass
 
         start_time = time.time()
-
-        # Prepare environment with isolated data directory for embedded mode
-        env = os.environ.copy()
-        if data_dir and not server_address:
-            env['GEODE_DATA_DIR'] = data_dir
 
         try:
             result = subprocess.run(

@@ -3,6 +3,26 @@ const std = @import("std");
 // Simple graph store with file-based persistence for testing
 // Real implementation would use proper storage engine
 
+/// Get the persistence file path, respecting GEODE_DATA_DIR environment variable
+/// Returns an allocated path that must be freed by the caller
+fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
+    // Check for GEODE_DATA_DIR environment variable
+    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
+        // If not set or error, use default /tmp path
+        if (err == error.EnvironmentVariableNotFound) {
+            return try allocator.dupe(u8, "/tmp/geode_graph_store.dat");
+        }
+        return err;
+    };
+    defer allocator.free(data_dir);
+
+    // Construct path: data_dir/graph_store.dat
+    // Ensure data_dir exists
+    std.fs.cwd().makePath(data_dir) catch {};
+
+    return try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{data_dir});
+}
+
 pub const Node = struct {
     id: u64,
     labels: [][]const u8,
@@ -327,7 +347,9 @@ pub const GraphStore = struct {
 
     // Simple file-based persistence for testing
     pub fn saveToFile(self: *GraphStore) !void {
-        const file = try std.fs.cwd().createFile("/tmp/geode_graph_store.dat", .{});
+        const file_path = try getPersistenceFilePath(self.allocator);
+        defer self.allocator.free(file_path);
+        const file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
 
         // Write header: next_node_id, next_edge_id, node_count, edge_count
@@ -604,7 +626,9 @@ pub const GraphStore = struct {
     }
 
     fn loadFromFile(self: *GraphStore) !void {
-        const file = std.fs.cwd().openFile("/tmp/geode_graph_store.dat", .{}) catch return;
+        const file_path = try getPersistenceFilePath(self.allocator);
+        defer self.allocator.free(file_path);
+        const file = std.fs.cwd().openFile(file_path, .{}) catch return;
         defer file.close();
 
         // Read header
