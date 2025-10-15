@@ -591,7 +591,6 @@ pub const QuicClient = struct {
             .allow_insecure = !use_tls,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .real_tls = use_tls,
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
