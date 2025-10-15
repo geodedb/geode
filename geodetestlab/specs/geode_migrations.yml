@@ -52,7 +52,7 @@ tests:
       stdout_contains: ["status_class\":\"00000"]
 
   - name: create-composite-index
-    args: ["query", "CREATE INDEX person_composite_idx ON :Person(name, age)", "--format", "json"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS person_composite_idx ON :Person(name, age)", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["status_class\":\"00000"]

@@ -616,7 +616,7 @@ pub const QuicClient = struct {
         }
 
         // Wait for handshake to complete with timeout
-        const total_timeout_ms = 2000; // 2 second total timeout (reduced for faster failure)
+        const total_timeout_ms = 5000; // 5 second total timeout (increased for auth-enabled servers)
         const poll_timeout_ms = 50; // 50ms per poll
         const start_time = std.time.milliTimestamp();
 

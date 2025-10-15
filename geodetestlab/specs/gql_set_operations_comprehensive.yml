@@ -357,9 +357,9 @@ tests:
       - "query"
       - "--embedded"
       - |
-        MATCH (a:AggA) RETURN a.category AS category, sum(a.value) AS total
+        MATCH (a:AggA) RETURN a.category AS category, sum(a.value) AS total GROUP BY a.category
         UNION
-        MATCH (b:AggB) RETURN b.category AS category, sum(b.value) AS total
+        MATCH (b:AggB) RETURN b.category AS category, sum(b.value) AS total GROUP BY b.category
     expect:
       exit_code: 0
       geode_query:

@@ -232,7 +232,7 @@ tests:
   
   - name: "test-create-graph-basic"
     description: "Test basic CREATE GRAPH statement"
-    args: ["query", "--embedded", "CREATE GRAPH test_graph_1"]
+    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS test_graph_1"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "create"]
@@ -253,7 +253,7 @@ tests:
 
   - name: "test-create-property-graph"
     description: "Test CREATE PROPERTY GRAPH"
-    args: ["query", "--embedded", "CREATE PROPERTY GRAPH prop_graph_1"]
+    args: ["query", "--embedded", "CREATE PROPERTY GRAPH IF NOT EXISTS prop_graph_1"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "create", "property"]
@@ -288,7 +288,7 @@ tests:
 
   - name: "test-create-schema"
     description: "Test CREATE SCHEMA statement"
-    args: ["query", "--embedded", "CREATE SCHEMA test_schema"]
+    args: ["query", "--embedded", "CREATE SCHEMA IF NOT EXISTS test_schema"]
     expect:
       exit_code: 0
     tags: ["ddl", "schema"]

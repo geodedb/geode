@@ -23,7 +23,7 @@ tests:
   
   - name: "create-schema-basic"
     description: "Test basic CREATE SCHEMA command"
-    args: ["query", "--embedded", "CREATE SCHEMA test_schema"]
+    args: ["query", "--embedded", "CREATE SCHEMA IF NOT EXISTS test_schema"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "create", "basic"]
@@ -75,14 +75,14 @@ tests:
   
   - name: "create-graph-basic"
     description: "Test basic CREATE GRAPH command"
-    args: ["query", "--embedded", "CREATE GRAPH test_graph ANY"]
+    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS test_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "basic"]
 
   - name: "create-property-graph-basic"
     description: "Test CREATE PROPERTY GRAPH command"
-    args: ["query", "--embedded", "CREATE PROPERTY GRAPH test_property_graph ANY"]
+    args: ["query", "--embedded", "CREATE PROPERTY GRAPH IF NOT EXISTS test_property_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "property"]
@@ -113,14 +113,14 @@ tests:
   # Graph with typed specifications
   - name: "create-typed-graph-any"
     description: "Test CREATE GRAPH with TYPED ANY specification"
-    args: ["query", "--embedded", "CREATE GRAPH typed_any_graph TYPED ANY"]
+    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS typed_any_graph TYPED ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "typed"]
 
   - name: "create-typed-property-graph-any"
     description: "Test CREATE GRAPH with TYPED ANY PROPERTY GRAPH"
-    args: ["query", "--embedded", "CREATE GRAPH typed_property_any_graph TYPED ANY PROPERTY GRAPH"]
+    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS typed_property_any_graph TYPED ANY PROPERTY GRAPH"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "typed", "property"]
@@ -129,8 +129,8 @@ tests:
   - name: "create-graph-like-existing"
     description: "Test CREATE GRAPH LIKE existing graph"
     setup:
-      - "query --embedded \"CREATE GRAPH source_graph ANY\""
-    args: ["query", "--embedded", "CREATE GRAPH like_graph LIKE source_graph"]
+      - "query --embedded \"CREATE GRAPH IF NOT EXISTS source_graph ANY\""
+    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS like_graph LIKE source_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "like"]
@@ -139,8 +139,8 @@ tests:
   - name: "create-graph-as-copy-of"
     description: "Test CREATE GRAPH AS COPY OF existing graph"
     setup:
-      - "query --embedded \"CREATE GRAPH copy_source_graph ANY\""
-    args: ["query", "--embedded", "CREATE GRAPH copy_target_graph ANY AS COPY OF copy_source_graph"]
+      - "query --embedded \"CREATE GRAPH IF NOT EXISTS copy_source_graph ANY\""
+    args: ["query", "--embedded", "CREATE OR REPLACE GRAPH copy_target_graph ANY AS COPY OF copy_source_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "copy"]
@@ -284,10 +284,10 @@ tests:
       - "query"
       - "--embedded"
       - |
-        CREATE SCHEMA workflow_schema;
-        CREATE GRAPH workflow_schema.workflow_graph ANY;
-        DROP GRAPH workflow_schema.workflow_graph;
-        DROP SCHEMA workflow_schema
+        CREATE SCHEMA IF NOT EXISTS workflow_schema;
+        CREATE GRAPH IF NOT EXISTS workflow_schema.workflow_graph ANY;
+        DROP GRAPH IF EXISTS workflow_schema.workflow_graph;
+        DROP SCHEMA IF EXISTS workflow_schema
     expect:
       exit_code: 0
     tags: ["catalog", "workflow", "comprehensive"]
@@ -298,10 +298,10 @@ tests:
       - "query"
       - "--embedded"
       - |
-        CREATE GRAPH TYPE workflow_type AS { };
-        CREATE GRAPH workflow_typed_graph TYPED workflow_type;
-        DROP GRAPH workflow_typed_graph;
-        DROP GRAPH TYPE workflow_type
+        CREATE GRAPH TYPE IF NOT EXISTS workflow_type AS { };
+        CREATE OR REPLACE GRAPH workflow_typed_graph TYPED workflow_type;
+        DROP GRAPH IF EXISTS workflow_typed_graph;
+        DROP GRAPH TYPE IF EXISTS workflow_type
     expect:
       exit_code: 0
     tags: ["catalog", "workflow", "graph-types"]

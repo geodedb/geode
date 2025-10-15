@@ -138,7 +138,7 @@ tests:
   # Index performance testing
   - name: "create-performance-index"
     description: "Create index for performance testing"
-    args: ["query", "--embedded", "CREATE INDEX large_test_value_idx FOR (n:LargeTest) ON (n.value)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS large_test_value_idx FOR (n:LargeTest) ON (n.value)"]
     expect:
       exit_code: 0
       execution_time_ms: 5000

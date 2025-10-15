@@ -139,14 +139,14 @@ tests:
   # Schema introspection
   - name: "create-node-index"
     description: "Create index on node property"
-    args: ["query", "--embedded", "CREATE INDEX person_name_idx FOR (p:Person) ON (p.name)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)"]
     expect:
       exit_code: 0
     tags: ["index", "create", "node"]
 
   - name: "create-relationship-index"
     description: "Create index on relationship property"
-    args: ["query", "--embedded", "CREATE INDEX works_for_since_idx FOR ()-[r:WORKS_FOR]-() ON (r.since)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS works_for_since_idx FOR ()-[r:WORKS_FOR]-() ON (r.since)"]
     expect:
       exit_code: 0
     tags: ["index", "create", "relationship"]

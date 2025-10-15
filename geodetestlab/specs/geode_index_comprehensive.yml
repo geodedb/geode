@@ -71,7 +71,7 @@ tests:
 
   - name: "index-patricia-trie-create"
     description: "Create Patricia Trie index for CIDR subnet matching"
-    args: ["query", "--embedded", "CREATE INDEX subnet_trie ON Server USING network_cidr (subnet)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS subnet_trie ON Server USING network_cidr (subnet)"]
     expect:
       exit_code: 0
     tags: ["index", "patricia", "create"]
@@ -113,14 +113,14 @@ tests:
 
   - name: "index-rtree-create-location"
     description: "Create R-tree index for spatial location queries"
-    args: ["query", "--embedded", "CREATE INDEX location_rtree ON POI USING RTree (location)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS location_rtree ON POI USING RTree (location)"]
     expect:
       exit_code: 0
     tags: ["index", "rtree", "create"]
 
   - name: "index-rtree-create-geometry"
     description: "Create R-tree index for geometry spatial queries"
-    args: ["query", "--embedded", "CREATE INDEX geometry_rtree ON Region USING RTree (boundary)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS geometry_rtree ON Region USING RTree (boundary)"]
     expect:
       exit_code: 0
     tags: ["index", "rtree", "geometry"]
@@ -171,7 +171,7 @@ tests:
 
   - name: "index-hnsw-create-vector"
     description: "Create HNSW index for vector similarity search"
-    args: ["query", "--embedded", "CREATE INDEX embedding_hnsw ON Document USING HNSW (embedding) WITH (metric = 'cosine', ef_construction = 200, M = 16)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS embedding_hnsw ON Document USING HNSW (embedding) WITH (metric = 'cosine', ef_construction = 200, M = 16)"]
     expect:
       exit_code: 0
     tags: ["index", "hnsw", "create"]
@@ -234,7 +234,7 @@ tests:
 
   - name: "index-interval-tree-create"
     description: "Create Interval Tree index for range overlap queries"
-    args: ["query", "--embedded", "CREATE INDEX time_interval_tree ON Event USING IntervalTree (time_range)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS time_interval_tree ON Event USING IntervalTree (time_range)"]
     expect:
       exit_code: 0
     tags: ["index", "interval", "create"]
@@ -265,7 +265,7 @@ tests:
 
   - name: "index-jsonb-inverted-create"
     description: "Create JSONB inverted index for path queries"
-    args: ["query", "--embedded", "CREATE INDEX metadata_jsonb_idx ON Product USING JsonbInverted (metadata)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS metadata_jsonb_idx ON Product USING JsonbInverted (metadata)"]
     expect:
       exit_code: 0
     tags: ["index", "jsonb", "create"]
@@ -327,7 +327,7 @@ tests:
 
   - name: "index-domain-trie-create"
     description: "Create Domain Trie index for domain suffix matching"
-    args: ["query", "--embedded", "CREATE INDEX domain_trie_idx ON Website USING DomainTrie (domain)"]
+    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS domain_trie_idx ON Website USING DomainTrie (domain)"]
     expect:
       exit_code: 0
     tags: ["index", "domain", "create"]
