@@ -2683,6 +2683,9 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         _ = try stdout_fd.writeAll(sessions_json);
         _ = try stdout_fd.writeAll("\n");
         std.process.exit(@intFromEnum(ExitCode.success));
+    } else if (std.mem.eql(u8, subcmd, "token")) {
+        // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
+        try cmdAuthToken(ally);
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -4558,6 +4561,42 @@ fn cmdAuthLogout(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     std.debug.print("Logout successful\n", .{});
     std.debug.print("Credentials cleared from ~/.geode/credentials.json\n", .{});
+}
+
+// CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
+fn cmdAuthToken(ally: std.mem.Allocator) !void {
+    const home = std.posix.getenv("HOME") orelse {
+        std.debug.print("Error: HOME environment variable not set\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    const credentials_path = try std.fmt.allocPrint(ally, "{s}/.geode/credentials.json", .{home});
+    defer ally.free(credentials_path);
+
+    // Try to read the credentials file
+    const file = std.fs.openFileAbsolute(credentials_path, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("No saved credentials found\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+        std.debug.print("Error reading credentials: {s}\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer file.close();
+
+    // Read file content
+    const content = file.readToEndAlloc(ally, 1024 * 1024) catch |err| {
+        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer ally.free(content);
+
+    // Output the content to stdout
+    const stdout_fd = std.fs.File{ .handle = 1 };
+    _ = try stdout_fd.writeAll(content);
+    if (content.len == 0 or content[content.len - 1] != '\n') {
+        _ = try stdout_fd.writeAll("\n");
+    }
 }
 
 // Remote server backup execution function
