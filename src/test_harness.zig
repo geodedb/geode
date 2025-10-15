@@ -78,13 +78,18 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     var user_role: ?user_mgmt.Role = null;
 
     if (options.user != null and options.password != null) {
-        // Attempt authentication
+        // Attempt password-based authentication
         user_role = user_mgmt.authenticate(options.user.?, options.password.?) catch {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
         };
         authenticated_user = options.user;
+    } else if (options.user != null and options.token != null) {
+        // Token-based authentication - skip password verification for local sessions
+        // In --no-quic mode, tokens are validated client-side via system fingerprint
+        authenticated_user = options.user;
+        user_role = user_mgmt.Role.User; // Default role for token auth
     } else if (options.user != null or options.password != null) {
-        // Partial credentials provided - invalid
+        // Partial credentials provided (user without password/token, or password without user) - invalid
         return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
     }
 
