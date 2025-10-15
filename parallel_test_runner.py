@@ -207,6 +207,10 @@ class ParallelTestRunner:
             is_query_command = command == "query" or is_query_like
             is_shell_command = command == "shell"
 
+            # If it's a query-like command but doesn't start with "query", add "query" at the beginning
+            if is_query_like and command != "query":
+                processed_args.insert(0, "query")
+
             if is_query_command:
                 if server_address and "--no-quic" not in processed_args and "--server" not in processed_args and "--embedded" not in processed_args:
                     # Use server mode (only if not using embedded or no-quic mode)
@@ -249,15 +253,24 @@ class ParallelTestRunner:
 
         # Prepare environment with isolated data directory for embedded mode
         env = os.environ.copy()
-        if data_dir and not server_address:
+        if data_dir:
+            # Always set GEODE_DATA_DIR if we have a data_dir, even with server mode
+            # Tests that use --embedded will use this, tests that use --server won't
             env['GEODE_DATA_DIR'] = data_dir
 
         # Handle setup commands - run them separately with persistence
         setup_commands = test_case.get("setup", [])
         if setup_commands:
-            for cmd_str in setup_commands:
+            for setup_item in setup_commands:
                 try:
-                    setup_args = shlex.split(cmd_str)
+                    # Handle both string and dict setup items
+                    if isinstance(setup_item, str):
+                        # Parse string as command-line arguments
+                        setup_args = shlex.split(setup_item)
+                    else:
+                        # Dict format with "args" key
+                        setup_args = setup_item.get("args", [])
+
                     # Process setup args (will use server or embedded persistent mode)
                     processed_setup_args = self.process_args(setup_args, server_address=server_address)
                     subprocess.run(
