@@ -203,7 +203,7 @@ class ParallelTestRunner:
             # Detect query commands: explicit "query" subcommand OR query-like strings (starting with GQL keywords)
             gql_keywords = ["MATCH", "RETURN", "CREATE", "DELETE", "MERGE", "WITH", "UNWIND", "CALL",
                            "INSERT", "SHOW", "EXPLAIN", "PROFILE", "USE", "SET", "BEGIN", "COMMIT",
-                           "ROLLBACK", "START", "SELECT", "OPTIONAL"]
+                           "ROLLBACK", "START", "SELECT", "OPTIONAL", "DROP", "ALTER", "GRANT", "REVOKE"]
             is_query_like = any(command.upper().startswith(kw) for kw in gql_keywords)
             is_query_command = command == "query" or is_query_like
             is_shell_command = command == "shell"
