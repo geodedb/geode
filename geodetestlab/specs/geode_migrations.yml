@@ -195,9 +195,7 @@ tests:
       stdout_contains: ["3"]
 
   - name: bulk-update-with-index
-    setup:
-      - "query \"CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3})\" --format json --embedded"
-    args: ["query", "CREATE INDEX IF NOT EXISTS test_id_idx ON :TestNode(id); MATCH (n:TestNode) WHERE n.id % 2 = 0 SET n.even = true RETURN count(n)", "--format", "json"]
+    args: ["query", "CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3}); CREATE INDEX IF NOT EXISTS test_id_idx ON :TestNode(id); MATCH (n:TestNode) WHERE n.id % 2 = 0 SET n.even = true RETURN count(n)", "--format", "json", "--embedded"]
     expect:
       exit_code: 0
       stdout_contains: ["1"]  # Only id=2 is even from the 3 created nodes
