@@ -5068,7 +5068,7 @@ pub const Parser = struct {
             var primary_key = false;
             if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "PRIMARY")) {
                 self.advance();
-                if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "KEY")) {
+                if (self.cur.kind == .KEY or (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "KEY"))) {
                     self.advance();
                     primary_key = true;
                 }
@@ -5206,16 +5206,18 @@ pub const Parser = struct {
                 if (self.cur.kind == .l_brace) {
                     // Parse field definitions
                     const fields = try self.parseFieldDefinitions();
-                    return .{ .CreateGraphType = .{
-                        .name = name,
-                        .if_not_exists = if_not_exists,
-                        .or_replace = or_replace,
-                        .property_graph = property_graph,
-                        .type_definition = "{ }", // Keep for backward compatibility
-                        .fields = fields,
-                        .like_source = like_source,
-                        .copy_source = copy_source,
-                    } };
+                    return .{
+                        .CreateGraphType = .{
+                            .name = name,
+                            .if_not_exists = if_not_exists,
+                            .or_replace = or_replace,
+                            .property_graph = property_graph,
+                            .type_definition = "{ }", // Keep for backward compatibility
+                            .fields = fields,
+                            .like_source = like_source,
+                            .copy_source = copy_source,
+                        },
+                    };
                 } else {
                     return error.UnexpectedToken;
                 }
@@ -5232,16 +5234,18 @@ pub const Parser = struct {
             }
         }
 
-        return .{ .CreateGraphType = .{
-            .name = name,
-            .if_not_exists = if_not_exists,
-            .or_replace = or_replace,
-            .property_graph = property_graph,
-            .type_definition = type_definition,
-            .fields = &.{}, // Empty fields for LIKE/COPY OF cases
-            .like_source = like_source,
-            .copy_source = copy_source,
-        } };
+        return .{
+            .CreateGraphType = .{
+                .name = name,
+                .if_not_exists = if_not_exists,
+                .or_replace = or_replace,
+                .property_graph = property_graph,
+                .type_definition = type_definition,
+                .fields = &.{}, // Empty fields for LIKE/COPY OF cases
+                .like_source = like_source,
+                .copy_source = copy_source,
+            },
+        };
     }
 
     // Parse DROP SCHEMA statement

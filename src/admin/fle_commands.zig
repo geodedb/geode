@@ -5,7 +5,6 @@ const std = @import("std");
 
 /// Admin CLI commands for Field-Level Encryption management
 /// Provides commands for key rotation, policy management, and migration
-
 pub const FLECommand = enum {
     rotate_key,
     grant_plaintext,
