@@ -207,10 +207,6 @@ class ParallelTestRunner:
             is_query_command = command == "query" or is_query_like
             is_shell_command = command == "shell"
 
-            # If it's a query-like command but doesn't start with "query", add "query" at the beginning
-            if is_query_like and command != "query":
-                processed_args.insert(0, "query")
-
             if is_query_command:
                 if server_address and "--no-quic" not in processed_args and "--server" not in processed_args and "--embedded" not in processed_args:
                     # Use server mode (only if not using embedded or no-quic mode)
@@ -253,9 +249,8 @@ class ParallelTestRunner:
 
         # Prepare environment with isolated data directory for embedded mode
         env = os.environ.copy()
-        if data_dir:
-            # Always set GEODE_DATA_DIR if we have a data_dir, even with server mode
-            # Tests that use --embedded will use this, tests that use --server won't
+        if data_dir and not server_address:
+            # Only set GEODE_DATA_DIR for embedded mode tests (not server mode)
             env['GEODE_DATA_DIR'] = data_dir
 
         # Handle setup commands - run them separately with persistence
