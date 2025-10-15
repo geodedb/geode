@@ -2318,14 +2318,18 @@ fn expandVariableLengthPaths(
     try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
 
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-15
-    // Add safety guard against infinite loops (max 100,000 iterations)
+    // Add safety guard against infinite loops (max 10,000 iterations for better performance)
     var iteration_count: u64 = 0;
-    const max_iterations: u64 = 100_000;
+    const max_iterations: u64 = 10_000;
+
+    // Track visited states to avoid redundant exploration
+    var visited_states = std.AutoHashMap(u64, u32).init(allocator);
+    defer visited_states.deinit();
 
     while (queue.items.len > 0) {
         iteration_count += 1;
-        if (iteration_count > max_iterations) {
-            // Clean up remaining paths in queue
+        if (iteration_count > max_iterations or queue.items.len > 5000) {
+            // Clean up remaining paths in queue when hitting limits
             for (queue.items) |*item| {
                 item.path.deinit(allocator);
             }
@@ -2352,6 +2356,15 @@ fn expandVariableLengthPaths(
 
         // Get the last node in the current path
         const last_node_id = current_path.nodes.items[current_path.nodes.items.len - 1];
+
+        // Check if we've visited this node at this depth before
+        const state_key = last_node_id + (@as(u64, depth) << 32);
+        if (visited_states.get(state_key)) |_| {
+            // We've explored this state before - skip to avoid redundant work
+            current_path.deinit(allocator);
+            continue;
+        }
+        try visited_states.put(state_key, depth);
 
         // Get all edges from this node
         const edges = store.getEdgesFrom(last_node_id);
