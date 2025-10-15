@@ -188,7 +188,8 @@ class ParallelTestRunner:
                 # Replace secret variables
                 elif "${secret" in arg:
                     processed_arg = arg.replace("${secret:api_token}", "test-token-123")
-                    processed_arg = processed_arg.replace("${secret:user_password}", "password123")
+                    processed_arg = processed_arg.replace("${secret:admin_password}", "admin")
+                    processed_arg = processed_arg.replace("${secret:user_password}", "testpass")
                     processed_args.append(processed_arg)
                 else:
                     processed_args.append(arg)

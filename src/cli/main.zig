@@ -487,12 +487,14 @@ fn printServeUsage() void {
         "  --cert <path>          TLS certificate path (auto-generated if missing)\n" ++
         "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
         "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
+        "  --enable-auth          Enable user authentication (default: disabled)\n" ++
         "  --stdio                Use stdio for communication (development mode)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
+        "  geode serve --enable-auth --log-level info\n" ++
         "  geode serve --stdio --log-level debug\n" ++
         "\n", .{});
 }
