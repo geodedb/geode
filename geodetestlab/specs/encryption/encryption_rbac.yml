@@ -5,9 +5,12 @@ suite: encryption_rbac
 description: Grant/Revoke READ_PLAINTEXT(field) affects projection & filters.
 setup:
   - gql: |
-      CREATE NODE TYPE Person ( id STRING PRIMARY KEY, ssn STRING @encrypted(alg:"AES-256-GCM") @searchable(index:"blind-hmac-sha256") );
+      CREATE GRAPH TYPE Person AS {
+        id STRING PRIMARY KEY,
+        ssn STRING @encrypted(alg:"AES-256-GCM") @searchable(index:"blind-hmac-sha256")
+      }
   - gql: |
-      INSERT INTO Person { id:"u1", ssn:"123-45-6789" };
+      INSERT INTO Person { id:"u1", ssn:"123-45-6789" }
 steps:
   - name: no_priv_projection
     cmd: geode user assume --role analyst
@@ -22,7 +25,7 @@ steps:
       MATCH (p:Person WHERE p.ssn = "123-45-6789") RETURN p.id;
     expect_error: SEARCH_NOT_PERMITTED
   - name: grant_then_filter
-    cmd: geode policy grant plaintext Person.ssn --role analyst
+    cmd: geode fle grant-plaintext Person ssn analyst
   - gql: |
       MATCH (p:Person WHERE p.ssn = "123-45-6789") RETURN p.id;
     expect:

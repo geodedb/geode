@@ -5,12 +5,12 @@ suite: encryption_basic
 description: Basic FLE — encrypt-on-write, decrypt-on-projection with RBAC.
 setup:
   - gql: |
-      CREATE NODE TYPE Person (
+      CREATE GRAPH TYPE Person AS {
         id UUID PRIMARY KEY,
         name STRING,
-        ssn  STRING @encrypted(alg:"AES-256-GCM") @classify(tags:["PII"]) @visible(to_roles:["pii_reader"])
-      );
-  - cmd: geode policy grant plaintext Person.ssn --role pii_reader
+        ssn STRING @encrypted(alg:"AES-256-GCM") @classify(tags:["PII"]) @visible(to_roles:["pii_reader"])
+      }
+  - cmd: geode fle grant-plaintext Person ssn pii_reader
   - cmd: geode user assume --role pii_reader
 steps:
   - name: insert_rows

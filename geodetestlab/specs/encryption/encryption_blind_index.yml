@@ -5,10 +5,10 @@ suite: encryption_blind_index
 description: Equality search via blind index (BI) on encrypted field.
 setup:
   - gql: |
-      CREATE NODE TYPE Account (
+      CREATE GRAPH TYPE Account AS {
         id UUID PRIMARY KEY,
         email STRING @encrypted(alg:"CHACHA20-POLY1305") @searchable(index:"blind-hmac-sha256")
-      );
+      }
 steps:
   - name: seed
     gql: |
