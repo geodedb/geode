@@ -639,12 +639,26 @@ class ParallelTestRunner:
                     skipped += 1
                     continue
 
-                # Create a unique data directory for each test (not shared per spec)
-                test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
-                test_data_dir.mkdir(parents=True, exist_ok=True)
+                # Tests within the same spec share the same data directory for catalog persistence
+                # Only parallel, loop, and explicitly isolated tests get their own directories
 
-                # Handle parallel tests with multiple instances
-                if test.get("parallel") and test.get("instances"):
+                # Handle tests with isolated flag (need their own data directory)
+                if test.get("isolated", False):
+                    test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
+                    test_data_dir.mkdir(parents=True, exist_ok=True)
+                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(test_data_dir))
+                    test_results.append(test_result)
+
+                    if test_result.success:
+                        passed += 1
+                    else:
+                        failed += 1
+
+                # Handle parallel tests with multiple instances (need isolation)
+                elif test.get("parallel") and test.get("instances"):
+                    test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
+                    test_data_dir.mkdir(parents=True, exist_ok=True)
+
                     for instance in range(test["instances"]):
                         instance_data_dir = test_data_dir / f"instance_{instance}"
                         instance_data_dir.mkdir(parents=True, exist_ok=True)
@@ -656,8 +670,11 @@ class ParallelTestRunner:
                         else:
                             failed += 1
 
-                # Handle loop tests
+                # Handle loop tests (need isolation per iteration)
                 elif test.get("loop"):
+                    test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
+                    test_data_dir.mkdir(parents=True, exist_ok=True)
+
                     for i in range(test["loop"]):
                         loop_data_dir = test_data_dir / f"loop_{i}"
                         loop_data_dir.mkdir(parents=True, exist_ok=True)
@@ -669,9 +686,9 @@ class ParallelTestRunner:
                         else:
                             failed += 1
 
-                # Handle normal tests
+                # Handle normal tests (share spec data directory for catalog persistence)
                 else:
-                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(test_data_dir))
+                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(spec_data_dir))
                     test_results.append(test_result)
 
                     if test_result.success:
@@ -679,13 +696,7 @@ class ParallelTestRunner:
                     else:
                         failed += 1
 
-                # Cleanup: Remove test data directory after test completes to save disk space
-                try:
-                    import shutil
-                    if test_data_dir.exists():
-                        shutil.rmtree(test_data_dir)
-                except Exception:
-                    pass  # Ignore cleanup errors
+                # Note: spec_data_dir is shared across tests and cleaned up after all tests complete
         finally:
             # Cleanup server
             if server_process:

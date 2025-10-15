@@ -146,6 +146,7 @@ tests:
       stdout_contains: ["1"]  # Alice doesn't have age
 
   - name: batch-create-relationships
+    isolated: true  # Needs clean state to avoid duplicate User nodes
     args: ["query", "CREATE (:User {name: 'Alice'}), (:User {name: 'Bob'}), (:User {name: 'Charlie'}) MATCH (u1:User), (u2:User) WHERE u1.name < u2.name CREATE (u1)-[:POTENTIAL_FRIEND]->(u2) RETURN count(*)", "--format", "json"]
     expect:
       exit_code: 0
@@ -189,12 +190,15 @@ tests:
 
   # Performance Migration Tests
   - name: create-large-dataset
+    isolated: true  # Needs clean state to avoid TestNode accumulation
     args: ["query", "CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3}) RETURN 3 AS created", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["3"]
 
   - name: bulk-update-with-index
+    setup:
+      - "query \"MATCH (n:TestNode) DELETE n\" --format json --embedded"
     args: ["query", "CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3}); CREATE INDEX IF NOT EXISTS test_id_idx ON :TestNode(id); MATCH (n:TestNode) WHERE n.id % 2 = 0 SET n.even = true RETURN count(n)", "--format", "json", "--embedded"]
     expect:
       exit_code: 0
