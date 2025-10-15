@@ -285,7 +285,7 @@ pub const SessionRegistry = struct {
         var iter = self.sessions.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.isExpired()) {
-                to_remove.append(entry.key_ptr.*) catch continue;
+                to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
             }
         }
 
@@ -298,3 +298,327 @@ pub const SessionRegistry = struct {
         }
     }
 };
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+test "SessionToken.generate creates valid token" {
+    const allocator = std.testing.allocator;
+
+    const token = try SessionToken.generate(allocator, "testuser");
+    defer allocator.free(token.username);
+    defer allocator.free(token.system_fingerprint);
+
+    // Token should be 32 bytes
+    try std.testing.expectEqual(@as(usize, 32), token.token.len);
+
+    // Username should match
+    try std.testing.expectEqualStrings("testuser", token.username);
+
+    // System fingerprint should be non-empty
+    try std.testing.expect(token.system_fingerprint.len > 0);
+
+    // Timestamps should be valid
+    try std.testing.expect(token.created_at > 0);
+    try std.testing.expect(token.expires_at > token.created_at);
+    try std.testing.expectEqual(token.created_at, token.last_renewed_at);
+}
+
+test "SessionToken.toHexString produces 64 character hex" {
+    const allocator = std.testing.allocator;
+
+    const token = try SessionToken.generate(allocator, "testuser");
+    defer allocator.free(token.username);
+    defer allocator.free(token.system_fingerprint);
+
+    const hex = try token.toHexString(allocator);
+    defer allocator.free(hex);
+
+    // Should be 64 hex characters (32 bytes * 2)
+    try std.testing.expectEqual(@as(usize, 64), hex.len);
+
+    // Should only contain valid hex characters
+    for (hex) |c| {
+        try std.testing.expect(
+            (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f')
+        );
+    }
+}
+
+test "SessionToken.isExpired detects expired tokens" {
+    const allocator = std.testing.allocator;
+
+    var token = try SessionToken.generate(allocator, "testuser");
+    defer allocator.free(token.username);
+    defer allocator.free(token.system_fingerprint);
+
+    // Fresh token should not be expired
+    try std.testing.expect(!token.isExpired());
+
+    // Manually expire the token
+    token.expires_at = std.time.timestamp() - 1;
+    try std.testing.expect(token.isExpired());
+}
+
+test "SessionToken.needsRenewal detects renewal threshold" {
+    const allocator = std.testing.allocator;
+
+    var token = try SessionToken.generate(allocator, "testuser");
+    defer allocator.free(token.username);
+    defer allocator.free(token.system_fingerprint);
+
+    // Fresh token should not need renewal (1 hour until expiry)
+    try std.testing.expect(!token.needsRenewal());
+
+    // Set expiry to 4 minutes from now (< 5 minute threshold)
+    token.expires_at = std.time.timestamp() + 240;
+    try std.testing.expect(token.needsRenewal());
+}
+
+test "SessionToken.renew extends expiration" {
+    const allocator = std.testing.allocator;
+
+    var token = try SessionToken.generate(allocator, "testuser");
+    defer allocator.free(token.username);
+    defer allocator.free(token.system_fingerprint);
+
+    const original_expires = token.expires_at;
+
+    token.renew();
+
+    // Expiration should be extended (renew adds TOKEN_LIFETIME_SECS from current time)
+    // Since time has passed, new expiry should be at least as far in future
+    try std.testing.expect(token.expires_at >= original_expires);
+
+    // Last renewed should be updated to current time
+    try std.testing.expect(token.last_renewed_at >= token.created_at);
+}
+
+test "SessionToken.isValid checks fingerprint and expiry" {
+    const allocator = std.testing.allocator;
+
+    var token = try SessionToken.generate(allocator, "testuser");
+    defer allocator.free(token.username);
+    defer allocator.free(token.system_fingerprint);
+
+    const current_fp = try getSystemFingerprint(allocator);
+    defer allocator.free(current_fp);
+
+    // Valid with correct fingerprint
+    try std.testing.expect(token.isValid(current_fp));
+
+    // Invalid with wrong fingerprint
+    try std.testing.expect(!token.isValid("wrong:fingerprint:123"));
+
+    // Invalid when expired (even with correct fingerprint)
+    token.expires_at = std.time.timestamp() - 1;
+    try std.testing.expect(!token.isValid(current_fp));
+}
+
+test "CredentialStore.saveCredentials and loadCredentials roundtrip" {
+    // Note: This test is integration-level and requires filesystem access
+    // It will use the real HOME directory temporarily
+    const allocator = std.testing.allocator;
+
+    // Save the current credentials file if it exists
+    var store = try CredentialStore.init(allocator);
+    defer store.deinit();
+
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}.test_backup", .{store.file_path});
+    defer allocator.free(backup_path);
+
+    // Backup existing file
+    std.fs.copyFileAbsolute(store.file_path, backup_path, .{}) catch {};
+    defer {
+        // Restore backup
+        std.fs.copyFileAbsolute(backup_path, store.file_path, .{}) catch {};
+        std.fs.deleteFileAbsolute(backup_path) catch {};
+    }
+
+    // Create test credentials
+    const creds = Credentials{
+        .token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .username = "test_alice",
+        .server = "127.0.0.1:3141",
+        .created_at = 1234567890,
+        .system_fingerprint = "testhost:testuser:1000",
+    };
+
+    // Save credentials
+    try store.saveCredentials(creds);
+
+    // Load credentials
+    const loaded = try store.loadCredentials();
+    try std.testing.expect(loaded != null);
+
+    if (loaded) |l| {
+        defer allocator.free(l.token);
+        defer allocator.free(l.username);
+        defer allocator.free(l.server);
+        defer allocator.free(l.system_fingerprint);
+
+        try std.testing.expectEqualStrings(creds.token, l.token);
+        try std.testing.expectEqualStrings(creds.username, l.username);
+        try std.testing.expectEqualStrings(creds.server, l.server);
+        try std.testing.expectEqual(creds.created_at, l.created_at);
+        try std.testing.expectEqualStrings(creds.system_fingerprint, l.system_fingerprint);
+    }
+
+    // Cleanup test file
+    try store.deleteCredentials();
+}
+
+test "CredentialStore.deleteCredentials removes file" {
+    const allocator = std.testing.allocator;
+
+    var store = try CredentialStore.init(allocator);
+    defer store.deinit();
+
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}.test_backup2", .{store.file_path});
+    defer allocator.free(backup_path);
+
+    // Backup existing file
+    std.fs.copyFileAbsolute(store.file_path, backup_path, .{}) catch {};
+    defer {
+        // Restore backup
+        std.fs.copyFileAbsolute(backup_path, store.file_path, .{}) catch {};
+        std.fs.deleteFileAbsolute(backup_path) catch {};
+    }
+
+    const creds = Credentials{
+        .token = "testtoken_delete",
+        .username = "test_bob",
+        .server = "127.0.0.1:3141",
+        .created_at = 1234567890,
+        .system_fingerprint = "test:fp:123",
+    };
+
+    try store.saveCredentials(creds);
+
+    // Verify file exists
+    var loaded = try store.loadCredentials();
+    try std.testing.expect(loaded != null);
+    if (loaded) |l| {
+        allocator.free(l.token);
+        allocator.free(l.username);
+        allocator.free(l.server);
+        allocator.free(l.system_fingerprint);
+    }
+
+    // Delete credentials
+    try store.deleteCredentials();
+
+    // Verify file is gone
+    loaded = try store.loadCredentials();
+    try std.testing.expect(loaded == null);
+}
+
+test "SessionRegistry.addSession and getSession" {
+    const allocator = std.testing.allocator;
+
+    var registry = SessionRegistry.init(allocator);
+    defer registry.deinit();
+
+    var token = try SessionToken.generate(allocator, "testuser");
+    const token_hex = try token.toHexString(allocator);
+    defer allocator.free(token_hex);
+
+    // Add session
+    try registry.addSession(token_hex, token);
+
+    // Retrieve session
+    const retrieved = registry.getSession(token_hex);
+    try std.testing.expect(retrieved != null);
+
+    if (retrieved) |r| {
+        try std.testing.expectEqualStrings("testuser", r.username);
+        try std.testing.expectEqual(token.created_at, r.created_at);
+    }
+}
+
+test "SessionRegistry.removeSession deletes session" {
+    const allocator = std.testing.allocator;
+
+    var registry = SessionRegistry.init(allocator);
+    defer registry.deinit();
+
+    var token = try SessionToken.generate(allocator, "testuser");
+    const token_hex = try token.toHexString(allocator);
+    defer allocator.free(token_hex);
+
+    try registry.addSession(token_hex, token);
+
+    // Verify session exists
+    var retrieved = registry.getSession(token_hex);
+    try std.testing.expect(retrieved != null);
+
+    // Remove session
+    registry.removeSession(token_hex);
+
+    // Verify session is gone
+    retrieved = registry.getSession(token_hex);
+    try std.testing.expect(retrieved == null);
+}
+
+test "SessionRegistry.cleanupExpired removes only expired sessions" {
+    const allocator = std.testing.allocator;
+
+    var registry = SessionRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Create valid token
+    var valid_token = try SessionToken.generate(allocator, "valid_user");
+    const valid_hex = try valid_token.toHexString(allocator);
+    defer allocator.free(valid_hex);
+    try registry.addSession(valid_hex, valid_token);
+
+    // Create expired token
+    var expired_token = try SessionToken.generate(allocator, "expired_user");
+    expired_token.expires_at = std.time.timestamp() - 1;
+    const expired_hex = try expired_token.toHexString(allocator);
+    defer allocator.free(expired_hex);
+    try registry.addSession(expired_hex, expired_token);
+
+    // Cleanup expired sessions
+    registry.cleanupExpired();
+
+    // Valid session should still exist
+    try std.testing.expect(registry.getSession(valid_hex) != null);
+
+    // Expired session should be removed
+    try std.testing.expect(registry.getSession(expired_hex) == null);
+}
+
+test "getSystemFingerprint returns valid format" {
+    const allocator = std.testing.allocator;
+
+    const fp = try getSystemFingerprint(allocator);
+    defer allocator.free(fp);
+
+    // Should contain at least one colon (hostname:username:uid)
+    try std.testing.expect(std.mem.indexOf(u8, fp, ":") != null);
+
+    // Should be non-empty
+    try std.testing.expect(fp.len > 0);
+}
+
+test "extractJsonString parses JSON value" {
+    const line = "  \"token\": \"abc123\",";
+    const value = extractJsonString(line);
+
+    try std.testing.expect(value != null);
+    if (value) |v| {
+        try std.testing.expectEqualStrings("abc123", v);
+    }
+}
+
+test "extractJsonNumber parses integer value" {
+    const line = "  \"created_at\": 1234567890,";
+    const value = extractJsonNumber(line);
+
+    try std.testing.expect(value != null);
+    if (value) |v| {
+        try std.testing.expectEqual(@as(i64, 1234567890), v);
+    }
+}
