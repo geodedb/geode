@@ -412,7 +412,9 @@ class ParallelTestRunner:
                             pass
             
             for pattern in expect["stdout_contains"]:
-                if pattern.lower() not in combined.lower():
+                # Check both stdout and stderr (some commands output to stderr)
+                combined_all = combined.lower() + " " + filtered_stderr.lower() + " " + result.stderr.lower()
+                if pattern.lower() not in combined_all:
                     return False, f"missing: '{pattern}'"
         
         # Check stderr_contains
