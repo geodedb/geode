@@ -121,10 +121,10 @@ pub const KeyManager = struct {
         }
 
         // Derive key hierarchy
-        const trk = try hkdf.deriveTRK(&self.master_key, ids.tenant);
+        var trk = try hkdf.deriveTRK(&self.master_key, ids.tenant);
         defer std.crypto.secureZero(u8, &trk);
 
-        const sk = try hkdf.deriveSK(&trk, ids.schema);
+        var sk = try hkdf.deriveSK(&trk, ids.schema);
         defer std.crypto.secureZero(u8, &sk);
 
         const fek = try hkdf.deriveFEK(&sk, ids.field);
@@ -151,10 +151,10 @@ pub const KeyManager = struct {
         }
 
         // Derive key hierarchy
-        const trk = try hkdf.deriveTRK(&self.master_key, ids.tenant);
+        var trk = try hkdf.deriveTRK(&self.master_key, ids.tenant);
         defer std.crypto.secureZero(u8, &trk);
 
-        const sk = try hkdf.deriveSK(&trk, ids.schema);
+        var sk = try hkdf.deriveSK(&trk, ids.schema);
         defer std.crypto.secureZero(u8, &sk);
 
         const bik = try hkdf.deriveBIK(&sk, ids.field);

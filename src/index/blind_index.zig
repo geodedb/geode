@@ -84,7 +84,7 @@ pub const BlindIndex = struct {
         // Get or create record list for this token
         const token_gop = try token_map.getOrPut(token);
         if (!token_gop.found_existing) {
-            token_gop.value_ptr.* = std.ArrayList([]const u8).init(self.allocator);
+            token_gop.value_ptr.* = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch @panic("OOM");
         }
 
         // Add record ID (check for duplicates)
@@ -95,7 +95,7 @@ pub const BlindIndex = struct {
         }
 
         const owned_id = try self.allocator.dupe(u8, record_id);
-        try token_gop.value_ptr.append(owned_id);
+        try token_gop.value_ptr.append(self.allocator, owned_id);
     }
 
     /// Lookup record IDs matching a plaintext value

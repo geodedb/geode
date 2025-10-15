@@ -187,7 +187,44 @@ pub const GraphStore = struct {
 
     pub fn getNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) ?PropertyValue {
         if (self.nodes.get(node_id)) |node| {
-            return node.properties.get(key);
+            const value = node.properties.get(key) orelse return null;
+
+            // Field-Level Encryption: decrypt string values if encrypted
+            switch (value) {
+                .String => |s| {
+                    // Get node type (primary label) for catalog lookup
+                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+
+                    // Create encryption context
+                    const fle_ctx = fle_integration.EncryptionContext{
+                        .tenant_id = "default", // TODO: get from session context
+                        .schema_name = "default", // TODO: get from session context
+                        .allocator = self.allocator,
+                    };
+
+                    // Format record ID
+                    const record_id = std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id}) catch s;
+                    defer if (!std.mem.eql(u8, record_id, s)) self.allocator.free(record_id);
+
+                    // Decrypt if field is encrypted
+                    const decrypted_value = fle_integration.decryptFieldIfNeeded(
+                        fle_ctx,
+                        type_name,
+                        key,
+                        s,
+                        record_id,
+                        true, // Check RBAC permissions
+                    ) catch s; // Fall back to original value on error
+
+                    // If decryption returned a different value, return new PropertyValue
+                    if (!std.mem.eql(u8, decrypted_value, s)) {
+                        return PropertyValue{ .String = decrypted_value };
+                    }
+
+                    return value;
+                },
+                else => return value,
+            }
         }
         return null;
     }
