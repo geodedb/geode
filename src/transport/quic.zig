@@ -152,7 +152,6 @@ pub const QuicTransport = struct {
         cfg.* = .{
             .version = .v1,
             .allow_insecure = (!use_tls) and (self.config.ca_path == null), // allow insecure only when TLS unavailable and no CA provided
-            .real_tls = use_tls, // disable real TLS if we fell back
             .alpn = &[_][]const u8{"geode/1"},
             .cc = .newreno,
             .enable_datagram = false,
@@ -489,13 +488,12 @@ pub const QuicClient = struct {
             .allow_insecure = !has_ca_cert,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .real_tls = true,
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
         self.quic_config = cfg;
 
-        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":{},\"allow_insecure\":{}}}\n", .{ cfg.real_tls, cfg.allow_insecure });
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"allow_insecure\":{}}}\n", .{cfg.allow_insecure});
 
         // Create client endpoint
         const bind_addr = "0.0.0.0:0"; // Bind to any available port
@@ -542,7 +540,6 @@ pub const QuicClient = struct {
             .allow_insecure = allow_insecure,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .real_tls = true, // Always use TLS protocol, but allow self-signed certs when insecure
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
@@ -552,7 +549,7 @@ pub const QuicClient = struct {
         const bind_addr = "0.0.0.0:0";
         self.endpoint = try quic_lib.endpointInit(&self.allocator, bind_addr, cfg);
 
-        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"real_tls\":{},\"allow_insecure\":{}}}\n", .{ cfg.real_tls, cfg.allow_insecure });
+        std.debug.print("{{\"level\":\"DEBUG\",\"component\":\"quic_client\",\"msg\":\"QUIC config\",\"allow_insecure\":{}}}\n", .{cfg.allow_insecure});
 
         // Connect to server
         const sni = address; // Use server address as SNI
