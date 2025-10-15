@@ -2862,9 +2862,8 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         } else if (std.mem.eql(u8, subcmd, "list")) {
             // For testing - show default admin user
             const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            const stdout = stdout_file.writer();
-            stdout.print("admin (active) <admin@localhost> [admin]\n", .{}) catch {};
-            stdout.print("Total: 1 user(s)\n", .{}) catch {};
+            _ = stdout_file.writeAll("admin (active) <admin@localhost> [admin]\n") catch {};
+            _ = stdout_file.writeAll("Total: 1 user(s)\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "show") or std.mem.eql(u8, subcmd, "info")) {
             if (subcmd_idx + 1 >= argv.len) {
@@ -2875,28 +2874,31 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
             const username = argv[subcmd_idx + 1];
             const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            const stdout = stdout_file.writer();
             // For testing - show info for requested user
             if (std.mem.eql(u8, username, "admin")) {
-                stdout.print("Username: admin\n", .{}) catch {};
-                stdout.print("Email: admin@localhost\n", .{}) catch {};
-                stdout.print("Status: active\n", .{}) catch {};
-                stdout.print("Roles: admin\n", .{}) catch {};
+                _ = stdout_file.writeAll("Username: admin\n") catch {};
+                _ = stdout_file.writeAll("Email: admin@localhost\n") catch {};
+                _ = stdout_file.writeAll("Status: active\n") catch {};
+                _ = stdout_file.writeAll("Roles: admin\n") catch {};
             } else if (std.mem.eql(u8, username, "alice")) {
-                stdout.print("Username: alice\n", .{}) catch {};
-                stdout.print("Email: alice@example.com\n", .{}) catch {};
-                stdout.print("Status: active\n", .{}) catch {};
-                stdout.print("Roles: user\n", .{}) catch {};
+                _ = stdout_file.writeAll("Username: alice\n") catch {};
+                _ = stdout_file.writeAll("Email: alice@example.com\n") catch {};
+                _ = stdout_file.writeAll("Status: active\n") catch {};
+                _ = stdout_file.writeAll("Roles: user\n") catch {};
             } else if (std.mem.eql(u8, username, "testuser")) {
-                stdout.print("Username: testuser\n", .{}) catch {};
-                stdout.print("Email: test@geode.dev\n", .{}) catch {};
-                stdout.print("Status: active\n", .{}) catch {};
-                stdout.print("Roles: user\n", .{}) catch {};
+                _ = stdout_file.writeAll("Username: testuser\n") catch {};
+                _ = stdout_file.writeAll("Email: test@geode.dev\n") catch {};
+                _ = stdout_file.writeAll("Status: active\n") catch {};
+                _ = stdout_file.writeAll("Roles: user\n") catch {};
             } else {
-                stdout.print("Username: {s}\n", .{username}) catch {};
-                stdout.print("Email: {s}@example.com\n", .{username}) catch {};
-                stdout.print("Status: active\n", .{}) catch {};
-                stdout.print("Roles: user\n", .{}) catch {};
+                const msg1 = std.fmt.allocPrint(ally, "Username: {s}\n", .{username}) catch "Error\n";
+                defer ally.free(msg1);
+                _ = stdout_file.writeAll(msg1) catch {};
+                const msg2 = std.fmt.allocPrint(ally, "Email: {s}@example.com\n", .{username}) catch "Error\n";
+                defer ally.free(msg2);
+                _ = stdout_file.writeAll(msg2) catch {};
+                _ = stdout_file.writeAll("Status: active\n") catch {};
+                _ = stdout_file.writeAll("Roles: user\n") catch {};
             }
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "delete")) {
@@ -3122,7 +3124,6 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
     // start_idx points to "role", so start_idx + 1 is the subcommand
     const subcmd_idx = start_idx + 1;
 
@@ -3159,24 +3160,25 @@ fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
         // For testing, simulate success for common operations
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const stdout = stdout_file.writer();
         if (std.mem.eql(u8, subcmd, "create")) {
             // Parse role name from arguments
             if (subcmd_idx + 1 < argv.len) {
                 const role_name = argv[subcmd_idx + 1];
-                stdout.print("Role '{s}' created successfully\n", .{role_name}) catch {};
+                const msg = std.fmt.allocPrint(ally, "Role '{s}' created successfully\n", .{role_name}) catch "Error\n";
+                defer ally.free(msg);
+                _ = stdout_file.writeAll(msg) catch {};
             } else {
-                stdout.print("Role created successfully\n", .{}) catch {};
+                _ = stdout_file.writeAll("Role created successfully\n") catch {};
             }
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "list")) {
-            stdout.print("admin (built-in)\nuser (built-in)\nanalyst (custom)\nTotal: 3 role(s)\n", .{}) catch {};
+            _ = stdout_file.writeAll("admin (built-in)\nuser (built-in)\nanalyst (custom)\nTotal: 3 role(s)\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "show")) {
-            stdout.print("Role: admin\nPermissions: ALL\n", .{}) catch {};
+            _ = stdout_file.writeAll("Role: admin\nPermissions: ALL\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "delete")) {
-            stdout.print("Role deleted successfully\n", .{}) catch {};
+            _ = stdout_file.writeAll("Role deleted successfully\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
         } else {
             std.debug.print("Role command '{s}' is not yet implemented\n", .{subcmd});
@@ -3262,8 +3264,6 @@ fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 }
 
 fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
-
     // Check for help flag
     if (start_idx + 1 < argv.len) {
         const arg = argv[start_idx + 1];
@@ -3297,19 +3297,17 @@ fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
 
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const stdout = stdout_file.writer();
-        stdout.print("Permission '{s}' granted to '{s}' successfully\n", .{ permission, target }) catch {};
+        const msg = std.fmt.allocPrint(ally, "Permission '{s}' granted to '{s}' successfully\n", .{ permission, target }) catch "Error\n";
+        defer ally.free(msg);
+        _ = stdout_file.writeAll(msg) catch {};
     } else {
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const stdout = stdout_file.writer();
-        stdout.print("Permission granted successfully\n", .{}) catch {};
+        _ = stdout_file.writeAll("Permission granted successfully\n") catch {};
     }
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
 fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
-
     // Check for help flag
     if (start_idx + 1 < argv.len) {
         const arg = argv[start_idx + 1];
@@ -3339,12 +3337,12 @@ fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
 
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const stdout = stdout_file.writer();
-        stdout.print("Permission '{s}' revoked from '{s}' successfully\n", .{ permission, target }) catch {};
+        const msg = std.fmt.allocPrint(ally, "Permission '{s}' revoked from '{s}' successfully\n", .{ permission, target }) catch "Error\n";
+        defer ally.free(msg);
+        _ = stdout_file.writeAll(msg) catch {};
     } else {
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const stdout = stdout_file.writer();
-        stdout.print("Permission revoked successfully\n", .{}) catch {};
+        _ = stdout_file.writeAll("Permission revoked successfully\n") catch {};
     }
     std.process.exit(@intFromEnum(ExitCode.success));
 }
