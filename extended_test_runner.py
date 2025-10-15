@@ -48,6 +48,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         if "${secret" in processed_arg:
             processed_arg = processed_arg.replace("${secret:api_token}", "test-token-123")
             processed_arg = processed_arg.replace("${secret:user_password}", "password123")
+            processed_arg = processed_arg.replace("${secret:admin_password}", "admin123")
 
         # Replace instance_id for parallel tests
         if instance_id is not None and "${instance_id}" in processed_arg:
