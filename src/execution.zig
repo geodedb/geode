@@ -2317,7 +2317,21 @@ fn expandVariableLengthPaths(
     try initial_path.nodes.append(allocator, start_node_id);
     try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
 
+    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-15
+    // Add safety guard against infinite loops (max 100,000 iterations)
+    var iteration_count: u64 = 0;
+    const max_iterations: u64 = 100_000;
+
     while (queue.items.len > 0) {
+        iteration_count += 1;
+        if (iteration_count > max_iterations) {
+            // Clean up remaining paths in queue
+            for (queue.items) |*item| {
+                item.path.deinit(allocator);
+            }
+            break;
+        }
+
         // Dequeue first item (BFS order)
         const current = queue.orderedRemove(0);
         var current_path = current.path;
