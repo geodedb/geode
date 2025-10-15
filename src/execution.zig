@@ -6,6 +6,7 @@ const graph_store = @import("graph_store.zig");
 // Global catalog for tracking schemas, graphs, and indexes
 var catalog_mutex = std.Thread.Mutex{};
 var catalog_initialized = false;
+var last_catalog_data_dir: ?[]u8 = null;
 
 // IndexInfo stores metadata about an index
 // CANARY: REQ=REQ-INDEX-001; FEATURE="IndexManagement"; ASPECT=Catalog; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
@@ -30,26 +31,73 @@ var catalog: struct {
 } = undefined;
 
 fn initCatalog() void {
-    if (!catalog_initialized) {
-        catalog_mutex.lock();
-        defer catalog_mutex.unlock();
-        if (!catalog_initialized) {
-            const allocator = std.heap.page_allocator;
-            catalog.schemas = std.StringHashMap(void).init(allocator);
-            catalog.graphs = std.StringHashMap(void).init(allocator);
-            catalog.indexes = std.StringHashMap(IndexInfo).init(allocator);
-            catalog_initialized = true;
-            // Load persisted catalog if it exists
-            loadCatalog() catch {};
+    const allocator = std.heap.page_allocator;
+
+    // Check if GEODE_DATA_DIR has changed
+    const current_data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk allocator.dupe(u8, "/tmp") catch "/tmp";
         }
+        break :blk "/tmp";
+    };
+
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
+
+    // Check if we need to reinitialize due to data dir change
+    var needs_reinit = !catalog_initialized;
+    if (last_catalog_data_dir) |last_dir| {
+        if (!std.mem.eql(u8, current_data_dir, last_dir)) {
+            needs_reinit = true;
+            // Clean up old catalog
+            if (catalog_initialized) {
+                catalog.schemas.deinit();
+                catalog.graphs.deinit();
+                catalog.indexes.deinit();
+                catalog_initialized = false;
+            }
+            allocator.free(last_dir);
+        }
+    } else {
+        needs_reinit = true;
+    }
+
+    if (needs_reinit) {
+        catalog.schemas = std.StringHashMap(void).init(allocator);
+        catalog.graphs = std.StringHashMap(void).init(allocator);
+        catalog.indexes = std.StringHashMap(IndexInfo).init(allocator);
+        catalog_initialized = true;
+
+        // Update last data dir
+        if (last_catalog_data_dir) |last_dir| {
+            allocator.free(last_dir);
+        }
+        last_catalog_data_dir = allocator.dupe(u8, current_data_dir) catch null;
+
+        // Load persisted catalog if it exists
+        loadCatalog() catch {};
+    } else {
+        allocator.free(current_data_dir);
     }
 }
 
 fn saveCatalog() !void {
-    const file = try std.fs.cwd().createFile("/tmp/geode_catalog.dat", .{});
-    defer file.close();
-
     const allocator = std.heap.page_allocator;
+
+    // Get catalog path from GEODE_DATA_DIR or use default
+    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk try allocator.dupe(u8, "/tmp");
+        }
+        return err;
+    };
+    defer allocator.free(data_dir);
+
+    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_catalog.dat", .{data_dir});
+    defer allocator.free(catalog_path);
+
+    const file = try std.fs.cwd().createFile(catalog_path, .{});
+    defer file.close();
 
     // Write header: schema_count, graph_count, index_count
     var header: [12]u8 = undefined;
@@ -113,18 +161,28 @@ fn saveCatalog() !void {
             _ = try file.write(col);
         }
     }
-
-    _ = allocator;
 }
 
 fn loadCatalog() !void {
-    const file = std.fs.cwd().openFile("/tmp/geode_catalog.dat", .{}) catch |err| {
+    const allocator = std.heap.page_allocator;
+
+    // Get catalog path from GEODE_DATA_DIR or use default
+    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk try allocator.dupe(u8, "/tmp");
+        }
+        return err;
+    };
+    defer allocator.free(data_dir);
+
+    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_catalog.dat", .{data_dir});
+    defer allocator.free(catalog_path);
+
+    const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
         if (err == error.FileNotFound) return;
         return err;
     };
     defer file.close();
-
-    const allocator = std.heap.page_allocator;
 
     // Read header
     var header: [12]u8 = undefined;

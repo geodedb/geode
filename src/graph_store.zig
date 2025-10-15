@@ -952,15 +952,53 @@ pub const GraphStore = struct {
 var global_store: ?GraphStore = null;
 var global_arena: ?std.heap.ArenaAllocator = null;
 var initialized = false;
+var last_data_dir: ?[]u8 = null;
 
 pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
-    _ = allocator;
-    // Initialize once with a persistent allocator
-    if (!initialized) {
+    // Check if GEODE_DATA_DIR has changed since last initialization
+    const current_data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
+    defer if (current_data_dir) |dir| allocator.free(dir);
+
+    var needs_reinit = false;
+    if (current_data_dir) |curr_dir| {
+        if (last_data_dir) |last_dir| {
+            if (!std.mem.eql(u8, curr_dir, last_dir)) {
+                needs_reinit = true;
+            }
+        } else {
+            needs_reinit = true;
+        }
+    } else if (last_data_dir != null) {
+        needs_reinit = true;
+    }
+
+    // Reinitialize if data dir changed or not initialized yet
+    if (!initialized or needs_reinit) {
+        // Clean up previous instance if it exists
+        if (initialized and global_store != null) {
+            global_store.?.clearNodes();  // Clear all data before reinitializing
+            global_store.?.deinit();
+            global_store = null;
+            if (global_arena != null) {
+                global_arena.?.deinit();
+                global_arena = null;
+            }
+        }
+
+        // Update last_data_dir
+        if (last_data_dir) |dir| {
+            std.heap.page_allocator.free(dir);
+        }
+        if (current_data_dir) |curr_dir| {
+            last_data_dir = std.heap.page_allocator.dupe(u8, curr_dir) catch null;
+        } else {
+            last_data_dir = null;
+        }
+
         // Use a persistent arena allocator for the global store
         global_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         global_store = GraphStore.init(global_arena.?.allocator());
-        // Try to load existing data
+        // Try to load existing data from the new location
         global_store.?.loadFromFile() catch {};
         initialized = true;
     }
