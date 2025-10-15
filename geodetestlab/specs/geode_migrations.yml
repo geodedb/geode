@@ -18,7 +18,7 @@ tests:
   # Property Management Tests
   - name: add-node-property
     setup:
-      - "query \"CREATE (:Person {name: 'Alice', age: 30})\" --format json --no-quic"
+      - "query \"CREATE (:Person {name: 'Alice', age: 30})\" --format json --embedded"
     args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.email = 'alice@example.com' RETURN p", "--format", "json"]
     expect:
       exit_code: 0
@@ -26,7 +26,7 @@ tests:
 
   - name: modify-property-type
     setup:
-      - "query \"CREATE (:Person {name: 'Alice', age: 30})\" --format json --no-quic"
+      - "query \"CREATE (:Person {name: 'Alice', age: 30})\" --format json --embedded"
     args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.age = toString(p.age) RETURN p.age", "--format", "json"]
     expect:
       exit_code: 0
@@ -97,7 +97,7 @@ tests:
 
   - name: remove-label-from-nodes
     setup:
-      - "query \"CREATE (:Person:Human {name: 'Alice'})\" --format json --no-quic"
+      - "query \"CREATE (:Person:Human {name: 'Alice'})\" --format json --embedded"
     args: ["query", "MATCH (p:Human) REMOVE p:Human RETURN labels(p)", "--format", "json"]
     expect:
       exit_code: 0
@@ -105,7 +105,7 @@ tests:
 
   - name: rename-label-migration
     setup:
-      - "query \"CREATE (:Person {name: 'Alice'})\" --format json --no-quic"
+      - "query \"CREATE (:Person {name: 'Alice'})\" --format json --embedded"
     args: ["query", "MATCH (p:Person) SET p:User REMOVE p:Person RETURN labels(p)", "--format", "json"]
     expect:
       exit_code: 0
@@ -114,7 +114,7 @@ tests:
   # Relationship Type Migration Tests
   - name: create-new-relationship-type
     setup:
-      - "query \"CREATE (:User {name: 'Alice'}), (:User {name: 'Bob'})\" --format json --no-quic"
+      - "query \"CREATE (:User {name: 'Alice'}), (:User {name: 'Bob'})\" --format json --embedded"
     args: ["query", "MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) CREATE (a)-[r:FOLLOWS {since: date()}]->(b) RETURN type(r)", "--format", "json"]
     expect:
       exit_code: 0
@@ -122,7 +122,7 @@ tests:
 
   - name: migrate-relationship-properties
     setup:
-      - "query \"CREATE (:Person {name: 'A'})-[:KNOWS]->(:Person {name: 'B'})\" --format json --no-quic"
+      - "query \"CREATE (:Person {name: 'A'})-[:KNOWS]->(:Person {name: 'B'})\" --format json --embedded"
     args: ["query", "MATCH ()-[r:KNOWS]->() SET r.strength = 'strong' RETURN r.strength", "--format", "json"]
     expect:
       exit_code: 0
@@ -130,7 +130,7 @@ tests:
 
   - name: change-relationship-direction
     setup:
-      - "query \"CREATE (:Person {name: 'X'})-[:FOLLOWS]->(:Person {name: 'Y'})\" --format json --no-quic"
+      - "query \"CREATE (:Person {name: 'X'})-[:FOLLOWS]->(:Person {name: 'Y'})\" --format json --embedded"
     args: ["query", "MATCH (a)-[old:FOLLOWS]->(b) DELETE old CREATE (b)-[r:FOLLOWED_BY]->(a) RETURN type(r)", "--format", "json"]
     expect:
       exit_code: 0
@@ -139,7 +139,7 @@ tests:
   # Batch Data Migration Tests
   - name: batch-update-properties
     setup:
-      - "query \"CREATE (:User {name: 'Alice'}), (:User {name: 'Bob', age: 25})\" --format json --no-quic"
+      - "query \"CREATE (:User {name: 'Alice'}), (:User {name: 'Bob', age: 25})\" --format json --embedded"
     args: ["query", "MATCH (u:User) WHERE u.age IS NULL SET u.age = 0 RETURN count(u)", "--format", "json"]
     expect:
       exit_code: 0
@@ -160,7 +160,7 @@ tests:
   # Complex Migration Scenarios
   - name: split-node-into-multiple
     setup:
-      - "query \"CREATE (:Person {name: 'John', type: 'employee', department: 'Engineering'})\" --format json --no-quic"
+      - "query \"CREATE (:Person {name: 'John', type: 'employee', department: 'Engineering'})\" --format json --embedded"
     args: ["query", "MATCH (p:Person) WHERE p.type = 'employee' CREATE (e:Employee {name: p.name}), (d:Department {name: p.department}) CREATE (e)-[:WORKS_IN]->(d) DELETE p RETURN count(e)", "--format", "json"]
     expect:
       exit_code: 0
@@ -168,7 +168,7 @@ tests:
 
   - name: normalize-denormalized-data
     setup:
-      - "query \"CREATE (:Order {id: 1, customerId: 'C1', customerName: 'Alice'})\" --format json --no-quic"
+      - "query \"CREATE (:Order {id: 1, customerId: 'C1', customerName: 'Alice'})\" --format json --embedded"
     args: ["query", "MATCH (o:Order) CREATE (c:Customer {id: o.customerId, name: o.customerName}) CREATE (o)-[:PLACED_BY]->(c) REMOVE o.customerId, o.customerName RETURN count(c)", "--format", "json"]
     expect:
       exit_code: 0
@@ -196,7 +196,7 @@ tests:
 
   - name: bulk-update-with-index
     setup:
-      - "query \"CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3})\" --format json --no-quic"
+      - "query \"CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3})\" --format json --embedded"
     args: ["query", "CREATE INDEX test_id_idx ON :TestNode(id); MATCH (n:TestNode) WHERE n.id % 2 = 0 SET n.even = true RETURN count(n)", "--format", "json"]
     expect:
       exit_code: 0

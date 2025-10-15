@@ -23,7 +23,7 @@ tests:
 
   - name: "audit-setup-test-environment"
     description: "Setup audit logging test environment"
-    args: ["query", "--no-quic", "CALL audit.configure(enabled => true, file_path => '/tmp/geode_audit_test.jsonl', hash_algorithm => 'sha256') YIELD status, config RETURN status, config"]
+    args: ["query", "--embedded", "CALL audit.configure(enabled => true, file_path => '/tmp/geode_audit_test.jsonl', hash_algorithm => 'sha256') YIELD status, config RETURN status, config"]
     expect:
       exit_code: 0
       geode_query:
@@ -33,7 +33,7 @@ tests:
 
   - name: "audit-setup-test-data"
     description: "Create test data for audit logging validation"
-    args: ["query", "--no-quic", 
+    args: ["query", "--embedded", 
            "CREATE (user1:User {username: 'alice', role: 'admin', department: 'IT'}), (user2:User {username: 'bob', role: 'analyst', department: 'Finance'}), (user3:User {username: 'charlie', role: 'viewer', department: 'HR'}), (user1)-[:HAS_ACCESS {level: 'full', granted_at: timestamp()}]->(user2) RETURN count(*) AS created"]
     expect:
       exit_code: 0
@@ -48,7 +48,7 @@ tests:
 
   - name: "audit-json-file-basic-operations"
     description: "Test JSON file audit logging for basic operations"
-    args: ["query", "--no-quic", 
+    args: ["query", "--embedded", 
            "MATCH (u:User {username: 'alice'}) SET u.last_login = timestamp() RETURN u.username AS user, u.last_login AS login_time"]
     expect:
       exit_code: 0
@@ -59,7 +59,7 @@ tests:
 
   - name: "audit-json-file-authentication-events"
     description: "Test authentication event logging (Event ID: 1001)"
-    args: ["query", "--no-quic", "CALL audit.log_auth_event('login', 'alice', 'success', 'password_auth') YIELD event_id, timestamp, logged RETURN event_id, timestamp, logged"]
+    args: ["query", "--embedded", "CALL audit.log_auth_event('login', 'alice', 'success', 'password_auth') YIELD event_id, timestamp, logged RETURN event_id, timestamp, logged"]
     expect:
       exit_code: 0
       geode_query:
@@ -69,7 +69,7 @@ tests:
 
   - name: "audit-json-file-command-execution-events"
     description: "Test command execution event logging (Event ID: 1002)"
-    args: ["query", "--no-quic", 
+    args: ["query", "--embedded", 
            "MATCH (u:User) WHERE u.role = 'admin' RETURN count(u) AS admin_count"]
     expect:
       exit_code: 0
@@ -80,7 +80,7 @@ tests:
 
   - name: "audit-json-file-cli-lifecycle-events"
     description: "Test CLI lifecycle event logging (Event ID: 1003)"
-    args: ["query", "--no-quic", "CALL audit.log_lifecycle_event('cli_startup', 'geode-cli', 'success') YIELD event_id, lifecycle_stage RETURN event_id, lifecycle_stage"]
+    args: ["query", "--embedded", "CALL audit.log_lifecycle_event('cli_startup', 'geode-cli', 'success') YIELD event_id, lifecycle_stage RETURN event_id, lifecycle_stage"]
     expect:
       exit_code: 0
       geode_query:
@@ -90,7 +90,7 @@ tests:
 
   - name: "audit-json-file-event-structure"
     description: "Test JSON audit event structure and canonical format"
-    args: ["query", "--no-quic", "CALL audit.get_recent_events(limit => 5) YIELD seq_no, timestamp, event_type, actor, action, result, event_hash RETURN seq_no, timestamp, event_type, actor, action, result ORDER BY seq_no DESC LIMIT 3"]
+    args: ["query", "--embedded", "CALL audit.get_recent_events(limit => 5) YIELD seq_no, timestamp, event_type, actor, action, result, event_hash RETURN seq_no, timestamp, event_type, actor, action, result ORDER BY seq_no DESC LIMIT 3"]
     expect:
       exit_code: 0
       geode_query:
@@ -103,7 +103,7 @@ tests:
 
   - name: "audit-tamper-evident-hash-chain"
     description: "Test tamper-evident hash chain generation"
-    args: ["query", "--no-quic", "CALL audit.verify_hash_chain() YIELD chain_valid, total_events, hash_mismatches, last_verified_seq RETURN chain_valid, total_events, hash_mismatches, last_verified_seq"]
+    args: ["query", "--embedded", "CALL audit.verify_hash_chain() YIELD chain_valid, total_events, hash_mismatches, last_verified_seq RETURN chain_valid, total_events, hash_mismatches, last_verified_seq"]
     expect:
       exit_code: 0
       geode_query:
@@ -113,7 +113,7 @@ tests:
 
   - name: "audit-tamper-evident-ed25519-signatures"
     description: "Test Ed25519 signature generation and verification"
-    args: ["query", "--no-quic", "CALL audit.test_signature_verification() YIELD signatures_valid, public_key_verified, signature_count RETURN signatures_valid, public_key_verified, signature_count"]
+    args: ["query", "--embedded", "CALL audit.test_signature_verification() YIELD signatures_valid, public_key_verified, signature_count RETURN signatures_valid, public_key_verified, signature_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -123,7 +123,7 @@ tests:
 
   - name: "audit-tamper-evident-merkle-digests"
     description: "Test Merkle digest generation every 100 events"
-    args: ["query", "--no-quic", "CALL audit.get_merkle_digests() YIELD digest_count, merkle_root, events_covered, digest_valid RETURN digest_count, merkle_root, events_covered, digest_valid"]
+    args: ["query", "--embedded", "CALL audit.get_merkle_digests() YIELD digest_count, merkle_root, events_covered, digest_valid RETURN digest_count, merkle_root, events_covered, digest_valid"]
     expect:
       exit_code: 0
       geode_query:
@@ -133,7 +133,7 @@ tests:
 
   - name: "audit-tamper-evident-integrity-check"
     description: "Test comprehensive audit log integrity check"
-    args: ["query", "--no-quic", "CALL audit.comprehensive_integrity_check() YIELD integrity_status, events_verified, hash_chain_valid, signatures_valid, merkle_valid RETURN integrity_status, events_verified, hash_chain_valid, signatures_valid, merkle_valid"]
+    args: ["query", "--embedded", "CALL audit.comprehensive_integrity_check() YIELD integrity_status, events_verified, hash_chain_valid, signatures_valid, merkle_valid RETURN integrity_status, events_verified, hash_chain_valid, signatures_valid, merkle_valid"]
     expect:
       exit_code: 0
       geode_query:
@@ -147,7 +147,7 @@ tests:
 
   - name: "audit-multiplatform-file-output"
     description: "Test file-based audit output across platforms"
-    args: ["query", "--no-quic", "CALL audit.test_file_output() YIELD file_accessible, permissions_correct, json_valid, cross_platform_compatible RETURN file_accessible, permissions_correct, json_valid, cross_platform_compatible"]
+    args: ["query", "--embedded", "CALL audit.test_file_output() YIELD file_accessible, permissions_correct, json_valid, cross_platform_compatible RETURN file_accessible, permissions_correct, json_valid, cross_platform_compatible"]
     expect:
       exit_code: 0
       geode_query:
@@ -157,7 +157,7 @@ tests:
 
   - name: "audit-multiplatform-windows-eventlog-simulation"
     description: "Test Windows Event Log integration simulation"
-    args: ["query", "--no-quic", "CALL audit.simulate_windows_eventlog() YIELD simulation_status, event_log_format, provider_name, event_ids_mapped RETURN simulation_status, event_log_format, provider_name, event_ids_mapped"]
+    args: ["query", "--embedded", "CALL audit.simulate_windows_eventlog() YIELD simulation_status, event_log_format, provider_name, event_ids_mapped RETURN simulation_status, event_log_format, provider_name, event_ids_mapped"]
     expect:
       exit_code: 0
       geode_query:
@@ -167,7 +167,7 @@ tests:
 
   - name: "audit-multiplatform-syslog-simulation"
     description: "Test syslog integration simulation for Unix/Linux systems"
-    args: ["query", "--no-quic", "CALL audit.simulate_syslog_output() YIELD syslog_format, facility, severity, message_format RETURN syslog_format, facility, severity, message_format"]
+    args: ["query", "--embedded", "CALL audit.simulate_syslog_output() YIELD syslog_format, facility, severity, message_format RETURN syslog_format, facility, severity, message_format"]
     expect:
       exit_code: 0
       geode_query:
@@ -177,7 +177,7 @@ tests:
 
   - name: "audit-multiplatform-combined-output"
     description: "Test combined audit output to multiple destinations"
-    args: ["query", "--no-quic", "CALL audit.test_combined_output() YIELD outputs_configured, file_success, eventlog_success, syslog_success RETURN outputs_configured, file_success, eventlog_success, syslog_success"]
+    args: ["query", "--embedded", "CALL audit.test_combined_output() YIELD outputs_configured, file_success, eventlog_success, syslog_success RETURN outputs_configured, file_success, eventlog_success, syslog_success"]
     expect:
       exit_code: 0
       geode_query:
@@ -191,7 +191,7 @@ tests:
 
   - name: "audit-categories-authentication-comprehensive"
     description: "Test comprehensive authentication event categories"
-    args: ["query", "--no-quic", "CALL audit.test_auth_categories() YIELD login_events, logout_events, password_reset_events, mfa_events, failed_auth_events RETURN login_events, logout_events, password_reset_events, mfa_events, failed_auth_events"]
+    args: ["query", "--embedded", "CALL audit.test_auth_categories() YIELD login_events, logout_events, password_reset_events, mfa_events, failed_auth_events RETURN login_events, logout_events, password_reset_events, mfa_events, failed_auth_events"]
     expect:
       exit_code: 0
       geode_query:
@@ -201,7 +201,7 @@ tests:
 
   - name: "audit-categories-command-execution-types"
     description: "Test command execution event type classification"
-    args: ["query", "--no-quic", "CALL audit.test_command_categories() YIELD serve_commands, shell_commands, query_commands, backup_commands, restore_commands RETURN serve_commands, shell_commands, query_commands, backup_commands, restore_commands"]
+    args: ["query", "--embedded", "CALL audit.test_command_categories() YIELD serve_commands, shell_commands, query_commands, backup_commands, restore_commands RETURN serve_commands, shell_commands, query_commands, backup_commands, restore_commands"]
     expect:
       exit_code: 0
       geode_query:
@@ -211,7 +211,7 @@ tests:
 
   - name: "audit-categories-data-access-patterns"
     description: "Test data access pattern categorization"
-    args: ["query", "--no-quic", "CALL audit.test_data_access_categories() YIELD read_operations, write_operations, admin_operations, privileged_access, unauthorized_attempts RETURN read_operations, write_operations, admin_operations, privileged_access, unauthorized_attempts"]
+    args: ["query", "--embedded", "CALL audit.test_data_access_categories() YIELD read_operations, write_operations, admin_operations, privileged_access, unauthorized_attempts RETURN read_operations, write_operations, admin_operations, privileged_access, unauthorized_attempts"]
     expect:
       exit_code: 0
       geode_query:
@@ -225,7 +225,7 @@ tests:
 
   - name: "audit-siem-event-correlation"
     description: "Test SIEM event correlation capabilities"
-    args: ["query", "--no-quic", "CALL audit.test_siem_correlation() YIELD correlation_id, related_events, threat_indicators, risk_score RETURN correlation_id, related_events, threat_indicators, risk_score"]
+    args: ["query", "--embedded", "CALL audit.test_siem_correlation() YIELD correlation_id, related_events, threat_indicators, risk_score RETURN correlation_id, related_events, threat_indicators, risk_score"]
     expect:
       exit_code: 0
       geode_query:
@@ -235,7 +235,7 @@ tests:
 
   - name: "audit-siem-alert-generation"
     description: "Test SIEM alert generation for suspicious patterns"
-    args: ["query", "--no-quic", "CALL audit.test_siem_alerts() YIELD alert_count, high_risk_events, suspicious_patterns, recommended_actions RETURN alert_count, high_risk_events, suspicious_patterns, recommended_actions"]
+    args: ["query", "--embedded", "CALL audit.test_siem_alerts() YIELD alert_count, high_risk_events, suspicious_patterns, recommended_actions RETURN alert_count, high_risk_events, suspicious_patterns, recommended_actions"]
     expect:
       exit_code: 0
       geode_query:
@@ -245,7 +245,7 @@ tests:
 
   - name: "audit-siem-compliance-reporting"
     description: "Test SIEM compliance reporting (SOX, PCI-DSS, HIPAA)"
-    args: ["query", "--no-quic", "CALL audit.generate_compliance_report(standard => 'SOX') YIELD report_id, compliance_score, violations_found, remediation_required RETURN report_id, compliance_score, violations_found, remediation_required"]
+    args: ["query", "--embedded", "CALL audit.generate_compliance_report(standard => 'SOX') YIELD report_id, compliance_score, violations_found, remediation_required RETURN report_id, compliance_score, violations_found, remediation_required"]
     expect:
       exit_code: 0
       geode_query:
@@ -255,7 +255,7 @@ tests:
 
   - name: "audit-siem-powershell-queries"
     description: "Test PowerShell query compatibility for Windows environments"
-    args: ["query", "--no-quic", "CALL audit.test_powershell_compatibility() YIELD query_examples, filter_support, log_name_mapping, provider_name_mapping RETURN query_examples, filter_support, log_name_mapping, provider_name_mapping"]
+    args: ["query", "--embedded", "CALL audit.test_powershell_compatibility() YIELD query_examples, filter_support, log_name_mapping, provider_name_mapping RETURN query_examples, filter_support, log_name_mapping, provider_name_mapping"]
     expect:
       exit_code: 0
       geode_query:
@@ -269,7 +269,7 @@ tests:
 
   - name: "audit-rotation-time-based"
     description: "Test time-based audit log rotation"
-    args: ["query", "--no-quic", "CALL audit.configure_rotation(strategy => 'time', interval_hours => 24) YIELD rotation_enabled, next_rotation_time, file_naming_pattern RETURN rotation_enabled, next_rotation_time, file_naming_pattern"]
+    args: ["query", "--embedded", "CALL audit.configure_rotation(strategy => 'time', interval_hours => 24) YIELD rotation_enabled, next_rotation_time, file_naming_pattern RETURN rotation_enabled, next_rotation_time, file_naming_pattern"]
     expect:
       exit_code: 0
       geode_query:
@@ -279,7 +279,7 @@ tests:
 
   - name: "audit-rotation-size-based"
     description: "Test size-based audit log rotation"
-    args: ["query", "--no-quic", "CALL audit.configure_rotation(strategy => 'size', max_size_mb => 100) YIELD rotation_enabled, size_threshold, compression_enabled RETURN rotation_enabled, size_threshold, compression_enabled"]
+    args: ["query", "--embedded", "CALL audit.configure_rotation(strategy => 'size', max_size_mb => 100) YIELD rotation_enabled, size_threshold, compression_enabled RETURN rotation_enabled, size_threshold, compression_enabled"]
     expect:
       exit_code: 0
       geode_query:
@@ -289,7 +289,7 @@ tests:
 
   - name: "audit-rotation-sequence-continuity"
     description: "Test sequence number continuity across rotations"
-    args: ["query", "--no-quic", "CALL audit.test_rotation_continuity() YIELD sequence_continuous, hash_chain_preserved, no_events_lost RETURN sequence_continuous, hash_chain_preserved, no_events_lost"]
+    args: ["query", "--embedded", "CALL audit.test_rotation_continuity() YIELD sequence_continuous, hash_chain_preserved, no_events_lost RETURN sequence_continuous, hash_chain_preserved, no_events_lost"]
     expect:
       exit_code: 0
       geode_query:
@@ -299,7 +299,7 @@ tests:
 
   - name: "audit-retention-policy-enforcement"
     description: "Test audit log retention policy enforcement"
-    args: ["query", "--no-quic", "CALL audit.configure_retention(retention_days => 90, archive_enabled => true) YIELD policy_active, archive_location, auto_cleanup_enabled RETURN policy_active, archive_location, auto_cleanup_enabled"]
+    args: ["query", "--embedded", "CALL audit.configure_retention(retention_days => 90, archive_enabled => true) YIELD policy_active, archive_location, auto_cleanup_enabled RETURN policy_active, archive_location, auto_cleanup_enabled"]
     expect:
       exit_code: 0
       geode_query:
@@ -313,7 +313,7 @@ tests:
 
   - name: "audit-security-anomaly-detection"
     description: "Test security anomaly detection in audit logs"
-    args: ["query", "--no-quic", "CALL audit.detect_anomalies() YIELD anomalies_found, anomaly_types, confidence_scores, investigation_required RETURN anomalies_found, anomaly_types, confidence_scores, investigation_required"]
+    args: ["query", "--embedded", "CALL audit.detect_anomalies() YIELD anomalies_found, anomaly_types, confidence_scores, investigation_required RETURN anomalies_found, anomaly_types, confidence_scores, investigation_required"]
     expect:
       exit_code: 0
       geode_query:
@@ -323,7 +323,7 @@ tests:
 
   - name: "audit-security-threat-indicators"
     description: "Test threat indicator extraction from audit events"
-    args: ["query", "--no-quic", "CALL audit.extract_threat_indicators() YIELD indicators_found, ip_addresses, user_patterns, attack_signatures RETURN indicators_found, ip_addresses, user_patterns, attack_signatures"]
+    args: ["query", "--embedded", "CALL audit.extract_threat_indicators() YIELD indicators_found, ip_addresses, user_patterns, attack_signatures RETURN indicators_found, ip_addresses, user_patterns, attack_signatures"]
     expect:
       exit_code: 0
       geode_query:
@@ -333,7 +333,7 @@ tests:
 
   - name: "audit-security-privilege-escalation"
     description: "Test privilege escalation detection in audit logs"
-    args: ["query", "--no-quic", "CALL audit.detect_privilege_escalation() YIELD escalation_events, suspicious_role_changes, admin_access_patterns RETURN escalation_events, suspicious_role_changes, admin_access_patterns"]
+    args: ["query", "--embedded", "CALL audit.detect_privilege_escalation() YIELD escalation_events, suspicious_role_changes, admin_access_patterns RETURN escalation_events, suspicious_role_changes, admin_access_patterns"]
     expect:
       exit_code: 0
       geode_query:
@@ -347,7 +347,7 @@ tests:
 
   - name: "audit-performance-high-volume"
     description: "Test audit logging performance under high event volume"
-    args: ["query", "--no-quic", "CALL audit.performance_test(events_per_second => 1000, duration_seconds => 30) YIELD events_logged, avg_latency_ms, max_latency_ms, throughput_achieved RETURN events_logged, avg_latency_ms, max_latency_ms, throughput_achieved"]
+    args: ["query", "--embedded", "CALL audit.performance_test(events_per_second => 1000, duration_seconds => 30) YIELD events_logged, avg_latency_ms, max_latency_ms, throughput_achieved RETURN events_logged, avg_latency_ms, max_latency_ms, throughput_achieved"]
     expect:
       exit_code: 0
       geode_query:
@@ -357,7 +357,7 @@ tests:
 
   - name: "audit-performance-memory-usage"
     description: "Test audit logging memory usage under load"
-    args: ["query", "--no-quic", "CALL audit.memory_usage_test() YIELD baseline_memory_mb, peak_memory_mb, memory_growth_rate, within_limits RETURN baseline_memory_mb, peak_memory_mb, memory_growth_rate, within_limits"]
+    args: ["query", "--embedded", "CALL audit.memory_usage_test() YIELD baseline_memory_mb, peak_memory_mb, memory_growth_rate, within_limits RETURN baseline_memory_mb, peak_memory_mb, memory_growth_rate, within_limits"]
     expect:
       exit_code: 0
       geode_query:
@@ -367,7 +367,7 @@ tests:
 
   - name: "audit-performance-concurrent-access"
     description: "Test audit logging with concurrent access patterns"
-    args: ["query", "--no-quic", "CALL audit.concurrent_access_test(concurrent_users => 50, operations_per_user => 100) YIELD total_operations, contention_events, lock_wait_time_ms RETURN total_operations, contention_events, lock_wait_time_ms"]
+    args: ["query", "--embedded", "CALL audit.concurrent_access_test(concurrent_users => 50, operations_per_user => 100) YIELD total_operations, contention_events, lock_wait_time_ms RETURN total_operations, contention_events, lock_wait_time_ms"]
     expect:
       exit_code: 0
       geode_query:
@@ -381,7 +381,7 @@ tests:
 
   - name: "audit-error-disk-space-exhaustion"
     description: "Test audit logging behavior when disk space is exhausted"
-    args: ["query", "--no-quic", "CALL audit.test_disk_space_handling() YIELD graceful_degradation, error_handling, recovery_successful RETURN graceful_degradation, error_handling, recovery_successful"]
+    args: ["query", "--embedded", "CALL audit.test_disk_space_handling() YIELD graceful_degradation, error_handling, recovery_successful RETURN graceful_degradation, error_handling, recovery_successful"]
     expect:
       exit_code: 0
       geode_query:
@@ -391,7 +391,7 @@ tests:
 
   - name: "audit-error-corrupted-log-file"
     description: "Test handling of corrupted audit log files"
-    args: ["query", "--no-quic", "CALL audit.test_corruption_handling() YIELD corruption_detected, recovery_attempted, data_salvaged RETURN corruption_detected, recovery_attempted, data_salvaged"]
+    args: ["query", "--embedded", "CALL audit.test_corruption_handling() YIELD corruption_detected, recovery_attempted, data_salvaged RETURN corruption_detected, recovery_attempted, data_salvaged"]
     expect:
       exit_code: 0
       geode_query:
@@ -401,7 +401,7 @@ tests:
 
   - name: "audit-error-invalid-configuration"
     description: "Test error handling for invalid audit configuration"
-    args: ["query", "--no-quic", "CALL audit.test_invalid_config() YIELD config_rejected, fallback_activated, service_continuity RETURN config_rejected, fallback_activated, service_continuity"]
+    args: ["query", "--embedded", "CALL audit.test_invalid_config() YIELD config_rejected, fallback_activated, service_continuity RETURN config_rejected, fallback_activated, service_continuity"]
     expect:
       exit_code: 0
       geode_query:
@@ -415,7 +415,7 @@ tests:
 
   - name: "audit-verification-external-tool"
     description: "Test audit log verification with external tools"
-    args: ["query", "--no-quic", "CALL audit.export_for_verification() YIELD export_path, verification_data, public_keys_included RETURN export_path, verification_data, public_keys_included"]
+    args: ["query", "--embedded", "CALL audit.export_for_verification() YIELD export_path, verification_data, public_keys_included RETURN export_path, verification_data, public_keys_included"]
     expect:
       exit_code: 0
       geode_query:
@@ -425,7 +425,7 @@ tests:
 
   - name: "audit-verification-forensic-analysis"
     description: "Test audit log preparation for forensic analysis"
-    args: ["query", "--no-quic", "CALL audit.prepare_forensic_package() YIELD package_created, chain_of_custody, integrity_preserved RETURN package_created, chain_of_custody, integrity_preserved"]
+    args: ["query", "--embedded", "CALL audit.prepare_forensic_package() YIELD package_created, chain_of_custody, integrity_preserved RETURN package_created, chain_of_custody, integrity_preserved"]
     expect:
       exit_code: 0
       geode_query:
@@ -435,7 +435,7 @@ tests:
 
   - name: "audit-verification-compliance-audit"
     description: "Test audit log compliance verification"
-    args: ["query", "--no-quic", "CALL audit.compliance_verification() YIELD compliance_standard, verification_passed, issues_found, certification_ready RETURN compliance_standard, verification_passed, issues_found, certification_ready"]
+    args: ["query", "--embedded", "CALL audit.compliance_verification() YIELD compliance_standard, verification_passed, issues_found, certification_ready RETURN compliance_standard, verification_passed, issues_found, certification_ready"]
     expect:
       exit_code: 0
       geode_query:
@@ -449,14 +449,14 @@ tests:
 
   - name: "audit-cleanup-test-data"
     description: "Clean up audit test data"
-    args: ["query", "--no-quic", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup"]
 
   - name: "audit-cleanup-log-files"
     description: "Clean up audit log files and test artifacts"
-    args: ["query", "--no-quic", "CALL audit.cleanup_test_artifacts() YIELD files_cleaned, logs_archived, test_data_removed RETURN files_cleaned, logs_archived, test_data_removed"]
+    args: ["query", "--embedded", "CALL audit.cleanup_test_artifacts() YIELD files_cleaned, logs_archived, test_data_removed RETURN files_cleaned, logs_archived, test_data_removed"]
     expect:
       exit_code: 0
       geode_query:

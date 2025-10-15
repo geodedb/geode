@@ -20,7 +20,7 @@ tests:
   # Test 1: Vector Type Creation and Basic Operations
   - name: "vector_types_basic_creation"
     description: "Test basic vector type creation and validation"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (doc1:Document {
         title: 'AI Research Paper',
@@ -38,7 +38,7 @@ tests:
   # Test 2: L2 (Euclidean) Distance Operations
   - name: "vector_l2_distance_operations"
     description: "Test L2 distance calculations and queries"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (v1:Vector {id: 1, data: vectorf32('[1.0, 2.0, 3.0]')})
       CREATE (v2:Vector {id: 2, data: vectorf32('[4.0, 5.0, 6.0]')})
@@ -58,7 +58,7 @@ tests:
   # Test 3: Cosine Similarity Operations
   - name: "vector_cosine_similarity_operations"
     description: "Test cosine similarity calculations for normalized embeddings"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (doc1:Document {title: 'Machine Learning', embedding: vectorf32('[0.8, 0.6, 0.0]')})
       CREATE (doc2:Document {title: 'Deep Learning', embedding: vectorf32('[0.6, 0.8, 0.0]')})
@@ -77,7 +77,7 @@ tests:
   # Test 4: Dot Product Operations
   - name: "vector_dot_product_operations" 
     description: "Test dot product calculations for unnormalized similarity"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (item1:Item {name: 'Product A', attributes: vectorf32('[2.0, 3.0, 1.0]')})
       CREATE (item2:Item {name: 'Product B', attributes: vectorf32('[1.0, 4.0, 2.0]')})
@@ -96,7 +96,7 @@ tests:
   # Test 5: Manhattan Distance Operations
   - name: "vector_manhattan_distance_operations"
     description: "Test Manhattan (L1) distance for sparse high-dimensional vectors"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (user1:User {name: 'Alice', preferences: vectori32('[1, 0, 1, 0, 1]')})
       CREATE (user2:User {name: 'Bob', preferences: vectori32('[0, 1, 1, 1, 0]')})
@@ -115,7 +115,7 @@ tests:
   # Test 6: Hamming Distance Operations
   - name: "vector_hamming_distance_operations"
     description: "Test Hamming distance for binary feature vectors"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (sig1:BinarySignature {id: 1, bits: vectori32('[1, 0, 1, 1, 0]')})
       CREATE (sig2:BinarySignature {id: 2, bits: vectori32('[1, 1, 1, 0, 0]')})
@@ -134,7 +134,7 @@ tests:
   # Test 7: Jaccard Similarity Operations
   - name: "vector_jaccard_similarity_operations"
     description: "Test Jaccard similarity for set-based similarity measures"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (cat1:Category {name: 'Tech', features: vectori32('[1, 1, 0, 1, 0]')})
       CREATE (cat2:Category {name: 'Science', features: vectori32('[1, 0, 1, 1, 0]')})
@@ -153,7 +153,7 @@ tests:
   # Test 8: Vector Index Creation
   - name: "vector_index_creation"
     description: "Test creation of vector indexes for optimization"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE INDEX vector_embeddings_idx ON Document (embedding) USING vector_f32
     expected_patterns:
@@ -165,7 +165,7 @@ tests:
   # Test 9: HNSW Vector Index Creation
   - name: "hnsw_vector_index_creation"
     description: "Test creation of HNSW vector indexes for K-NN optimization"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE INDEX hnsw_embeddings_idx ON Document (embedding) USING vector_hnsw
     expected_patterns:
@@ -177,7 +177,7 @@ tests:
   # Test 10: Advanced Vector Query with Multiple Metrics
   - name: "multi_metric_vector_comparison"
     description: "Test query using multiple distance metrics in one query"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (item:Item {
         name: 'Test Item',
@@ -204,7 +204,7 @@ tests:
   # Test 11: Vector Function Error Handling
   - name: "vector_function_error_handling"
     description: "Test error handling for invalid vector operations"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       RETURN vector_l2(vectorf32('[1.0, 2.0]'), vectorf32('[1.0, 2.0, 3.0]'))
     expected_patterns:
@@ -215,7 +215,7 @@ tests:
   # Test 12: Vector Index Performance Test
   - name: "vector_index_performance_basic"
     description: "Basic performance test for vector operations"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (v1:Vector {data: vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5]')})
       CREATE (v2:Vector {data: vectorf32('[0.6, 0.7, 0.8, 0.9, 1.0]')})
@@ -234,7 +234,7 @@ tests:
   # Test 13: Vector Operations with Complex Queries
   - name: "vector_operations_complex_queries"
     description: "Test vector operations in complex query patterns"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (doc1:Document {title: 'ML Paper 1', embedding: vectorf32('[0.8, 0.2, 0.1]'), category: 'AI'})
       CREATE (doc2:Document {title: 'Stats Paper 1', embedding: vectorf32('[0.1, 0.8, 0.1]'), category: 'Statistics'})
@@ -256,7 +256,7 @@ tests:
   # Test 14: Vector Aggregation Operations
   - name: "vector_aggregation_operations"
     description: "Test aggregation functions with vector distance metrics"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE (p1:Point {location: vectorf32('[1.0, 1.0]'), cluster: 'A'})
       CREATE (p2:Point {location: vectorf32('[1.1, 0.9]'), cluster: 'A'})
@@ -277,7 +277,7 @@ tests:
   # Test 15: Vector Index Drop Operations
   - name: "vector_index_drop_operations"
     description: "Test dropping vector indexes"
-    command: ["geode", "query", "--no-quic"]
+    command: ["geode", "query", "--embedded"]
     input: |
       CREATE INDEX test_vector_idx ON TestNode (vector_data) USING vector_f32;
       DROP INDEX test_vector_idx

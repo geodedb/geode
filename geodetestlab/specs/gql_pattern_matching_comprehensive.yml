@@ -24,8 +24,8 @@ tests:
   - name: "node-pattern-simple"
     description: "Test simple node pattern matching"
     setup:
-      - "query --no-quic \"CREATE (a), (b), (c)\""
-    args: ["query", "--no-quic", "MATCH (n) RETURN count(n) AS node_count"]
+      - "query --embedded \"CREATE (a), (b), (c)\""
+    args: ["query", "--embedded", "MATCH (n) RETURN count(n) AS node_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -39,8 +39,8 @@ tests:
   - name: "node-pattern-with-variable"
     description: "Test node pattern with variable binding"
     setup:
-      - "query --no-quic \"CREATE (a {id: 1}), (b {id: 2})\""
-    args: ["query", "--no-quic", "MATCH (node) RETURN node.id AS id ORDER BY id"]
+      - "query --embedded \"CREATE (a {id: 1}), (b {id: 2})\""
+    args: ["query", "--embedded", "MATCH (node) RETURN node.id AS id ORDER BY id"]
     expect:
       exit_code: 0
       geode_query:
@@ -51,8 +51,8 @@ tests:
   - name: "node-pattern-with-label"
     description: "Test node pattern with label matching"
     setup:
-      - "query --no-quic \"CREATE (a:Person), (b:Person), (c:Company)\""
-    args: ["query", "--no-quic", "MATCH (n:Person) RETURN count(n) AS person_count"]
+      - "query --embedded \"CREATE (a:Person), (b:Person), (c:Company)\""
+    args: ["query", "--embedded", "MATCH (n:Person) RETURN count(n) AS person_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -66,8 +66,8 @@ tests:
   - name: "node-pattern-with-properties"
     description: "Test node pattern with property matching"
     setup:
-      - "query --no-quic \"CREATE (a:User {name: 'Alice', age: 30}), (b:User {name: 'Bob', age: 25}), (c:User {name: 'Charlie', age: 30})\""
-    args: ["query", "--no-quic", "MATCH (n:User {age: 30}) RETURN count(n) AS age_30_count"]
+      - "query --embedded \"CREATE (a:User {name: 'Alice', age: 30}), (b:User {name: 'Bob', age: 25}), (c:User {name: 'Charlie', age: 30})\""
+    args: ["query", "--embedded", "MATCH (n:User {age: 30}) RETURN count(n) AS age_30_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -81,8 +81,8 @@ tests:
   - name: "node-pattern-multiple-labels"
     description: "Test node pattern with multiple labels"
     setup:
-      - "query --no-quic \"CREATE (a:Person:Employee), (b:Person), (c:Employee)\""
-    args: ["query", "--no-quic", "MATCH (n:Person:Employee) RETURN count(n) AS both_labels_count"]
+      - "query --embedded \"CREATE (a:Person:Employee), (b:Person), (c:Employee)\""
+    args: ["query", "--embedded", "MATCH (n:Person:Employee) RETURN count(n) AS both_labels_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -100,8 +100,8 @@ tests:
   - name: "relationship-pattern-simple"
     description: "Test simple relationship pattern matching"
     setup:
-      - "query --no-quic \"CREATE (a)-[:KNOWS]->(b), (c)-[:LIKES]->(d)\""
-    args: ["query", "--no-quic", "MATCH ()-[r]->() RETURN count(r) AS rel_count"]
+      - "query --embedded \"CREATE (a)-[:KNOWS]->(b), (c)-[:LIKES]->(d)\""
+    args: ["query", "--embedded", "MATCH ()-[r]->() RETURN count(r) AS rel_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -115,8 +115,8 @@ tests:
   - name: "relationship-pattern-with-type"
     description: "Test relationship pattern with type matching"
     setup:
-      - "query --no-quic \"CREATE (a)-[:KNOWS]->(b), (c)-[:KNOWS]->(d), (e)-[:LIKES]->(f)\""
-    args: ["query", "--no-quic", "MATCH ()-[r:KNOWS]->() RETURN count(r) AS knows_count"]
+      - "query --embedded \"CREATE (a)-[:KNOWS]->(b), (c)-[:KNOWS]->(d), (e)-[:LIKES]->(f)\""
+    args: ["query", "--embedded", "MATCH ()-[r:KNOWS]->() RETURN count(r) AS knows_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -130,8 +130,8 @@ tests:
   - name: "relationship-pattern-with-properties"
     description: "Test relationship pattern with property matching"
     setup:
-      - "query --no-quic \"CREATE (a)-[:RATED {score: 5}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 5}]->(f)\""
-    args: ["query", "--no-quic", "MATCH ()-[r:RATED {score: 5}]->() RETURN count(r) AS high_rated_count"]
+      - "query --embedded \"CREATE (a)-[:RATED {score: 5}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 5}]->(f)\""
+    args: ["query", "--embedded", "MATCH ()-[r:RATED {score: 5}]->() RETURN count(r) AS high_rated_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -145,8 +145,8 @@ tests:
   - name: "relationship-pattern-undirected"
     description: "Test undirected relationship pattern matching"
     setup:
-      - "query --no-quic \"CREATE (a)-[:CONNECTED]->(b), (c)-[:CONNECTED]->(d)\""
-    args: ["query", "--no-quic", "MATCH ()-[r:CONNECTED]-() RETURN count(r) AS connected_count"]
+      - "query --embedded \"CREATE (a)-[:CONNECTED]->(b), (c)-[:CONNECTED]->(d)\""
+    args: ["query", "--embedded", "MATCH ()-[r:CONNECTED]-() RETURN count(r) AS connected_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -160,8 +160,8 @@ tests:
   - name: "relationship-pattern-reverse-direction"
     description: "Test reverse direction relationship pattern"
     setup:
-      - "query --no-quic \"CREATE (a {name: 'source'})-[:FLOWS_TO]->(b {name: 'target'})\""
-    args: ["query", "--no-quic", "MATCH (target)<-[:FLOWS_TO]-(source) RETURN source.name AS source_name, target.name AS target_name"]
+      - "query --embedded \"CREATE (a {name: 'source'})-[:FLOWS_TO]->(b {name: 'target'})\""
+    args: ["query", "--embedded", "MATCH (target)<-[:FLOWS_TO]-(source) RETURN source.name AS source_name, target.name AS target_name"]
     expect:
       exit_code: 0
       geode_query:
@@ -181,8 +181,8 @@ tests:
   - name: "variable-length-any"
     description: "Test variable-length pattern with any length (*)"
     setup:
-      - "query --no-quic \"CREATE (a)-[:NEXT]->(b)-[:NEXT]->(c)-[:NEXT]->(d)\""
-    args: ["query", "--no-quic", "MATCH (start)-[:NEXT*]->(end) RETURN count(*) AS path_count"]
+      - "query --embedded \"CREATE (a)-[:NEXT]->(b)-[:NEXT]->(c)-[:NEXT]->(d)\""
+    args: ["query", "--embedded", "MATCH (start)-[:NEXT*]->(end) RETURN count(*) AS path_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -196,8 +196,8 @@ tests:
   - name: "variable-length-exact"
     description: "Test variable-length pattern with exact length"
     setup:
-      - "query --no-quic \"CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)\""
-    args: ["query", "--no-quic", "MATCH (start)-[:STEP*2]->(end) RETURN count(*) AS two_step_count"]
+      - "query --embedded \"CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)\""
+    args: ["query", "--embedded", "MATCH (start)-[:STEP*2]->(end) RETURN count(*) AS two_step_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -211,8 +211,8 @@ tests:
   - name: "variable-length-range"
     description: "Test variable-length pattern with range (min..max)"
     setup:
-      - "query --no-quic \"CREATE (a)-[:LINK]->(b)-[:LINK]->(c)-[:LINK]->(d)-[:LINK]->(e)\""
-    args: ["query", "--no-quic", "MATCH (start)-[:LINK*2..3]->(end) RETURN count(*) AS range_count"]
+      - "query --embedded \"CREATE (a)-[:LINK]->(b)-[:LINK]->(c)-[:LINK]->(d)-[:LINK]->(e)\""
+    args: ["query", "--embedded", "MATCH (start)-[:LINK*2..3]->(end) RETURN count(*) AS range_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -226,8 +226,8 @@ tests:
   - name: "variable-length-min-only"
     description: "Test variable-length pattern with minimum only (min..)"
     setup:
-      - "query --no-quic \"CREATE (a)-[:CHAIN]->(b)-[:CHAIN]->(c)-[:CHAIN]->(d)\""
-    args: ["query", "--no-quic", "MATCH (start)-[:CHAIN*2..]->(end) RETURN count(*) AS min_two_count"]
+      - "query --embedded \"CREATE (a)-[:CHAIN]->(b)-[:CHAIN]->(c)-[:CHAIN]->(d)\""
+    args: ["query", "--embedded", "MATCH (start)-[:CHAIN*2..]->(end) RETURN count(*) AS min_two_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -241,8 +241,8 @@ tests:
   - name: "variable-length-max-only"
     description: "Test variable-length pattern with maximum only (..max)"
     setup:
-      - "query --no-quic \"CREATE (a)-[:PATH]->(b)-[:PATH]->(c)-[:PATH]->(d)\""
-    args: ["query", "--no-quic", "MATCH (start)-[:PATH*..2]->(end) RETURN count(*) AS max_two_count"]
+      - "query --embedded \"CREATE (a)-[:PATH]->(b)-[:PATH]->(c)-[:PATH]->(d)\""
+    args: ["query", "--embedded", "MATCH (start)-[:PATH*..2]->(end) RETURN count(*) AS max_two_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -260,8 +260,8 @@ tests:
   - name: "path-variable-assignment"
     description: "Test path variable assignment"
     setup:
-      - "query --no-quic \"CREATE (a {name: 'start'})-[:CONNECTS]->(b {name: 'middle'})-[:CONNECTS]->(c {name: 'end'})\""
-    args: ["query", "--no-quic", "MATCH path = (a)-[:CONNECTS*2]->(c) RETURN length(path) AS path_length"]
+      - "query --embedded \"CREATE (a {name: 'start'})-[:CONNECTS]->(b {name: 'middle'})-[:CONNECTS]->(c {name: 'end'})\""
+    args: ["query", "--embedded", "MATCH path = (a)-[:CONNECTS*2]->(c) RETURN length(path) AS path_length"]
     expect:
       exit_code: 0
       geode_query:
@@ -275,8 +275,8 @@ tests:
   - name: "path-variable-nodes"
     description: "Test accessing nodes from path variable"
     setup:
-      - "query --no-quic \"CREATE (a {id: 1})-[:TO]->(b {id: 2})-[:TO]->(c {id: 3})\""
-    args: ["query", "--no-quic", "MATCH path = (start)-[:TO*2]->(end) RETURN nodes(path)[0].id AS first_id, nodes(path)[2].id AS last_id"]
+      - "query --embedded \"CREATE (a {id: 1})-[:TO]->(b {id: 2})-[:TO]->(c {id: 3})\""
+    args: ["query", "--embedded", "MATCH path = (start)-[:TO*2]->(end) RETURN nodes(path)[0].id AS first_id, nodes(path)[2].id AS last_id"]
     expect:
       exit_code: 0
       geode_query:
@@ -292,8 +292,8 @@ tests:
   - name: "path-variable-relationships"
     description: "Test accessing relationships from path variable"
     setup:
-      - "query --no-quic \"CREATE (a)-[:REL {weight: 1.0}]->(b)-[:REL {weight: 2.0}]->(c)\""
-    args: ["query", "--no-quic", "MATCH path = (a)-[:REL*2]->(c) RETURN relationships(path)[0].weight AS first_weight, relationships(path)[1].weight AS second_weight"]
+      - "query --embedded \"CREATE (a)-[:REL {weight: 1.0}]->(b)-[:REL {weight: 2.0}]->(c)\""
+    args: ["query", "--embedded", "MATCH path = (a)-[:REL*2]->(c) RETURN relationships(path)[0].weight AS first_weight, relationships(path)[1].weight AS second_weight"]
     expect:
       exit_code: 0
       geode_query:
@@ -313,8 +313,8 @@ tests:
   - name: "multiple-patterns-in-match"
     description: "Test multiple patterns in single MATCH clause"
     setup:
-      - "query --no-quic \"CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})-[:LIKES]->(d:Item {name: 'coffee'})\""
-    args: ["query", "--no-quic", "MATCH (p1:Person)-[:KNOWS]->(p2:Person), (p3:Person)-[:LIKES]->(i:Item) RETURN count(*) AS pattern_count"]
+      - "query --embedded \"CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})-[:LIKES]->(d:Item {name: 'coffee'})\""
+    args: ["query", "--embedded", "MATCH (p1:Person)-[:KNOWS]->(p2:Person), (p3:Person)-[:LIKES]->(i:Item) RETURN count(*) AS pattern_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -328,8 +328,8 @@ tests:
   - name: "connected-patterns"
     description: "Test connected patterns sharing variables"
     setup:
-      - "query --no-quic \"CREATE (a:User {name: 'Alice'})-[:OWNS]->(b:Car {model: 'Toyota'}), (a)-[:LIVES_IN]->(c:City {name: 'Boston'})\""
-    args: ["query", "--no-quic", "MATCH (u:User)-[:OWNS]->(car:Car), (u)-[:LIVES_IN]->(city:City) RETURN u.name AS user_name, car.model AS car_model, city.name AS city_name"]
+      - "query --embedded \"CREATE (a:User {name: 'Alice'})-[:OWNS]->(b:Car {model: 'Toyota'}), (a)-[:LIVES_IN]->(c:City {name: 'Boston'})\""
+    args: ["query", "--embedded", "MATCH (u:User)-[:OWNS]->(car:Car), (u)-[:LIVES_IN]->(city:City) RETURN u.name AS user_name, car.model AS car_model, city.name AS city_name"]
     expect:
       exit_code: 0
       geode_query:
@@ -347,8 +347,8 @@ tests:
   - name: "triangular-pattern"
     description: "Test triangular pattern (A->B->C->A)"
     setup:
-      - "query --no-quic \"CREATE (a {name: 'A'})-[:EDGE]->(b {name: 'B'})-[:EDGE]->(c {name: 'C'})-[:EDGE]->(a)\""
-    args: ["query", "--no-quic", "MATCH (a)-[:EDGE]->(b)-[:EDGE]->(c)-[:EDGE]->(a) RETURN a.name AS node_a, b.name AS node_b, c.name AS node_c"]
+      - "query --embedded \"CREATE (a {name: 'A'})-[:EDGE]->(b {name: 'B'})-[:EDGE]->(c {name: 'C'})-[:EDGE]->(a)\""
+    args: ["query", "--embedded", "MATCH (a)-[:EDGE]->(b)-[:EDGE]->(c)-[:EDGE]->(a) RETURN a.name AS node_a, b.name AS node_b, c.name AS node_c"]
     expect:
       exit_code: 0
       geode_query:
@@ -370,8 +370,8 @@ tests:
   - name: "pattern-with-where-clause"
     description: "Test pattern matching with WHERE clause"
     setup:
-      - "query --no-quic \"CREATE (a:Product {name: 'Laptop', price: 1000}), (b:Product {name: 'Mouse', price: 25}), (c:Product {name: 'Keyboard', price: 75})\""
-    args: ["query", "--no-quic", "MATCH (p:Product) WHERE p.price > 50 RETURN p.name AS expensive_product ORDER BY p.price"]
+      - "query --embedded \"CREATE (a:Product {name: 'Laptop', price: 1000}), (b:Product {name: 'Mouse', price: 25}), (c:Product {name: 'Keyboard', price: 75})\""
+    args: ["query", "--embedded", "MATCH (p:Product) WHERE p.price > 50 RETURN p.name AS expensive_product ORDER BY p.price"]
     expect:
       exit_code: 0
       geode_query:
@@ -382,8 +382,8 @@ tests:
   - name: "pattern-with-relationship-filter"
     description: "Test pattern matching with relationship property filter"
     setup:
-      - "query --no-quic \"CREATE (a)-[:RATED {score: 9}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 8}]->(f)\""
-    args: ["query", "--no-quic", "MATCH ()-[r:RATED]->() WHERE r.score >= 8 RETURN count(r) AS high_ratings"]
+      - "query --embedded \"CREATE (a)-[:RATED {score: 9}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 8}]->(f)\""
+    args: ["query", "--embedded", "MATCH ()-[r:RATED]->() WHERE r.score >= 8 RETURN count(r) AS high_ratings"]
     expect:
       exit_code: 0
       geode_query:
@@ -397,8 +397,8 @@ tests:
   - name: "pattern-with-path-length-filter"
     description: "Test pattern matching with path length filter"
     setup:
-      - "query --no-quic \"CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)-[:STEP]->(e)\""
-    args: ["query", "--no-quic", "MATCH path = (start)-[:STEP*]->(end) WHERE length(path) = 3 RETURN count(path) AS three_step_paths"]
+      - "query --embedded \"CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)-[:STEP]->(e)\""
+    args: ["query", "--embedded", "MATCH path = (start)-[:STEP*]->(end) WHERE length(path) = 3 RETURN count(path) AS three_step_paths"]
     expect:
       exit_code: 0
       geode_query:
@@ -416,8 +416,8 @@ tests:
   - name: "optional-match-basic"
     description: "Test basic OPTIONAL MATCH pattern"
     setup:
-      - "query --no-quic \"CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})-[:HAS_EMAIL]->(e:Email {address: 'bob@example.com'})\""
-    args: ["query", "--no-quic", "MATCH (p:Person) OPTIONAL MATCH (p)-[:HAS_EMAIL]->(email:Email) RETURN p.name AS name, email.address AS email_address ORDER BY name"]
+      - "query --embedded \"CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})-[:HAS_EMAIL]->(e:Email {address: 'bob@example.com'})\""
+    args: ["query", "--embedded", "MATCH (p:Person) OPTIONAL MATCH (p)-[:HAS_EMAIL]->(email:Email) RETURN p.name AS name, email.address AS email_address ORDER BY name"]
     expect:
       exit_code: 0
       geode_query:
@@ -428,8 +428,8 @@ tests:
   - name: "optional-match-with-where"
     description: "Test OPTIONAL MATCH with WHERE clause"
     setup:
-      - "query --no-quic \"CREATE (a:User {name: 'Alice', age: 25}), (b:User {name: 'Bob', age: 35})-[:OWNS]->(c:Car {brand: 'Toyota'})\""
-    args: ["query", "--no-quic", "MATCH (u:User) OPTIONAL MATCH (u)-[:OWNS]->(car:Car) WHERE u.age > 30 RETURN u.name AS name, car.brand AS car_brand ORDER BY name"]
+      - "query --embedded \"CREATE (a:User {name: 'Alice', age: 25}), (b:User {name: 'Bob', age: 35})-[:OWNS]->(c:Car {brand: 'Toyota'})\""
+    args: ["query", "--embedded", "MATCH (u:User) OPTIONAL MATCH (u)-[:OWNS]->(car:Car) WHERE u.age > 30 RETURN u.name AS name, car.brand AS car_brand ORDER BY name"]
     expect:
       exit_code: 0
       geode_query:
@@ -444,8 +444,8 @@ tests:
   - name: "pattern-in-list-comprehension"
     description: "Test pattern within list comprehension"
     setup:
-      - "query --no-quic \"CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (a)-[:KNOWS]->(c:Person {name: 'Charlie'})\""
-    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice'}) RETURN [(p)-[:KNOWS]->(friend) | friend.name] AS friends"]
+      - "query --embedded \"CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (a)-[:KNOWS]->(c:Person {name: 'Charlie'})\""
+    args: ["query", "--embedded", "MATCH (p:Person {name: 'Alice'}) RETURN [(p)-[:KNOWS]->(friend) | friend.name] AS friends"]
     expect:
       exit_code: 0
       geode_query:
@@ -460,8 +460,8 @@ tests:
   - name: "pattern-no-matches"
     description: "Test pattern matching with no results"
     setup:
-      - "query --no-quic \"CREATE (a:TypeA), (b:TypeB)\""
-    args: ["query", "--no-quic", "MATCH (n:TypeC) RETURN count(n) AS count"]
+      - "query --embedded \"CREATE (a:TypeA), (b:TypeB)\""
+    args: ["query", "--embedded", "MATCH (n:TypeC) RETURN count(n) AS count"]
     expect:
       exit_code: 0
       geode_query:
@@ -475,8 +475,8 @@ tests:
   - name: "pattern-variable-reuse"
     description: "Test reusing pattern variables"
     setup:
-      - "query --no-quic \"CREATE (a {name: 'self'})-[:REFLEXIVE]->(a)\""
-    args: ["query", "--no-quic", "MATCH (n)-[:REFLEXIVE]->(n) RETURN n.name AS self_referencing"]
+      - "query --embedded \"CREATE (a {name: 'self'})-[:REFLEXIVE]->(a)\""
+    args: ["query", "--embedded", "MATCH (n)-[:REFLEXIVE]->(n) RETURN n.name AS self_referencing"]
     expect:
       exit_code: 0
       geode_query:
@@ -489,7 +489,7 @@ tests:
 
   - name: "pattern-invalid-variable-length"
     description: "Test invalid variable-length pattern (should error)"
-    args: ["query", "--no-quic", "MATCH (a)-[:REL*0]->(b) RETURN a, b"]
+    args: ["query", "--embedded", "MATCH (a)-[:REL*0]->(b) RETURN a, b"]
     expect:
       exit_code: 1
     tags: ["pattern-matching", "error", "invalid-variable-length"]
@@ -502,9 +502,9 @@ tests:
     description: "Performance test with larger graph pattern matching"
     timeout_ms: 30000
     setup:
-      - "query --no-quic \"CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5})\""
-      - "query --no-quic \"MATCH (a:Node), (b:Node) WHERE a.id < b.id CREATE (a)-[:CONNECTS]->(b)\""
-    args: ["query", "--no-quic", "MATCH (a:Node)-[:CONNECTS*2]->(c:Node) RETURN count(*) AS two_hop_paths"]
+      - "query --embedded \"CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5})\""
+      - "query --embedded \"MATCH (a:Node), (b:Node) WHERE a.id < b.id CREATE (a)-[:CONNECTS]->(b)\""
+    args: ["query", "--embedded", "MATCH (a:Node)-[:CONNECTS*2]->(c:Node) RETURN count(*) AS two_hop_paths"]
     expect:
       exit_code: 0
       geode_query:
@@ -520,7 +520,7 @@ tests:
     description: "Clean up all test data created during pattern matching tests"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - "MATCH (n) DETACH DELETE n"
     expect:
       exit_code: 0

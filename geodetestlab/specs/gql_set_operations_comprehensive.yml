@@ -24,11 +24,11 @@ tests:
   - name: "union-basic"
     description: "Test basic UNION operation"
     setup:
-      - "query --no-quic \"CREATE (a:TypeA {id: 1, value: 'first'}), (b:TypeA {id: 2, value: 'second'})\""
-      - "query --no-quic \"CREATE (c:TypeB {id: 3, value: 'third'}), (d:TypeB {id: 4, value: 'fourth'})\""
+      - "query --embedded \"CREATE (a:TypeA {id: 1, value: 'first'}), (b:TypeA {id: 2, value: 'second'})\""
+      - "query --embedded \"CREATE (c:TypeB {id: 3, value: 'third'}), (d:TypeB {id: 4, value: 'fourth'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:TypeA) RETURN a.id AS id, a.value AS value
         UNION
@@ -43,11 +43,11 @@ tests:
   - name: "union-distinct"
     description: "Test UNION DISTINCT operation"
     setup:
-      - "query --no-quic \"CREATE (a:UnionTest {id: 1, name: 'common'}), (b:UnionTest {id: 2, name: 'unique1'})\""
-      - "query --no-quic \"CREATE (c:UnionTest {id: 1, name: 'common'}), (d:UnionTest {id: 3, name: 'unique2'})\""
+      - "query --embedded \"CREATE (a:UnionTest {id: 1, name: 'common'}), (b:UnionTest {id: 2, name: 'unique1'})\""
+      - "query --embedded \"CREATE (c:UnionTest {id: 1, name: 'common'}), (d:UnionTest {id: 3, name: 'unique2'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:UnionTest {id: 1}) RETURN a.id AS id, a.name AS name
         UNION DISTINCT
@@ -62,11 +62,11 @@ tests:
   - name: "union-all"
     description: "Test UNION ALL operation (preserves duplicates)"
     setup:
-      - "query --no-quic \"CREATE (a:UnionAllTest {id: 1, type: 'duplicate'})\""
-      - "query --no-quic \"CREATE (b:UnionAllTest {id: 1, type: 'duplicate'})\""
+      - "query --embedded \"CREATE (a:UnionAllTest {id: 1, type: 'duplicate'})\""
+      - "query --embedded \"CREATE (b:UnionAllTest {id: 1, type: 'duplicate'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:UnionAllTest {type: 'duplicate'}) RETURN a.id AS id, a.type AS type
         UNION ALL
@@ -85,11 +85,11 @@ tests:
   - name: "intersect-basic"
     description: "Test basic INTERSECT operation"
     setup:
-      - "query --no-quic \"CREATE (a:IntersectA {id: 1, value: 'shared'}), (b:IntersectA {id: 2, value: 'unique_a'})\""
-      - "query --no-quic \"CREATE (c:IntersectB {id: 1, value: 'shared'}), (d:IntersectB {id: 3, value: 'unique_b'})\""
+      - "query --embedded \"CREATE (a:IntersectA {id: 1, value: 'shared'}), (b:IntersectA {id: 2, value: 'unique_a'})\""
+      - "query --embedded \"CREATE (c:IntersectB {id: 1, value: 'shared'}), (d:IntersectB {id: 3, value: 'unique_b'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:IntersectA) RETURN a.id AS id, a.value AS value
         INTERSECT
@@ -104,11 +104,11 @@ tests:
   - name: "intersect-distinct"
     description: "Test INTERSECT DISTINCT operation"
     setup:
-      - "query --no-quic \"CREATE (a:IntDistinct {id: 1, name: 'common'}), (b:IntDistinct {id: 1, name: 'common'})\""
-      - "query --no-quic \"CREATE (c:IntDistinct {id: 1, name: 'common'}), (d:IntDistinct {id: 2, name: 'different'})\""
+      - "query --embedded \"CREATE (a:IntDistinct {id: 1, name: 'common'}), (b:IntDistinct {id: 1, name: 'common'})\""
+      - "query --embedded \"CREATE (c:IntDistinct {id: 1, name: 'common'}), (d:IntDistinct {id: 2, name: 'different'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:IntDistinct {name: 'common'}) RETURN a.id AS id, a.name AS name
         INTERSECT DISTINCT
@@ -123,11 +123,11 @@ tests:
   - name: "intersect-all"
     description: "Test INTERSECT ALL operation (frequency-based intersection)"
     setup:
-      - "query --no-quic \"CREATE (a:IntAll {id: 1, type: 'multi'}), (b:IntAll {id: 1, type: 'multi'})\""
-      - "query --no-quic \"CREATE (c:IntAll {id: 1, type: 'multi'}), (d:IntAll {id: 1, type: 'multi'}), (e:IntAll {id: 1, type: 'multi'})\""
+      - "query --embedded \"CREATE (a:IntAll {id: 1, type: 'multi'}), (b:IntAll {id: 1, type: 'multi'})\""
+      - "query --embedded \"CREATE (c:IntAll {id: 1, type: 'multi'}), (d:IntAll {id: 1, type: 'multi'}), (e:IntAll {id: 1, type: 'multi'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:IntAll {type: 'multi'}) RETURN a.id AS id, a.type AS type
         INTERSECT ALL
@@ -146,11 +146,11 @@ tests:
   - name: "except-basic"
     description: "Test basic EXCEPT operation"
     setup:
-      - "query --no-quic \"CREATE (a:ExceptA {id: 1, value: 'keep'}), (b:ExceptA {id: 2, value: 'remove'})\""
-      - "query --no-quic \"CREATE (c:ExceptB {id: 2, value: 'remove'}), (d:ExceptB {id: 3, value: 'other'})\""
+      - "query --embedded \"CREATE (a:ExceptA {id: 1, value: 'keep'}), (b:ExceptA {id: 2, value: 'remove'})\""
+      - "query --embedded \"CREATE (c:ExceptB {id: 2, value: 'remove'}), (d:ExceptB {id: 3, value: 'other'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:ExceptA) RETURN a.id AS id, a.value AS value
         EXCEPT
@@ -165,11 +165,11 @@ tests:
   - name: "except-distinct"
     description: "Test EXCEPT DISTINCT operation"
     setup:
-      - "query --no-quic \"CREATE (a:ExcDistinct {id: 1, name: 'keep'}), (b:ExcDistinct {id: 1, name: 'keep'}), (c:ExcDistinct {id: 2, name: 'remove'})\""
-      - "query --no-quic \"CREATE (d:ExcDistinct {id: 2, name: 'remove'})\""
+      - "query --embedded \"CREATE (a:ExcDistinct {id: 1, name: 'keep'}), (b:ExcDistinct {id: 1, name: 'keep'}), (c:ExcDistinct {id: 2, name: 'remove'})\""
+      - "query --embedded \"CREATE (d:ExcDistinct {id: 2, name: 'remove'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:ExcDistinct) RETURN a.id AS id, a.name AS name
         EXCEPT DISTINCT
@@ -184,11 +184,11 @@ tests:
   - name: "except-all"
     description: "Test EXCEPT ALL operation (frequency-based subtraction)"
     setup:
-      - "query --no-quic \"CREATE (a:ExcAll {id: 1, type: 'freq'}), (b:ExcAll {id: 1, type: 'freq'}), (c:ExcAll {id: 1, type: 'freq'})\""
-      - "query --no-quic \"CREATE (d:ExcAll {id: 1, type: 'freq'})\""
+      - "query --embedded \"CREATE (a:ExcAll {id: 1, type: 'freq'}), (b:ExcAll {id: 1, type: 'freq'}), (c:ExcAll {id: 1, type: 'freq'})\""
+      - "query --embedded \"CREATE (d:ExcAll {id: 1, type: 'freq'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:ExcAll {type: 'freq'}) RETURN a.id AS id, a.type AS type
         EXCEPT ALL
@@ -207,10 +207,10 @@ tests:
   - name: "multi-way-union"
     description: "Test multi-way UNION operation"
     setup:
-      - "query --no-quic \"CREATE (a:MultiA {id: 1, source: 'A'}), (b:MultiB {id: 2, source: 'B'}), (c:MultiC {id: 3, source: 'C'})\""
+      - "query --embedded \"CREATE (a:MultiA {id: 1, source: 'A'}), (b:MultiB {id: 2, source: 'B'}), (c:MultiC {id: 3, source: 'C'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:MultiA) RETURN a.id AS id, a.source AS source
         UNION
@@ -227,12 +227,12 @@ tests:
   - name: "mixed-set-operations"
     description: "Test mixed set operations (UNION with INTERSECT)"
     setup:
-      - "query --no-quic \"CREATE (a:MixedA {id: 1, type: 'common'}), (b:MixedA {id: 2, type: 'unique_a'})\""
-      - "query --no-quic \"CREATE (c:MixedB {id: 1, type: 'common'}), (d:MixedB {id: 3, type: 'unique_b'})\""
-      - "query --no-quic \"CREATE (e:MixedC {id: 1, type: 'common'}), (f:MixedC {id: 4, type: 'unique_c'})\""
+      - "query --embedded \"CREATE (a:MixedA {id: 1, type: 'common'}), (b:MixedA {id: 2, type: 'unique_a'})\""
+      - "query --embedded \"CREATE (c:MixedB {id: 1, type: 'common'}), (d:MixedB {id: 3, type: 'unique_b'})\""
+      - "query --embedded \"CREATE (e:MixedC {id: 1, type: 'common'}), (f:MixedC {id: 4, type: 'unique_c'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         (MATCH (a:MixedA) RETURN a.id AS id, a.type AS type
          UNION
@@ -253,11 +253,11 @@ tests:
   - name: "union-with-order-by"
     description: "Test UNION with ORDER BY clause"
     setup:
-      - "query --no-quic \"CREATE (a:OrderA {id: 3, name: 'third'}), (b:OrderA {id: 1, name: 'first'})\""
-      - "query --no-quic \"CREATE (c:OrderB {id: 4, name: 'fourth'}), (d:OrderB {id: 2, name: 'second'})\""
+      - "query --embedded \"CREATE (a:OrderA {id: 3, name: 'third'}), (b:OrderA {id: 1, name: 'first'})\""
+      - "query --embedded \"CREATE (c:OrderB {id: 4, name: 'fourth'}), (d:OrderB {id: 2, name: 'second'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:OrderA) RETURN a.id AS id, a.name AS name
         UNION
@@ -273,11 +273,11 @@ tests:
   - name: "union-with-limit"
     description: "Test UNION with LIMIT clause"
     setup:
-      - "query --no-quic \"CREATE (a:LimitA {id: 1, value: 'a1'}), (b:LimitA {id: 2, value: 'a2'})\""
-      - "query --no-quic \"CREATE (c:LimitB {id: 3, value: 'b1'}), (d:LimitB {id: 4, value: 'b2'})\""
+      - "query --embedded \"CREATE (a:LimitA {id: 1, value: 'a1'}), (b:LimitA {id: 2, value: 'a2'})\""
+      - "query --embedded \"CREATE (c:LimitB {id: 3, value: 'b1'}), (d:LimitB {id: 4, value: 'b2'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:LimitA) RETURN a.id AS id, a.value AS value
         UNION
@@ -298,7 +298,7 @@ tests:
     description: "Test UNION with compatible string types"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         RETURN 'first' AS text_value
         UNION
@@ -314,7 +314,7 @@ tests:
     description: "Test UNION with compatible numeric types"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         RETURN 42 AS number_value
         UNION
@@ -330,7 +330,7 @@ tests:
     description: "Test UNION with mixed compatible types"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         RETURN 'text' AS mixed_value
         UNION
@@ -351,11 +351,11 @@ tests:
   - name: "set-operations-with-aggregation"
     description: "Test set operations with aggregation"
     setup:
-      - "query --no-quic \"CREATE (a:AggA {category: 'X', value: 10}), (b:AggA {category: 'X', value: 20})\""
-      - "query --no-quic \"CREATE (c:AggB {category: 'Y', value: 15}), (d:AggB {category: 'Y', value: 25})\""
+      - "query --embedded \"CREATE (a:AggA {category: 'X', value: 10}), (b:AggA {category: 'X', value: 20})\""
+      - "query --embedded \"CREATE (c:AggB {category: 'Y', value: 15}), (d:AggB {category: 'Y', value: 25})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:AggA) RETURN a.category AS category, sum(a.value) AS total
         UNION
@@ -370,11 +370,11 @@ tests:
   - name: "set-operations-with-subqueries"
     description: "Test set operations with subqueries"
     setup:
-      - "query --no-quic \"CREATE (a:SubA {id: 1, parent_id: 10}), (b:SubA {id: 2, parent_id: 10})\""
-      - "query --no-quic \"CREATE (c:SubB {id: 3, parent_id: 20}), (d:SubB {id: 4, parent_id: 20})\""
+      - "query --embedded \"CREATE (a:SubA {id: 1, parent_id: 10}), (b:SubA {id: 2, parent_id: 10})\""
+      - "query --embedded \"CREATE (c:SubB {id: 3, parent_id: 20}), (d:SubB {id: 4, parent_id: 20})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:SubA) WHERE a.parent_id IN (MATCH (x:SubA) RETURN DISTINCT x.parent_id) RETURN a.id AS id
         UNION
@@ -394,7 +394,7 @@ tests:
     description: "Test UNION with mismatched column counts (should error)"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         RETURN 'single' AS col1
         UNION
@@ -406,11 +406,11 @@ tests:
   - name: "intersect-no-common-rows"
     description: "Test INTERSECT with no common rows"
     setup:
-      - "query --no-quic \"CREATE (a:NoCommonA {id: 1, value: 'unique_a'})\""
-      - "query --no-quic \"CREATE (b:NoCommonB {id: 2, value: 'unique_b'})\""
+      - "query --embedded \"CREATE (a:NoCommonA {id: 1, value: 'unique_a'})\""
+      - "query --embedded \"CREATE (b:NoCommonB {id: 2, value: 'unique_b'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:NoCommonA) RETURN a.id AS id, a.value AS value
         INTERSECT
@@ -430,11 +430,11 @@ tests:
     description: "Performance test with larger datasets in UNION"
     timeout_ms: 30000
     setup:
-      - "query --no-quic \"CREATE (n1:PerfA {id: 1, batch: 'A'}), (n2:PerfA {id: 2, batch: 'A'}), (n3:PerfA {id: 3, batch: 'A'}), (n4:PerfA {id: 4, batch: 'A'}), (n5:PerfA {id: 5, batch: 'A'})\""
-      - "query --no-quic \"CREATE (n6:PerfB {id: 6, batch: 'B'}), (n7:PerfB {id: 7, batch: 'B'}), (n8:PerfB {id: 8, batch: 'B'}), (n9:PerfB {id: 9, batch: 'B'}), (n10:PerfB {id: 10, batch: 'B'})\""
+      - "query --embedded \"CREATE (n1:PerfA {id: 1, batch: 'A'}), (n2:PerfA {id: 2, batch: 'A'}), (n3:PerfA {id: 3, batch: 'A'}), (n4:PerfA {id: 4, batch: 'A'}), (n5:PerfA {id: 5, batch: 'A'})\""
+      - "query --embedded \"CREATE (n6:PerfB {id: 6, batch: 'B'}), (n7:PerfB {id: 7, batch: 'B'}), (n8:PerfB {id: 8, batch: 'B'}), (n9:PerfB {id: 9, batch: 'B'}), (n10:PerfB {id: 10, batch: 'B'})\""
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (a:PerfA) RETURN a.id AS id, a.batch AS batch
         UNION ALL
@@ -455,7 +455,7 @@ tests:
     description: "Clean up all test data created during set operations tests"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (n) WHERE 
           n:TypeA OR n:TypeB OR n:UnionTest OR n:UnionAllTest OR

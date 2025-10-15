@@ -24,7 +24,7 @@ tests:
   # SESSION SET SCHEMA
   - name: "session-set-schema"
     description: "Test SESSION SET SCHEMA command"
-    args: ["query", "--no-quic", "SESSION SET SCHEMA default_schema"]
+    args: ["query", "--embedded", "SESSION SET SCHEMA default_schema"]
     expect:
       exit_code: 0
     tags: ["session", "schema", "set"]
@@ -32,14 +32,14 @@ tests:
   # SESSION SET GRAPH
   - name: "session-set-graph"
     description: "Test SESSION SET GRAPH command"
-    args: ["query", "--no-quic", "SESSION SET GRAPH CURRENT_GRAPH"]
+    args: ["query", "--embedded", "SESSION SET GRAPH CURRENT_GRAPH"]
     expect:
       exit_code: 0
     tags: ["session", "graph", "set"]
 
   - name: "session-set-property-graph"
     description: "Test SESSION SET PROPERTY GRAPH command"
-    args: ["query", "--no-quic", "SESSION SET PROPERTY GRAPH CURRENT_PROPERTY_GRAPH"]
+    args: ["query", "--embedded", "SESSION SET PROPERTY GRAPH CURRENT_PROPERTY_GRAPH"]
     expect:
       exit_code: 0
     tags: ["session", "property-graph", "set"]
@@ -47,14 +47,14 @@ tests:
   # SESSION SET TIME ZONE
   - name: "session-set-timezone-utc"
     description: "Test SESSION SET TIME ZONE to UTC"
-    args: ["query", "--no-quic", "SESSION SET TIME ZONE 'UTC'"]
+    args: ["query", "--embedded", "SESSION SET TIME ZONE 'UTC'"]
     expect:
       exit_code: 0
     tags: ["session", "timezone", "set"]
 
   - name: "session-set-timezone-offset"
     description: "Test SESSION SET TIME ZONE with offset"
-    args: ["query", "--no-quic", "SESSION SET TIME ZONE '+05:00'"]
+    args: ["query", "--embedded", "SESSION SET TIME ZONE '+05:00'"]
     expect:
       exit_code: 0
     tags: ["session", "timezone", "offset"]
@@ -62,21 +62,21 @@ tests:
   # SESSION SET PARAMETER clauses
   - name: "session-set-graph-parameter"
     description: "Test SESSION SET GRAPH parameter"
-    args: ["query", "--no-quic", "SESSION SET GRAPH $my_graph = CURRENT_GRAPH"]
+    args: ["query", "--embedded", "SESSION SET GRAPH $my_graph = CURRENT_GRAPH"]
     expect:
       exit_code: 0
     tags: ["session", "parameter", "graph"]
 
   - name: "session-set-binding-table-parameter"
     description: "Test SESSION SET BINDING TABLE parameter"
-    args: ["query", "--no-quic", "SESSION SET BINDING TABLE $my_table = { MATCH (n) RETURN n }"]
+    args: ["query", "--embedded", "SESSION SET BINDING TABLE $my_table = { MATCH (n) RETURN n }"]
     expect:
       exit_code: 0
     tags: ["session", "parameter", "binding-table"]
 
   - name: "session-set-value-parameter"
     description: "Test SESSION SET VALUE parameter"
-    args: ["query", "--no-quic", "SESSION SET VALUE $my_value = 42"]
+    args: ["query", "--embedded", "SESSION SET VALUE $my_value = 42"]
     expect:
       exit_code: 0
     tags: ["session", "parameter", "value"]
@@ -84,7 +84,7 @@ tests:
   # SESSION SET with IF NOT EXISTS
   - name: "session-set-parameter-if-not-exists"
     description: "Test SESSION SET with IF NOT EXISTS"
-    args: ["query", "--no-quic", "SESSION SET VALUE IF NOT EXISTS $new_param = 'test'"]
+    args: ["query", "--embedded", "SESSION SET VALUE IF NOT EXISTS $new_param = 'test'"]
     expect:
       exit_code: 0
     tags: ["session", "parameter", "conditional"]
@@ -95,63 +95,63 @@ tests:
   
   - name: "session-reset-all-parameters"
     description: "Test SESSION RESET ALL PARAMETERS"
-    args: ["query", "--no-quic", "SESSION RESET ALL PARAMETERS"]
+    args: ["query", "--embedded", "SESSION RESET ALL PARAMETERS"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "parameters"]
 
   - name: "session-reset-parameters"
     description: "Test SESSION RESET PARAMETERS"
-    args: ["query", "--no-quic", "SESSION RESET PARAMETERS"]
+    args: ["query", "--embedded", "SESSION RESET PARAMETERS"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "parameters"]
 
   - name: "session-reset-characteristics"
     description: "Test SESSION RESET CHARACTERISTICS"
-    args: ["query", "--no-quic", "SESSION RESET ALL CHARACTERISTICS"]
+    args: ["query", "--embedded", "SESSION RESET ALL CHARACTERISTICS"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "characteristics"]
 
   - name: "session-reset-schema"
     description: "Test SESSION RESET SCHEMA"
-    args: ["query", "--no-quic", "SESSION RESET SCHEMA"]
+    args: ["query", "--embedded", "SESSION RESET SCHEMA"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "schema"]
 
   - name: "session-reset-graph"
     description: "Test SESSION RESET GRAPH"
-    args: ["query", "--no-quic", "SESSION RESET GRAPH"]
+    args: ["query", "--embedded", "SESSION RESET GRAPH"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "graph"]
 
   - name: "session-reset-property-graph"
     description: "Test SESSION RESET PROPERTY GRAPH"
-    args: ["query", "--no-quic", "SESSION RESET PROPERTY GRAPH"]
+    args: ["query", "--embedded", "SESSION RESET PROPERTY GRAPH"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "property-graph"]
 
   - name: "session-reset-timezone"
     description: "Test SESSION RESET TIME ZONE"
-    args: ["query", "--no-quic", "SESSION RESET TIME ZONE"]
+    args: ["query", "--embedded", "SESSION RESET TIME ZONE"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "timezone"]
 
   - name: "session-reset-specific-parameter"
     description: "Test SESSION RESET specific parameter"
-    args: ["query", "--no-quic", "SESSION RESET PARAMETER $my_value"]
+    args: ["query", "--embedded", "SESSION RESET PARAMETER $my_value"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "parameter", "specific"]
 
   - name: "session-reset-no-args"
     description: "Test SESSION RESET with no arguments"
-    args: ["query", "--no-quic", "SESSION RESET"]
+    args: ["query", "--embedded", "SESSION RESET"]
     expect:
       exit_code: 0
     tags: ["session", "reset", "default"]
@@ -162,7 +162,7 @@ tests:
   
   - name: "session-close"
     description: "Test SESSION CLOSE command"
-    args: ["query", "--no-quic", "SESSION CLOSE"]
+    args: ["query", "--embedded", "SESSION CLOSE"]
     expect:
       exit_code: 0
     tags: ["session", "close"]
@@ -175,7 +175,7 @@ tests:
     description: "Test complete session workflow: set parameters then reset"
     args: 
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         SESSION SET VALUE $test_param = 'initial_value';
         SESSION SET TIME ZONE 'UTC';
@@ -188,7 +188,7 @@ tests:
     description: "Test setting multiple session parameters"
     args:
       - "query" 
-      - "--no-quic"
+      - "--embedded"
       - |
         SESSION SET VALUE $param1 = 100;
         SESSION SET VALUE $param2 = 'text_value';
@@ -204,7 +204,7 @@ tests:
   
   - name: "current-graph-expression"
     description: "Test CURRENT_GRAPH expression"
-    args: ["query", "--no-quic", "RETURN CURRENT_GRAPH AS current_graph"]
+    args: ["query", "--embedded", "RETURN CURRENT_GRAPH AS current_graph"]
     expect:
       exit_code: 0
       geode_query:
@@ -214,7 +214,7 @@ tests:
 
   - name: "current-property-graph-expression"
     description: "Test CURRENT_PROPERTY_GRAPH expression"
-    args: ["query", "--no-quic", "RETURN CURRENT_PROPERTY_GRAPH AS current_property_graph"]
+    args: ["query", "--embedded", "RETURN CURRENT_PROPERTY_GRAPH AS current_property_graph"]
     expect:
       exit_code: 0
       geode_query:
@@ -228,14 +228,14 @@ tests:
   
   - name: "session-set-invalid-parameter-name"
     description: "Test SESSION SET with invalid parameter name"
-    args: ["query", "--no-quic", "SESSION SET VALUE invalid_param_name = 'value'"]
+    args: ["query", "--embedded", "SESSION SET VALUE invalid_param_name = 'value'"]
     expect:
       exit_code: 1
     tags: ["session", "error", "parameter"]
 
   - name: "session-reset-nonexistent-parameter"
     description: "Test SESSION RESET with non-existent parameter"
-    args: ["query", "--no-quic", "SESSION RESET PARAMETER $nonexistent"]
+    args: ["query", "--embedded", "SESSION RESET PARAMETER $nonexistent"]
     expect:
       exit_code: 0  # Should not error, just no-op
     tags: ["session", "reset", "nonexistent"]

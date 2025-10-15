@@ -8,7 +8,7 @@ tests:
   # ===============================
   - name: "merge-on-create-string-property"
     description: "Test MERGE ON CREATE with string property"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (p:Person {email: 'test@example.com'})
       ON CREATE SET p.name = 'TestUser', p.created = true
@@ -25,7 +25,7 @@ tests:
 
   - name: "merge-on-create-integer-property"
     description: "Test MERGE ON CREATE with integer property"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (u:User {id: 123})
       ON CREATE SET u.count = 1, u.active = true
@@ -39,7 +39,7 @@ tests:
 
   - name: "merge-on-create-boolean-property"
     description: "Test MERGE ON CREATE with boolean property"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (d:Document {path: '/test'})
       ON CREATE SET d.published = false, d.draft = true
@@ -54,7 +54,7 @@ tests:
 
   - name: "merge-on-create-multiple-properties"
     description: "Test MERGE ON CREATE with multiple properties of different types"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (n:Node {key: 'abc'})
       ON CREATE SET n.name = 'NewNode', n.count = 42, n.enabled = true
@@ -71,7 +71,7 @@ tests:
   # ===============================
   - name: "merge-on-match-existing-node"
     description: "Test MERGE ON MATCH with existing node"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {email: 'existing@example.com', name: 'Original'})
       MERGE (p:Person {email: 'existing@example.com'})
@@ -87,7 +87,7 @@ tests:
 
   - name: "merge-on-match-update-string"
     description: "Test MERGE ON MATCH updating string property"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (u:User {id: 1, status: 'inactive'})
       MERGE (u:User {id: 1})
@@ -106,7 +106,7 @@ tests:
   # ===============================
   - name: "merge-on-create-and-match-new-node"
     description: "Test MERGE with both ON CREATE and ON MATCH (new node)"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (p:Person {email: 'new@example.com'})
       ON CREATE SET p.name = 'NewPerson', p.created = true
@@ -122,7 +122,7 @@ tests:
 
   - name: "merge-on-create-and-match-existing-node"
     description: "Test MERGE with both ON CREATE and ON MATCH (existing node)"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {email: 'exist@example.com', name: 'Existing'})
       MERGE (p:Person {email: 'exist@example.com'})
@@ -139,7 +139,7 @@ tests:
 
   - name: "merge-double-execution-check"
     description: "Test MERGE executed twice shows ON MATCH on second run"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (p:Person {email: 'double@example.com'})
       ON CREATE SET p.create_count = 1
@@ -160,7 +160,7 @@ tests:
   # ===============================
   - name: "merge-without-on-clauses"
     description: "Test MERGE without ON CREATE or ON MATCH"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (p:Person {email: 'simple@example.com'})
       RETURN p.email AS email
@@ -174,7 +174,7 @@ tests:
 
   - name: "merge-with-return-clause"
     description: "Test MERGE with RETURN clause"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (p:Person {email: 'return@example.com'})
       ON CREATE SET p.new_field = 'created'
@@ -188,7 +188,7 @@ tests:
 
   - name: "merge-property-expressions"
     description: "Test MERGE evaluates property expressions correctly"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       MERGE (n:Node {id: 1})
       ON CREATE SET n.str = 'hello', n.num = 42, n.bool = false

@@ -23,14 +23,14 @@ tests:
   
   - name: "create-schema-basic"
     description: "Test basic CREATE SCHEMA command"
-    args: ["query", "--no-quic", "CREATE SCHEMA test_schema"]
+    args: ["query", "--embedded", "CREATE SCHEMA test_schema"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "create", "basic"]
 
   - name: "create-schema-if-not-exists"
     description: "Test CREATE SCHEMA IF NOT EXISTS"
-    args: ["query", "--no-quic", "CREATE SCHEMA IF NOT EXISTS test_schema_conditional"]
+    args: ["query", "--embedded", "CREATE SCHEMA IF NOT EXISTS test_schema_conditional"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "create", "conditional"]
@@ -38,8 +38,8 @@ tests:
   - name: "create-schema-if-not-exists-duplicate"
     description: "Test CREATE SCHEMA IF NOT EXISTS on existing schema"
     setup:
-      - "query --no-quic \"CREATE SCHEMA existing_schema\""
-    args: ["query", "--no-quic", "CREATE SCHEMA IF NOT EXISTS existing_schema"]
+      - "query --embedded \"CREATE SCHEMA existing_schema\""
+    args: ["query", "--embedded", "CREATE SCHEMA IF NOT EXISTS existing_schema"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "create", "duplicate"]
@@ -47,8 +47,8 @@ tests:
   - name: "drop-schema-basic"
     description: "Test basic DROP SCHEMA command"
     setup:
-      - "query --no-quic \"CREATE SCHEMA drop_test_schema\""
-    args: ["query", "--no-quic", "DROP SCHEMA drop_test_schema"]
+      - "query --embedded \"CREATE SCHEMA drop_test_schema\""
+    args: ["query", "--embedded", "DROP SCHEMA drop_test_schema"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "drop", "basic"]
@@ -56,15 +56,15 @@ tests:
   - name: "drop-schema-if-exists"
     description: "Test DROP SCHEMA IF EXISTS"
     setup:
-      - "query --no-quic \"CREATE SCHEMA conditional_drop_schema\""
-    args: ["query", "--no-quic", "DROP SCHEMA IF EXISTS conditional_drop_schema"]
+      - "query --embedded \"CREATE SCHEMA conditional_drop_schema\""
+    args: ["query", "--embedded", "DROP SCHEMA IF EXISTS conditional_drop_schema"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "drop", "conditional"]
 
   - name: "drop-schema-if-exists-nonexistent"
     description: "Test DROP SCHEMA IF EXISTS on non-existent schema"
-    args: ["query", "--no-quic", "DROP SCHEMA IF EXISTS nonexistent_schema"]
+    args: ["query", "--embedded", "DROP SCHEMA IF EXISTS nonexistent_schema"]
     expect:
       exit_code: 0
     tags: ["catalog", "schema", "drop", "nonexistent"]
@@ -75,21 +75,21 @@ tests:
   
   - name: "create-graph-basic"
     description: "Test basic CREATE GRAPH command"
-    args: ["query", "--no-quic", "CREATE GRAPH test_graph ANY"]
+    args: ["query", "--embedded", "CREATE GRAPH test_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "basic"]
 
   - name: "create-property-graph-basic"
     description: "Test CREATE PROPERTY GRAPH command"
-    args: ["query", "--no-quic", "CREATE PROPERTY GRAPH test_property_graph ANY"]
+    args: ["query", "--embedded", "CREATE PROPERTY GRAPH test_property_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "property"]
 
   - name: "create-graph-if-not-exists"
     description: "Test CREATE GRAPH IF NOT EXISTS"
-    args: ["query", "--no-quic", "CREATE GRAPH IF NOT EXISTS conditional_graph ANY"]
+    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS conditional_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "conditional"]
@@ -97,15 +97,15 @@ tests:
   - name: "create-or-replace-graph"
     description: "Test CREATE OR REPLACE GRAPH"
     setup:
-      - "query --no-quic \"CREATE GRAPH replace_test_graph ANY\""
-    args: ["query", "--no-quic", "CREATE OR REPLACE GRAPH replace_test_graph ANY"]
+      - "query --embedded \"CREATE GRAPH replace_test_graph ANY\""
+    args: ["query", "--embedded", "CREATE OR REPLACE GRAPH replace_test_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "replace"]
 
   - name: "create-or-replace-property-graph"
     description: "Test CREATE OR REPLACE PROPERTY GRAPH"
-    args: ["query", "--no-quic", "CREATE OR REPLACE PROPERTY GRAPH replace_property_graph ANY"]
+    args: ["query", "--embedded", "CREATE OR REPLACE PROPERTY GRAPH replace_property_graph ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "replace", "property"]
@@ -113,14 +113,14 @@ tests:
   # Graph with typed specifications
   - name: "create-typed-graph-any"
     description: "Test CREATE GRAPH with TYPED ANY specification"
-    args: ["query", "--no-quic", "CREATE GRAPH typed_any_graph TYPED ANY"]
+    args: ["query", "--embedded", "CREATE GRAPH typed_any_graph TYPED ANY"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "typed"]
 
   - name: "create-typed-property-graph-any"
     description: "Test CREATE GRAPH with TYPED ANY PROPERTY GRAPH"
-    args: ["query", "--no-quic", "CREATE GRAPH typed_property_any_graph TYPED ANY PROPERTY GRAPH"]
+    args: ["query", "--embedded", "CREATE GRAPH typed_property_any_graph TYPED ANY PROPERTY GRAPH"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "typed", "property"]
@@ -129,8 +129,8 @@ tests:
   - name: "create-graph-like-existing"
     description: "Test CREATE GRAPH LIKE existing graph"
     setup:
-      - "query --no-quic \"CREATE GRAPH source_graph ANY\""
-    args: ["query", "--no-quic", "CREATE GRAPH like_graph LIKE source_graph"]
+      - "query --embedded \"CREATE GRAPH source_graph ANY\""
+    args: ["query", "--embedded", "CREATE GRAPH like_graph LIKE source_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "like"]
@@ -139,8 +139,8 @@ tests:
   - name: "create-graph-as-copy-of"
     description: "Test CREATE GRAPH AS COPY OF existing graph"
     setup:
-      - "query --no-quic \"CREATE GRAPH copy_source_graph ANY\""
-    args: ["query", "--no-quic", "CREATE GRAPH copy_target_graph ANY AS COPY OF copy_source_graph"]
+      - "query --embedded \"CREATE GRAPH copy_source_graph ANY\""
+    args: ["query", "--embedded", "CREATE GRAPH copy_target_graph ANY AS COPY OF copy_source_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "create", "copy"]
@@ -148,8 +148,8 @@ tests:
   - name: "drop-graph-basic"
     description: "Test basic DROP GRAPH command"
     setup:
-      - "query --no-quic \"CREATE GRAPH drop_test_graph ANY\""
-    args: ["query", "--no-quic", "DROP GRAPH drop_test_graph"]
+      - "query --embedded \"CREATE GRAPH drop_test_graph ANY\""
+    args: ["query", "--embedded", "DROP GRAPH drop_test_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "drop", "basic"]
@@ -157,8 +157,8 @@ tests:
   - name: "drop-property-graph-basic"
     description: "Test DROP PROPERTY GRAPH command"
     setup:
-      - "query --no-quic \"CREATE PROPERTY GRAPH drop_property_test_graph ANY\""
-    args: ["query", "--no-quic", "DROP PROPERTY GRAPH drop_property_test_graph"]
+      - "query --embedded \"CREATE PROPERTY GRAPH drop_property_test_graph ANY\""
+    args: ["query", "--embedded", "DROP PROPERTY GRAPH drop_property_test_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "drop", "property"]
@@ -166,15 +166,15 @@ tests:
   - name: "drop-graph-if-exists"
     description: "Test DROP GRAPH IF EXISTS"
     setup:
-      - "query --no-quic \"CREATE GRAPH conditional_drop_graph ANY\""
-    args: ["query", "--no-quic", "DROP GRAPH IF EXISTS conditional_drop_graph"]
+      - "query --embedded \"CREATE GRAPH conditional_drop_graph ANY\""
+    args: ["query", "--embedded", "DROP GRAPH IF EXISTS conditional_drop_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "drop", "conditional"]
 
   - name: "drop-graph-if-exists-nonexistent"
     description: "Test DROP GRAPH IF EXISTS on non-existent graph"
-    args: ["query", "--no-quic", "DROP GRAPH IF EXISTS nonexistent_graph"]
+    args: ["query", "--embedded", "DROP GRAPH IF EXISTS nonexistent_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph", "drop", "nonexistent"]
@@ -185,21 +185,21 @@ tests:
   
   - name: "create-graph-type-basic"
     description: "Test basic CREATE GRAPH TYPE command"
-    args: ["query", "--no-quic", "CREATE GRAPH TYPE test_graph_type AS { }"]
+    args: ["query", "--embedded", "CREATE GRAPH TYPE test_graph_type AS { }"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "basic"]
 
   - name: "create-property-graph-type-basic"
     description: "Test CREATE PROPERTY GRAPH TYPE command"
-    args: ["query", "--no-quic", "CREATE PROPERTY GRAPH TYPE test_property_graph_type AS { }"]
+    args: ["query", "--embedded", "CREATE PROPERTY GRAPH TYPE test_property_graph_type AS { }"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "property"]
 
   - name: "create-graph-type-if-not-exists"
     description: "Test CREATE GRAPH TYPE IF NOT EXISTS"
-    args: ["query", "--no-quic", "CREATE GRAPH TYPE IF NOT EXISTS conditional_graph_type AS { }"]
+    args: ["query", "--embedded", "CREATE GRAPH TYPE IF NOT EXISTS conditional_graph_type AS { }"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "conditional"]
@@ -207,15 +207,15 @@ tests:
   - name: "create-or-replace-graph-type"
     description: "Test CREATE OR REPLACE GRAPH TYPE"
     setup:
-      - "query --no-quic \"CREATE GRAPH TYPE replace_test_graph_type AS { }\""
-    args: ["query", "--no-quic", "CREATE OR REPLACE GRAPH TYPE replace_test_graph_type AS { }"]
+      - "query --embedded \"CREATE GRAPH TYPE replace_test_graph_type AS { }\""
+    args: ["query", "--embedded", "CREATE OR REPLACE GRAPH TYPE replace_test_graph_type AS { }"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "replace"]
 
   - name: "create-or-replace-property-graph-type"
     description: "Test CREATE OR REPLACE PROPERTY GRAPH TYPE"
-    args: ["query", "--no-quic", "CREATE OR REPLACE PROPERTY GRAPH TYPE replace_property_graph_type AS { }"]
+    args: ["query", "--embedded", "CREATE OR REPLACE PROPERTY GRAPH TYPE replace_property_graph_type AS { }"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "replace", "property"]
@@ -224,8 +224,8 @@ tests:
   - name: "create-graph-type-copy-of"
     description: "Test CREATE GRAPH TYPE AS COPY OF existing type"
     setup:
-      - "query --no-quic \"CREATE GRAPH TYPE source_graph_type AS { }\""
-    args: ["query", "--no-quic", "CREATE GRAPH TYPE copy_graph_type AS COPY OF source_graph_type"]
+      - "query --embedded \"CREATE GRAPH TYPE source_graph_type AS { }\""
+    args: ["query", "--embedded", "CREATE GRAPH TYPE copy_graph_type AS COPY OF source_graph_type"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "copy"]
@@ -234,8 +234,8 @@ tests:
   - name: "create-graph-type-like"
     description: "Test CREATE GRAPH TYPE LIKE existing graph"
     setup:
-      - "query --no-quic \"CREATE GRAPH like_source_graph ANY\""
-    args: ["query", "--no-quic", "CREATE GRAPH TYPE like_graph_type LIKE like_source_graph"]
+      - "query --embedded \"CREATE GRAPH like_source_graph ANY\""
+    args: ["query", "--embedded", "CREATE GRAPH TYPE like_graph_type LIKE like_source_graph"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "create", "like"]
@@ -243,8 +243,8 @@ tests:
   - name: "drop-graph-type-basic"
     description: "Test basic DROP GRAPH TYPE command"
     setup:
-      - "query --no-quic \"CREATE GRAPH TYPE drop_test_graph_type AS { }\""
-    args: ["query", "--no-quic", "DROP GRAPH TYPE drop_test_graph_type"]
+      - "query --embedded \"CREATE GRAPH TYPE drop_test_graph_type AS { }\""
+    args: ["query", "--embedded", "DROP GRAPH TYPE drop_test_graph_type"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "drop", "basic"]
@@ -252,8 +252,8 @@ tests:
   - name: "drop-property-graph-type-basic"
     description: "Test DROP PROPERTY GRAPH TYPE command"
     setup:
-      - "query --no-quic \"CREATE PROPERTY GRAPH TYPE drop_property_test_graph_type AS { }\""
-    args: ["query", "--no-quic", "DROP PROPERTY GRAPH TYPE drop_property_test_graph_type"]
+      - "query --embedded \"CREATE PROPERTY GRAPH TYPE drop_property_test_graph_type AS { }\""
+    args: ["query", "--embedded", "DROP PROPERTY GRAPH TYPE drop_property_test_graph_type"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "drop", "property"]
@@ -261,15 +261,15 @@ tests:
   - name: "drop-graph-type-if-exists"
     description: "Test DROP GRAPH TYPE IF EXISTS"
     setup:
-      - "query --no-quic \"CREATE GRAPH TYPE conditional_drop_graph_type AS { }\""
-    args: ["query", "--no-quic", "DROP GRAPH TYPE IF EXISTS conditional_drop_graph_type"]
+      - "query --embedded \"CREATE GRAPH TYPE conditional_drop_graph_type AS { }\""
+    args: ["query", "--embedded", "DROP GRAPH TYPE IF EXISTS conditional_drop_graph_type"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "drop", "conditional"]
 
   - name: "drop-graph-type-if-exists-nonexistent"
     description: "Test DROP GRAPH TYPE IF EXISTS on non-existent type"
-    args: ["query", "--no-quic", "DROP GRAPH TYPE IF EXISTS nonexistent_graph_type"]
+    args: ["query", "--embedded", "DROP GRAPH TYPE IF EXISTS nonexistent_graph_type"]
     expect:
       exit_code: 0
     tags: ["catalog", "graph-type", "drop", "nonexistent"]
@@ -282,7 +282,7 @@ tests:
     description: "Complete workflow: create schema, create graph, use graph, drop"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         CREATE SCHEMA workflow_schema;
         CREATE GRAPH workflow_schema.workflow_graph ANY;
@@ -296,7 +296,7 @@ tests:
     description: "Workflow with graph types: create type, create graph from type, drop"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         CREATE GRAPH TYPE workflow_type AS { };
         CREATE GRAPH workflow_typed_graph TYPED workflow_type;
@@ -313,17 +313,17 @@ tests:
   - name: "create-duplicate-schema-error"
     description: "Test creating duplicate schema without IF NOT EXISTS (should error)"
     setup:
-      - "query --no-quic \"CREATE SCHEMA duplicate_error_schema\""
-    args: ["query", "--no-quic", "CREATE SCHEMA duplicate_error_schema"]
+      - "query --embedded \"CREATE SCHEMA duplicate_error_schema\""
+    args: ["query", "--embedded", "CREATE SCHEMA duplicate_error_schema"]
     expect:
       exit_code: 1
     cleanup:
-      - "query --no-quic \"DROP SCHEMA duplicate_error_schema\""
+      - "query --embedded \"DROP SCHEMA duplicate_error_schema\""
     tags: ["catalog", "error", "schema", "duplicate"]
 
   - name: "drop-nonexistent-schema-error"
     description: "Test dropping non-existent schema without IF EXISTS (should error)"
-    args: ["query", "--no-quic", "DROP SCHEMA nonexistent_error_schema"]
+    args: ["query", "--embedded", "DROP SCHEMA nonexistent_error_schema"]
     expect:
       exit_code: 1
     tags: ["catalog", "error", "schema", "nonexistent"]
@@ -331,17 +331,17 @@ tests:
   - name: "create-duplicate-graph-error"
     description: "Test creating duplicate graph without IF NOT EXISTS (should error)"
     setup:
-      - "query --no-quic \"CREATE GRAPH duplicate_error_graph ANY\""
-    args: ["query", "--no-quic", "CREATE GRAPH duplicate_error_graph ANY"]
+      - "query --embedded \"CREATE GRAPH duplicate_error_graph ANY\""
+    args: ["query", "--embedded", "CREATE GRAPH duplicate_error_graph ANY"]
     expect:
       exit_code: 1
     cleanup:
-      - "query --no-quic \"DROP GRAPH duplicate_error_graph\""
+      - "query --embedded \"DROP GRAPH duplicate_error_graph\""
     tags: ["catalog", "error", "graph", "duplicate"]
 
   - name: "drop-nonexistent-graph-error"
     description: "Test dropping non-existent graph without IF EXISTS (should error)"
-    args: ["query", "--no-quic", "DROP GRAPH nonexistent_error_graph"]
+    args: ["query", "--embedded", "DROP GRAPH nonexistent_error_graph"]
     expect:
       exit_code: 1
     tags: ["catalog", "error", "graph", "nonexistent"]
@@ -354,7 +354,7 @@ tests:
     description: "Clean up all catalog objects created during tests"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         DROP GRAPH IF EXISTS test_graph;
         DROP GRAPH IF EXISTS test_property_graph;

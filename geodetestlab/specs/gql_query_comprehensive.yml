@@ -17,7 +17,7 @@ cli:
     format: "json"
 
 setup:
-  - "query --no-quic \"CREATE (alice:Person {name: 'Alice', age: 30, city: 'New York'}), (bob:Person {name: 'Bob', age: 25, city: 'San Francisco'}), (carol:Person {name: 'Carol', age: 35, city: 'London'}), (company:Company {name: 'TechCorp', founded: 2010, employees: 100}), (product:Product {name: 'Database', version: '1.0', price: 999.99}), (alice)-[:WORKS_FOR {since: 2020, role: 'Engineer'}]->(company), (bob)-[:WORKS_FOR {since: 2021, role: 'Designer'}]->(company), (carol)-[:MANAGES {since: 2019}]->(alice), (alice)-[:DEVELOPED {start_date: '2022-01-01'}]->(product), (company)-[:OWNS {acquired: 2022}]->(product)\""
+  - "query --embedded \"CREATE (alice:Person {name: 'Alice', age: 30, city: 'New York'}), (bob:Person {name: 'Bob', age: 25, city: 'San Francisco'}), (carol:Person {name: 'Carol', age: 35, city: 'London'}), (company:Company {name: 'TechCorp', founded: 2010, employees: 100}), (product:Product {name: 'Database', version: '1.0', price: 999.99}), (alice)-[:WORKS_FOR {since: 2020, role: 'Engineer'}]->(company), (bob)-[:WORKS_FOR {since: 2021, role: 'Designer'}]->(company), (carol)-[:MANAGES {since: 2019}]->(alice), (alice)-[:DEVELOPED {start_date: '2022-01-01'}]->(product), (company)-[:OWNS {acquired: 2022}]->(product)\""
 
 tests:
   # ===============================
@@ -26,7 +26,7 @@ tests:
   
   - name: "match-all-nodes"
     description: "Test basic MATCH all nodes"
-    args: ["query", "--no-quic", "MATCH (n) RETURN count(n) AS total_nodes"]
+    args: ["query", "--embedded", "MATCH (n) RETURN count(n) AS total_nodes"]
     expect:
       exit_code: 0
       geode_query:
@@ -36,7 +36,7 @@ tests:
 
   - name: "match-nodes-by-label"
     description: "Test MATCH nodes by label"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -46,7 +46,7 @@ tests:
 
   - name: "match-nodes-by-property"
     description: "Test MATCH nodes by property"
-    args: ["query", "--no-quic", "MATCH (p:Person {city: 'New York'}) RETURN p.name AS name"]
+    args: ["query", "--embedded", "MATCH (p:Person {city: 'New York'}) RETURN p.name AS name"]
     expect:
       exit_code: 0
       geode_query:
@@ -56,7 +56,7 @@ tests:
 
   - name: "match-nodes-multiple-properties"
     description: "Test MATCH nodes with multiple properties"
-    args: ["query", "--no-quic", "MATCH (p:Person {name: 'Alice', city: 'New York'}) RETURN p.age AS age"]
+    args: ["query", "--embedded", "MATCH (p:Person {name: 'Alice', city: 'New York'}) RETURN p.age AS age"]
     expect:
       exit_code: 0
       geode_query:
@@ -70,7 +70,7 @@ tests:
   
   - name: "match-relationships-basic"
     description: "Test basic relationship matching"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name AS person, c.name AS company"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name AS person, c.name AS company"]
     expect:
       exit_code: 0
       geode_query:
@@ -80,7 +80,7 @@ tests:
 
   - name: "match-relationships-with-properties"
     description: "Test relationship matching with properties"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[r:WORKS_FOR {role: 'Engineer'}]->(c:Company) RETURN p.name AS engineer, r.since AS since"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[r:WORKS_FOR {role: 'Engineer'}]->(c:Company) RETURN p.name AS engineer, r.since AS since"]
     expect:
       exit_code: 0
       geode_query:
@@ -90,7 +90,7 @@ tests:
 
   - name: "match-undirected-relationships"
     description: "Test undirected relationship matching"
-    args: ["query", "--no-quic", "MATCH (p1:Person)-[:MANAGES]-(p2:Person) RETURN p1.name AS manager, p2.name AS employee"]
+    args: ["query", "--embedded", "MATCH (p1:Person)-[:MANAGES]-(p2:Person) RETURN p1.name AS manager, p2.name AS employee"]
     expect:
       exit_code: 0
       geode_query:
@@ -100,7 +100,7 @@ tests:
 
   - name: "match-any-relationship"
     description: "Test matching any relationship type"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[r]->(target) RETURN p.name AS person, type(r) AS rel_type, labels(target)[0] AS target_type"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[r]->(target) RETURN p.name AS person, type(r) AS rel_type, labels(target)[0] AS target_type"]
     expect:
       exit_code: 0
       geode_query:
@@ -114,7 +114,7 @@ tests:
   
   - name: "match-path-variable"
     description: "Test path variable assignment"
-    args: ["query", "--no-quic", "MATCH path = (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name AS person, length(path) AS path_length"]
+    args: ["query", "--embedded", "MATCH path = (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name AS person, length(path) AS path_length"]
     expect:
       exit_code: 0
       geode_query:
@@ -124,7 +124,7 @@ tests:
 
   - name: "match-variable-length-path"
     description: "Test variable length path patterns"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[*1..2]->(target) RETURN p.name AS person, labels(target)[0] AS target_type"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[*1..2]->(target) RETURN p.name AS person, labels(target)[0] AS target_type"]
     expect:
       exit_code: 0
       geode_query:
@@ -134,7 +134,7 @@ tests:
 
   - name: "match-specific-length-path"
     description: "Test specific length path patterns"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[*2]->(target) RETURN p.name AS person, labels(target)[0] AS target_type"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[*2]->(target) RETURN p.name AS person, labels(target)[0] AS target_type"]
     expect:
       exit_code: 0
       geode_query:
@@ -144,7 +144,7 @@ tests:
 
   - name: "match-any-length-path"
     description: "Test any length path patterns"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[*]->(target) RETURN p.name AS person, labels(target)[0] AS target_type LIMIT 5"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[*]->(target) RETURN p.name AS person, labels(target)[0] AS target_type LIMIT 5"]
     expect:
       exit_code: 0
       geode_query:
@@ -158,7 +158,7 @@ tests:
   
   - name: "optional-match-basic"
     description: "Test basic OPTIONAL MATCH"
-    args: ["query", "--no-quic", "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name AS person, subordinate.name AS manages"]
+    args: ["query", "--embedded", "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name AS person, subordinate.name AS manages"]
     expect:
       exit_code: 0
       geode_query:
@@ -168,7 +168,7 @@ tests:
 
   - name: "optional-match-with-where"
     description: "Test OPTIONAL MATCH with WHERE clause"
-    args: ["query", "--no-quic", "MATCH (p:Person) OPTIONAL MATCH (p)-[r:WORKS_FOR]->(c:Company) WHERE r.role = 'Engineer' RETURN p.name AS person, c.name AS company"]
+    args: ["query", "--embedded", "MATCH (p:Person) OPTIONAL MATCH (p)-[r:WORKS_FOR]->(c:Company) WHERE r.role = 'Engineer' RETURN p.name AS person, c.name AS company"]
     expect:
       exit_code: 0
       geode_query:
@@ -180,7 +180,7 @@ tests:
     description: "Test nested OPTIONAL MATCH with braces"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (p:Person) 
         OPTIONAL {
@@ -199,7 +199,7 @@ tests:
     description: "Test OPTIONAL MATCH with parentheses"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (p:Person) 
         OPTIONAL (
@@ -219,7 +219,7 @@ tests:
   
   - name: "filter-with-where-clause"
     description: "Test FILTER with WHERE clause"
-    args: ["query", "--no-quic", "MATCH (p:Person) FILTER WHERE p.age > 28 RETURN p.name AS name, p.age AS age ORDER BY p.age"]
+    args: ["query", "--embedded", "MATCH (p:Person) FILTER WHERE p.age > 28 RETURN p.name AS name, p.age AS age ORDER BY p.age"]
     expect:
       exit_code: 0
       geode_query:
@@ -229,7 +229,7 @@ tests:
 
   - name: "filter-with-search-condition"
     description: "Test FILTER with search condition"
-    args: ["query", "--no-quic", "MATCH (p:Person) FILTER p.city = 'New York' OR p.city = 'London' RETURN p.name AS name, p.city AS city"]
+    args: ["query", "--embedded", "MATCH (p:Person) FILTER p.city = 'New York' OR p.city = 'London' RETURN p.name AS name, p.city AS city"]
     expect:
       exit_code: 0
       geode_query:
@@ -239,7 +239,7 @@ tests:
 
   - name: "filter-complex-conditions"
     description: "Test FILTER with complex conditions"
-    args: ["query", "--no-quic", "MATCH (p:Person) FILTER WHERE p.age >= 25 AND p.age <= 35 AND p.city <> 'London' RETURN p.name AS name"]
+    args: ["query", "--embedded", "MATCH (p:Person) FILTER WHERE p.age >= 25 AND p.age <= 35 AND p.city <> 'London' RETURN p.name AS name"]
     expect:
       exit_code: 0
       geode_query:
@@ -253,7 +253,7 @@ tests:
   
   - name: "let-value-variable"
     description: "Test LET with value variable definition"
-    args: ["query", "--no-quic", "LET $max_age = 35 MATCH (p:Person) WHERE p.age <= $max_age RETURN p.name AS name, p.age AS age"]
+    args: ["query", "--embedded", "LET $max_age = 35 MATCH (p:Person) WHERE p.age <= $max_age RETURN p.name AS name, p.age AS age"]
     expect:
       exit_code: 0
       geode_query:
@@ -263,7 +263,7 @@ tests:
 
   - name: "let-expression-assignment"
     description: "Test LET with expression assignment"
-    args: ["query", "--no-quic", "MATCH (p:Person) LET age_category = CASE WHEN p.age < 30 THEN 'young' ELSE 'mature' END RETURN p.name AS name, age_category"]
+    args: ["query", "--embedded", "MATCH (p:Person) LET age_category = CASE WHEN p.age < 30 THEN 'young' ELSE 'mature' END RETURN p.name AS name, age_category"]
     expect:
       exit_code: 0
       geode_query:
@@ -273,7 +273,7 @@ tests:
 
   - name: "let-multiple-variables"
     description: "Test LET with multiple variable definitions"
-    args: ["query", "--no-quic", "LET $company_name = 'TechCorp', $min_year = 2020 MATCH (p:Person)-[r:WORKS_FOR]->(c:Company {name: $company_name}) WHERE r.since >= $min_year RETURN p.name AS name"]
+    args: ["query", "--embedded", "LET $company_name = 'TechCorp', $min_year = 2020 MATCH (p:Person)-[r:WORKS_FOR]->(c:Company {name: $company_name}) WHERE r.since >= $min_year RETURN p.name AS name"]
     expect:
       exit_code: 0
       geode_query:
@@ -287,7 +287,7 @@ tests:
   
   - name: "for-list-iteration"
     description: "Test FOR with list iteration"
-    args: ["query", "--no-quic", "FOR item IN [1, 2, 3, 4, 5] RETURN item * 2 AS doubled"]
+    args: ["query", "--embedded", "FOR item IN [1, 2, 3, 4, 5] RETURN item * 2 AS doubled"]
     expect:
       exit_code: 0
       geode_query:
@@ -297,7 +297,7 @@ tests:
 
   - name: "for-with-ordinality"
     description: "Test FOR with ORDINALITY"
-    args: ["query", "--no-quic", "FOR item IN ['a', 'b', 'c'] WITH ORDINALITY pos RETURN item, pos"]
+    args: ["query", "--embedded", "FOR item IN ['a', 'b', 'c'] WITH ORDINALITY pos RETURN item, pos"]
     expect:
       exit_code: 0
       geode_query:
@@ -307,7 +307,7 @@ tests:
 
   - name: "for-with-offset"
     description: "Test FOR with OFFSET"
-    args: ["query", "--no-quic", "FOR item IN ['x', 'y', 'z'] WITH OFFSET idx RETURN item, idx"]
+    args: ["query", "--embedded", "FOR item IN ['x', 'y', 'z'] WITH OFFSET idx RETURN item, idx"]
     expect:
       exit_code: 0
       geode_query:
@@ -319,7 +319,7 @@ tests:
     description: "Test FOR with binding table reference"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (p:Person) 
         WITH p.name AS person_name
@@ -338,7 +338,7 @@ tests:
   
   - name: "match-multiple-patterns"
     description: "Test MATCH with multiple patterns"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:DEVELOPED]->(prod:Product) RETURN p.name AS developer, c.name AS company, prod.name AS product"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:DEVELOPED]->(prod:Product) RETURN p.name AS developer, c.name AS company, prod.name AS product"]
     expect:
       exit_code: 0
       geode_query:
@@ -350,7 +350,7 @@ tests:
     description: "Test nested MATCH patterns"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (p:Person)
         MATCH (p)-[:WORKS_FOR]->(c:Company)
@@ -367,7 +367,7 @@ tests:
     description: "Test query combining MATCH, OPTIONAL, FILTER, LET"
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         LET $target_role = 'Engineer'
         MATCH (p:Person)
@@ -387,7 +387,7 @@ tests:
   
   - name: "return-asterisk"
     description: "Test RETURN * (all variables)"
-    args: ["query", "--no-quic", "MATCH (p:Person) WHERE p.name = 'Alice' RETURN *"]
+    args: ["query", "--embedded", "MATCH (p:Person) WHERE p.name = 'Alice' RETURN *"]
     expect:
       exit_code: 0
       geode_query:
@@ -396,7 +396,7 @@ tests:
 
   - name: "return-distinct"
     description: "Test RETURN DISTINCT"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN DISTINCT c.name AS company"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN DISTINCT c.name AS company"]
     expect:
       exit_code: 0
       geode_query:
@@ -406,7 +406,7 @@ tests:
 
   - name: "return-no-bindings"
     description: "Test RETURN NO BINDINGS"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN NO BINDINGS"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN NO BINDINGS"]
     expect:
       exit_code: 0
       geode_query:
@@ -415,7 +415,7 @@ tests:
 
   - name: "return-with-aliases"
     description: "Test RETURN with various aliases"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS person_name, p.age AS person_age, p.city AS location ORDER BY person_name"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS person_name, p.age AS person_age, p.city AS location ORDER BY person_name"]
     expect:
       exit_code: 0
       geode_query:
@@ -429,7 +429,7 @@ tests:
   
   - name: "order-by-single-column"
     description: "Test ORDER BY single column"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.age"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.age"]
     expect:
       exit_code: 0
       geode_query:
@@ -439,7 +439,7 @@ tests:
 
   - name: "order-by-multiple-columns"
     description: "Test ORDER BY multiple columns"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY p.city ASC, p.age DESC"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY p.city ASC, p.age DESC"]
     expect:
       exit_code: 0
       geode_query:
@@ -449,7 +449,7 @@ tests:
 
   - name: "limit-basic"
     description: "Test basic LIMIT clause"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name LIMIT 2"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name LIMIT 2"]
     expect:
       exit_code: 0
       geode_query:
@@ -459,7 +459,7 @@ tests:
 
   - name: "offset-basic"
     description: "Test basic OFFSET clause"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name OFFSET 1"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name OFFSET 1"]
     expect:
       exit_code: 0
       geode_query:
@@ -469,7 +469,7 @@ tests:
 
   - name: "offset-limit-combined"
     description: "Test OFFSET and LIMIT combined"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name OFFSET 1 LIMIT 1"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name OFFSET 1 LIMIT 1"]
     expect:
       exit_code: 0
       geode_query:
@@ -479,7 +479,7 @@ tests:
 
   - name: "limit-offset-order"
     description: "Test LIMIT OFFSET order (both valid orders)"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name LIMIT 2 OFFSET 1"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.name LIMIT 2 OFFSET 1"]
     expect:
       exit_code: 0
       geode_query:
@@ -493,7 +493,7 @@ tests:
   
   - name: "query-with-count"
     description: "Test query with COUNT aggregation"
-    args: ["query", "--no-quic", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count GROUP BY c.name"]
+    args: ["query", "--embedded", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count GROUP BY c.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -503,7 +503,7 @@ tests:
 
   - name: "query-with-group-by"
     description: "Test query with GROUP BY"
-    args: ["query", "--no-quic", "MATCH (p:Person) RETURN p.city AS city, count(p) AS person_count GROUP BY p.city ORDER BY city"]
+    args: ["query", "--embedded", "MATCH (p:Person) RETURN p.city AS city, count(p) AS person_count GROUP BY p.city ORDER BY city"]
     expect:
       exit_code: 0
       geode_query:
@@ -520,7 +520,7 @@ tests:
     timeout_ms: 30000
     args:
       - "query"
-      - "--no-quic"
+      - "--embedded"
       - |
         MATCH (p:Person)
         OPTIONAL MATCH (p)-[w:WORKS_FOR]->(c:Company)
@@ -544,6 +544,6 @@ invariants:
   - type: "server_running"
 
 cleanup:
-  - "query --no-quic \"MATCH (n) DETACH DELETE n\""
+  - "query --embedded \"MATCH (n) DETACH DELETE n\""
 
 tags: ["query", "match", "optional", "filter", "let", "for", "iso-gql", "comprehensive"]

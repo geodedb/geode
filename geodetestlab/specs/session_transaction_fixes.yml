@@ -8,7 +8,7 @@ tests:
     description: Test SESSION SET TIME ZONE with UTC string literal
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET TIME ZONE 'UTC'"
     expect:
       exit_code: 0
@@ -19,7 +19,7 @@ tests:
     description: Test SESSION SET TIME ZONE with LOCAL keyword
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET TIME ZONE LOCAL"
     expect:
       exit_code: 0
@@ -30,7 +30,7 @@ tests:
     description: Test SESSION SET TIME ZONE with offset
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET TIME ZONE '+00:00'"
     expect:
       exit_code: 0
@@ -42,7 +42,7 @@ tests:
     description: Test SESSION SET SCHEMA command
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET SCHEMA test_schema"
     expect:
       exit_code: 0
@@ -54,7 +54,7 @@ tests:
     description: Test SESSION SET PROPERTY GRAPH with G1
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET PROPERTY GRAPH G1"
     expect:
       exit_code: 0
@@ -65,7 +65,7 @@ tests:
     description: Test SESSION SET PROPERTY GRAPH with G2
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET PROPERTY GRAPH G2"
     expect:
       exit_code: 0
@@ -76,7 +76,7 @@ tests:
     description: Test SESSION SET PROPERTY GRAPH with custom graph name
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET PROPERTY GRAPH CustomGraph"
     expect:
       exit_code: 0
@@ -88,7 +88,7 @@ tests:
     description: Test SESSION RESET without arguments (resets all)
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION RESET"
     expect:
       exit_code: 0
@@ -98,10 +98,10 @@ tests:
   - name: session-reset-after-set
     description: Test SESSION RESET after SESSION SET
     setup:
-      - "query \"SESSION SET TIME ZONE 'UTC'\" --format json --no-quic"
+      - "query \"SESSION SET TIME ZONE 'UTC'\" --format json --embedded"
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION RESET"
     expect:
       exit_code: 0
@@ -113,7 +113,7 @@ tests:
     description: Test SESSION CLOSE command
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION CLOSE"
     expect:
       exit_code: 0
@@ -125,7 +125,7 @@ tests:
     description: Test START TRANSACTION command
     args:
       - query
-      - --no-quic
+      - --embedded
       - "START TRANSACTION"
     expect:
       exit_code: 0
@@ -136,7 +136,7 @@ tests:
     description: Test COMMIT command
     args:
       - query
-      - --no-quic
+      - --embedded
       - "COMMIT"
     expect:
       exit_code: 0
@@ -147,7 +147,7 @@ tests:
     description: Test ROLLBACK command
     args:
       - query
-      - --no-quic
+      - --embedded
       - "ROLLBACK"
     expect:
       exit_code: 0
@@ -158,7 +158,7 @@ tests:
     description: Test basic transaction flow START -> operation -> COMMIT
     args:
       - query
-      - --no-quic
+      - --embedded
       - "START TRANSACTION; CREATE (n:TestNode {id: 1}); COMMIT"
     expect:
       exit_code: 0
@@ -169,7 +169,7 @@ tests:
     description: Test transaction rollback flow START -> operation -> ROLLBACK
     args:
       - query
-      - --no-quic
+      - --embedded
       - "START TRANSACTION; CREATE (n:TestNode {id: 2}); ROLLBACK"
     expect:
       exit_code: 0
@@ -181,7 +181,7 @@ tests:
     description: Test SESSION SET followed by transaction
     args:
       - query
-      - --no-quic
+      - --embedded
       - "SESSION SET PROPERTY GRAPH G1; START TRANSACTION; RETURN 1 AS x; COMMIT"
     expect:
       exit_code: 0
@@ -193,7 +193,7 @@ tests:
     description: Test deeply nested mathematical functions
     args:
       - query
-      - --no-quic
+      - --embedded
       - "RETURN abs(sqrt(pow(2, 2))) AS result"
     expect:
       exit_code: 0
@@ -204,7 +204,7 @@ tests:
     description: Test nested string manipulation functions
     args:
       - query
-      - --no-quic
+      - --embedded
       - "RETURN substring(upper(lower(trim('  hello  '))), 0, 5) AS result"
     expect:
       exit_code: 0
@@ -216,7 +216,7 @@ tests:
     description: Test overflow protection in exp() function
     args:
       - query
-      - --no-quic
+      - --embedded
       - "RETURN exp(1000) AS result"
     expect:
       exit_code: 0
@@ -227,7 +227,7 @@ tests:
     description: Test overflow protection in pow() function
     args:
       - query
-      - --no-quic
+      - --embedded
       - "RETURN pow(10, 100) AS result"
     expect:
       exit_code: 0
@@ -239,7 +239,7 @@ tests:
     description: Test simple map literal creation
     args:
       - query
-      - --no-quic
+      - --embedded
       - "RETURN {name: 'Alice', age: 30} AS person"
     expect:
       exit_code: 0
@@ -251,7 +251,7 @@ tests:
     description: Test nested map literals
     args:
       - query
-      - --no-quic
+      - --embedded
       - "RETURN {person: {name: 'Bob', age: 25}, city: 'NYC'} AS data"
     expect:
       exit_code: 0

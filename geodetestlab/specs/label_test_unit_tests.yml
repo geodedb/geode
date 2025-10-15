@@ -8,7 +8,7 @@ tests:
   # ===============================
   - name: "label-test-single-match"
     description: "Test single label test in WHERE clause"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -24,7 +24,7 @@ tests:
 
   - name: "label-test-no-match"
     description: "Test label test with no matching nodes"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Bob'})
       MATCH (n) WHERE n:Company RETURN n.name AS name
@@ -40,7 +40,7 @@ tests:
   # ===============================
   - name: "label-test-or-two-labels"
     description: "Test OR with two label tests"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -55,7 +55,7 @@ tests:
 
   - name: "label-test-or-three-labels"
     description: "Test OR with three label tests"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {id: 1})
       CREATE (c:Company {id: 2})
@@ -71,7 +71,7 @@ tests:
 
   - name: "label-test-or-returns-labels"
     description: "Test OR label tests returning labels() function"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (t:TxTest {id: 1})
@@ -89,7 +89,7 @@ tests:
   # ===============================
   - name: "label-test-and-two-labels"
     description: "Test AND with two label tests (multi-label node)"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (n:Person:Employee {name: 'Alice'})
       CREATE (p:Person {name: 'Bob'})
@@ -108,7 +108,7 @@ tests:
   # ===============================
   - name: "label-test-with-property-predicate"
     description: "Test label test combined with property predicate"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p1:Person {name: 'Alice', age: 30})
       CREATE (p2:Person {name: 'Bob', age: 25})
@@ -125,7 +125,7 @@ tests:
 
   - name: "label-test-or-with-property"
     description: "Test label test OR combined with property check"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice', active: true})
       CREATE (c:Company {name: 'Acme', active: false})
@@ -145,7 +145,7 @@ tests:
   # ===============================
   - name: "label-test-negation"
     description: "Test NOT with label test"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -164,7 +164,7 @@ tests:
   # ===============================
   - name: "label-test-in-delete"
     description: "Test label tests in DELETE WHERE clause"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -183,7 +183,7 @@ tests:
   # ===============================
   - name: "label-test-empty-graph"
     description: "Test label test on empty graph"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "MATCH (n) WHERE n:Person RETURN n"
     expect:
       exit_code: 0
@@ -194,7 +194,7 @@ tests:
 
   - name: "label-test-with-labels-function"
     description: "Test label test combined with labels() function"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person:Employee {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -208,7 +208,7 @@ tests:
 
   - name: "label-test-case-sensitivity"
     description: "Test label test case sensitivity"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       MATCH (n) WHERE n:person RETURN n.name AS name

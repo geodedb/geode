@@ -20,7 +20,7 @@ tests:
   # Performance baseline tests
   - name: "performance-baseline-simple"
     description: "Baseline performance test - simple RETURN"
-    args: ["query", "--no-quic", "RETURN 1 AS result"]
+    args: ["query", "--embedded", "RETURN 1 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -30,7 +30,7 @@ tests:
 
   - name: "performance-baseline-arithmetic"
     description: "Baseline performance test - arithmetic operations"
-    args: ["query", "--no-quic", "RETURN 1 + 2 * 3 / 4 - 5 AS result, sqrt(16) AS sqrt_result, abs(-10) AS abs_result"]
+    args: ["query", "--embedded", "RETURN 1 + 2 * 3 / 4 - 5 AS result, sqrt(16) AS sqrt_result, abs(-10) AS abs_result"]
     expect:
       exit_code: 0
       geode_query:
@@ -41,7 +41,7 @@ tests:
   # Data creation performance
   - name: "create-small-dataset"
     description: "Create small dataset (5 nodes)"
-    args: ["query", "--no-quic", "CREATE (n1:SmallTest {id: 1, name: 'node_1'}), (n2:SmallTest {id: 2, name: 'node_2'}), (n3:SmallTest {id: 3, name: 'node_3'}), (n4:SmallTest {id: 4, name: 'node_4'}), (n5:SmallTest {id: 5, name: 'node_5'}) RETURN count(*) AS created"]
+    args: ["query", "--embedded", "CREATE (n1:SmallTest {id: 1, name: 'node_1'}), (n2:SmallTest {id: 2, name: 'node_2'}), (n3:SmallTest {id: 3, name: 'node_3'}), (n4:SmallTest {id: 4, name: 'node_4'}), (n5:SmallTest {id: 5, name: 'node_5'}) RETURN count(*) AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -52,7 +52,7 @@ tests:
 
   - name: "create-medium-dataset"
     description: "Create medium dataset (10 nodes)"
-    args: ["query", "--no-quic", "CREATE (n1:MediumTest {id: 1, name: 'node_1', value: 2}), (n2:MediumTest {id: 2, name: 'node_2', value: 4}), (n3:MediumTest {id: 3, name: 'node_3', value: 6}), (n4:MediumTest {id: 4, name: 'node_4', value: 8}), (n5:MediumTest {id: 5, name: 'node_5', value: 10}), (n6:MediumTest {id: 6, name: 'node_6', value: 12}), (n7:MediumTest {id: 7, name: 'node_7', value: 14}), (n8:MediumTest {id: 8, name: 'node_8', value: 16}), (n9:MediumTest {id: 9, name: 'node_9', value: 18}), (n10:MediumTest {id: 10, name: 'node_10', value: 20}) RETURN count(*) AS created"]
+    args: ["query", "--embedded", "CREATE (n1:MediumTest {id: 1, name: 'node_1', value: 2}), (n2:MediumTest {id: 2, name: 'node_2', value: 4}), (n3:MediumTest {id: 3, name: 'node_3', value: 6}), (n4:MediumTest {id: 4, name: 'node_4', value: 8}), (n5:MediumTest {id: 5, name: 'node_5', value: 10}), (n6:MediumTest {id: 6, name: 'node_6', value: 12}), (n7:MediumTest {id: 7, name: 'node_7', value: 14}), (n8:MediumTest {id: 8, name: 'node_8', value: 16}), (n9:MediumTest {id: 9, name: 'node_9', value: 18}), (n10:MediumTest {id: 10, name: 'node_10', value: 20}) RETURN count(*) AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -66,7 +66,7 @@ tests:
   # Relationship creation performance
   - name: "create-relationships-small"
     description: "Create relationships for small dataset"
-    args: ["query", "--no-quic", "MATCH (n1:SmallTest), (n2:SmallTest) WHERE n1.id < n2.id CREATE (n1)-[:RELATED_TO {weight: 0.5}]->(n2) RETURN count(*) AS relationships_created"]
+    args: ["query", "--embedded", "MATCH (n1:SmallTest), (n2:SmallTest) WHERE n1.id < n2.id CREATE (n1)-[:RELATED_TO {weight: 0.5}]->(n2) RETURN count(*) AS relationships_created"]
     expect:
       exit_code: 0
       geode_query:
@@ -76,7 +76,7 @@ tests:
 
   - name: "create-relationships-medium"
     description: "Create relationships for medium dataset"
-    args: ["query", "--no-quic", "MATCH (n1:MediumTest), (n2:MediumTest) WHERE n1.id < n2.id AND n1.id % 50 = n2.id % 50 AND n1.id <= 500 AND n2.id <= 500 CREATE (n1)-[:CONNECTED_TO {strength: rand(), created: timestamp()}]->(n2) RETURN count(*) AS relationships_created"]
+    args: ["query", "--embedded", "MATCH (n1:MediumTest), (n2:MediumTest) WHERE n1.id < n2.id AND n1.id % 50 = n2.id % 50 AND n1.id <= 500 AND n2.id <= 500 CREATE (n1)-[:CONNECTED_TO {strength: rand(), created: timestamp()}]->(n2) RETURN count(*) AS relationships_created"]
     expect:
       exit_code: 0
       geode_query:
@@ -87,7 +87,7 @@ tests:
   # Query performance tests
   - name: "simple-match-performance"
     description: "Simple MATCH query performance"
-    args: ["query", "--no-quic", "MATCH (n:MediumTest) RETURN count(n) AS node_count"]
+    args: ["query", "--embedded", "MATCH (n:MediumTest) RETURN count(n) AS node_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -97,7 +97,7 @@ tests:
 
   - name: "filtered-match-performance"
     description: "Filtered MATCH query performance"
-    args: ["query", "--no-quic", "MATCH (n:MediumTest) WHERE n.value > 500 AND n.value < 1500 RETURN count(n) AS filtered_count"]
+    args: ["query", "--embedded", "MATCH (n:MediumTest) WHERE n.value > 500 AND n.value < 1500 RETURN count(n) AS filtered_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -107,7 +107,7 @@ tests:
 
   - name: "complex-match-performance"
     description: "Complex MATCH query with relationships"
-    args: ["query", "--no-quic", "MATCH (n1:MediumTest)-[r:CONNECTED_TO]->(n2:MediumTest) WHERE r.strength > 0.5 RETURN count(r) AS strong_relationships"]
+    args: ["query", "--embedded", "MATCH (n1:MediumTest)-[r:CONNECTED_TO]->(n2:MediumTest) WHERE r.strength > 0.5 RETURN count(r) AS strong_relationships"]
     expect:
       exit_code: 0
       geode_query:
@@ -117,7 +117,7 @@ tests:
 
   - name: "aggregation-performance"
     description: "Aggregation query performance"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) RETURN avg(n.value) AS avg_value, max(n.value) AS max_value, min(n.value) AS min_value, count(n) AS total_count"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) RETURN avg(n.value) AS avg_value, max(n.value) AS max_value, min(n.value) AS min_value, count(n) AS total_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -127,7 +127,7 @@ tests:
 
   - name: "grouping-performance"
     description: "GROUP BY query performance"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) RETURN n.metadata AS category, count(n) AS count, avg(n.value) AS avg_value GROUP BY n.metadata ORDER BY count DESC LIMIT 20"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) RETURN n.metadata AS category, count(n) AS count, avg(n.value) AS avg_value GROUP BY n.metadata ORDER BY count DESC LIMIT 20"]
     expect:
       exit_code: 0
       geode_query:
@@ -138,7 +138,7 @@ tests:
   # Index performance testing
   - name: "create-performance-index"
     description: "Create index for performance testing"
-    args: ["query", "--no-quic", "CREATE INDEX large_test_value_idx FOR (n:LargeTest) ON (n.value)"]
+    args: ["query", "--embedded", "CREATE INDEX large_test_value_idx FOR (n:LargeTest) ON (n.value)"]
     expect:
       exit_code: 0
       execution_time_ms: 5000
@@ -146,7 +146,7 @@ tests:
 
   - name: "indexed-query-performance"
     description: "Query performance with index"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) WHERE n.value = 5000 RETURN n.name AS name, n.metadata AS metadata"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) WHERE n.value = 5000 RETURN n.name AS name, n.metadata AS metadata"]
     expect:
       exit_code: 0
       geode_query:
@@ -156,7 +156,7 @@ tests:
 
   - name: "range-query-performance"
     description: "Range query performance with index"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) WHERE n.value >= 1000 AND n.value <= 2000 RETURN count(n) AS count_in_range"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) WHERE n.value >= 1000 AND n.value <= 2000 RETURN count(n) AS count_in_range"]
     expect:
       exit_code: 0
       geode_query:
@@ -167,7 +167,7 @@ tests:
   # Update performance tests
   - name: "single-node-update"
     description: "Single node update performance"
-    args: ["query", "--no-quic", "MATCH (n:MediumTest {id: 500}) SET n.updated = timestamp(), n.version = 2 RETURN n.id AS id, n.version AS version"]
+    args: ["query", "--embedded", "MATCH (n:MediumTest {id: 500}) SET n.updated = timestamp(), n.version = 2 RETURN n.id AS id, n.version AS version"]
     expect:
       exit_code: 0
       geode_query:
@@ -177,7 +177,7 @@ tests:
 
   - name: "bulk-update-performance"
     description: "Bulk update performance"
-    args: ["query", "--no-quic", "MATCH (n:MediumTest) WHERE n.id % 10 = 0 SET n.special = true, n.updated = timestamp() RETURN count(n) AS updated"]
+    args: ["query", "--embedded", "MATCH (n:MediumTest) WHERE n.id % 10 = 0 SET n.special = true, n.updated = timestamp() RETURN count(n) AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -188,7 +188,7 @@ tests:
   # Delete performance tests
   - name: "selective-delete-performance"
     description: "Selective delete performance"
-    args: ["query", "--no-quic", "MATCH (n:SmallTest) WHERE n.id % 5 = 0 DELETE n RETURN count(n) AS deleted"]
+    args: ["query", "--embedded", "MATCH (n:SmallTest) WHERE n.id % 5 = 0 DELETE n RETURN count(n) AS deleted"]
     expect:
       exit_code: 0
       geode_query:
@@ -199,7 +199,7 @@ tests:
   # Path finding performance
   - name: "shortest-path-performance"
     description: "Shortest path query performance"
-    args: ["query", "--no-quic", "MATCH (start:MediumTest {id: 1}), (end:MediumTest {id: 100}) MATCH path = shortestPath((start)-[:CONNECTED_TO*]-(end)) RETURN length(path) AS path_length"]
+    args: ["query", "--embedded", "MATCH (start:MediumTest {id: 1}), (end:MediumTest {id: 100}) MATCH path = shortestPath((start)-[:CONNECTED_TO*]-(end)) RETURN length(path) AS path_length"]
     expect:
       exit_code: 0
       geode_query:
@@ -209,7 +209,7 @@ tests:
 
   - name: "all-paths-performance"
     description: "All paths query performance (limited)"
-    args: ["query", "--no-quic", "MATCH (start:MediumTest {id: 1}), (end:MediumTest {id: 50}) MATCH path = (start)-[:CONNECTED_TO*1..3]-(end) RETURN count(path) AS path_count"]
+    args: ["query", "--embedded", "MATCH (start:MediumTest {id: 1}), (end:MediumTest {id: 50}) MATCH path = (start)-[:CONNECTED_TO*1..3]-(end) RETURN count(path) AS path_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -220,7 +220,7 @@ tests:
   # Concurrent operation simulation
   - name: "concurrent-reads-simulation"
     description: "Simulate concurrent read operations"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) WHERE n.id IN [1, 100, 1000, 5000, 9999] RETURN n.id AS id, n.name AS name, n.value AS value ORDER BY n.id"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) WHERE n.id IN [1, 100, 1000, 5000, 9999] RETURN n.id AS id, n.name AS name, n.value AS value ORDER BY n.id"]
     expect:
       exit_code: 0
       geode_query:
@@ -231,7 +231,7 @@ tests:
   # Memory usage tests
   - name: "memory-intensive-query"
     description: "Memory-intensive query to test resource usage"
-    args: ["query", "--no-quic", "MATCH (n1:LargeTest), (n2:LargeTest) WHERE n1.id < 100 AND n2.id < 100 AND n1.id != n2.id RETURN n1.name AS name1, n2.name AS name2, n1.value + n2.value AS sum_value ORDER BY sum_value DESC LIMIT 50"]
+    args: ["query", "--embedded", "MATCH (n1:LargeTest), (n2:LargeTest) WHERE n1.id < 100 AND n2.id < 100 AND n1.id != n2.id RETURN n1.name AS name1, n2.name AS name2, n1.value + n2.value AS sum_value ORDER BY sum_value DESC LIMIT 50"]
     expect:
       exit_code: 0
       geode_query:
@@ -242,7 +242,7 @@ tests:
   # Transaction performance
   - name: "transaction-performance"
     description: "Transaction performance test"
-    args: ["query", "--no-quic", "--begin", "MATCH (n:MediumTest) WHERE n.id <= 10 SET n.tx_test = timestamp() RETURN count(n) AS updated"]
+    args: ["query", "--embedded", "--begin", "MATCH (n:MediumTest) WHERE n.id <= 10 SET n.tx_test = timestamp() RETURN count(n) AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -252,7 +252,7 @@ tests:
 
   - name: "commit-transaction-performance"
     description: "Transaction commit performance"
-    args: ["query", "--no-quic", "--commit", "RETURN 'committed' AS status"]
+    args: ["query", "--embedded", "--commit", "RETURN 'committed' AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -263,7 +263,7 @@ tests:
   # Stress tests
   - name: "stress-test-rapid-queries"
     description: "Stress test with rapid sequential queries"
-    args: ["query", "--no-quic", "MATCH (n:MediumTest) WHERE n.id IN [1, 2, 3, 4, 5] RETURN n.name AS name ORDER BY n.id"]
+    args: ["query", "--embedded", "MATCH (n:MediumTest) WHERE n.id IN [1, 2, 3, 4, 5] RETURN n.name AS name ORDER BY n.id"]
     expect:
       exit_code: 0
       geode_query:
@@ -273,7 +273,7 @@ tests:
 
   - name: "stress-test-large-result"
     description: "Stress test with large result set"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) RETURN n.id AS id, n.name AS name, n.value AS value ORDER BY n.id LIMIT 1000"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) RETURN n.id AS id, n.name AS name, n.value AS value ORDER BY n.id LIMIT 1000"]
     expect:
       exit_code: 0
       geode_query:
@@ -284,7 +284,7 @@ tests:
   # Performance regression detection
   - name: "regression-test-basic-ops"
     description: "Regression test for basic operations"
-    args: ["query", "--no-quic", "CREATE (test:RegressionTest {created: timestamp()}) WITH test MATCH (n:MediumTest) WHERE n.id = 500 CREATE (test)-[:TESTS]->(n) RETURN test.created AS created, n.name AS target"]
+    args: ["query", "--embedded", "CREATE (test:RegressionTest {created: timestamp()}) WITH test MATCH (n:MediumTest) WHERE n.id = 500 CREATE (test)-[:TESTS]->(n) RETURN test.created AS created, n.name AS target"]
     expect:
       exit_code: 0
       geode_query:
@@ -295,7 +295,7 @@ tests:
   # Cleanup with performance tracking
   - name: "performance-cleanup-medium"
     description: "Performance test of medium dataset cleanup"
-    args: ["query", "--no-quic", "MATCH (n:MediumTest) DETACH DELETE n RETURN count(n) AS deleted"]
+    args: ["query", "--embedded", "MATCH (n:MediumTest) DETACH DELETE n RETURN count(n) AS deleted"]
     expect:
       exit_code: 0
       geode_query:
@@ -305,7 +305,7 @@ tests:
 
   - name: "performance-cleanup-large"
     description: "Performance test of large dataset cleanup"
-    args: ["query", "--no-quic", "MATCH (n:LargeTest) DETACH DELETE n RETURN count(n) AS deleted"]
+    args: ["query", "--embedded", "MATCH (n:LargeTest) DETACH DELETE n RETURN count(n) AS deleted"]
     expect:
       exit_code: 0
       geode_query:
@@ -315,7 +315,7 @@ tests:
 
   - name: "final-cleanup"
     description: "Final cleanup of all test data"
-    args: ["query", "--no-quic", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
       execution_time_ms: 10000

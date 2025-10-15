@@ -8,7 +8,7 @@ tests:
   # ===============================
   - name: "session-set-graph-basic"
     description: "Test SESSION SET GRAPH with basic parameter"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION SET GRAPH $current_graph = CURRENT_GRAPH"
     expect:
       exit_code: 0
@@ -19,7 +19,7 @@ tests:
 
   - name: "session-set-graph-if-not-exists"
     description: "Test SESSION SET GRAPH with IF NOT EXISTS"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET GRAPH IF NOT EXISTS $my_graph = G1
       SESSION SET GRAPH IF NOT EXISTS $my_graph = G2
@@ -34,7 +34,7 @@ tests:
   # ===============================
   - name: "session-set-value-integer"
     description: "Test SESSION SET VALUE with integer"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION SET VALUE $my_value = 42"
     expect:
       exit_code: 0
@@ -45,7 +45,7 @@ tests:
 
   - name: "session-set-value-string"
     description: "Test SESSION SET VALUE with string"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION SET VALUE $my_string = 'hello'"
     expect:
       exit_code: 0
@@ -55,7 +55,7 @@ tests:
 
   - name: "session-set-value-boolean"
     description: "Test SESSION SET VALUE with boolean"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION SET VALUE $my_bool = true"
     expect:
       exit_code: 0
@@ -65,7 +65,7 @@ tests:
 
   - name: "session-set-value-if-not-exists"
     description: "Test SESSION SET VALUE with IF NOT EXISTS"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET VALUE $counter = 1
       SESSION SET VALUE IF NOT EXISTS $counter = 2
@@ -80,7 +80,7 @@ tests:
   # ===============================
   - name: "session-set-binding-table-basic"
     description: "Test SESSION SET BINDING TABLE"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION SET BINDING TABLE $my_table = my_binding"
     expect:
       exit_code: 0
@@ -90,7 +90,7 @@ tests:
 
   - name: "session-set-table-shorthand"
     description: "Test SESSION SET TABLE shorthand"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION SET TABLE $my_table = table1"
     expect:
       exit_code: 0
@@ -103,7 +103,7 @@ tests:
   # ===============================
   - name: "session-reset-all-parameters"
     description: "Test SESSION RESET ALL PARAMETERS"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET VALUE $v1 = 1
       SESSION SET VALUE $v2 = 2
@@ -116,7 +116,7 @@ tests:
 
   - name: "session-reset-parameters-shorthand"
     description: "Test SESSION RESET PARAMETERS (without ALL)"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET VALUE $v1 = 1
       SESSION RESET PARAMETERS
@@ -128,7 +128,7 @@ tests:
 
   - name: "session-reset-single-parameter"
     description: "Test SESSION RESET PARAMETER for single param"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET VALUE $test_param = 100
       SESSION RESET PARAMETER $test_param
@@ -140,7 +140,7 @@ tests:
 
   - name: "session-reset-graph"
     description: "Test SESSION RESET GRAPH"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET GRAPH $my_graph = G1
       SESSION RESET GRAPH
@@ -152,7 +152,7 @@ tests:
 
   - name: "session-reset-time-zone"
     description: "Test SESSION RESET TIME ZONE"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION RESET TIME ZONE"
     expect:
       exit_code: 0
@@ -162,7 +162,7 @@ tests:
 
   - name: "session-reset-no-args"
     description: "Test SESSION RESET with no arguments"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: "SESSION RESET"
     expect:
       exit_code: 0
@@ -175,7 +175,7 @@ tests:
   # ===============================
   - name: "session-parameter-lifecycle"
     description: "Test full parameter lifecycle"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET VALUE $count = 1
       SESSION SET VALUE $name = 'test'
@@ -190,7 +190,7 @@ tests:
 
   - name: "session-multiple-parameters"
     description: "Test setting multiple different parameter types"
-    args: ["query", "--no-quic", "-"]
+    args: ["query", "--embedded", "-"]
     stdin: |
       SESSION SET VALUE $v1 = 10
       SESSION SET VALUE $v2 = 'hello'
