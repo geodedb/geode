@@ -2844,9 +2844,14 @@ pub const Parser = struct {
                     } else {
                         while (true) {
                             // Parse expression, handling named parameter syntax: identifier => expression
-                            // We peek ahead: if we see identifier followed by =>, skip both and parse value
+                            // We peek ahead: if we see identifier/keyword followed by =>, skip both and parse value
                             const arg = blk: {
-                                if (self.cur.kind == .identifier) {
+                                // Allow identifiers AND keywords as named parameter names (GQL spec allows keywords)
+                                const is_potential_param_name = self.cur.kind == .identifier or
+                                    self.cur.kind == .LIMIT or self.cur.kind == .ORDER or
+                                    self.cur.kind == .WHERE;
+
+                                if (is_potential_param_name) {
                                     // Save lexer state to check for =>
                                     const saved_idx = self.lx.idx;
                                     const saved_line = self.lx.line;

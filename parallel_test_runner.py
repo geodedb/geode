@@ -222,6 +222,24 @@ class ParallelTestRunner:
 
         return processed_args
 
+    def cleanup_catalog_objects(self, server_address: str):
+        """Clean up catalog objects (graphs, schemas, indexes) and test data after a test completes."""
+        cleanup_queries = [
+            # Delete all nodes and relationships to clean up test data
+            "MATCH (n) DETACH DELETE n",
+        ]
+
+        for query in cleanup_queries:
+            try:
+                subprocess.run(
+                    [self.binary, "query", "--server", server_address, query],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+            except:
+                pass  # Ignore cleanup errors
+
     def run_single_test(self, test_case: Dict, spec_name: str, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, data_dir: Optional[str] = None) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
@@ -330,7 +348,11 @@ class ParallelTestRunner:
         
         # Validate test expectations
         success, message = self.validate_expectations(result, expect, test_case, spec_name)
-        
+
+        # Cleanup catalog objects in server mode to prevent pollution
+        if server_address:
+            self.cleanup_catalog_objects(server_address)
+
         return TestResult(
             spec_file=spec_name,
             test_name=test_name,
