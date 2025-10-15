@@ -1418,6 +1418,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             } else {
                 // Check if graph already exists
                 if (catalog.graphs.contains(graph_name)) {
+                    // If IF NOT EXISTS is specified, silently succeed
+                    if (cg.if_not_exists) {
+                        return ExecutionResult{
+                            .columns = try allocator.alloc([]const u8, 0),
+                            .rows = try allocator.alloc([]eval.Value, 0),
+                            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        };
+                    }
                     return error.DuplicateGraph;
                 }
             }

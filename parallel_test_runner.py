@@ -614,10 +614,16 @@ class ParallelTestRunner:
                     skipped += 1
                     continue
 
+                # Create a unique data directory for each test (not shared per spec)
+                test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
+                test_data_dir.mkdir(parents=True, exist_ok=True)
+
                 # Handle parallel tests with multiple instances
                 if test.get("parallel") and test.get("instances"):
                     for instance in range(test["instances"]):
-                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, instance_id=instance, data_dir=str(spec_data_dir))
+                        instance_data_dir = test_data_dir / f"instance_{instance}"
+                        instance_data_dir.mkdir(parents=True, exist_ok=True)
+                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, instance_id=instance, data_dir=str(instance_data_dir))
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -628,7 +634,9 @@ class ParallelTestRunner:
                 # Handle loop tests
                 elif test.get("loop"):
                     for i in range(test["loop"]):
-                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, loop_index=i, data_dir=str(spec_data_dir))
+                        loop_data_dir = test_data_dir / f"loop_{i}"
+                        loop_data_dir.mkdir(parents=True, exist_ok=True)
+                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, loop_index=i, data_dir=str(loop_data_dir))
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -638,13 +646,21 @@ class ParallelTestRunner:
 
                 # Handle normal tests
                 else:
-                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(spec_data_dir))
+                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(test_data_dir))
                     test_results.append(test_result)
 
                     if test_result.success:
                         passed += 1
                     else:
                         failed += 1
+
+                # Cleanup: Remove test data directory after test completes to save disk space
+                try:
+                    import shutil
+                    if test_data_dir.exists():
+                        shutil.rmtree(test_data_dir)
+                except Exception:
+                    pass  # Ignore cleanup errors
         finally:
             # Cleanup server
             if server_process:
