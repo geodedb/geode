@@ -1690,7 +1690,24 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const node = target.Node;
                 if (node.properties.get(member.field)) |val| {
                     const result = switch (val) {
-                        .String => |s| Value{ .Str = s },
+                        .String => |s| blk: {
+                            // For string properties, check FLE permissions
+                            const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                            const checked_value = fle_integration.checkPropertyAccess(
+                                ally,
+                                type_name,
+                                member.field,
+                                s,
+                                node.id,
+                            ) catch |err| {
+                                if (err == error.SearchNotPermitted) {
+                                    return EvalError.SearchNotPermitted;
+                                }
+                                // For other errors, fall back to original value
+                                break :blk Value{ .Str = s };
+                            };
+                            break :blk Value{ .Str = checked_value };
+                        },
                         .Int => |i| Value{ .Int = i },
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
@@ -1706,7 +1723,24 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 const edge = target.Edge;
                 if (edge.properties.get(member.field)) |val| {
                     const result = switch (val) {
-                        .String => |s| Value{ .Str = s },
+                        .String => |s| blk: {
+                            // For string properties, check FLE permissions
+                            const type_name = edge.label;
+                            const checked_value = fle_integration.checkPropertyAccess(
+                                ally,
+                                type_name,
+                                member.field,
+                                s,
+                                edge.id,
+                            ) catch |err| {
+                                if (err == error.SearchNotPermitted) {
+                                    return EvalError.SearchNotPermitted;
+                                }
+                                // For other errors, fall back to original value
+                                break :blk Value{ .Str = s };
+                            };
+                            break :blk Value{ .Str = checked_value };
+                        },
                         .Int => |i| Value{ .Int = i },
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
