@@ -3054,6 +3054,176 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings);
     }
 
+    // Handle initial CALL subquery (e.g., CALL { MATCH (n) RETURN n } WITH ... RETURN ...)
+    if (q.initial_call_subquery) |call_subq| {
+        // Execute the CALL subquery to get initial results
+        const call_result = try executeQueryWithContext(allocator, call_subq.*, context);
+
+        // If there's a WITH clause, apply it to the CALL results
+        if (q.with_clause) |with_clause| {
+            const with_result = try executeWithClause(allocator, call_result, with_clause);
+
+            // Apply WHERE filter if present
+            const filtered_result = if (q.where_clause) |where_expr| blk: {
+                var filtered_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+                for (with_result.rows) |row| {
+                    const env = eval.Env{
+                        .names = with_result.columns,
+                        .values = row,
+                        .param_names = param_names.items,
+                        .param_values = param_values.items,
+                    };
+
+                    const matches = try eval.evalExpr(allocator, where_expr, env);
+                    const passes_where = switch (matches) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+                    if (passes_where) {
+                        try filtered_rows.append(allocator, row);
+                    }
+                }
+
+                break :blk ExecutionResult{
+                    .columns = with_result.columns,
+                    .rows = try filtered_rows.toOwnedSlice(allocator),
+                    .flags = with_result.flags,
+                };
+            } else with_result;
+
+            // Apply RETURN clause to transform results
+            var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+            for (filtered_result.rows) |row| {
+                var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+
+                const env = eval.Env{
+                    .names = filtered_result.columns,
+                    .values = row,
+                    .param_names = param_names.items,
+                    .param_values = param_values.items,
+                };
+
+                for (q.ret.items, 0..) |item, i| {
+                    return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                }
+
+                try final_rows.append(allocator, return_row);
+            }
+
+            var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+            for (q.ret.items, 0..) |item, i| {
+                const col_name = item.alias orelse switch (item.expr) {
+                    .Ident => |ident| ident.orig,
+                    else => "column",
+                };
+                return_columns[i] = try allocator.dupe(u8, col_name);
+            }
+
+            var result = ExecutionResult{
+                .columns = return_columns,
+                .rows = try final_rows.toOwnedSlice(allocator),
+                .flags = filtered_result.flags,
+            };
+
+            // Apply ORDER BY if present
+            if (q.order_by) |order| {
+                try sortRows(allocator, &result, order);
+            }
+
+            // Apply LIMIT if present
+            if (q.limit) |lim| {
+                if (result.rows.len > lim) {
+                    result.rows = result.rows[0..lim];
+                }
+            }
+
+            return result;
+        } else {
+            // No WITH clause, just apply WHERE/RETURN to CALL results
+            var filtered_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+            if (q.where_clause) |where_expr| {
+                for (call_result.rows) |row| {
+                    const env = eval.Env{
+                        .names = call_result.columns,
+                        .values = row,
+                        .param_names = param_names.items,
+                        .param_values = param_values.items,
+                    };
+
+                    const matches = try eval.evalExpr(allocator, where_expr, env);
+                    const passes_where = switch (matches) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+                    if (passes_where) {
+                        try filtered_rows.append(allocator, row);
+                    }
+                }
+            } else {
+                // No WHERE clause, use all rows
+                for (call_result.rows) |row| {
+                    try filtered_rows.append(allocator, row);
+                }
+            }
+
+            // Apply RETURN clause
+            var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+
+            for (filtered_rows.items) |row| {
+                var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+
+                const env = eval.Env{
+                    .names = call_result.columns,
+                    .values = row,
+                    .param_names = param_names.items,
+                    .param_values = param_values.items,
+                };
+
+                for (q.ret.items, 0..) |item, i| {
+                    return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                }
+
+                try final_rows.append(allocator, return_row);
+            }
+
+            var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
+            for (q.ret.items, 0..) |item, i| {
+                const col_name = item.alias orelse switch (item.expr) {
+                    .Ident => |ident| ident.orig,
+                    else => "column",
+                };
+                return_columns[i] = try allocator.dupe(u8, col_name);
+            }
+
+            var result = ExecutionResult{
+                .columns = return_columns,
+                .rows = try final_rows.toOwnedSlice(allocator),
+                .flags = call_result.flags,
+            };
+
+            // Apply ORDER BY if present
+            if (q.order_by) |order| {
+                try sortRows(allocator, &result, order);
+            }
+
+            // Apply LIMIT if present
+            if (q.limit) |lim| {
+                if (result.rows.len > lim) {
+                    result.rows = result.rows[0..lim];
+                }
+            }
+
+            return result;
+        }
+    }
+
     // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
     if (q.with_clause) |with_clause| {
         // Create initial empty result with one row

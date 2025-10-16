@@ -948,6 +948,66 @@ pub const Parser = struct {
                     // Expect closing brace
                     _ = try self.expect(.r_brace);
 
+                    // If there's a WITH clause after the CALL, this needs to be parsed as a Query
+                    // not as a standalone Statement.Call
+                    if (self.cur.kind == .WITH or self.cur.kind == .WHERE) {
+                        // Create a Query with initial_call_subquery set to the inner query
+                        const query_ptr = try self.arena.allocator().create(ast.Query);
+                        query_ptr.* = query;
+
+                        // Parse the WITH and other clauses
+                        // We need to create a new Query that wraps the CALL result
+                        var with_clause: ?ast.WithClause = null;
+                        var where_clause: ?ast.Expr = null;
+                        var ret_clause: ast.ReturnClause = .{ .items = &.{}, .distinct = false };
+
+                        if (self.cur.kind == .WITH) {
+                            self.advance();
+                            var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                            try self.parseProjectionItems(&witems);
+                            with_clause = .{
+                                .items = try witems.toOwnedSlice(self.arena.allocator()),
+                                .order_by = null,
+                                .limit = null,
+                                .offset = null,
+                            };
+                        }
+
+                        if (self.cur.kind == .WHERE) {
+                            self.advance();
+                            where_clause = try self.parseOrExpr();
+                        }
+
+                        if (self.cur.kind == .RETURN) {
+                            self.advance();
+                            const distinct = if (self.cur.kind == .DISTINCT) blk: {
+                                self.advance();
+                                break :blk true;
+                            } else false;
+                            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                            try self.parseProjectionItems(&return_items);
+                            ret_clause = .{
+                                .items = try return_items.toOwnedSlice(self.arena.allocator()),
+                                .distinct = distinct,
+                            };
+                        }
+
+                        // Create a Query with the CALL result as input
+                        const wrapper_query = ast.Query{
+                            .optional_match = false,
+                            .match = .{ .chains = &.{} },
+                            .where_clause = where_clause,
+                            .with_clause = with_clause,
+                            .ret = ret_clause,
+                            .order_by = null,
+                            .limit = null,
+                            .offset = null,
+                            .initial_call_subquery = query_ptr,
+                        };
+
+                        break :blk_call .{ .Query = wrapper_query };
+                    }
+
                     // Optional RETURN clause after subquery
                     var return_clause: ?ast.ReturnClause = null;
                     if (self.cur.kind == .RETURN) {
@@ -1423,6 +1483,7 @@ pub const Parser = struct {
         }
 
         // Check for CALL { subquery } at the beginning
+        var initial_call_subquery: ?*ast.Query = null;
         if (self.cur.kind == .CALL) {
             const peek_ahead = self.peekToken();
             if (peek_ahead == .l_brace) {
@@ -1436,17 +1497,10 @@ pub const Parser = struct {
                 // Consume closing brace
                 _ = try self.expect(.r_brace);
 
-                // Now continue parsing WITH/WHERE/RETURN after the CALL block
-                // The inner query results become available to the following clauses
-                // We treat this as if the inner query's RETURN produced a WITH clause
-
-                // Store the inner query's return items as an implicit WITH clause
-                initial_with_clause = .{
-                    .items = inner_query.ret.items,
-                    .order_by = null,
-                    .limit = null,
-                    .offset = null,
-                };
+                // Store pointer to inner query for execution
+                const inner_query_ptr = try self.arena.allocator().create(ast.Query);
+                inner_query_ptr.* = inner_query;
+                initial_call_subquery = inner_query_ptr;
 
                 // Continue parsing - don't return yet, let the rest of parseQuery handle
                 // any WITH/WHERE/RETURN that follows
@@ -2055,6 +2109,7 @@ pub const Parser = struct {
             .path_variable = path_variable,
             .call_clause = call_clause,
             .next_query = next_query_ptr, // Query chaining support
+            .initial_call_subquery = initial_call_subquery,
         };
     }
     fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {

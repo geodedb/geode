@@ -85,6 +85,9 @@ pub const Query = struct {
     next_query: ?*Query = null,
     // FOR statement that follows WITH (for queries like WITH ... FOR ... RETURN)
     for_statement: ?*ForStatement = null,
+    // Initial CALL subquery for CALL { ... } WITH ... RETURN pattern
+    // When set, this subquery should be executed first and its results used as input to WITH/WHERE/RETURN
+    initial_call_subquery: ?*Query = null,
 };
 
 pub const UnionQuery = struct {
