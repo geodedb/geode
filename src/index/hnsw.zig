@@ -23,9 +23,9 @@ pub const HnswNode = struct {
         // Phase 3: Pre-allocate with typical M value (32 is common default)
         // Layer 0 uses 2*M, other layers use M
         // This eliminates repeated reallocations during graph construction (30-50% faster inserts)
-        const typical_M = 32; // Most HNSW implementations use M=16-32
+        const typical_M: usize = 32; // Most HNSW implementations use M=16-32
         for (neighbors, 0..) |*list, layer_idx| {
-            const capacity = if (layer_idx == 0) typical_M * 2 else typical_M;
+            const capacity: usize = if (layer_idx == 0) typical_M * 2 else typical_M;
             list.* = try std.ArrayList(u64).initCapacity(allocator, capacity);
         }
 
@@ -189,7 +189,6 @@ pub const Hnsw = struct {
                 const dot_product: f32 = @reduce(.Add, sum_vec);
                 return -dot_product; // Negative for max-heap behavior
             },
-            .euclidean, .manhattan, .hamming => return self.distance(a, b, metric),
         }
     }
 
