@@ -653,9 +653,6 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                             const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{node.id});
                             defer std.heap.page_allocator.free(record_id_buf);
 
-                            const role_str = if (user_role) |r| r else "null";
-                            std.debug.print("DEBUG DECRYPT: type={s}, field={s}, record_id={s}, node_id={d}, role={s}\n", .{ type_name, entry.key_ptr.*, record_id_buf, node.id, role_str });
-
                             const decrypted = fle_integration.decryptFieldIfNeeded(
                                 fle_ctx,
                                 type_name,
@@ -664,8 +661,12 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                                 record_id_buf,
                                 true, // Check RBAC
                             ) catch |err| blk_decrypt: {
-                                std.debug.print("DEBUG: Decryption failed for {s}.{s}: {}\n", .{ type_name, entry.key_ptr.*, err });
-                                break :blk_decrypt s; // Fall back to ciphertext on error
+                                // For SearchNotPermitted, return redacted placeholder
+                                if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
+                                    break :blk_decrypt "[REDACTED]";
+                                }
+                                // Fall back to ciphertext on other errors (e.g., AEADAuthFailed)
+                                break :blk_decrypt s;
                             };
 
                             try writer.writeByte('"');
@@ -720,8 +721,12 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                                 record_id_buf,
                                 true, // Check RBAC
                             ) catch |err| blk_decrypt: {
-                                std.debug.print("DEBUG: Decryption failed for {s}.{s}: {}\n", .{ type_name, entry.key_ptr.*, err });
-                                break :blk_decrypt s; // Fall back to ciphertext on error
+                                // For SearchNotPermitted, return redacted placeholder
+                                if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
+                                    break :blk_decrypt "[REDACTED]";
+                                }
+                                // Fall back to ciphertext on other errors (e.g., AEADAuthFailed)
+                                break :blk_decrypt s;
                             };
 
                             try writer.writeByte('"');
@@ -4057,7 +4062,6 @@ fn encryptPropertyIfNeeded(
     };
 
     const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
-    std.debug.print("DEBUG ENCRYPT: type={s}, field={s}, record_id={s}, node_id={d}\n", .{ node_type, field_name, record_id, node_id });
 
     // Try to encrypt - if field is not encrypted, returns original value
     const encrypted_value = fle_integration.encryptFieldIfNeeded(

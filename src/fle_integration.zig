@@ -9,8 +9,9 @@ const blind_index_mod = @import("index/blind_index.zig");
 // CANARY: FLE_INTEGRATION - Field-Level Encryption Integration Layer
 // CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
 
-// Re-export catalog module for CLI access
+// Re-export modules for external access
 pub const catalog_mod = fle_catalog;
+pub const fle_aead_mod = fle_aead;
 
 /// Integration layer for field-level encryption
 /// This module provides high-level encryption/decryption operations
