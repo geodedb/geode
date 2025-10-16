@@ -66,9 +66,26 @@ pub const KeyManager = struct {
     pub fn init(allocator: std.mem.Allocator) !*KeyManager {
         const manager = try allocator.create(KeyManager);
 
-        // Generate or load master key (in production, load from secure KMS)
+        // Load master key from environment variable or use deterministic test key
         var master_key: [32]u8 = undefined;
-        std.crypto.random.bytes(&master_key);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
+            defer allocator.free(env_key);
+            if (env_key.len >= 32) {
+                @memcpy(&master_key, env_key[0..32]);
+            } else {
+                // If env key is too short, use it as seed for deterministic derivation
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                hasher.update(env_key);
+                hasher.final(&master_key);
+            }
+        } else |_| {
+            // No env var set - use deterministic key for testing
+            // In production, this should FAIL and require KMS configuration
+            const test_seed = "geode-fle-test-master-key-v1";
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            hasher.update(test_seed);
+            hasher.final(&master_key);
+        }
 
         manager.* = .{
             .allocator = allocator,

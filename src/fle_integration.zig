@@ -374,10 +374,10 @@ pub fn checkPropertyAccess(
     value_str: []const u8,
     node_id: u64,
 ) ![]const u8 {
-    // Create encryption context
+    // Create encryption context with correct schema
     const ctx = EncryptionContext{
         .tenant_id = "default",
-        .schema_name = "default",
+        .schema_name = type_name, // Use actual type name, not "default"
         .allocator = allocator,
         .current_user_role = getCurrentUserRole(),
     };
@@ -388,8 +388,8 @@ pub fn checkPropertyAccess(
         return value_str; // Not encrypted, return as-is
     }
 
-    // Format record ID
-    const record_id = try std.fmt.allocPrint(allocator, "node_{d}", .{node_id});
+    // Format record ID - must match encryption format
+    const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
     defer allocator.free(record_id);
 
     // Decrypt and check RBAC

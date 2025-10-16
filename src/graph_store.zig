@@ -147,35 +147,10 @@ pub const GraphStore = struct {
         if (self.nodes.getPtr(node_id)) |node| {
             const key_copy = try self.allocator.dupe(u8, key);
 
-            // Field-Level Encryption: encrypt string values if configured
+            // Note: Encryption is now handled by the caller (execution.zig) before calling setNodeProperty
+            // This ensures consistent parameters (schema, record_id) between encryption and decryption
             const value_copy = switch (value) {
-                .String => |s| blk: {
-                    // Get node type (primary label) for catalog lookup
-                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-
-                    // Create encryption context
-                    const fle_ctx = fle_integration.EncryptionContext{
-                        .tenant_id = "default", // TODO: get from session context
-                        .schema_name = "default", // TODO: get from session context
-                        .allocator = self.allocator,
-                        .current_user_role = fle_integration.getCurrentUserRole(),
-                    };
-
-                    // Format record ID
-                    const record_id = try std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id});
-                    defer self.allocator.free(record_id);
-
-                    // Encrypt if field is configured for encryption
-                    const encrypted_value = fle_integration.encryptFieldIfNeeded(
-                        fle_ctx,
-                        type_name,
-                        key,
-                        s,
-                        record_id,
-                    ) catch s; // Fall back to plaintext on error
-
-                    break :blk PropertyValue{ .String = try self.allocator.dupe(u8, encrypted_value) };
-                },
+                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
                 else => value,
             };
 
@@ -342,35 +317,10 @@ pub const GraphStore = struct {
         if (self.edges.getPtr(edge_id)) |edge| {
             const key_copy = try self.allocator.dupe(u8, key);
 
-            // Field-Level Encryption: encrypt string values if configured
+            // Note: Encryption is now handled by the caller (execution.zig) before calling setEdgeProperty
+            // This ensures consistent parameters (schema, record_id) between encryption and decryption
             const value_copy = switch (value) {
-                .String => |s| blk: {
-                    // Use edge label as type name for catalog lookup
-                    const type_name = edge.label;
-
-                    // Create encryption context
-                    const fle_ctx = fle_integration.EncryptionContext{
-                        .tenant_id = "default", // TODO: get from session context
-                        .schema_name = "default", // TODO: get from session context
-                        .allocator = self.allocator,
-                        .current_user_role = fle_integration.getCurrentUserRole(),
-                    };
-
-                    // Format record ID
-                    const record_id = try std.fmt.allocPrint(self.allocator, "edge_{d}", .{edge_id});
-                    defer self.allocator.free(record_id);
-
-                    // Encrypt if field is configured for encryption
-                    const encrypted_value = fle_integration.encryptFieldIfNeeded(
-                        fle_ctx,
-                        type_name,
-                        key,
-                        s,
-                        record_id,
-                    ) catch s; // Fall back to plaintext on error
-
-                    break :blk PropertyValue{ .String = try self.allocator.dupe(u8, encrypted_value) };
-                },
+                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
                 else => value,
             };
 
