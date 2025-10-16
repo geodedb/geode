@@ -3,6 +3,7 @@ const ast = @import("gql/ast.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
 const execution = @import("execution.zig");
+const fle_integration = @import("fle_integration.zig");
 
 pub const EvalError = error{
     TypeMismatch,
@@ -13,6 +14,7 @@ pub const EvalError = error{
     HexFormatError,
     JsonInvalid,
     XmlNotWellFormed,
+    SearchNotPermitted,
     UrlParseError,
     DomainSyntaxError,
     UuidParseError,
@@ -1578,7 +1580,24 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
                 .Node => |node| {
                     if (node.properties.get(pa.property)) |val| {
                         const result = switch (val) {
-                            .String => |s| Value{ .Str = s },
+                            .String => |s| blk: {
+                                // For string properties, check FLE permissions
+                                const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                                const checked_value = fle_integration.checkPropertyAccess(
+                                    ally,
+                                    type_name,
+                                    pa.property,
+                                    s,
+                                    node.id,
+                                ) catch |err| {
+                                    if (err == error.SearchNotPermitted) {
+                                        return EvalError.SearchNotPermitted;
+                                    }
+                                    // For other errors, fall back to original value
+                                    break :blk Value{ .Str = s };
+                                };
+                                break :blk Value{ .Str = checked_value };
+                            },
                             .Int => |i| Value{ .Int = i },
                             .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                             .Bool => |b| Value{ .Bool = b },

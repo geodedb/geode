@@ -5405,11 +5405,22 @@ fn cmdFLEGrantPlaintext(argv: [][:0]u8, start_idx: usize) !void {
     const field = argv[start_idx + 1];
     const role = argv[start_idx + 2];
 
-    // Placeholder implementation
     std.debug.print("Granting READ_PLAINTEXT privilege\n", .{});
     std.debug.print("  Schema: {s}\n", .{schema});
     std.debug.print("  Field:  {s}\n", .{field});
     std.debug.print("  Role:   {s}\n", .{role});
+
+    // Get global catalog and grant access
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const catalog = try geode.fle_integration.catalog_mod.globalCatalog(allocator);
+    catalog.grantPlaintextAccess(schema, field, role) catch |err| {
+        std.debug.print("\n❌ Error: Failed to grant privilege: {any}\n", .{err});
+        return err;
+    };
+
     std.debug.print("\n✓ Privilege granted successfully\n", .{});
 }
 

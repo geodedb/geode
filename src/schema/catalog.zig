@@ -140,6 +140,98 @@ pub const SchemaCatalog = struct {
         }
     }
 
+    /// Grant READ_PLAINTEXT privilege to a role for a specific field
+    /// Thread-safe operation
+    pub fn grantPlaintextAccess(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_name: []const u8,
+        role: []const u8,
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        // Get the type metadata (mutable)
+        const type_meta_ptr = self.schemas.getPtr(type_name) orelse return error.TypeNotFound;
+        const type_meta = type_meta_ptr.*;
+
+        // Get the field metadata
+        const field_meta_ptr = type_meta.fields.getPtr(field_name) orelse return error.FieldNotFound;
+
+        // Check if role already exists
+        for (field_meta_ptr.visibility.to_roles) |existing_role| {
+            if (std.mem.eql(u8, existing_role, role)) {
+                return; // Role already has access
+            }
+        }
+
+        // Add the role to the visibility list
+        const new_roles = try self.allocator.alloc([]const u8, field_meta_ptr.visibility.to_roles.len + 1);
+        if (field_meta_ptr.visibility.to_roles.len > 0) {
+            @memcpy(new_roles[0..field_meta_ptr.visibility.to_roles.len], field_meta_ptr.visibility.to_roles);
+            // Free old roles array if it was allocated
+            if (field_meta_ptr.visibility.to_roles.len > 0) {
+                self.allocator.free(field_meta_ptr.visibility.to_roles);
+            }
+        }
+        new_roles[field_meta_ptr.visibility.to_roles.len] = try self.allocator.dupe(u8, role);
+
+        field_meta_ptr.visibility.to_roles = new_roles;
+    }
+
+    /// Revoke READ_PLAINTEXT privilege from a role for a specific field
+    /// Thread-safe operation
+    pub fn revokePlaintextAccess(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_name: []const u8,
+        role: []const u8,
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        // Get the type metadata (mutable)
+        const type_meta_ptr = self.schemas.getPtr(type_name) orelse return error.TypeNotFound;
+        const type_meta = type_meta_ptr.*;
+
+        // Get the field metadata
+        const field_meta_ptr = type_meta.fields.getPtr(field_name) orelse return error.FieldNotFound;
+
+        // Find and remove the role
+        var found_index: ?usize = null;
+        for (field_meta_ptr.visibility.to_roles, 0..) |existing_role, i| {
+            if (std.mem.eql(u8, existing_role, role)) {
+                found_index = i;
+                break;
+            }
+        }
+
+        if (found_index == null) {
+            return; // Role doesn't have access, nothing to revoke
+        }
+
+        // Create new roles array without the removed role
+        if (field_meta_ptr.visibility.to_roles.len == 1) {
+            // Last role being removed
+            self.allocator.free(field_meta_ptr.visibility.to_roles[0]);
+            self.allocator.free(field_meta_ptr.visibility.to_roles);
+            field_meta_ptr.visibility.to_roles = &.{};
+        } else {
+            const new_roles = try self.allocator.alloc([]const u8, field_meta_ptr.visibility.to_roles.len - 1);
+            var new_idx: usize = 0;
+            for (field_meta_ptr.visibility.to_roles, 0..) |existing_role, i| {
+                if (i != found_index.?) {
+                    new_roles[new_idx] = existing_role;
+                    new_idx += 1;
+                } else {
+                    self.allocator.free(existing_role);
+                }
+            }
+            self.allocator.free(field_meta_ptr.visibility.to_roles);
+            field_meta_ptr.visibility.to_roles = new_roles;
+        }
+    }
+
     /// Get count of registered types
     pub fn count(self: *SchemaCatalog) usize {
         self.mutex.lock();

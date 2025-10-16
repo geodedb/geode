@@ -9,6 +9,9 @@ const blind_index_mod = @import("index/blind_index.zig");
 // CANARY: FLE_INTEGRATION - Field-Level Encryption Integration Layer
 // CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
 
+// Re-export catalog module for CLI access
+pub const catalog_mod = fle_catalog;
+
 /// Integration layer for field-level encryption
 /// This module provides high-level encryption/decryption operations
 /// that integrate with the schema catalog, key manager, and blind index
@@ -180,7 +183,12 @@ pub fn decryptFieldIfNeeded(
 
     // 3. If RBAC check required, verify access
     if (check_rbac and !canReadPlaintext(ctx, type_name, field_name)) {
-        // Return redacted placeholder
+        // If field is searchable, throw error (search operations require privilege)
+        // If field is not searchable, return redacted placeholder (projection only)
+        if (catalog.isFieldSearchable(type_name, field_name)) {
+            return fle_aead.Error.SearchNotPermitted;
+        }
+        // Return redacted placeholder for non-searchable fields
         return try ctx.allocator.dupe(u8, "[REDACTED]");
     }
 
@@ -329,8 +337,14 @@ fn canReadPlaintext(
     const type_meta = catalog.getType(type_name) orelse return true;
     const field_meta = type_meta.getField(field_name) orelse return true;
 
-    // If no visibility config, allow access
+    // For encrypted+searchable fields, empty to_roles means deny by default
+    // For non-searchable encrypted fields, empty to_roles allows access (backward compat)
     if (field_meta.visibility.to_roles.len == 0) {
+        if (field_meta.isSearchable() and field_meta.isEncrypted()) {
+            // Searchable encrypted fields require explicit grant
+            return false;
+        }
+        // Non-searchable fields allow access if no restrictions configured
         return true;
     }
 
@@ -346,6 +360,46 @@ fn canReadPlaintext(
 
     // User's role not in allowed list
     return false;
+}
+
+/// Check property access permissions during evaluation
+/// This should be called when accessing node properties during WHERE clause evaluation
+/// For searchable encrypted fields, it enforces RBAC by throwing SearchNotPermitted
+/// Returns the value (decrypted if necessary and permitted)
+pub fn checkPropertyAccess(
+    allocator: std.mem.Allocator,
+    type_name: []const u8,
+    field_name: []const u8,
+    value_str: []const u8,
+    node_id: u64,
+) ![]const u8 {
+    // Create encryption context
+    const ctx = EncryptionContext{
+        .tenant_id = "default",
+        .schema_name = "default",
+        .allocator = allocator,
+        .current_user_role = getCurrentUserRole(),
+    };
+
+    // Check if field is encrypted
+    const catalog = try fle_catalog.globalCatalog(allocator);
+    if (!catalog.isFieldEncrypted(type_name, field_name)) {
+        return value_str; // Not encrypted, return as-is
+    }
+
+    // Format record ID
+    const record_id = try std.fmt.allocPrint(allocator, "node_{d}", .{node_id});
+    defer allocator.free(record_id);
+
+    // Decrypt and check RBAC
+    return try decryptFieldIfNeeded(
+        ctx,
+        type_name,
+        field_name,
+        value_str,
+        record_id,
+        true, // Check RBAC - will throw SearchNotPermitted for searchable fields
+    );
 }
 
 test "FLE integration placeholder" {
