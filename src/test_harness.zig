@@ -169,6 +169,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.Unauthorized) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42501\",\"message\":\"Permission denied\",\"additional_statuses\":[]}}", .{});
         }
+        if (err == error.SearchNotPermitted) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42501\",\"error\":\"SEARCH_NOT_PERMITTED\",\"message\":\"Access denied: READ_PLAINTEXT privilege required for encrypted searchable field\",\"additional_statuses\":[]}}", .{});
+        }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
             error.TypeMismatch => "Type mismatch in expression",

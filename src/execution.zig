@@ -377,6 +377,7 @@ pub const ExecutionError = error{
     UnknownProcedure,
     Unauthenticated,
     Unauthorized,
+    SearchNotPermitted,
 };
 
 pub const ExecutionResult = struct {
