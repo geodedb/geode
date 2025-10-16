@@ -298,6 +298,19 @@ pub fn build(b: *std.Build) void {
     const canary_step = b.step("canary", "Run additional data types canary tests");
     canary_step.dependOn(&run_canary.step);
 
+    // Add Phase 1 performance benchmark step
+    // CANARY: REQ=REQ-PERF-PHASE1-BENCH-001; FEATURE="PerformanceBenchmarking"; ASPECT=BUILD; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    const phase1_benchmarks = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/phase1_benchmarks.zig"),
+            .target = target,
+            .optimize = .ReleaseFast, // Critical: benchmarks must run optimized
+        }),
+    });
+    const run_phase1_benchmarks = b.addRunArtifact(phase1_benchmarks);
+    const benchmark_step = b.step("benchmark", "Run Phase 1 performance benchmarks");
+    benchmark_step.dependOn(&run_phase1_benchmarks.step);
+
     // Add acceptance test target
     const cpa_accept_exe = b.addExecutable(.{
         .name = "cpa_accept_main",
