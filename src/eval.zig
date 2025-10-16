@@ -2674,10 +2674,11 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
-        // Size of a list or string
+        // Size of a list, string, or map
         switch (first_arg) {
             .List => |l| return Value{ .Int = @intCast(l.len) },
             .Str => |s| return Value{ .Int = @intCast(s.len) },
+            .Map => |m| return Value{ .Int = @intCast(m.count()) },
             else => return Value{ .Int = 0 },
         }
     } else if (std.mem.eql(u8, function_name, "head")) {
