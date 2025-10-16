@@ -308,8 +308,20 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_phase1_benchmarks = b.addRunArtifact(phase1_benchmarks);
-    const benchmark_step = b.step("benchmark", "Run Phase 1 performance benchmarks");
+    const benchmark_step = b.step("benchmark", "Run performance benchmarks (all phases)");
     benchmark_step.dependOn(&run_phase1_benchmarks.step);
+
+    // Add Phase 2 storage optimization benchmarks
+    // CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageBenchmarking"; ASPECT=BUILD; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    const phase2_benchmarks = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/phase2_benchmarks.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    const run_phase2_benchmarks = b.addRunArtifact(phase2_benchmarks);
+    benchmark_step.dependOn(&run_phase2_benchmarks.step);
 
     // Add acceptance test target
     const cpa_accept_exe = b.addExecutable(.{
