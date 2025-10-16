@@ -3856,7 +3856,19 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
 
                     const value = try eval.evalExpr(allocator, prop.value, env);
                     const prop_value = switch (value) {
-                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Str => |s| blk: {
+                            // Get node to determine its labels for encryption
+                            const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                            // Encrypt if needed before storing
+                            const final_value = try encryptPropertyIfNeeded(
+                                allocator,
+                                node.labels,
+                                prop.target.property,
+                                s,
+                                node_id,
+                            );
+                            break :blk graph_store.PropertyValue{ .String = final_value };
+                        },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -4698,7 +4710,19 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                                 // Evaluate the property expression
                                 const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .names = &.{}, .values = &.{} });
                                 const prop_value = switch (value) {
-                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Str => |s| blk: {
+                                        // Get node to determine its labels for encryption
+                                        const node_ptr = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                                        // Encrypt if needed before storing
+                                        const final_value = try encryptPropertyIfNeeded(
+                                            allocator,
+                                            node_ptr.labels,
+                                            prop.target.property,
+                                            s,
+                                            node_id,
+                                        );
+                                        break :blk graph_store.PropertyValue{ .String = final_value };
+                                    },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                     .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
@@ -4792,7 +4816,19 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                                 // Evaluate the property expression
                                 const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .names = &.{}, .values = &.{} });
                                 const prop_value = switch (value) {
-                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Str => |s| blk: {
+                                        // Get node to determine its labels for encryption
+                                        const node_ptr = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                                        // Encrypt if needed before storing
+                                        const final_value = try encryptPropertyIfNeeded(
+                                            allocator,
+                                            node_ptr.labels,
+                                            prop.target.property,
+                                            s,
+                                            node_id,
+                                        );
+                                        break :blk graph_store.PropertyValue{ .String = final_value };
+                                    },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                     .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
@@ -6003,7 +6039,17 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                             if (std.mem.eql(u8, prop.target.object, match_variable orelse "")) {
                                 const value = try eval.evalExpr(allocator, prop.value, env);
                                 const prop_value = switch (value) {
-                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Str => |s| blk: {
+                                        // Encrypt if needed before storing
+                                        const final_value = try encryptPropertyIfNeeded(
+                                            allocator,
+                                            node.labels,
+                                            prop.target.property,
+                                            s,
+                                            node.id,
+                                        );
+                                        break :blk graph_store.PropertyValue{ .String = final_value };
+                                    },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -6413,7 +6459,17 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                     else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
                                         const value = try eval.evalExpr(allocator, prop.value, env);
                                         const prop_value = switch (value) {
-                                            .Str => |s| graph_store.PropertyValue{ .String = s },
+                                            .Str => |s| blk: {
+                                                // Encrypt if needed before storing
+                                                const final_value = try encryptPropertyIfNeeded(
+                                                    allocator,
+                                                    left_node.labels,
+                                                    prop.target.property,
+                                                    s,
+                                                    left_node.id,
+                                                );
+                                                break :blk graph_store.PropertyValue{ .String = final_value };
+                                            },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
                                             .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -6426,7 +6482,17 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                     else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
                                         const value = try eval.evalExpr(allocator, prop.value, env);
                                         const prop_value = switch (value) {
-                                            .Str => |s| graph_store.PropertyValue{ .String = s },
+                                            .Str => |s| blk: {
+                                                // Encrypt if needed before storing
+                                                const final_value = try encryptPropertyIfNeeded(
+                                                    allocator,
+                                                    right_node_ptr.labels,
+                                                    prop.target.property,
+                                                    s,
+                                                    right_node_ptr.id,
+                                                );
+                                                break :blk graph_store.PropertyValue{ .String = final_value };
+                                            },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
                                             .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -6596,7 +6662,17 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                                 const value = try eval.evalExpr(allocator, prop.value, env);
                                 // Convert eval.Value to PropertyValue
                                 const prop_value = switch (value) {
-                                    .Str => |s| graph_store.PropertyValue{ .String = s },
+                                    .Str => |s| blk: {
+                                        // Encrypt if needed before storing
+                                        const final_value = try encryptPropertyIfNeeded(
+                                            allocator,
+                                            node.labels,
+                                            prop.target.property,
+                                            s,
+                                            node.id,
+                                        );
+                                        break :blk graph_store.PropertyValue{ .String = final_value };
+                                    },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
                                     .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
