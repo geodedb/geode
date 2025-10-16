@@ -3300,7 +3300,17 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
                     const prop_value = switch (value) {
-                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Str => |s| blk: {
+                            // Encrypt if needed before storing
+                            const final_value = try encryptPropertyIfNeeded(
+                                allocator,
+                                node_pattern.labels,
+                                prop.key,
+                                s,
+                                node_id,
+                            );
+                            break :blk graph_store.PropertyValue{ .String = final_value };
+                        },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -3444,7 +3454,17 @@ fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_patter
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
                     const prop_value = switch (value) {
-                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Str => |s| blk: {
+                            // Encrypt if needed before storing
+                            const final_value = try encryptPropertyIfNeeded(
+                                allocator,
+                                node_pattern.labels,
+                                prop.key,
+                                s,
+                                node_id,
+                            );
+                            break :blk graph_store.PropertyValue{ .String = final_value };
+                        },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },

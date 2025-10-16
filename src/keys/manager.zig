@@ -130,10 +130,11 @@ pub const KeyManager = struct {
     /// Derives TRK → SK → FEK using HKDF
     pub fn getFEK(self: *KeyManager, ids: types.KeyIds) ![32]u8 {
         const cache_key = try buildCacheKey(self.allocator, ids);
-        defer self.allocator.free(cache_key);
 
         // Check cache first
         if (self.fek_cache.get(cache_key)) |entry| {
+            // Cache hit - free the key we just built since we don't need it
+            self.allocator.free(cache_key);
             return entry.key;
         }
 
@@ -146,7 +147,7 @@ pub const KeyManager = struct {
 
         const fek = try hkdf.deriveFEK(&sk, ids.field);
 
-        // Cache the result
+        // Cache the result - cache takes ownership of cache_key
         const now = std.time.timestamp();
         try self.fek_cache.put(cache_key, .{
             .key = fek,
@@ -160,10 +161,11 @@ pub const KeyManager = struct {
     /// Get Blind Index Key (BIK)
     pub fn getBIK(self: *KeyManager, ids: types.KeyIds) ![32]u8 {
         const cache_key = try buildCacheKey(self.allocator, ids);
-        defer self.allocator.free(cache_key);
 
         // Check cache first
         if (self.bik_cache.get(cache_key)) |entry| {
+            // Cache hit - free the key we just built since we don't need it
+            self.allocator.free(cache_key);
             return entry.key;
         }
 
@@ -176,7 +178,7 @@ pub const KeyManager = struct {
 
         const bik = try hkdf.deriveBIK(&sk, ids.field);
 
-        // Cache the result
+        // Cache the result - cache takes ownership of cache_key
         const now = std.time.timestamp();
         try self.bik_cache.put(cache_key, .{
             .key = bik,
