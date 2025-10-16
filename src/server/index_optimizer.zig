@@ -32,12 +32,24 @@ pub const IndexOptimizer = struct {
     allocator: Allocator,
     index_manager: *index_manager,
     stats_manager: ?*@import("index_statistics.zig").IndexStatisticsManager = null,
+    index_info_cache: std.StringHashMap(IndexInfo),
 
     pub fn init(allocator: Allocator, idx_mgr: *index_manager) IndexOptimizer {
         return IndexOptimizer{
             .allocator = allocator,
             .index_manager = idx_mgr,
+            .index_info_cache = std.StringHashMap(IndexInfo).init(allocator),
         };
+    }
+
+    pub fn deinit(self: *IndexOptimizer) void {
+        // Free cached IndexInfo structures
+        var it = self.index_info_cache.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.name);
+        }
+        self.index_info_cache.deinit();
     }
 
     // Set the statistics manager for enhanced cost estimation
@@ -280,6 +292,15 @@ pub const IndexOptimizer = struct {
         label: []const u8,
         property: []const u8,
     ) ?IndexInfo {
+        // Build cache key
+        var cache_key_buf: [512]u8 = undefined;
+        const cache_key_str = std.fmt.bufPrint(&cache_key_buf, "{s}.{s}", .{ label, property }) catch return null;
+
+        // Check cache first
+        if (self.index_info_cache.get(cache_key_str)) |cached| {
+            return cached;
+        }
+
         var best_index: ?IndexInfo = null;
         var best_cost: f64 = std.math.inf(f64);
 
@@ -308,6 +329,15 @@ pub const IndexOptimizer = struct {
                     best_index = index_info;
                 }
             }
+        }
+
+        // Cache the result if found
+        if (best_index) |info| {
+            const cache_key_owned = self.allocator.dupe(u8, cache_key_str) catch return best_index;
+            self.index_info_cache.put(cache_key_owned, info) catch {
+                self.allocator.free(cache_key_owned);
+                return best_index;
+            };
         }
 
         return best_index;

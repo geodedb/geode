@@ -142,7 +142,44 @@ pub const Hnsw = struct {
 
                 return @sqrt(sum);
             },
-            else => return self.distance(a, b, metric),
+            .cosine => {
+                var dot_vec: VecType = @splat(0);
+                var norm_a_vec: VecType = @splat(0);
+                var norm_b_vec: VecType = @splat(0);
+
+                var i: usize = 0;
+                while (i < n_vecs) : (i += 1) {
+                    const a_vec: VecType = a[i * 4 ..][0..4].*;
+                    const b_vec: VecType = b[i * 4 ..][0..4].*;
+                    dot_vec += a_vec * b_vec;
+                    norm_a_vec += a_vec * a_vec;
+                    norm_b_vec += b_vec * b_vec;
+                }
+
+                // Horizontal sum using reduce
+                const dot: f32 = @reduce(.Add, dot_vec);
+                const norm_a_sq: f32 = @reduce(.Add, norm_a_vec);
+                const norm_b_sq: f32 = @reduce(.Add, norm_b_vec);
+
+                const norm_a = @sqrt(norm_a_sq);
+                const norm_b = @sqrt(norm_b_sq);
+
+                if (norm_a == 0 or norm_b == 0) return 1.0;
+                const similarity = dot / (norm_a * norm_b);
+                return 1.0 - similarity;
+            },
+            .dot => {
+                var sum_vec: VecType = @splat(0);
+                var i: usize = 0;
+                while (i < n_vecs) : (i += 1) {
+                    const a_vec: VecType = a[i * 4 ..][0..4].*;
+                    const b_vec: VecType = b[i * 4 ..][0..4].*;
+                    sum_vec += a_vec * b_vec;
+                }
+                const dot_product: f32 = @reduce(.Add, sum_vec);
+                return -dot_product; // Negative for max-heap behavior
+            },
+            .euclidean, .manhattan, .hamming => return self.distance(a, b, metric),
         }
     }
 

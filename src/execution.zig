@@ -2004,12 +2004,14 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
         },
     }
 
-    // Build result rows by iterating over collection
-    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+    // Build result rows by iterating over collection (pre-sized to collection length)
+    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, items.items.len);
 
-    // Build arrays for iteration environment
-    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+    // Build arrays for iteration environment (pre-sized for variable + optionals)
+    const env_capacity = 1 + (if (for_stmt.ordinality_var != null) @as(usize, 1) else 0) +
+                        (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
+    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, env_capacity);
+    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, env_capacity);
 
     for (items.items, 0..) |item, idx| {
         // Clear environment for this iteration
@@ -2038,8 +2040,8 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
             .values = env_values_list.items,
         };
 
-        // Evaluate RETURN items for this iteration
-        var row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+        // Evaluate RETURN items for this iteration (pre-sized to return clause length)
+        var row = try std.ArrayList(eval.Value).initCapacity(allocator, for_stmt.return_clause.items.len);
 
         for (for_stmt.return_clause.items) |ret_item| {
             const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
@@ -2049,8 +2051,8 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
         try result_rows.append(allocator, try row.toOwnedSlice(allocator));
     }
 
-    // Build column names from RETURN clause
-    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    // Build column names from RETURN clause (pre-sized)
+    var columns = try std.ArrayList([]const u8).initCapacity(allocator, for_stmt.return_clause.items.len);
 
     for (for_stmt.return_clause.items) |ret_item| {
         const col_name = if (ret_item.alias) |alias|
@@ -2095,7 +2097,7 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                 // Check if query has MATCH clause - if so, execute full query with parameters
                 if (query.match.chains.len > 0) {
                     // VALUES ... MATCH pattern: execute MATCH for each VALUES row and collect results
-                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
                     var final_columns: ?[]const []const u8 = null;
 
                     // For each VALUES row, execute the full MATCH query with bindings as parameters
@@ -2145,11 +2147,11 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                     };
                 } else {
                     // VALUES ... RETURN pattern (no MATCH): evaluate RETURN for each VALUES row
-                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, result_rows.items.len);
 
-                    // Build arrays for environment
-                    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                    // Build arrays for environment (pre-sized)
+                    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, values_stmt.column_names.len);
+                    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, values_stmt.column_names.len);
 
                     // For each VALUES row, create environment and evaluate RETURN
                     for (result_rows.items) |row_values| {
@@ -2170,8 +2172,8 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                             .values = env_values_list.items,
                         };
 
-                        // Evaluate RETURN items for this row
-                        var result_row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                        // Evaluate RETURN items for this row (pre-sized)
+                        var result_row = try std.ArrayList(eval.Value).initCapacity(allocator, query.ret.items.len);
 
                         for (query.ret.items) |ret_item| {
                             const value = try eval.evalExpr(allocator, ret_item.expr, row_env);
@@ -2181,8 +2183,8 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                         try final_rows.append(allocator, try result_row.toOwnedSlice(allocator));
                     }
 
-                    // Build column names from RETURN clause
-                    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    // Build column names from RETURN clause (pre-sized)
+                    var columns = try std.ArrayList([]const u8).initCapacity(allocator, query.ret.items.len);
 
                     for (query.ret.items) |ret_item| {
                         const col_name = if (ret_item.alias) |alias|
@@ -2221,8 +2223,17 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
     _ = context; // May be used for permissions in future
     // EXPLAIN shows the query execution plan with cost estimates
 
-    // Generate plan steps with cost information
-    var plan_steps = try std.ArrayList(struct { op: []const u8, cost: i64 }).initCapacity(allocator, 0);
+    // Helper to format plan operations with stack buffer (performance optimization)
+    const formatPlanOp = struct {
+        fn format(ally: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![]const u8 {
+            var buf: [256]u8 = undefined;
+            const result = try std.fmt.bufPrint(&buf, fmt, args);
+            return try ally.dupe(u8, result);
+        }
+    }.format;
+
+    // Generate plan steps with cost information (pre-size for typical query)
+    var plan_steps = try std.ArrayList(struct { op: []const u8, cost: i64 }).initCapacity(allocator, 10);
     defer plan_steps.deinit(allocator);
 
     // Track cumulative cost
@@ -2265,61 +2276,61 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
                         // IndexSeek cost: 10 (much cheaper than NodeScan)
                         const index_cost: i64 = 10;
                         total_cost += index_cost;
-                        try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "IndexSeek (cost: {})", .{index_cost}), .cost = index_cost });
+                        try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "IndexSeek (cost: {})", .{index_cost}), .cost = index_cost });
                     } else {
                         // NodeScan base cost: 100 per node
                         const node_cost: i64 = 100;
                         total_cost += node_cost;
-                        try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
+                        try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
                     }
                 }
                 if (chain.hops.len > 0) {
                     // ExpandRelationships cost: 50 per hop
                     const expand_cost: i64 = @intCast(chain.hops.len * 50);
                     total_cost += expand_cost;
-                    try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "ExpandRelationships (cost: {})", .{expand_cost}), .cost = expand_cost });
+                    try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "ExpandRelationships (cost: {})", .{expand_cost}), .cost = expand_cost });
                 }
             }
             if (q.where_clause != null) {
                 // Filter cost: 10 per condition
                 const filter_cost: i64 = 10;
                 total_cost += filter_cost;
-                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Filter (cost: {})", .{filter_cost}), .cost = filter_cost });
+                try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Filter (cost: {})", .{filter_cost}), .cost = filter_cost });
             }
             if (q.filter_clause != null) {
                 // Additional filter cost
                 const filter_cost: i64 = 10;
                 total_cost += filter_cost;
-                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Filter FILTER clause (cost: {})", .{filter_cost}), .cost = filter_cost });
+                try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Filter FILTER clause (cost: {})", .{filter_cost}), .cost = filter_cost });
             }
             if (q.group_by != null) {
                 // Aggregate cost: 200 for grouping
                 const agg_cost: i64 = 200;
                 total_cost += agg_cost;
-                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Aggregate (cost: {})", .{agg_cost}), .cost = agg_cost });
+                try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Aggregate (cost: {})", .{agg_cost}), .cost = agg_cost });
             }
             if (q.order_by != null) {
                 // Sort cost: 150 for sorting
                 const sort_cost: i64 = 150;
                 total_cost += sort_cost;
-                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Sort (cost: {})", .{sort_cost}), .cost = sort_cost });
+                try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Sort (cost: {})", .{sort_cost}), .cost = sort_cost });
             }
             if (q.limit != null or q.offset != null) {
                 // Limit cost: 5
                 const limit_cost: i64 = 5;
                 total_cost += limit_cost;
-                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Limit (cost: {})", .{limit_cost}), .cost = limit_cost });
+                try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Limit (cost: {})", .{limit_cost}), .cost = limit_cost });
             }
             if (q.ret.distinct) {
                 // Distinct cost: 100
                 const distinct_cost: i64 = 100;
                 total_cost += distinct_cost;
-                try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Distinct (cost: {})", .{distinct_cost}), .cost = distinct_cost });
+                try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Distinct (cost: {})", .{distinct_cost}), .cost = distinct_cost });
             }
             // Project cost: 5
             const project_cost: i64 = 5;
             total_cost += project_cost;
-            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "Project (cost: {})", .{project_cost}), .cost = project_cost });
+            try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Project (cost: {})", .{project_cost}), .cost = project_cost });
         },
         .Create => |_| {
             // CREATE costs
@@ -2327,19 +2338,19 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
             const create_rel_cost: i64 = 75;
             total_cost += create_node_cost + create_rel_cost;
 
-            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "CreateNodes (cost: {})", .{create_node_cost}), .cost = create_node_cost });
-            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "CreateRelationships (cost: {})", .{create_rel_cost}), .cost = create_rel_cost });
+            try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "CreateNodes (cost: {})", .{create_node_cost}), .cost = create_node_cost });
+            try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "CreateRelationships (cost: {})", .{create_rel_cost}), .cost = create_rel_cost });
         },
         .Delete => |_| {
             // DELETE cost
             const delete_cost: i64 = 100;
             total_cost += delete_cost;
-            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "DeleteNodes (cost: {})", .{delete_cost}), .cost = delete_cost });
+            try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "DeleteNodes (cost: {})", .{delete_cost}), .cost = delete_cost });
         },
         else => {
             const generic_cost: i64 = 50;
             total_cost += generic_cost;
-            try plan_steps.append(allocator, .{ .op = try std.fmt.allocPrint(allocator, "ExecuteStatement (cost: {})", .{generic_cost}), .cost = generic_cost });
+            try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "ExecuteStatement (cost: {})", .{generic_cost}), .cost = generic_cost });
         },
     }
 
@@ -2358,13 +2369,13 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
     // Add operation rows
     for (plan_steps.items, 0..) |step, i| {
         const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "  {s}", .{step.op}) };
+        row[0] = eval.Value{ .Str = try formatPlanOp(allocator, "  {s}", .{step.op}) };
         rows[i + 1] = row;
     }
 
     // Add total cost row
     const total_row = try allocator.alloc(eval.Value, 1);
-    total_row[0] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "Total cost: {}", .{total_cost}) };
+    total_row[0] = eval.Value{ .Str = try formatPlanOp(allocator, "Total cost: {}", .{total_cost}) };
     rows[plan_steps.items.len + 1] = total_row;
 
     return ExecutionResult{
