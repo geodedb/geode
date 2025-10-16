@@ -643,13 +643,18 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                         .String => |s| {
                             // Field-Level Encryption: decrypt if configured
                             const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                            const user_role = fle_integration.getCurrentUserRole();
                             const fle_ctx = fle_integration.EncryptionContext{
-                                .tenant_id = "default", // TODO: get from session context
-                                .schema_name = "default", // TODO: get from session context
+                                .tenant_id = "default",
+                                .schema_name = type_name, // Use actual node type
                                 .allocator = std.heap.page_allocator,
+                                .current_user_role = user_role,
                             };
-                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "node_{d}", .{node.id});
+                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{node.id});
                             defer std.heap.page_allocator.free(record_id_buf);
+
+                            const role_str = if (user_role) |r| r else "null";
+                            std.debug.print("DEBUG DECRYPT: type={s}, field={s}, record_id={s}, node_id={d}, role={s}\n", .{ type_name, entry.key_ptr.*, record_id_buf, node.id, role_str });
 
                             const decrypted = fle_integration.decryptFieldIfNeeded(
                                 fle_ctx,
@@ -658,7 +663,10 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                                 s,
                                 record_id_buf,
                                 true, // Check RBAC
-                            ) catch s; // Fall back to ciphertext on error
+                            ) catch |err| blk_decrypt: {
+                                std.debug.print("DEBUG: Decryption failed for {s}.{s}: {}\n", .{ type_name, entry.key_ptr.*, err });
+                                break :blk_decrypt s; // Fall back to ciphertext on error
+                            };
 
                             try writer.writeByte('"');
                             try writer.writeAll(decrypted);
@@ -696,11 +704,12 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                             // Field-Level Encryption: decrypt if configured
                             const type_name = edge.label;
                             const fle_ctx = fle_integration.EncryptionContext{
-                                .tenant_id = "default", // TODO: get from session context
-                                .schema_name = "default", // TODO: get from session context
+                                .tenant_id = "default",
+                                .schema_name = type_name, // Use actual edge type
                                 .allocator = std.heap.page_allocator,
+                                .current_user_role = fle_integration.getCurrentUserRole(),
                             };
-                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "edge_{d}", .{edge.id});
+                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{edge.id});
                             defer std.heap.page_allocator.free(record_id_buf);
 
                             const decrypted = fle_integration.decryptFieldIfNeeded(
@@ -710,7 +719,10 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                                 s,
                                 record_id_buf,
                                 true, // Check RBAC
-                            ) catch s; // Fall back to ciphertext on error
+                            ) catch |err| blk_decrypt: {
+                                std.debug.print("DEBUG: Decryption failed for {s}.{s}: {}\n", .{ type_name, entry.key_ptr.*, err });
+                                break :blk_decrypt s; // Fall back to ciphertext on error
+                            };
 
                             try writer.writeByte('"');
                             try writer.writeAll(decrypted);
@@ -4044,13 +4056,16 @@ fn encryptPropertyIfNeeded(
         .current_user_role = fle_integration.getCurrentUserRole(),
     };
 
+    const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
+    std.debug.print("DEBUG ENCRYPT: type={s}, field={s}, record_id={s}, node_id={d}\n", .{ node_type, field_name, record_id, node_id });
+
     // Try to encrypt - if field is not encrypted, returns original value
     const encrypted_value = fle_integration.encryptFieldIfNeeded(
         ctx,
         node_type,
         field_name,
         plaintext_value,
-        try std.fmt.allocPrint(allocator, "{d}", .{node_id}),
+        record_id,
     ) catch |err| {
         // If encryption fails, log and return original value
         std.debug.print("Warning: Failed to encrypt field {s}.{s}: {}\n", .{ node_type, field_name, err });
@@ -4058,6 +4073,46 @@ fn encryptPropertyIfNeeded(
     };
 
     return encrypted_value;
+}
+
+/// Helper function to decrypt field value if needed when reading
+/// Returns decrypted value for authorized users, "[REDACTED]" for others
+fn decryptPropertyIfNeeded(
+    allocator: std.mem.Allocator,
+    node_labels: [][]const u8,
+    field_name: []const u8,
+    stored_value: []const u8,
+    node_id: u64,
+) ![]const u8 {
+    // Get node type from first label
+    if (node_labels.len == 0) {
+        return stored_value; // No type, cannot check encryption
+    }
+    const node_type = node_labels[0];
+
+    // Create encryption context
+    const ctx = fle_integration.EncryptionContext{
+        .tenant_id = "default",
+        .schema_name = node_type,
+        .allocator = allocator,
+        .current_user_role = fle_integration.getCurrentUserRole(),
+    };
+
+    // Try to decrypt - handles RBAC and returns "[REDACTED]" if unauthorized
+    const decrypted_value = fle_integration.decryptFieldIfNeeded(
+        ctx,
+        node_type,
+        field_name,
+        stored_value,
+        try std.fmt.allocPrint(allocator, "{d}", .{node_id}),
+        true, // check_rbac = true
+    ) catch |err| {
+        // If decryption fails, return "[REDACTED]" for safety
+        std.debug.print("Warning: Failed to decrypt field {s}.{s}: {}\n", .{ node_type, field_name, err });
+        return try allocator.dupe(u8, "[REDACTED]");
+    };
+
+    return decrypted_value;
 }
 
 fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !ExecutionResult {
