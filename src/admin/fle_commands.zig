@@ -1,4 +1,5 @@
 const std = @import("std");
+const fle_catalog = @import("../schema/catalog.zig");
 
 // CANARY: FLE_ADMIN_CLI - Field-Level Encryption Admin Commands
 // CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
@@ -69,36 +70,58 @@ pub fn rotateKey(allocator: std.mem.Allocator, args: KeyRotationArgs) !void {
 
 /// Grant plaintext read permission for a field
 pub fn grantPlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
-    _ = allocator;
+    // 1. Get global catalog
+    const catalog = try fle_catalog.globalCatalog(allocator);
 
-    // TODO: Implementation steps:
-    // 1. Load field metadata from catalog
-    // 2. Add role to visibility.to_roles list
-    // 3. Save updated metadata to catalog
-    // 4. Log policy change to audit trail
+    // 2. Grant access using catalog API
+    catalog.grantPlaintextAccess(
+        args.schema_name,
+        args.field_name,
+        args.role,
+    ) catch |err| {
+        if (err == error.TypeNotFound) {
+            std.debug.print("Error: Schema '{s}' not found in catalog\n", .{args.schema_name});
+            return err;
+        }
+        if (err == error.FieldNotFound) {
+            std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
+            return err;
+        }
+        return err;
+    };
 
-    std.debug.print("Granting READ_PLAINTEXT permission:\n", .{});
+    std.debug.print("✓ Granted READ_PLAINTEXT permission:\n", .{});
     std.debug.print("  Schema: {s}\n", .{args.schema_name});
     std.debug.print("  Field: {s}\n", .{args.field_name});
     std.debug.print("  Role: {s}\n", .{args.role});
-    std.debug.print("[Placeholder] Policy would be updated in catalog\n", .{});
 }
 
 /// Revoke plaintext read permission for a field
 pub fn revokePlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
-    _ = allocator;
+    // 1. Get global catalog
+    const catalog = try fle_catalog.globalCatalog(allocator);
 
-    // TODO: Implementation steps:
-    // 1. Load field metadata from catalog
-    // 2. Remove role from visibility.to_roles list
-    // 3. Save updated metadata to catalog
-    // 4. Log policy change to audit trail
+    // 2. Revoke access using catalog API
+    catalog.revokePlaintextAccess(
+        args.schema_name,
+        args.field_name,
+        args.role,
+    ) catch |err| {
+        if (err == error.TypeNotFound) {
+            std.debug.print("Error: Schema '{s}' not found in catalog\n", .{args.schema_name});
+            return err;
+        }
+        if (err == error.FieldNotFound) {
+            std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
+            return err;
+        }
+        return err;
+    };
 
-    std.debug.print("Revoking READ_PLAINTEXT permission:\n", .{});
+    std.debug.print("✓ Revoked READ_PLAINTEXT permission:\n", .{});
     std.debug.print("  Schema: {s}\n", .{args.schema_name});
     std.debug.print("  Field: {s}\n", .{args.field_name});
     std.debug.print("  Role: {s}\n", .{args.role});
-    std.debug.print("[Placeholder] Policy would be updated in catalog\n", .{});
 }
 
 /// Migrate field from plaintext to encrypted
