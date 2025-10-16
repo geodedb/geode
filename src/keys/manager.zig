@@ -32,10 +32,12 @@ const KeyCache = struct {
     }
 
     pub fn deinit(self: *KeyCache) void {
-        // Securely zero all cached keys before freeing
+        // Securely zero all cached keys and free key strings before freeing
+        const allocator = self.map.allocator;
         var it = self.map.iterator();
         while (it.next()) |entry| {
             std.crypto.secureZero(u8, &entry.value_ptr.key);
+            allocator.free(entry.key_ptr.*);
         }
         self.map.deinit();
     }
@@ -145,7 +147,7 @@ pub const KeyManager = struct {
         var sk = try hkdf.deriveSK(&trk, ids.schema);
         defer std.crypto.secureZero(u8, &sk);
 
-        const fek = try hkdf.deriveFEK(&sk, ids.field);
+        const fek = try hkdf.deriveFEKVersioned(&sk, ids.field, ids.version);
 
         // Cache the result - cache takes ownership of cache_key
         const now = std.time.timestamp();
@@ -176,7 +178,7 @@ pub const KeyManager = struct {
         var sk = try hkdf.deriveSK(&trk, ids.schema);
         defer std.crypto.secureZero(u8, &sk);
 
-        const bik = try hkdf.deriveBIK(&sk, ids.field);
+        const bik = try hkdf.deriveBIKVersioned(&sk, ids.field, ids.version);
 
         // Cache the result - cache takes ownership of cache_key
         const now = std.time.timestamp();

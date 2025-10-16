@@ -409,6 +409,7 @@ test "FLE integration placeholder" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    defer fle_catalog.resetGlobalCatalog(allocator);
 
     const ctx = EncryptionContext{
         .tenant_id = "tenant1",

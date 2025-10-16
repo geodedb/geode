@@ -272,12 +272,14 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
 
 /// Reset global catalog (for testing)
 pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
+    _ = allocator; // Unused, kept for API compatibility
     global_catalog_mutex.lock();
     defer global_catalog_mutex.unlock();
 
     if (global_catalog) |catalog| {
+        const catalog_allocator = catalog.allocator;
         catalog.deinit();
-        allocator.destroy(catalog);
+        catalog_allocator.destroy(catalog);
         global_catalog = null;
     }
 }
@@ -387,38 +389,48 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
 
     // Read type count
     var type_count_buf: [4]u8 = undefined;
-    _ = try file.readAll(&type_count_buf);
+    const bytes_read = try file.readAll(&type_count_buf);
+    if (bytes_read != 4) return error.CorruptedCatalog;
     const type_count = std.mem.readInt(u32, &type_count_buf, .little);
+    if (type_count > 10000) return error.CorruptedCatalog; // Sanity check
 
     // Read each type
     var i: usize = 0;
     while (i < type_count) : (i += 1) {
         // Read type name
         var type_name_len_buf: [4]u8 = undefined;
-        _ = try file.readAll(&type_name_len_buf);
+        const name_len_bytes = try file.readAll(&type_name_len_buf);
+        if (name_len_bytes != 4) return error.CorruptedCatalog;
         const type_name_len = std.mem.readInt(u32, &type_name_len_buf, .little);
+        if (type_name_len > 1024) return error.CorruptedCatalog; // Sanity check
 
         const type_name = try allocator.alloc(u8, type_name_len);
-        _ = try file.readAll(type_name);
+        const name_bytes = try file.readAll(type_name);
+        if (name_bytes != type_name_len) return error.CorruptedCatalog;
 
         // Create type metadata
         var type_meta = annotations.TypeMetadata.init(allocator, type_name);
 
         // Read field count
         var field_count_buf: [4]u8 = undefined;
-        _ = try file.readAll(&field_count_buf);
+        const field_count_bytes = try file.readAll(&field_count_buf);
+        if (field_count_bytes != 4) return error.CorruptedCatalog;
         const field_count = std.mem.readInt(u32, &field_count_buf, .little);
+        if (field_count > 1000) return error.CorruptedCatalog; // Sanity check
 
         // Read each field
         var j: usize = 0;
         while (j < field_count) : (j += 1) {
             // Read field name
             var field_name_len_buf: [4]u8 = undefined;
-            _ = try file.readAll(&field_name_len_buf);
+            const fname_len_bytes = try file.readAll(&field_name_len_buf);
+            if (fname_len_bytes != 4) return error.CorruptedCatalog;
             const field_name_len = std.mem.readInt(u32, &field_name_len_buf, .little);
+            if (field_name_len > 1024) return error.CorruptedCatalog; // Sanity check
 
             const field_name = try allocator.alloc(u8, field_name_len);
-            _ = try file.readAll(field_name);
+            const fname_bytes = try file.readAll(field_name);
+            if (fname_bytes != field_name_len) return error.CorruptedCatalog;
 
             var field_meta = annotations.FieldMetadata{
                 .field_name = field_name,
@@ -452,19 +464,24 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
 
             // Read visibility config
             var role_count_buf: [4]u8 = undefined;
-            _ = try file.readAll(&role_count_buf);
+            const role_count_bytes = try file.readAll(&role_count_buf);
+            if (role_count_bytes != 4) return error.CorruptedCatalog;
             const role_count = std.mem.readInt(u32, &role_count_buf, .little);
+            if (role_count > 100) return error.CorruptedCatalog; // Sanity check
 
             if (role_count > 0) {
                 const roles = try allocator.alloc([]const u8, role_count);
                 var k: usize = 0;
                 while (k < role_count) : (k += 1) {
                     var role_len_buf: [4]u8 = undefined;
-                    _ = try file.readAll(&role_len_buf);
+                    const rlen_bytes = try file.readAll(&role_len_buf);
+                    if (rlen_bytes != 4) return error.CorruptedCatalog;
                     const role_len = std.mem.readInt(u32, &role_len_buf, .little);
+                    if (role_len > 256) return error.CorruptedCatalog; // Sanity check
 
                     const role = try allocator.alloc(u8, role_len);
-                    _ = try file.readAll(role);
+                    const role_bytes = try file.readAll(role);
+                    if (role_bytes != role_len) return error.CorruptedCatalog;
                     roles[k] = role;
                 }
                 field_meta.visibility.to_roles = roles;

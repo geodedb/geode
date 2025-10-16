@@ -36,12 +36,16 @@ pub const BlindIndex = struct {
     pub fn deinit(self: *BlindIndex) void {
         var it = self.indices.iterator();
         while (it.next()) |entry| {
+            // Free the field key (outer StringHashMap key)
+            self.allocator.free(entry.key_ptr.*);
+
+            // Free inner AutoHashMap contents
             var token_map_it = entry.value_ptr.iterator();
             while (token_map_it.next()) |token_entry| {
                 for (token_entry.value_ptr.items) |id| {
                     self.allocator.free(id);
                 }
-                token_entry.value_ptr.deinit();
+                token_entry.value_ptr.deinit(self.allocator);
             }
             entry.value_ptr.deinit();
         }

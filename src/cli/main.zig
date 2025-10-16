@@ -5310,7 +5310,7 @@ const RestoreMetadata = struct {
 /// FLE command handler
 fn cmdFLE(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = ally;
-    
+
     if (start_idx + 1 >= argv.len) {
         printFLEUsage();
         return;

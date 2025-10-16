@@ -87,10 +87,24 @@ pub fn deriveFEK(sk: []const u8, field: []const u8) ![32]u8 {
     return deriveKey32(sk, "geode-fle-salt", context);
 }
 
+/// Derive FEK with version for key rotation support
+pub fn deriveFEKVersioned(sk: []const u8, field: []const u8, version: u16) ![32]u8 {
+    var context_buf: [256]u8 = undefined;
+    const context = try std.fmt.bufPrint(&context_buf, "geode/fek/{s}/v{d}", .{ field, version });
+    return deriveKey32(sk, "geode-fle-salt", context);
+}
+
 /// Derive BIK (Blind Index Key) from SK
 pub fn deriveBIK(sk: []const u8, field: []const u8) ![32]u8 {
     var context_buf: [256]u8 = undefined;
     const context = try std.fmt.bufPrint(&context_buf, "geode/bi/{s}", .{field});
+    return deriveKey32(sk, "geode-fle-salt", context);
+}
+
+/// Derive BIK with version for key rotation support
+pub fn deriveBIKVersioned(sk: []const u8, field: []const u8, version: u16) ![32]u8 {
+    var context_buf: [256]u8 = undefined;
+    const context = try std.fmt.bufPrint(&context_buf, "geode/bi/{s}/v{d}", .{ field, version });
     return deriveKey32(sk, "geode-fle-salt", context);
 }
 
