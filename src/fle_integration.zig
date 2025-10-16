@@ -18,10 +18,36 @@ var global_key_manager_instance: ?*key_manager_mod.KeyManager = null;
 var global_blind_index_instance: ?*blind_index_mod.BlindIndex = null;
 var global_mutex: std.Thread.Mutex = .{};
 
+// Global current user role for RBAC (thread-local in multi-threaded env)
+var global_current_user_role: ?[]const u8 = null;
+
+/// Set the current user role for RBAC checks
+/// This should be called at the start of a session/transaction
+pub fn setCurrentUserRole(role: ?[]const u8) void {
+    global_mutex.lock();
+    defer global_mutex.unlock();
+    global_current_user_role = role;
+}
+
+/// Get the current user role
+/// Checks environment variable GEODE_CURRENT_ROLE first, then falls back to global variable
+pub fn getCurrentUserRole() ?[]const u8 {
+    // Check environment variable first (for CLI testing across process boundaries)
+    if (std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_CURRENT_ROLE")) |env_role| {
+        return env_role;
+    } else |_| {
+        // Fall back to global variable
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        return global_current_user_role;
+    }
+}
+
 pub const EncryptionContext = struct {
     tenant_id: []const u8,
     schema_name: []const u8,
     allocator: std.mem.Allocator,
+    current_user_role: ?[]const u8 = null, // User's current role for RBAC checks
 };
 
 /// Get or create global key manager
@@ -223,7 +249,12 @@ pub fn lookupEncryptedField(
         return null; // Not searchable, fall back to full scan
     }
 
-    // 3. Get BIK from key manager
+    // 3. Check RBAC - user must have READ_PLAINTEXT privilege to search encrypted fields
+    if (!canReadPlaintext(ctx, type_name, field_name)) {
+        return fle_aead.Error.SearchNotPermitted;
+    }
+
+    // 4. Get BIK from key manager
     const key_manager = try getGlobalKeyManager(ctx.allocator);
     const key_ids = key_types.KeyIds{
         .tenant = ctx.tenant_id,
@@ -233,10 +264,10 @@ pub fn lookupEncryptedField(
     };
     const bik = try key_manager.getBIK(key_ids);
 
-    // 4. Get blind index
+    // 5. Get blind index
     const blind_index = try getGlobalBlindIndex(ctx.allocator);
 
-    // 5. Lookup record IDs
+    // 6. Lookup record IDs
     const record_ids = try blind_index.lookup(
         ctx.schema_name,
         field_name,
@@ -303,16 +334,18 @@ fn canReadPlaintext(
         return true;
     }
 
-    // TODO: Get current user/role from session context
-    // For now, we don't have session context in EncryptionContext
-    // This will need to be enhanced when RBAC session management is added
-    // For testing purposes, allow all reads
-    // In production, this should:
-    // 1. Get current user/role from ctx (need to add to EncryptionContext)
-    // 2. Check if user's role is in field_meta.visibility.to_roles
-    // 3. Return true if authorized, false otherwise
+    // Get user role from context or global state
+    const user_role = ctx.current_user_role orelse getCurrentUserRole() orelse return false;
 
-    return true; // Allow all for now - will fail RBAC test as expected
+    // Check if user's role is in the allowed roles list
+    for (field_meta.visibility.to_roles) |allowed_role| {
+        if (std.mem.eql(u8, user_role, allowed_role)) {
+            return true; // User has required role
+        }
+    }
+
+    // User's role not in allowed list
+    return false;
 }
 
 test "FLE integration placeholder" {

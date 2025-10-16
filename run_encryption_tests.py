@@ -6,7 +6,11 @@ Run encryption test specs individually and report results.
 import subprocess
 import yaml
 import sys
+import os
 from pathlib import Path
+
+# Global environment for test session
+test_env = os.environ.copy()
 
 def run_geode_query(query):
     """Execute a GQL query and return result."""
@@ -15,7 +19,8 @@ def run_geode_query(query):
             ["/home/benji/src/spyder/geode/zig-out/bin/geode", "query", query],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            env=test_env
         )
         return result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired:
@@ -25,13 +30,25 @@ def run_geode_query(query):
 
 def run_geode_command(cmd_args):
     """Execute a geode CLI command."""
+    global test_env
     try:
         result = subprocess.run(
             ["/home/benji/src/spyder/geode/zig-out/bin/geode"] + cmd_args,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            env=test_env
         )
+
+        # If this was a "user assume --role" command, set the environment variable
+        if len(cmd_args) >= 3 and cmd_args[0] == "user" and cmd_args[1] == "assume":
+            for i, arg in enumerate(cmd_args):
+                if arg == "--role" and i + 1 < len(cmd_args):
+                    role = cmd_args[i + 1]
+                    test_env["GEODE_CURRENT_ROLE"] = role
+                    print(f"     (Set GEODE_CURRENT_ROLE={role})")
+                    break
+
         return result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired:
         return "", "TIMEOUT", -1

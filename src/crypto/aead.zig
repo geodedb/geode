@@ -18,6 +18,7 @@ pub const Error = error{
     InvalidEnvelope,
     InvalidInput,
     OutOfMemory,
+    SearchNotPermitted,
 };
 
 /// Envelope V1 format for encrypted fields

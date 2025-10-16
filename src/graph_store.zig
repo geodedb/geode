@@ -158,6 +158,7 @@ pub const GraphStore = struct {
                         .tenant_id = "default", // TODO: get from session context
                         .schema_name = "default", // TODO: get from session context
                         .allocator = self.allocator,
+                        .current_user_role = fle_integration.getCurrentUserRole(),
                     };
 
                     // Format record ID
@@ -200,6 +201,7 @@ pub const GraphStore = struct {
                         .tenant_id = "default", // TODO: get from session context
                         .schema_name = "default", // TODO: get from session context
                         .allocator = self.allocator,
+                        .current_user_role = fle_integration.getCurrentUserRole(),
                     };
 
                     // Format record ID
@@ -351,6 +353,7 @@ pub const GraphStore = struct {
                         .tenant_id = "default", // TODO: get from session context
                         .schema_name = "default", // TODO: get from session context
                         .allocator = self.allocator,
+                        .current_user_role = fle_integration.getCurrentUserRole(),
                     };
 
                     // Format record ID

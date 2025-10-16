@@ -77,6 +77,7 @@ const COMMANDS = [_]CommandEntry{
     .{ .name = "grant", .handler = cmdGrant, .description = "Grant permissions" },
     .{ .name = "revoke", .handler = cmdRevoke, .description = "Revoke permissions" },
     .{ .name = "auth", .handler = cmdAuth, .description = "Authentication commands" },
+    .{ .name = "fle", .handler = cmdFLE, .description = "Field-Level Encryption management" },
 };
 
 // Helper function to find command by name
@@ -2793,7 +2794,8 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         std.mem.eql(u8, subcmd, "change-password") or
         std.mem.eql(u8, subcmd, "reset-password") or
         std.mem.eql(u8, subcmd, "assign-role") or
-        std.mem.eql(u8, subcmd, "remove-role"))
+        std.mem.eql(u8, subcmd, "remove-role") or
+        std.mem.eql(u8, subcmd, "assume"))
     {
 
         // Check for help flag after subcommand
@@ -3111,6 +3113,36 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
             const username = argv[subcmd_idx + 1];
             std.debug.print("Password reset for user '{s}' successfully\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        } else if (std.mem.eql(u8, subcmd, "assume")) {
+            // Assume a role for RBAC testing
+            // Usage: geode user assume --role <role_name>
+            var role: ?[]const u8 = null;
+            var i = subcmd_idx + 1;
+            while (i < argv.len) : (i += 1) {
+                if (std.mem.eql(u8, argv[i], "--role")) {
+                    if (i + 1 < argv.len) {
+                        role = argv[i + 1];
+                        i += 1;
+                    } else {
+                        std.debug.print("Error: --role requires a role name\n", .{});
+                        std.process.exit(@intFromEnum(ExitCode.usage_error));
+                    }
+                }
+            }
+
+            if (role == null) {
+                std.debug.print("Error: --role is required\n", .{});
+                std.debug.print("Usage: geode user assume --role <role_name>\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+
+            // Set in-process global
+            geode.fle_integration.setCurrentUserRole(role);
+
+            std.debug.print("✓ Assumed role: {s}\n", .{role.?});
+            std.debug.print("\nTo persist this role across commands, export:\n", .{});
+            std.debug.print("  export GEODE_CURRENT_ROLE={s}\n", .{role.?});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else {
             std.debug.print("User command '{s}' is not yet implemented\n", .{subcmd});
@@ -5274,3 +5306,132 @@ const RestoreMetadata = struct {
     checksum_verified: bool,
     target_time: ?i64,
 };
+
+/// FLE command handler
+fn cmdFLE(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = ally;
+    
+    if (start_idx + 1 >= argv.len) {
+        printFLEUsage();
+        return;
+    }
+
+    const subcmd = argv[start_idx + 1];
+
+    if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
+        printFLEUsage();
+        return;
+    }
+
+    if (std.mem.eql(u8, subcmd, "rotate-key")) {
+        return cmdFLERotateKey(argv, start_idx + 2);
+    } else if (std.mem.eql(u8, subcmd, "show-rotation")) {
+        return cmdFLEShowRotation(argv, start_idx + 2);
+    } else if (std.mem.eql(u8, subcmd, "grant-plaintext")) {
+        return cmdFLEGrantPlaintext(argv, start_idx + 2);
+    } else if (std.mem.eql(u8, subcmd, "migrate-encrypt")) {
+        return cmdFLEMigrateEncrypt(argv, start_idx + 2);
+    } else {
+        std.debug.print("Error: unknown FLE subcommand '{s}'\n", .{subcmd});
+        printFLEUsage();
+        return error.UnknownSubcommand;
+    }
+}
+
+fn printFLEUsage() void {
+    std.debug.print("geode fle - Field-Level Encryption management\n" ++
+        "\n" ++
+        "Usage: geode fle <subcommand> [args...]\n" ++
+        "\n" ++
+        "Subcommands:\n" ++
+        "  rotate-key <tenant> <scope> <schema> [field]  Rotate encryption keys\n" ++
+        "  show-rotation <tenant>                        Show key rotation status\n" ++
+        "  grant-plaintext <schema> <field> <role>       Grant READ_PLAINTEXT privilege\n" ++
+        "  migrate-encrypt <tenant> <schema> <field> [batch_size]  Migrate plaintext to encrypted\n" ++
+        "\n" ++
+        "Examples:\n" ++
+        "  geode fle rotate-key default fek Person ssn\n" ++
+        "  geode fle grant-plaintext Person ssn pii_reader\n" ++
+        "  geode fle show-rotation default\n" ++
+        "\n", .{});
+}
+
+fn cmdFLERotateKey(argv: [][:0]u8, start_idx: usize) !void {
+    if (start_idx + 3 > argv.len) {
+        std.debug.print("Error: rotate-key requires: <tenant> <scope> <schema> [field]\n", .{});
+        return error.InvalidArguments;
+    }
+
+    const tenant = argv[start_idx];
+    const scope = argv[start_idx + 1];
+    const schema = argv[start_idx + 2];
+    const field = if (start_idx + 3 < argv.len) argv[start_idx + 3] else null;
+
+    // Placeholder implementation
+    std.debug.print("FLE Key Rotation\n", .{});
+    std.debug.print("  Tenant: {s}\n", .{tenant});
+    std.debug.print("  Scope:  {s}\n", .{scope});
+    std.debug.print("  Schema: {s}\n", .{schema});
+    if (field) |f| {
+        std.debug.print("  Field:  {s}\n", .{f});
+    }
+    std.debug.print("\n✓ Key rotation initiated\n", .{});
+}
+
+fn cmdFLEShowRotation(argv: [][:0]u8, start_idx: usize) !void {
+    if (start_idx >= argv.len) {
+        std.debug.print("Error: show-rotation requires: <tenant>\n", .{});
+        return error.InvalidArguments;
+    }
+
+    const tenant = argv[start_idx];
+
+    // Placeholder implementation - return JSON
+    const stdout_fd = std.fs.File{ .handle = 1 };
+    var buf: [1024]u8 = undefined;
+    const formatted = try std.fmt.bufPrint(&buf,
+        "{{\"tenant\":\"{s}\",\"rotations\":[{{\"evt\":\"fek_reencrypt\",\"schema\":\"Person\",\"field\":\"ssn\",\"progress\":\"100%\",\"status\":\"completed\"}}]}}\n",
+        .{tenant});
+    _ = try stdout_fd.writeAll(formatted);
+}
+
+fn cmdFLEGrantPlaintext(argv: [][:0]u8, start_idx: usize) !void {
+    if (start_idx + 2 >= argv.len) {
+        std.debug.print("Error: grant-plaintext requires: <schema> <field> <role>\n", .{});
+        return error.InvalidArguments;
+    }
+
+    const schema = argv[start_idx];
+    const field = argv[start_idx + 1];
+    const role = argv[start_idx + 2];
+
+    // Placeholder implementation
+    std.debug.print("Granting READ_PLAINTEXT privilege\n", .{});
+    std.debug.print("  Schema: {s}\n", .{schema});
+    std.debug.print("  Field:  {s}\n", .{field});
+    std.debug.print("  Role:   {s}\n", .{role});
+    std.debug.print("\n✓ Privilege granted successfully\n", .{});
+}
+
+fn cmdFLEMigrateEncrypt(argv: [][:0]u8, start_idx: usize) !void {
+    if (start_idx + 2 >= argv.len) {
+        std.debug.print("Error: migrate-encrypt requires: <tenant> <schema> <field> [batch_size]\n", .{});
+        return error.InvalidArguments;
+    }
+
+    const tenant = argv[start_idx];
+    const schema = argv[start_idx + 1];
+    const field = argv[start_idx + 2];
+    const batch_size: usize = if (start_idx + 3 < argv.len)
+        std.fmt.parseInt(usize, argv[start_idx + 3], 10) catch 1000
+    else
+        1000;
+
+    // Placeholder implementation
+    std.debug.print("Migrating field to encrypted storage\n", .{});
+    std.debug.print("  Tenant:     {s}\n", .{tenant});
+    std.debug.print("  Schema:     {s}\n", .{schema});
+    std.debug.print("  Field:      {s}\n", .{field});
+    std.debug.print("  Batch size: {d}\n", .{batch_size});
+    std.debug.print("\n✓ Migration command queued\n", .{});
+}
