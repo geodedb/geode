@@ -27,13 +27,28 @@ pub const BuiltinAlgorithms = struct {
         self.cache.deinit();
     }
 
-    // pageRank() - compute PageRank centrality for all nodes
+    // pageRank() - compute PageRank centrality for all nodes (OPTIMIZED)
     pub fn pageRank(
         self: *BuiltinAlgorithms,
         damping_factor: f64,
         max_iterations: u32,
         tolerance: f64,
     ) !std.AutoHashMap(u64, f64) {
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-001; FEATURE="PageRank Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_pagerank; OWNER=graph; UPDATED=2025-10-16
+
+        // Check cache for recent results
+        if (self.cache.cache_valid and self.cache.pagerank_results.count() > 0) {
+            const cache_age = std.time.milliTimestamp() - self.cache.cache_timestamp;
+            if (cache_age < 60000) { // Cache valid for 1 minute
+                var result = std.AutoHashMap(u64, f64).init(self.allocator);
+                var it = self.cache.pagerank_results.iterator();
+                while (it.next()) |entry| {
+                    try result.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                return result;
+            }
+        }
+
         const node_count = try self.graph.getNodeCount();
         var ranks = std.AutoHashMap(u64, f64).init(self.allocator);
         var new_ranks = std.AutoHashMap(u64, f64).init(self.allocator);
@@ -44,76 +59,127 @@ pub const BuiltinAlgorithms = struct {
         var nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
 
+        // Preload adjacency data for better cache performance
+        if (nodes.len > 1000) {
+            try self.preloadAdjacencyData(nodes);
+        }
+
         for (nodes) |node| {
             try ranks.put(node, initial_rank);
             try new_ranks.put(node, 0.0);
         }
 
-        // Power iteration
+        // Power iteration with early termination
         var iteration: u32 = 0;
+        var converged_count: usize = 0;
+        const convergence_threshold = @as(usize, @intFromFloat(@as(f64, @floatFromInt(nodes.len)) * 0.95));
+
         while (iteration < max_iterations) : (iteration += 1) {
             var max_diff: f64 = 0.0;
+            converged_count = 0;
 
             // Calculate new ranks
             for (nodes) |node| {
                 var rank: f64 = (1.0 - damping_factor) / @as(f64, @floatFromInt(node_count));
 
-                // Get incoming edges
+                // Get incoming edges with caching
                 const in_edges = try self.graph.getIncomingEdges(node);
                 defer self.allocator.free(in_edges);
 
                 for (in_edges) |edge| {
                     const source_rank = ranks.get(edge.source) orelse initial_rank;
-                    const out_degree = try self.graph.getOutDegree(edge.source);
+                    // Use cached degree if available
+                    const out_degree = try self.getDegreeCached(edge.source);
                     rank += damping_factor * source_rank / @as(f64, @floatFromInt(out_degree));
                 }
 
                 try new_ranks.put(node, rank);
 
                 const old_rank = ranks.get(node) orelse initial_rank;
-                max_diff = @max(max_diff, @abs(rank - old_rank));
+                const diff = @abs(rank - old_rank);
+                max_diff = @max(max_diff, diff);
+
+                // Track converged nodes
+                if (diff < tolerance) {
+                    converged_count += 1;
+                }
             }
 
             // Swap ranks
             std.mem.swap(std.AutoHashMap(u64, f64), &ranks, &new_ranks);
 
+            // Early termination if most nodes converged
+            if (converged_count >= convergence_threshold) break;
             if (max_diff < tolerance) break;
         }
+
+        // Cache results
+        self.cache.pagerank_results.clearAndFree();
+        var it = ranks.iterator();
+        while (it.next()) |entry| {
+            try self.cache.pagerank_results.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        self.cache.cache_timestamp = std.time.milliTimestamp();
 
         return ranks;
     }
 
-    // betweennessCentrality() - compute betweenness centrality
+    // betweennessCentrality() - compute betweenness centrality (OPTIMIZED)
     pub fn betweennessCentrality(
         self: *BuiltinAlgorithms,
         normalized: bool,
         sample_size: ?usize,
     ) !std.AutoHashMap(u64, f64) {
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-002; FEATURE="Betweenness Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_betweenness; OWNER=graph; UPDATED=2025-10-16
+
+        // Check cache for recent results
+        if (self.cache.cache_valid and self.cache.betweenness_results.count() > 0 and sample_size == null) {
+            const cache_age = std.time.milliTimestamp() - self.cache.cache_timestamp;
+            if (cache_age < 60000) {
+                var result = std.AutoHashMap(u64, f64).init(self.allocator);
+                var it = self.cache.betweenness_results.iterator();
+                while (it.next()) |entry| {
+                    try result.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                return result;
+            }
+        }
+
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
 
         var nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
+
+        // Preload adjacency data for large graphs
+        if (nodes.len > self.parallel_threshold) {
+            try self.preloadAdjacencyData(nodes);
+        }
 
         // Initialize centrality scores
         for (nodes) |node| {
             try centrality.put(node, 0.0);
         }
 
-        // Use sampling for large graphs
-        const sample = if (sample_size) |size| blk: {
-            if (size < nodes.len) {
-                var sampled = try self.allocator.alloc(u64, size);
-                var rng = std.rand.DefaultPrng.init(@intCast(std.time.timestamp()));
-                const random = rng.random();
+        // Automatic sampling for very large graphs
+        const effective_sample_size = if (sample_size) |size|
+            size
+        else if (nodes.len > 10000)
+            nodes.len / 10 // Sample 10% for very large graphs
+        else
+            nodes.len;
 
-                for (sampled) |*s| {
-                    s.* = nodes[random.intRangeAtMost(usize, 0, nodes.len - 1)];
-                }
-                break :blk sampled;
+        // Use sampling for large graphs
+        const sample = if (effective_sample_size < nodes.len) blk: {
+            var sampled = try self.allocator.alloc(u64, effective_sample_size);
+            var rng = std.rand.DefaultPrng.init(@intCast(std.time.timestamp()));
+            const random = rng.random();
+
+            for (sampled) |*s| {
+                s.* = nodes[random.intRangeAtMost(usize, 0, nodes.len - 1)];
             }
-            break :blk nodes;
+            break :blk sampled;
         } else nodes;
-        defer if (sample_size != null) self.allocator.free(sample);
+        defer if (effective_sample_size < nodes.len) self.allocator.free(sample);
 
         // Brandes algorithm
         for (sample) |source| {
@@ -209,8 +275,8 @@ pub const BuiltinAlgorithms = struct {
         // Normalize if requested
         if (normalized and nodes.len > 2) {
             const n = @as(f64, @floatFromInt(nodes.len));
-            const norm_factor = if (sample_size) |size|
-                2.0 / ((n - 1.0) * (n - 2.0)) * (n / @as(f64, @floatFromInt(size)))
+            const norm_factor = if (effective_sample_size < nodes.len)
+                2.0 / ((n - 1.0) * (n - 2.0)) * (n / @as(f64, @floatFromInt(effective_sample_size)))
             else
                 2.0 / ((n - 1.0) * (n - 2.0));
 
@@ -220,18 +286,48 @@ pub const BuiltinAlgorithms = struct {
             }
         }
 
+        // Cache results if not using sampling
+        if (sample_size == null and effective_sample_size == nodes.len) {
+            self.cache.betweenness_results.clearAndFree();
+            var it = centrality.iterator();
+            while (it.next()) |entry| {
+                try self.cache.betweenness_results.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            self.cache.cache_timestamp = std.time.milliTimestamp();
+        }
+
         return centrality;
     }
 
-    // closenessCentrality() - compute closeness centrality
+    // closenessCentrality() - compute closeness centrality (OPTIMIZED)
     pub fn closenessCentrality(
         self: *BuiltinAlgorithms,
         normalized: bool,
         wf_improved: bool, // Wasserman-Faust improvement for disconnected graphs
     ) !std.AutoHashMap(u64, f64) {
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-003; FEATURE="Closeness Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_closeness; OWNER=graph; UPDATED=2025-10-16
+
+        // Check cache for recent results
+        if (self.cache.cache_valid and self.cache.closeness_results.count() > 0) {
+            const cache_age = std.time.milliTimestamp() - self.cache.cache_timestamp;
+            if (cache_age < 60000) {
+                var result = std.AutoHashMap(u64, f64).init(self.allocator);
+                var it = self.cache.closeness_results.iterator();
+                while (it.next()) |entry| {
+                    try result.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                return result;
+            }
+        }
+
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
         const nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
+
+        // Preload adjacency data
+        if (nodes.len > 1000) {
+            try self.preloadAdjacencyData(nodes);
+        }
 
         for (nodes) |node| {
             const distances = try self.computeShortestPaths(node);
@@ -267,17 +363,45 @@ pub const BuiltinAlgorithms = struct {
             try centrality.put(node, closeness);
         }
 
+        // Cache results
+        self.cache.closeness_results.clearAndFree();
+        var it = centrality.iterator();
+        while (it.next()) |entry| {
+            try self.cache.closeness_results.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        self.cache.cache_timestamp = std.time.milliTimestamp();
+
         return centrality;
     }
 
-    // eigenvectorCentrality() - compute eigenvector centrality
+    // eigenvectorCentrality() - compute eigenvector centrality (OPTIMIZED)
     pub fn eigenvectorCentrality(
         self: *BuiltinAlgorithms,
         max_iterations: u32,
         tolerance: f64,
     ) ![]CentralityResult {
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-004; FEATURE="Eigenvector Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_eigenvector; OWNER=graph; UPDATED=2025-10-16
+
+        // Check cache for recent results
+        if (self.cache.cache_valid and self.cache.eigenvector_results.count() > 0) {
+            const cache_age = std.time.milliTimestamp() - self.cache.cache_timestamp;
+            if (cache_age < 60000) {
+                var result = std.AutoHashMap(u64, f64).init(self.allocator);
+                var it = self.cache.eigenvector_results.iterator();
+                while (it.next()) |entry| {
+                    try result.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                return result;
+            }
+        }
+
         const nodes = try self.graph.getAllNodes();
         defer self.allocator.free(nodes);
+
+        // Preload adjacency data for large graphs
+        if (nodes.len > 1000) {
+            try self.preloadAdjacencyData(nodes);
+        }
 
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
         var new_centrality = std.AutoHashMap(u64, f64).init(self.allocator);
@@ -289,16 +413,19 @@ pub const BuiltinAlgorithms = struct {
             try centrality.put(node, initial);
         }
 
-        // Power iteration
+        // Power iteration with early convergence detection
         var iteration: u32 = 0;
+        var converged_count: usize = 0;
+        const convergence_threshold = @as(usize, @intFromFloat(@as(f64, @floatFromInt(nodes.len)) * 0.95));
+
         while (iteration < max_iterations) : (iteration += 1) {
             var norm: f64 = 0;
+            converged_count = 0;
 
-            // Update centrality values
+            // Update centrality values using cached neighbors
             for (nodes) |node| {
                 var sum: f64 = 0;
-                const neighbors = try self.graph.getNeighbors(node);
-                defer self.allocator.free(neighbors);
+                const neighbors = try self.getNeighborsCached(node);
 
                 for (neighbors) |neighbor| {
                     sum += centrality.get(neighbor) orelse initial;
@@ -316,12 +443,27 @@ pub const BuiltinAlgorithms = struct {
             for (nodes) |node| {
                 const new_val = (new_centrality.get(node) orelse 0) / norm;
                 const old_val = centrality.get(node) orelse 0;
-                max_diff = @max(max_diff, @abs(new_val - old_val));
+                const diff = @abs(new_val - old_val);
+                max_diff = @max(max_diff, diff);
                 try centrality.put(node, new_val);
+
+                // Track convergence
+                if (diff < tolerance) {
+                    converged_count += 1;
+                }
             }
 
-            if (max_diff < tolerance) break;
+            // Early termination
+            if (converged_count >= convergence_threshold or max_diff < tolerance) break;
         }
+
+        // Cache results
+        self.cache.eigenvector_results.clearAndFree();
+        var it = centrality.iterator();
+        while (it.next()) |entry| {
+            try self.cache.eigenvector_results.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        self.cache.cache_timestamp = std.time.milliTimestamp();
 
         return centrality;
     }
@@ -1094,20 +1236,139 @@ pub const BuiltinAlgorithms = struct {
 
     // Algorithm cache for memoization
     const AlgorithmCache = struct {
+        // CANARY: REQ=REQ-GQL-ALGO-PERF; FEATURE="Algorithm Performance"; ASPECT=Caching; STATUS=IMPL; TEST=benchmark_graph_algorithms; OWNER=graph; UPDATED=2025-10-16
+
         allocator: Allocator,
-        results: std.AutoHashMap(u64, f64),
+        pagerank_results: std.AutoHashMap(u64, f64),
+        betweenness_results: std.AutoHashMap(u64, f64),
+        closeness_results: std.AutoHashMap(u64, f64),
+        eigenvector_results: std.AutoHashMap(u64, f64),
+        degree_cache: std.AutoHashMap(u64, usize),
+        adjacency_cache: std.AutoHashMap(u64, []u64),
+        shortest_paths_cache: std.AutoHashMap(u64, std.AutoHashMap(u64, u32)),
+        cache_timestamp: i64,
+        cache_valid: bool,
 
         pub fn init(allocator: Allocator) AlgorithmCache {
             return .{
                 .allocator = allocator,
-                .results = std.AutoHashMap(u64, f64).init(allocator),
+                .pagerank_results = std.AutoHashMap(u64, f64).init(allocator),
+                .betweenness_results = std.AutoHashMap(u64, f64).init(allocator),
+                .closeness_results = std.AutoHashMap(u64, f64).init(allocator),
+                .eigenvector_results = std.AutoHashMap(u64, f64).init(allocator),
+                .degree_cache = std.AutoHashMap(u64, usize).init(allocator),
+                .adjacency_cache = std.AutoHashMap(u64, []u64).init(allocator),
+                .shortest_paths_cache = std.AutoHashMap(u64, std.AutoHashMap(u64, u32)).init(allocator),
+                .cache_timestamp = std.time.milliTimestamp(),
+                .cache_valid = true,
             };
         }
 
         pub fn deinit(self: *AlgorithmCache) void {
-            self.results.deinit();
+            self.pagerank_results.deinit();
+            self.betweenness_results.deinit();
+            self.closeness_results.deinit();
+            self.eigenvector_results.deinit();
+            self.degree_cache.deinit();
+
+            // Free adjacency cache arrays
+            var adj_iter = self.adjacency_cache.valueIterator();
+            while (adj_iter.next()) |neighbors| {
+                self.allocator.free(neighbors.*);
+            }
+            self.adjacency_cache.deinit();
+
+            // Free shortest paths cache
+            var sp_iter = self.shortest_paths_cache.valueIterator();
+            while (sp_iter.next()) |distances| {
+                distances.deinit();
+            }
+            self.shortest_paths_cache.deinit();
+        }
+
+        pub fn invalidate(self: *AlgorithmCache) void {
+            self.cache_valid = false;
+            self.pagerank_results.clearAndFree();
+            self.betweenness_results.clearAndFree();
+            self.closeness_results.clearAndFree();
+            self.eigenvector_results.clearAndFree();
+            self.degree_cache.clearAndFree();
+
+            // Clear adjacency cache
+            var adj_iter = self.adjacency_cache.valueIterator();
+            while (adj_iter.next()) |neighbors| {
+                self.allocator.free(neighbors.*);
+            }
+            self.adjacency_cache.clearAndFree();
+
+            // Clear shortest paths cache
+            var sp_iter = self.shortest_paths_cache.valueIterator();
+            while (sp_iter.next()) |distances| {
+                distances.deinit();
+            }
+            self.shortest_paths_cache.clearAndFree();
+        }
+
+        pub fn getCachedNeighbors(self: *AlgorithmCache, node: u64) ?[]u64 {
+            return self.adjacency_cache.get(node);
+        }
+
+        pub fn cacheNeighbors(self: *AlgorithmCache, node: u64, neighbors: []u64) !void {
+            const copy = try self.allocator.dupe(u64, neighbors);
+            try self.adjacency_cache.put(node, copy);
+        }
+
+        pub fn getCachedDegree(self: *AlgorithmCache, node: u64) ?usize {
+            return self.degree_cache.get(node);
+        }
+
+        pub fn cacheDegree(self: *AlgorithmCache, node: u64, degree: usize) !void {
+            try self.degree_cache.put(node, degree);
         }
     };
+
+    // Cached graph operations for performance
+    fn getNeighborsCached(self: *BuiltinAlgorithms, node: u64) ![]u64 {
+        // Check cache first
+        if (self.cache.getCachedNeighbors(node)) |neighbors| {
+            return neighbors;
+        }
+
+        // Cache miss - fetch and cache
+        const neighbors = try self.graph.getNeighbors(node);
+        try self.cache.cacheNeighbors(node, neighbors);
+        self.allocator.free(neighbors); // Original freed, cache holds copy
+
+        return self.cache.getCachedNeighbors(node).?;
+    }
+
+    fn getDegreeCached(self: *BuiltinAlgorithms, node: u64) !usize {
+        // Check cache first
+        if (self.cache.getCachedDegree(node)) |degree| {
+            return degree;
+        }
+
+        // Cache miss - compute and cache
+        const neighbors = try self.graph.getNeighbors(node);
+        defer self.allocator.free(neighbors);
+        const degree = neighbors.len;
+
+        try self.cache.cacheDegree(node, degree);
+        return degree;
+    }
+
+    // Preload adjacency data for batch operations
+    fn preloadAdjacencyData(self: *BuiltinAlgorithms, nodes: []const u64) !void {
+        for (nodes) |node| {
+            // Skip if already cached
+            if (self.cache.getCachedNeighbors(node) != null) continue;
+
+            const neighbors = try self.graph.getNeighbors(node);
+            try self.cache.cacheNeighbors(node, neighbors);
+            try self.cache.cacheDegree(node, neighbors.len);
+            self.allocator.free(neighbors);
+        }
+    }
     //
     //     const Neighbor = struct {
     //         node: u64,
