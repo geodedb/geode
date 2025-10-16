@@ -323,6 +323,18 @@ pub fn build(b: *std.Build) void {
     const run_phase2_benchmarks = b.addRunArtifact(phase2_benchmarks);
     benchmark_step.dependOn(&run_phase2_benchmarks.step);
 
+    // Add Phase 3 concurrency & memory optimization benchmarks
+    // CANARY: REQ=REQ-PERF-PHASE3-BENCH-001; FEATURE="ConcurrencyBenchmarking"; ASPECT=BUILD; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    const phase3_benchmarks = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/phase3_benchmarks.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    const run_phase3_benchmarks = b.addRunArtifact(phase3_benchmarks);
+    benchmark_step.dependOn(&run_phase3_benchmarks.step);
+
     // Add acceptance test target
     const cpa_accept_exe = b.addExecutable(.{
         .name = "cpa_accept_main",
