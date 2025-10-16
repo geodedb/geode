@@ -710,7 +710,7 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                                 .allocator = std.heap.page_allocator,
                                 .current_user_role = fle_integration.getCurrentUserRole(),
                             };
-                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{edge.id});
+                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "edge_{d}", .{edge.id});
                             defer std.heap.page_allocator.free(record_id_buf);
 
                             const decrypted = fle_integration.decryptFieldIfNeeded(
