@@ -1,15 +1,25 @@
 const std = @import("std");
 const iface = @import("interface");
 
+// CANARY: PERF_PHASE5_NEIGHBORS_LAZY_SORT - Lazy sorting for neighbors() to avoid O(n²) repeated sorts
+// CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="GraphOptimization"; ASPECT=LAZY_SORT; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+
 pub const InMemory = struct {
     allocator: std.mem.Allocator,
     // adjacency: src -> sorted unique neighbors
     adj: std.AutoHashMap(u64, std.ArrayList(u64)),
     // labels: node id -> set of labels
     labels: std.AutoHashMap(u64, std.StringHashMap(void)),
+    // Phase 5.1.2: Track which adjacency lists are sorted (avoids O(n²) repeated sorting)
+    adj_sorted: std.AutoHashMap(u64, bool),
 
     pub fn init(ally: std.mem.Allocator) InMemory {
-        return .{ .allocator = ally, .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(ally), .labels = std.AutoHashMap(u64, std.StringHashMap(void)).init(ally) };
+        return .{
+            .allocator = ally,
+            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(ally),
+            .labels = std.AutoHashMap(u64, std.StringHashMap(void)).init(ally),
+            .adj_sorted = std.AutoHashMap(u64, bool).init(ally),
+        };
     }
 
     pub fn deinit(self: *InMemory) void {
@@ -19,6 +29,8 @@ pub const InMemory = struct {
         var itl = self.labels.valueIterator();
         while (itl.next()) |m| m.*.deinit();
         self.labels.deinit();
+        // Phase 5.1.2: Clean up sorted tracking map
+        self.adj_sorted.deinit();
     }
 
     pub fn addEdge(self: *InMemory, src: u64, dst: u64) !void {
@@ -28,21 +40,38 @@ pub const InMemory = struct {
         }
         // ensure uniqueness and sorted order on finalize; for now just append
         try gop.value_ptr.append(self.allocator, dst);
+        // Phase 5.1.2: Mark adjacency list as unsorted after adding edge
+        try self.adj_sorted.put(src, false);
     }
 
     pub fn neighbors(self: *InMemory, src: u64) iface.NeighborIter {
-        if (self.adj.get(src)) |lst| {
-            var slice = lst.items;
-            std.mem.sort(u64, slice, {}, std.sort.asc(u64));
-            var w: usize = 0;
-            var i: usize = 0;
-            while (i < slice.len) : (i += 1) {
-                if (w == 0 or slice[i] != slice[w - 1]) {
-                    slice[w] = slice[i];
-                    w += 1;
+        // Phase 5.1.2: Use getPtr to get mutable pointer for in-place sorting
+        if (self.adj.getPtr(src)) |lst_ptr| {
+            const is_sorted = self.adj_sorted.get(src) orelse false;
+
+            if (!is_sorted) {
+                // Sort ONCE and deduplicate, then cache the sorted state
+                var slice = lst_ptr.items;
+                std.mem.sort(u64, slice, {}, std.sort.asc(u64));
+
+                // In-place deduplication
+                var w: usize = 0;
+                var i: usize = 0;
+                while (i < slice.len) : (i += 1) {
+                    if (w == 0 or slice[i] != slice[w - 1]) {
+                        slice[w] = slice[i];
+                        w += 1;
+                    }
                 }
+
+                // Truncate to deduplicated length
+                lst_ptr.items.len = w;
+
+                // Mark as sorted (ignore errors - worst case is re-sorting)
+                self.adj_sorted.put(src, true) catch {};
             }
-            return .{ .items = slice[0..w] };
+
+            return .{ .items = lst_ptr.items };
         }
         return .{ .items = &.{} };
     }
