@@ -177,6 +177,9 @@ pub const SchemaCatalog = struct {
         new_roles[field_meta_ptr.visibility.to_roles.len] = try self.allocator.dupe(u8, role);
 
         field_meta_ptr.visibility.to_roles = new_roles;
+
+        // Save catalog after grant
+        saveCatalog(self) catch {};
     }
 
     /// Revoke READ_PLAINTEXT privilege from a role for a specific field
@@ -230,6 +233,9 @@ pub const SchemaCatalog = struct {
             self.allocator.free(field_meta_ptr.visibility.to_roles);
             field_meta_ptr.visibility.to_roles = new_roles;
         }
+
+        // Save catalog after revoke
+        saveCatalog(self) catch {};
     }
 
     /// Get count of registered types
@@ -254,6 +260,10 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
     if (global_catalog == null) {
         const catalog = try allocator.create(SchemaCatalog);
         catalog.* = SchemaCatalog.init(allocator);
+
+        // Load persisted catalog if it exists
+        loadCatalog(catalog) catch {};
+
         global_catalog = catalog;
     }
 
@@ -269,6 +279,207 @@ pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
         catalog.deinit();
         allocator.destroy(catalog);
         global_catalog = null;
+    }
+}
+
+/// Save catalog to disk
+pub fn saveCatalog(catalog: *SchemaCatalog) !void {
+    const allocator = catalog.allocator;
+
+    // Get catalog path from GEODE_DATA_DIR or use default
+    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk try allocator.dupe(u8, "/tmp");
+        }
+        return err;
+    };
+    defer allocator.free(data_dir);
+
+    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
+    defer allocator.free(catalog_path);
+
+    const file = try std.fs.cwd().createFile(catalog_path, .{});
+    defer file.close();
+
+    // Write type count
+    var type_count_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &type_count_buf, @intCast(catalog.schemas.count()), .little);
+    _ = try file.write(&type_count_buf);
+
+    // Write each type
+    var type_iter = catalog.schemas.iterator();
+    while (type_iter.next()) |entry| {
+        const type_name = entry.key_ptr.*;
+        const type_meta = entry.value_ptr.*;
+
+        // Write type name
+        var type_name_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &type_name_len_buf, @intCast(type_name.len), .little);
+        _ = try file.write(&type_name_len_buf);
+        _ = try file.write(type_name);
+
+        // Write field count
+        var field_count_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &field_count_buf, @intCast(type_meta.fields.count()), .little);
+        _ = try file.write(&field_count_buf);
+
+        // Write each field
+        var field_iter = type_meta.fields.iterator();
+        while (field_iter.next()) |field_entry| {
+            const field_name = field_entry.key_ptr.*;
+            const field_meta = field_entry.value_ptr.*;
+
+            // Write field name
+            var field_name_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &field_name_len_buf, @intCast(field_name.len), .little);
+            _ = try file.write(&field_name_len_buf);
+            _ = try file.write(field_name);
+
+            // Write encryption config
+            _ = try file.write(&[_]u8{@intFromBool(field_meta.encryption.enabled)});
+            if (field_meta.encryption.enabled) {
+                _ = try file.write(&[_]u8{@intFromEnum(field_meta.encryption.algorithm)});
+                _ = try file.write(&[_]u8{@intFromEnum(field_meta.encryption.key_scope)});
+            }
+
+            // Write search config
+            _ = try file.write(&[_]u8{@intFromBool(field_meta.search.enabled)});
+            if (field_meta.search.enabled) {
+                _ = try file.write(&[_]u8{@intFromEnum(field_meta.search.index_type)});
+            }
+
+            // Write visibility config (role count and roles)
+            var role_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &role_count_buf, @intCast(field_meta.visibility.to_roles.len), .little);
+            _ = try file.write(&role_count_buf);
+
+            for (field_meta.visibility.to_roles) |role| {
+                var role_len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &role_len_buf, @intCast(role.len), .little);
+                _ = try file.write(&role_len_buf);
+                _ = try file.write(role);
+            }
+        }
+    }
+}
+
+/// Load catalog from disk
+pub fn loadCatalog(catalog: *SchemaCatalog) !void {
+    const allocator = catalog.allocator;
+
+    // Get catalog path from GEODE_DATA_DIR or use default
+    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk try allocator.dupe(u8, "/tmp");
+        }
+        return err;
+    };
+    defer allocator.free(data_dir);
+
+    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
+    defer allocator.free(catalog_path);
+
+    const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
+        if (err == error.FileNotFound) return; // No catalog file yet
+        return err;
+    };
+    defer file.close();
+
+    // Read type count
+    var type_count_buf: [4]u8 = undefined;
+    _ = try file.readAll(&type_count_buf);
+    const type_count = std.mem.readInt(u32, &type_count_buf, .little);
+
+    // Read each type
+    var i: usize = 0;
+    while (i < type_count) : (i += 1) {
+        // Read type name
+        var type_name_len_buf: [4]u8 = undefined;
+        _ = try file.readAll(&type_name_len_buf);
+        const type_name_len = std.mem.readInt(u32, &type_name_len_buf, .little);
+
+        const type_name = try allocator.alloc(u8, type_name_len);
+        _ = try file.readAll(type_name);
+
+        // Create type metadata
+        var type_meta = annotations.TypeMetadata.init(allocator, type_name);
+
+        // Read field count
+        var field_count_buf: [4]u8 = undefined;
+        _ = try file.readAll(&field_count_buf);
+        const field_count = std.mem.readInt(u32, &field_count_buf, .little);
+
+        // Read each field
+        var j: usize = 0;
+        while (j < field_count) : (j += 1) {
+            // Read field name
+            var field_name_len_buf: [4]u8 = undefined;
+            _ = try file.readAll(&field_name_len_buf);
+            const field_name_len = std.mem.readInt(u32, &field_name_len_buf, .little);
+
+            const field_name = try allocator.alloc(u8, field_name_len);
+            _ = try file.readAll(field_name);
+
+            var field_meta = annotations.FieldMetadata{
+                .field_name = field_name,
+            };
+
+            // Read encryption config
+            var enc_enabled_buf: [1]u8 = undefined;
+            _ = try file.readAll(&enc_enabled_buf);
+            field_meta.encryption.enabled = enc_enabled_buf[0] != 0;
+
+            if (field_meta.encryption.enabled) {
+                var alg_buf: [1]u8 = undefined;
+                _ = try file.readAll(&alg_buf);
+                field_meta.encryption.algorithm = @enumFromInt(alg_buf[0]);
+
+                var scope_buf: [1]u8 = undefined;
+                _ = try file.readAll(&scope_buf);
+                field_meta.encryption.key_scope = @enumFromInt(scope_buf[0]);
+            }
+
+            // Read search config
+            var search_enabled_buf: [1]u8 = undefined;
+            _ = try file.readAll(&search_enabled_buf);
+            field_meta.search.enabled = search_enabled_buf[0] != 0;
+
+            if (field_meta.search.enabled) {
+                var idx_type_buf: [1]u8 = undefined;
+                _ = try file.readAll(&idx_type_buf);
+                field_meta.search.index_type = @enumFromInt(idx_type_buf[0]);
+            }
+
+            // Read visibility config
+            var role_count_buf: [4]u8 = undefined;
+            _ = try file.readAll(&role_count_buf);
+            const role_count = std.mem.readInt(u32, &role_count_buf, .little);
+
+            if (role_count > 0) {
+                const roles = try allocator.alloc([]const u8, role_count);
+                var k: usize = 0;
+                while (k < role_count) : (k += 1) {
+                    var role_len_buf: [4]u8 = undefined;
+                    _ = try file.readAll(&role_len_buf);
+                    const role_len = std.mem.readInt(u32, &role_len_buf, .little);
+
+                    const role = try allocator.alloc(u8, role_len);
+                    _ = try file.readAll(role);
+                    roles[k] = role;
+                }
+                field_meta.visibility.to_roles = roles;
+            }
+
+            try type_meta.fields.put(field_name, field_meta);
+        }
+
+        // Register the type
+        const type_name_dup = try allocator.dupe(u8, type_name);
+        const type_meta_ptr = try allocator.create(annotations.TypeMetadata);
+        type_meta_ptr.* = type_meta;
+        try catalog.schemas.put(type_name_dup, type_meta_ptr);
+
+        allocator.free(type_name);
     }
 }
 

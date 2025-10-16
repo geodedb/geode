@@ -1589,6 +1589,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Register type in catalog
             try fle_cat.registerType(cgt.name, type_meta);
 
+            // Save FLE catalog to disk
+            fle_catalog.saveCatalog(fle_cat) catch {};
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]eval.Value, 0),
