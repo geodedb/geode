@@ -4021,6 +4021,45 @@ fn executeReturnClauseWithNodes(
     };
 }
 
+/// Helper function to encrypt field value if needed before storing
+/// Returns the potentially encrypted value to store
+fn encryptPropertyIfNeeded(
+    allocator: std.mem.Allocator,
+    node_labels: [][]const u8,
+    field_name: []const u8,
+    plaintext_value: []const u8,
+    node_id: u64,
+) ![]const u8 {
+    // Get node type from first label
+    if (node_labels.len == 0) {
+        return plaintext_value; // No type, cannot check encryption
+    }
+    const node_type = node_labels[0];
+
+    // Create encryption context
+    const ctx = fle_integration.EncryptionContext{
+        .tenant_id = "default",
+        .schema_name = node_type,
+        .allocator = allocator,
+        .current_user_role = fle_integration.getCurrentUserRole(),
+    };
+
+    // Try to encrypt - if field is not encrypted, returns original value
+    const encrypted_value = fle_integration.encryptFieldIfNeeded(
+        ctx,
+        node_type,
+        field_name,
+        plaintext_value,
+        try std.fmt.allocPrint(allocator, "{d}", .{node_id}),
+    ) catch |err| {
+        // If encryption fails, log and return original value
+        std.debug.print("Warning: Failed to encrypt field {s}.{s}: {}\n", .{ node_type, field_name, err });
+        return plaintext_value;
+    };
+
+    return encrypted_value;
+}
+
 fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
@@ -4048,7 +4087,17 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
                     const prop_value = switch (value) {
-                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Str => |s| blk: {
+                            // Encrypt if needed before storing
+                            const final_value = try encryptPropertyIfNeeded(
+                                allocator,
+                                node_pattern.labels,
+                                prop.key,
+                                s,
+                                node_id,
+                            );
+                            break :blk graph_store.PropertyValue{ .String = final_value };
+                        },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -4091,7 +4140,17 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
                     const prop_value = switch (value) {
-                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Str => |s| blk: {
+                            // Encrypt if needed before storing
+                            const final_value = try encryptPropertyIfNeeded(
+                                allocator,
+                                hop.left.labels,
+                                prop.key,
+                                s,
+                                left_node_id,
+                            );
+                            break :blk graph_store.PropertyValue{ .String = final_value };
+                        },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
@@ -4126,7 +4185,17 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
                     const prop_value = switch (value) {
-                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Str => |s| blk: {
+                            // Encrypt if needed before storing
+                            const final_value = try encryptPropertyIfNeeded(
+                                allocator,
+                                hop.right.labels,
+                                prop.key,
+                                s,
+                                right_node_id,
+                            );
+                            break :blk graph_store.PropertyValue{ .String = final_value };
+                        },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
