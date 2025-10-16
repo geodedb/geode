@@ -5327,6 +5327,8 @@ fn cmdFLE(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         return cmdFLERotateKey(argv, start_idx + 2);
     } else if (std.mem.eql(u8, subcmd, "show-rotation")) {
         return cmdFLEShowRotation(argv, start_idx + 2);
+    } else if (std.mem.eql(u8, subcmd, "show-policy")) {
+        return cmdFLEShowPolicy(argv, start_idx + 2);
     } else if (std.mem.eql(u8, subcmd, "grant-plaintext")) {
         return cmdFLEGrantPlaintext(argv, start_idx + 2);
     } else if (std.mem.eql(u8, subcmd, "migrate-encrypt")) {
@@ -5346,13 +5348,15 @@ fn printFLEUsage() void {
         "Subcommands:\n" ++
         "  rotate-key <tenant> <scope> <schema> [field]  Rotate encryption keys\n" ++
         "  show-rotation <tenant>                        Show key rotation status\n" ++
+        "  show-policy <schema>                          Show encryption policy for schema\n" ++
         "  grant-plaintext <schema> <field> <role>       Grant READ_PLAINTEXT privilege\n" ++
         "  migrate-encrypt <tenant> <schema> <field> [batch_size]  Migrate plaintext to encrypted\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode fle rotate-key default fek Person ssn\n" ++
-        "  geode fle grant-plaintext Person ssn pii_reader\n" ++
         "  geode fle show-rotation default\n" ++
+        "  geode fle show-policy Person\n" ++
+        "  geode fle grant-plaintext Person ssn pii_reader\n" ++
         "\n", .{});
 }
 
@@ -5386,13 +5390,28 @@ fn cmdFLEShowRotation(argv: [][:0]u8, start_idx: usize) !void {
 
     const tenant = argv[start_idx];
 
-    // Placeholder implementation - return JSON
-    const stdout_fd = std.fs.File{ .handle = 1 };
-    var buf: [1024]u8 = undefined;
-    const formatted = try std.fmt.bufPrint(&buf,
-        "{{\"tenant\":\"{s}\",\"rotations\":[{{\"evt\":\"fek_reencrypt\",\"schema\":\"Person\",\"field\":\"ssn\",\"progress\":\"100%\",\"status\":\"completed\"}}]}}\n",
-        .{tenant});
-    _ = try stdout_fd.writeAll(formatted);
+    // Call actual implementation
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    try geode.fle_commands.showRotationStatus(allocator, tenant);
+}
+
+fn cmdFLEShowPolicy(argv: [][:0]u8, start_idx: usize) !void {
+    if (start_idx >= argv.len) {
+        std.debug.print("Error: show-policy requires: <schema>\n", .{});
+        return error.InvalidArguments;
+    }
+
+    const schema = argv[start_idx];
+
+    // Call actual implementation
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    try geode.fle_commands.showPolicyStatus(allocator, schema);
 }
 
 fn cmdFLEGrantPlaintext(argv: [][:0]u8, start_idx: usize) !void {

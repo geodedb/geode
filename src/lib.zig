@@ -339,6 +339,7 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
 pub const fle_integration = @import("fle_integration.zig");
+pub const fle_commands = @import("admin/fle_commands.zig");
 
 // User management and authentication
 pub const user_management = @import("security/user_management.zig");
