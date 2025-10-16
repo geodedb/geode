@@ -2161,12 +2161,17 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
                     var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
                     var final_columns: ?[]const []const u8 = null;
 
+                    // CANARY: PERF_PHASE5_PARAM_ALLOC - Allocate parameter arrays once instead of per-iteration
+                    // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=PARAM_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+                    // Phase 5.1.2: Pre-allocate parameter arrays before loop (reduces N allocations to 1)
+                    var param_names = try allocator.alloc([]const u8, values_stmt.column_names.len);
+                    defer allocator.free(param_names);
+                    var param_values = try allocator.alloc(eval.Value, values_stmt.column_names.len);
+                    defer allocator.free(param_values);
+
                     // For each VALUES row, execute the full MATCH query with bindings as parameters
                     for (result_rows.items) |row_values| {
-                        // Build parameter names and values from VALUES columns
-                        var param_names = try allocator.alloc([]const u8, values_stmt.column_names.len);
-                        var param_values = try allocator.alloc(eval.Value, values_stmt.column_names.len);
-
+                        // Build parameter names and values from VALUES columns (reuse arrays)
                         for (values_stmt.column_names, 0..) |col_name, i| {
                             if (i < row_values.len) {
                                 param_names[i] = col_name;
@@ -2195,10 +2200,6 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
 
                         // Free the rows array (but not the individual rows, which are now owned by final_rows)
                         allocator.free(match_result.rows);
-
-                        // Clean up parameter arrays
-                        allocator.free(param_names);
-                        allocator.free(param_values);
                     }
 
                     return ExecutionResult{
@@ -6106,6 +6107,22 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                 group_keys.deinit(allocator);
             }
 
+            // CANARY: PERF_PHASE5_ENV_ALLOC_GROUPBY - Pre-allocate environment arrays for GROUP BY loop
+            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+            // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
+            var env_names_buf: [][]const u8 = &.{};
+            var env_values_buf: []eval.Value = &.{};
+            if (match_variable) |_| {
+                env_names_buf = try allocator.alloc([]const u8, 1);
+                env_values_buf = try allocator.alloc(eval.Value, 1);
+            }
+            defer {
+                if (match_variable != null) {
+                    allocator.free(env_names_buf);
+                    allocator.free(env_values_buf);
+                }
+            }
+
             // Group nodes by grouping key values (filter by labels first)
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
@@ -6130,13 +6147,13 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     if (!has_all_labels) continue;
                 }
 
-                // Create environment with matched node for WHERE clause evaluation
+                // Create environment with matched node for WHERE clause evaluation (reuse arrays)
                 var env_names: [][]const u8 = &.{};
                 var env_values: []eval.Value = &.{};
 
                 if (match_variable) |var_name| {
-                    env_names = try allocator.alloc([]const u8, 1);
-                    env_values = try allocator.alloc(eval.Value, 1);
+                    env_names = env_names_buf;
+                    env_values = env_values_buf;
                     env_names[0] = var_name;
                     env_values[0] = eval.Value{ .Node = node };
                 }
@@ -6159,10 +6176,6 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     };
 
                     if (!passes_where) {
-                        if (match_variable != null) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                        }
                         continue;
                     }
                 }
@@ -6178,18 +6191,8 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     };
 
                     if (!passes_filter) {
-                        if (match_variable != null) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                        }
                         continue;
                     }
-                }
-
-                // Free environment memory since we don't need it for grouping
-                if (match_variable != null) {
-                    allocator.free(env_names);
-                    allocator.free(env_values);
                 }
 
                 // Evaluate grouping key for this node
@@ -6291,6 +6294,22 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
             var matched_nodes = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
             defer matched_nodes.deinit(allocator);
 
+            // CANARY: PERF_PHASE5_ENV_ALLOC_AGGREGATE - Pre-allocate environment arrays for aggregation loop
+            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+            // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
+            var env_names_buf: [][]const u8 = &.{};
+            var env_values_buf: []eval.Value = &.{};
+            if (match_variable) |_| {
+                env_names_buf = try allocator.alloc([]const u8, 1);
+                env_values_buf = try allocator.alloc(eval.Value, 1);
+            }
+            defer {
+                if (match_variable != null) {
+                    allocator.free(env_names_buf);
+                    allocator.free(env_values_buf);
+                }
+            }
+
             // Collect all nodes that match the pattern and WHERE clause
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
@@ -6315,13 +6334,13 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     if (!has_all_labels) continue;
                 }
 
-                // Create environment with matched node for WHERE clause evaluation
+                // Create environment with matched node for WHERE clause evaluation (reuse arrays)
                 var env_names: [][]const u8 = &.{};
                 var env_values: []eval.Value = &.{};
 
                 if (match_variable) |var_name| {
-                    env_names = try allocator.alloc([]const u8, 1);
-                    env_values = try allocator.alloc(eval.Value, 1);
+                    env_names = env_names_buf;
+                    env_values = env_values_buf;
                     env_names[0] = var_name;
                     env_values[0] = eval.Value{ .Node = node };
                 }
@@ -6344,10 +6363,6 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     };
 
                     if (!passes_where) {
-                        if (match_variable != null) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                        }
                         continue;
                     }
                 }
@@ -6363,10 +6378,6 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     };
 
                     if (!passes_filter) {
-                        if (match_variable != null) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                        }
                         continue;
                     }
                 }
@@ -6407,12 +6418,6 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                         },
                         .AllProperties => {},
                     }
-                }
-
-                // Free environment memory
-                if (match_variable != null) {
-                    allocator.free(env_names);
-                    allocator.free(env_values);
                 }
 
                 // Add node to matched list
