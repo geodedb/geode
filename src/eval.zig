@@ -79,6 +79,8 @@ pub const Env = struct {
     // Optional parameter bindings: parallel arrays
     param_names: []const []const u8 = &.{},
     param_values: []const Value = &.{},
+    // Allocator for memory management (C4 fix)
+    allocator: std.mem.Allocator,
 
     pub fn get(self: Env, name: []const u8) ?Value {
         // First check regular environment variables
@@ -98,11 +100,16 @@ pub const Env = struct {
         return null;
     }
 
-    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-14
+    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-17
+    // CANARY: REQ=REQ-C4-001; FEATURE="MemoryLeakFix"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=core; UPDATED=2025-10-17;
+    //         EVIDENCE="Free old arrays in withBinding() to prevent memory leaks"
     // Create a new environment with an additional binding (for list comprehension variable scopes)
     pub fn withBinding(self: Env, ally: std.mem.Allocator, name: []const u8, value: Value) !Env {
         var new_names = try ally.alloc([]const u8, self.names.len + 1);
+        errdefer ally.free(new_names);
+
         var new_values = try ally.alloc(Value, self.values.len + 1);
+        errdefer ally.free(new_values);
 
         @memcpy(new_names[0..self.names.len], self.names);
         @memcpy(new_values[0..self.values.len], self.values);
@@ -110,11 +117,19 @@ pub const Env = struct {
         new_names[self.names.len] = name;
         new_values[self.values.len] = value;
 
+        // Free old arrays to prevent memory leak (C4 fix)
+        // Only free if they were allocated (len > 0 indicates heap allocation)
+        if (self.names.len > 0) {
+            self.allocator.free(self.names);
+            self.allocator.free(self.values);
+        }
+
         return Env{
             .names = new_names,
             .values = new_values,
             .param_names = self.param_names,
             .param_values = self.param_values,
+            .allocator = ally,
         };
     }
 };

@@ -355,7 +355,7 @@ pub fn runGroupedQuery(
     const t_build_start = if (timings) |_| std.time.nanoTimestamp() else 0;
     for (input_rows) |vals| {
         // Make eval env for this row
-        const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values };
+        const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values, .allocator = ally };
         // Evaluate keys
         var out_row = try ally.alloc(BindingValue, key_len + aggs.items.len);
         // Keys
@@ -485,7 +485,7 @@ pub fn runGroupedQuery(
     if (q.having) |hv| {
         for (grouped) |gr| {
             const rewritten = rewriteExprWithAggregates(ally, hv, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
-            const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{} }) catch eval.Value{ .Null = {} };
+            const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{}, .allocator = ally }) catch eval.Value{ .Null = {} };
             if (v == .Bool and v.Bool) try kept.append(ally, gr);
         }
     } else {
@@ -581,7 +581,7 @@ pub fn runGroupedQuery(
                     // Evaluate against the aggregated row gr (kept row), not projection
                     const gr = kept.items[rix];
                     const rewritten = rewriteExprWithAggregates(ally, expr, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
-                    const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{} }) catch eval.Value{ .Null = {} };
+                    const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{}, .allocator = ally }) catch eval.Value{ .Null = {} };
                     kv[kk] = valueToBinding(v);
                 }
                 keyvals[rix] = kv;
