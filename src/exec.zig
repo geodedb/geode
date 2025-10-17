@@ -81,8 +81,10 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
         desc: bool,
         nulls_policy: ?ast.OrderBy.NullsPolicy,
         ctx: planner.SessionContext,
+        /// P2-3: Added allocator for temporary allocations in sort comparison
+        ally: std.mem.Allocator,
     };
-    const sctx = Ctx{ .rows = rows, .desc = desc, .nulls_policy = nulls_policy, .ctx = ctx };
+    const sctx = Ctx{ .rows = rows, .desc = desc, .nulls_policy = nulls_policy, .ctx = ctx, .ally = ally };
     std.sort.pdq(usize, idxs, sctx, struct {
         fn isNull(e: ast.Expr) bool {
             return e == .Null;
@@ -105,7 +107,8 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
             }
             const cmp = planner.compareTemporalForOrder(ra.key, rb.key, sc.ctx) catch {
                 // Fallback to lexicographic stringify on error.Invalid
-                const tmp_ally = std.heap.page_allocator;
+                // P2-3: Use provided allocator instead of page_allocator
+                const tmp_ally = sc.ally;
                 const sa = printer.stringifyExprAlloc(tmp_ally, ra.key, .{}) catch return a < b;
                 defer tmp_ally.free(sa);
                 const sb = printer.stringifyExprAlloc(tmp_ally, rb.key, .{}) catch return a < b;
@@ -1427,7 +1430,8 @@ pub const HashAggregator = struct {
         };
     }
 
-    fn mergeAggValue(dst: *AggregateState.AggValue, src: AggregateState.AggValue) void {
+    /// P2-3: Now accepts allocator parameter for temporary allocations
+    fn mergeAggValue(allocator: std.mem.Allocator, dst: *AggregateState.AggValue, src: AggregateState.AggValue) void {
         if (dst.* == .Count and src == .Count) {
             dst.Count += src.Count;
         } else if (dst.* == .Sum and src == .Sum and dst.Sum == .Int and src.Sum == .Int) {
@@ -1448,20 +1452,22 @@ pub const HashAggregator = struct {
             const need = existing.len + incoming.len;
             while (cap < need * 2) cap <<= 1; // load factor <=0.5
             const SetEntry = struct { hash: u64, val: []const u8 };
-            const set = std.heap.page_allocator.alloc(?SetEntry, cap) catch return;
-            defer std.heap.page_allocator.free(set);
+            // P2-3: Use provided allocator instead of page_allocator
+            const set = allocator.alloc(?SetEntry, cap) catch return;
+            defer allocator.free(set);
             @memset(set, null);
             const mask = cap - 1;
-            var new_vals = std.ArrayList([]const u8).init(std.heap.page_allocator);
+            var new_vals = std.ArrayList([]const u8).init(allocator);
             defer new_vals.deinit();
             var insertFn = struct {
-                fn insert(slots: []?SetEntry, slot_mask: usize, v: []const u8, store: *std.ArrayList([]const u8)) void {
+                fn insert(ally: std.mem.Allocator, slots: []?SetEntry, slot_mask: usize, v: []const u8, store: *std.ArrayList([]const u8)) void {
                     const h = std.hash.Wyhash.hash(0, v);
                     var idx: usize = @intCast(h & slot_mask);
                     while (true) {
                         if (slots[idx] == null) {
                             // copy value
-                            const dup = std.heap.page_allocator.alloc(u8, v.len) catch return; // best effort
+                            // P2-3: Use provided allocator instead of page_allocator
+                            const dup = ally.alloc(u8, v.len) catch return; // best effort
                             @memcpy(dup, v);
                             store.append(dup) catch return;
                             slots[idx] = SetEntry{ .hash = h, .val = dup };
@@ -1475,10 +1481,10 @@ pub const HashAggregator = struct {
             };
             // load existing
             var i: usize = 0;
-            while (i < existing.len) : (i += 1) insertFn.insert(set, mask, existing[i], &new_vals);
+            while (i < existing.len) : (i += 1) insertFn.insert(allocator, set, mask, existing[i], &new_vals);
             // add incoming
             i = 0;
-            while (i < incoming.len) : (i += 1) insertFn.insert(set, mask, incoming[i], &new_vals);
+            while (i < incoming.len) : (i += 1) insertFn.insert(allocator, set, mask, incoming[i], &new_vals);
             // Free old values (shallow) - NOTE: underlying alloc ownership ambiguous; skipping free to avoid double-free risk.
             dst.CountDistinctState.values = new_vals.toOwnedSlice();
             dst.CountDistinctState.count = @intCast(dst.CountDistinctState.values.len);
@@ -1549,7 +1555,7 @@ pub const HashAggregator = struct {
                     res.value_ptr.* = AggregateState{ .key_values = key_vals, .agg_values = agg_vals };
                 } else {
                     // Merge aggregates and free duplicates
-                    for (res.value_ptr.agg_values, 0..) |*dst, j| mergeAggValue(dst, agg_vals[j]);
+                    for (res.value_ptr.agg_values, 0..) |*dst, j| mergeAggValue(self.allocator, dst, agg_vals[j]);
                     self.allocator.free(key_slice);
                     self.allocator.free(key_vals);
                     self.allocator.free(agg_vals);
