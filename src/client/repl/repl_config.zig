@@ -41,10 +41,18 @@ pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
     return allocator.dupe(u8, ".geode_history");
 }
 
+/// P2-3: Static GPA for env var check
+var color_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var color_gpa_init = false;
+
 pub fn shouldUseColor() bool {
+    // P2-3: Use static GPA for env var check
+    if (!color_gpa_init) {
+        color_gpa_init = true;
+    }
     // Check NO_COLOR environment variable
-    if (std.process.getEnvVarOwned(std.heap.page_allocator, "NO_COLOR")) |val| {
-        std.heap.page_allocator.free(val);
+    if (std.process.getEnvVarOwned(color_gpa.allocator(), "NO_COLOR")) |val| {
+        color_gpa.allocator().free(val);
         return false;
     } else |_| {}
 

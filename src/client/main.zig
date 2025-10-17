@@ -190,7 +190,11 @@ pub fn main() !void {
     var test_wal_skip_ratio: ?[]const u8 = null;
     const build_options = @import("build_options");
     const sentinel = @import("sentinel");
-    const gpa = if (build_options.enable_sentinel) sentinel.maybeSentinel(std.heap.page_allocator) else std.heap.page_allocator;
+    // P2-3: Use GeneralPurposeAllocator instead of page_allocator for client main
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const base_gpa = gpa_instance.allocator();
+    const gpa = if (build_options.enable_sentinel) sentinel.maybeSentinel(base_gpa) else base_gpa;
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     // Handle help flags
