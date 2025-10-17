@@ -61,7 +61,7 @@ pub fn main() !void {
     try testByteaHex(allocator);
     try testJsonVsJsonb(allocator);
     try testJsonbGet(allocator);
-    try testXmlWellFormed();
+    try testXmlWellFormed(allocator);
     try testUrlNorm(allocator);
     try testDomainPuny(allocator);
     try testUuidParse();
@@ -237,8 +237,8 @@ fn testJsonbGet(allocator: std.mem.Allocator) !void {
     std.debug.print("CANARY jsonb_get {{\"a\":1,\"b\":2}} $.a -> 1\n", .{});
 }
 
-fn testXmlWellFormed() !void {
-    const doc = xml.XmlDocument.fromString("<a><b/></a>") catch unreachable;
+fn testXmlWellFormed(allocator: std.mem.Allocator) !void {
+    const doc = xml.XmlDocument.fromString(allocator, "<a><b/></a>") catch unreachable;
     _ = doc;
     std.debug.print("CANARY xml_wellformed \"<a><b/></a>\" ok\n", .{});
 }

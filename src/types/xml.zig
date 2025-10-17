@@ -9,19 +9,22 @@ pub const XmlDocument = struct {
         OutOfMemory,
     };
 
-    pub fn fromString(data: []const u8) Error!XmlDocument {
-        try validateWellFormed(data);
+    /// P2-3: Now accepts allocator parameter for validation
+    pub fn fromString(allocator: std.mem.Allocator, data: []const u8) Error!XmlDocument {
+        try validateWellFormed(allocator, data);
         return XmlDocument{ .data = data };
     }
 
-    pub fn isWellFormed(data: []const u8) bool {
-        validateWellFormed(data) catch return false;
+    /// P2-3: Now accepts allocator parameter for validation
+    pub fn isWellFormed(allocator: std.mem.Allocator, data: []const u8) bool {
+        validateWellFormed(allocator, data) catch return false;
         return true;
     }
 
-    fn validateWellFormed(data: []const u8) Error!void {
-        var tag_stack = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 0);
-        defer tag_stack.deinit(std.heap.page_allocator);
+    /// P2-3: Now accepts allocator parameter for tag stack
+    fn validateWellFormed(allocator: std.mem.Allocator, data: []const u8) Error!void {
+        var tag_stack = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        defer tag_stack.deinit();
 
         var i: usize = 0;
         var in_tag = false;
@@ -49,7 +52,7 @@ pub const XmlDocument = struct {
                 } else if (tag_content[tag_content.len - 1] == '/') {} else {
                     const space_pos = std.mem.indexOfScalar(u8, tag_content, ' ') orelse tag_content.len;
                     const tag_name = tag_content[0..space_pos];
-                    try tag_stack.append(std.heap.page_allocator, tag_name);
+                    try tag_stack.append(tag_name);
                 }
             } else if (c == '&') {
                 const end_pos = std.mem.indexOfScalarPos(u8, data, i, ';') orelse return Error.InvalidEntity;
@@ -74,6 +77,6 @@ pub const XmlDocument = struct {
 };
 
 test "xml well-formed" {
-    const doc = try XmlDocument.fromString("<a><b/></a>");
+    const doc = try XmlDocument.fromString(std.testing.allocator, "<a><b/></a>");
     std.testing.expectEqualSlices(u8, doc.data, "<a><b/></a>") catch unreachable;
 }

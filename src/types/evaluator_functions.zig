@@ -395,8 +395,9 @@ pub fn Jsonb(allocator: std.mem.Allocator, json_str: []const u8) EvaluatorError!
     return Value{ .Jsonb = doc };
 }
 
-pub fn Xml(xml_str: []const u8) EvaluatorError!Value {
-    const doc = xml.XmlDocument.fromString(xml_str) catch return EvaluatorError.XmlNotWellFormed;
+/// P2-3: Now accepts allocator parameter for XML validation
+pub fn Xml(allocator: std.mem.Allocator, xml_str: []const u8) EvaluatorError!Value {
+    const doc = xml.XmlDocument.fromString(allocator, xml_str) catch return EvaluatorError.XmlNotWellFormed;
     return Value{ .Xml = doc };
 }
 
