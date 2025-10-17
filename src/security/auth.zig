@@ -666,13 +666,177 @@ pub const SecurityManager = struct {
     }
 
     // ---- Passwords ----
-    // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-09-30
+    // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-10-16
+    // CRITICAL SECURITY FIX (C2): Proper Argon2id implementation with random salts and PHC format
     pub fn hashPassword(self: *Self, password: []const u8) ![]const u8 {
         // CANARY: REQ=REQ-AUTH-POLICY-008; FEATURE="Pre-Hash Password Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation; OWNER=security; UPDATED=2025-09-30
         // Validate password against policy before hashing
         try self.validatePasswordAgainstCurrentPolicy(password);
-        // For now, use a placeholder secure hash format
-        // TODO: Replace with proper Argon2id implementation when API is stabilized
+
+        // Generate cryptographically random 16-byte salt
+        var salt: [16]u8 = undefined;
+        std.crypto.random.bytes(&salt);
+
+        // OWASP recommended Argon2id parameters (ASVS 2.4.1)
+        const argon2_params = std.crypto.pwhash.argon2.Params{
+            .t = 2,      // 2 iterations (OWASP minimum)
+            .m = 19456,  // 19 MiB memory (OWASP minimum)
+            .p = 1,      // 1 parallel lane
+        };
+
+        // Hash password with Argon2id
+        var hash: [32]u8 = undefined;
+        std.crypto.pwhash.argon2.kdf(
+            self.allocator,
+            &hash,
+            password,
+            &salt,
+            argon2_params,
+            .argon2id,
+        ) catch |err| {
+            std.log.err("Argon2id hashing failed: {}", .{err});
+            return error.HashingFailed;
+        };
+
+        // Encode as PHC string format: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+        // This is the standard format for Argon2 hashes (password-hashing.net/argon2-specs.pdf)
+        const hex_chars = "0123456789abcdef";
+
+        // Encode salt as hex
+        var salt_hex = try self.allocator.alloc(u8, 32);
+        for (salt, 0..) |byte, i| {
+            salt_hex[i * 2] = hex_chars[byte >> 4];
+            salt_hex[i * 2 + 1] = hex_chars[byte & 0xf];
+        }
+        defer self.allocator.free(salt_hex);
+
+        // Encode hash as hex
+        var hash_hex = try self.allocator.alloc(u8, 64);
+        for (hash, 0..) |byte, i| {
+            hash_hex[i * 2] = hex_chars[byte >> 4];
+            hash_hex[i * 2 + 1] = hex_chars[byte & 0xf];
+        }
+        defer self.allocator.free(hash_hex);
+
+        // Create PHC format string
+        return std.fmt.allocPrint(
+            self.allocator,
+            "$argon2id$v=19$m=19456,t=2,p=1${s}${s}",
+            .{ salt_hex, hash_hex },
+        );
+    }
+
+    /// Constant-time comparison to prevent timing attacks
+    /// Uses XOR pattern to ensure execution time is independent of where bytes differ
+    fn constantTimeEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+
+        var result: u8 = 0;
+        for (a, b) |byte_a, byte_b| {
+            result |= byte_a ^ byte_b;
+        }
+        return result == 0;
+    }
+
+    fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
+        // SECURITY FIX (C2): Support both Argon2id (PHC format) and legacy Blake2b
+        // This enables gradual migration from Blake2b to Argon2id
+
+        // Check if hash is PHC format (starts with $argon2id$)
+        if (std.mem.startsWith(u8, stored_hash, "$argon2id$")) {
+            // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+            return self.verifyArgon2idPHC(password, stored_hash);
+        }
+
+        // Legacy Blake2b format (64 hex chars) - for migration only
+        if (stored_hash.len == 64 and isHexString(stored_hash)) {
+            std.log.warn("Legacy Blake2b hash detected - recommend password reset for Argon2id upgrade", .{});
+            return self.verifyBlake2bLegacy(password, stored_hash);
+        }
+
+        // Unknown format
+        std.log.err("Unrecognized password hash format (len={}, prefix={s})", .{ stored_hash.len, stored_hash[0..@min(10, stored_hash.len)] });
+        return error.InvalidHashFormat;
+    }
+
+    /// Verify Argon2id password in PHC format
+    fn verifyArgon2idPHC(self: *Self, password: []const u8, phc_string: []const u8) !bool {
+        // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+        var parts = std.mem.split(u8, phc_string, "$");
+
+        _ = parts.next(); // Empty before first $
+        const alg = parts.next() orelse return false;
+        if (!std.mem.eql(u8, alg, "argon2id")) return false;
+
+        const version = parts.next() orelse return false;
+        if (!std.mem.eql(u8, version, "v=19")) return false;
+
+        const params_str = parts.next() orelse return false;
+        // Parse params: m=19456,t=2,p=1
+        var param_parts = std.mem.split(u8, params_str, ",");
+        var m: u32 = 19456;
+        var t: u32 = 2;
+        var p: u32 = 1;
+
+        while (param_parts.next()) |param| {
+            var kv = std.mem.split(u8, param, "=");
+            const key = kv.next() orelse continue;
+            const value = kv.next() orelse continue;
+
+            if (std.mem.eql(u8, key, "m")) {
+                m = std.fmt.parseInt(u32, value, 10) catch 19456;
+            } else if (std.mem.eql(u8, key, "t")) {
+                t = std.fmt.parseInt(u32, value, 10) catch 2;
+            } else if (std.mem.eql(u8, key, "p")) {
+                p = std.fmt.parseInt(u32, value, 10) catch 1;
+            }
+        }
+
+        const salt_hex = parts.next() orelse return false;
+        const hash_hex = parts.next() orelse return false;
+
+        // Decode salt from hex
+        if (salt_hex.len != 32) return false; // 16 bytes = 32 hex chars
+        var salt: [16]u8 = undefined;
+        for (0..16) |i| {
+            const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return false;
+            const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return false;
+            salt[i] = @as(u8, hi) * 16 + @as(u8, lo);
+        }
+
+        // Decode expected hash from hex
+        if (hash_hex.len != 64) return false; // 32 bytes = 64 hex chars
+        var expected_hash: [32]u8 = undefined;
+        for (0..32) |i| {
+            const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return false;
+            const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return false;
+            expected_hash[i] = @as(u8, hi) * 16 + @as(u8, lo);
+        }
+
+        // Re-hash password with same salt and params
+        const argon2_params = std.crypto.pwhash.argon2.Params{
+            .t = t,
+            .m = m,
+            .p = p,
+        };
+
+        var computed_hash: [32]u8 = undefined;
+        std.crypto.pwhash.argon2.kdf(
+            self.allocator,
+            &computed_hash,
+            password,
+            &salt,
+            argon2_params,
+            .argon2id,
+        ) catch return false;
+
+        // Constant-time comparison
+        return constantTimeEqual(&computed_hash, &expected_hash);
+    }
+
+    /// Verify legacy Blake2b password (for migration)
+    fn verifyBlake2bLegacy(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
+        _ = self; // Not needed for Blake2b verification
         const salt = "geode-salt-secure-v2";
         var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
         hasher.update(password);
@@ -680,24 +844,24 @@ pub const SecurityManager = struct {
         var digest: [32]u8 = undefined;
         hasher.final(&digest);
 
-        // Return as hex string for now
+        // Convert to hex
         const hex_chars = "0123456789abcdef";
-        const result = try self.allocator.alloc(u8, 64);
+        var computed_hex: [64]u8 = undefined;
         for (digest, 0..) |byte, i| {
-            result[i * 2] = hex_chars[byte >> 4];
-            result[i * 2 + 1] = hex_chars[byte & 0xf];
+            computed_hex[i * 2] = hex_chars[byte >> 4];
+            computed_hex[i * 2 + 1] = hex_chars[byte & 0xf];
         }
 
-        return result;
+        return constantTimeEqual(&computed_hex, stored_hash);
     }
 
-    fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
-        // For now, regenerate hash and compare
-        // TODO: Replace with proper Argon2id verification when API is stabilized
-        const computed_hash = try self.hashPassword(password);
-        defer self.allocator.free(computed_hash);
-
-        return std.mem.eql(u8, computed_hash, stored_hash);
+    /// Check if string is valid hexadecimal
+    fn isHexString(s: []const u8) bool {
+        for (s) |c| {
+            const is_hex = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+            if (!is_hex) return false;
+        }
+        return true;
     }
     // Create user helper
     // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
@@ -839,19 +1003,10 @@ pub const SecurityManager = struct {
         // Hash the password
         const password_hash = try self.hashPassword(default_password);
 
-        // Check if password meets security standards
-        const needs_reset = blk: {
-            if (password_from_env) {
-                // Validate against secure policy
-                _ = self.password_policy; // Reference to avoid unused variable
-                self.validatePassword(default_password) catch {
-                    break :blk true; // Password doesn't meet standards, force reset
-                };
-                break :blk false; // Password meets standards
-            } else {
-                break :blk true; // Default "geodesic" always requires reset
-            }
-        };
+        // CRITICAL SECURITY FIX (C5): ALWAYS require password reset for default user
+        // Even if env password is strong, it may be committed to git/logs/CI
+        // Per OWASP ASVS 2.1.9: Force password change on first use of default credentials
+        const needs_reset = true;
 
         const user = User{
             .id = id,
@@ -874,14 +1029,12 @@ pub const SecurityManager = struct {
         try self.users.put(id, user);
         try self.audit_log.logUserCreated(id, admin_username);
 
+        // SECURITY FIX (C5): Log with HIGH severity - default credentials are critical security event
+        const password_source = if (password_from_env) "environment" else "hardcoded";
+        try self.audit_log.append(.user_created, id, "DEFAULT_USER_CREATED username={s} password_source={s} REQUIRES_IMMEDIATE_RESET", .{ admin_username, password_source });
+
         if (password_from_env) {
-            if (needs_reset) {
-                try self.audit_log.append(.user_created, id, "Default user created with env password (insecure, reset required)", .{});
-            } else {
-                try self.audit_log.append(.user_created, id, "Default user created with secure env password", .{});
-            }
-        } else {
-            try self.audit_log.append(.user_created, id, "Default user created with default password (reset required)", .{});
+            std.log.warn("Default user created with env password. SECURITY: Ensure GEODE_DEFAULT_PASSWORD is not in git/logs. Password reset required on first login.", .{});
         }
     }
 
@@ -964,6 +1117,14 @@ pub const SecurityManager = struct {
         }
         const user = user_opt orelse return error.UserNotFound;
         if (!user.is_active) return error.UserDisabled;
+
+        // CRITICAL SECURITY FIX (C5): Block default users until password changed
+        // Prevents authentication with predictable default credentials
+        if (user.is_default_user and user.password_reset_required) {
+            try self.audit_log.append(.login_failed, user.id, "Authentication blocked: default user must change password", .{});
+            return error.DefaultPasswordMustBeChanged;
+        }
+
         if (!try self.verifyPassword(password, user.password_hash)) {
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
@@ -1014,6 +1175,13 @@ pub const SecurityManager = struct {
         }
         const user = user_opt orelse return error.UserNotFound;
         if (!user.is_active) return error.UserDisabled;
+
+        // SECURITY FIX (C5): Block default users in MFA path too
+        if (user.is_default_user and user.password_reset_required) {
+            try self.audit_log.append(.login_failed, user.id, "MFA authentication blocked: default user must change password", .{});
+            return error.DefaultPasswordMustBeChanged;
+        }
+
         if (!try self.verifyPassword(password, user.password_hash)) {
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;

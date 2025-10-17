@@ -162,10 +162,15 @@ pub fn parseAlg(name: []const u8) Error!HashAlg {
 }
 
 /// Constant-time comparison of two hashes
+/// SECURITY: Uses XOR pattern to ensure execution time is independent of where bytes differ
+/// This prevents timing side-channel attacks that could leak hash information
 pub fn equals(a: Hash, b: Hash) bool {
+    // Algorithm and length mismatches are not timing-sensitive information
     if (a.alg != b.alg) return false;
     if (a.digest.len != b.digest.len) return false;
 
+    // Constant-time comparison using XOR pattern
+    // Result accumulates all differences without early return
     var result: u8 = 0;
     for (a.digest, b.digest) |byte_a, byte_b| {
         result |= byte_a ^ byte_b;
