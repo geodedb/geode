@@ -691,13 +691,27 @@ pub const SecurityManager = struct {
         return result;
     }
 
+    /// Constant-time comparison to prevent timing attacks
+    /// Uses XOR pattern to ensure execution time is independent of where bytes differ
+    fn constantTimeEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+
+        var result: u8 = 0;
+        for (a, b) |byte_a, byte_b| {
+            result |= byte_a ^ byte_b;
+        }
+        return result == 0;
+    }
+
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
         // For now, regenerate hash and compare
         // TODO: Replace with proper Argon2id verification when API is stabilized
         const computed_hash = try self.hashPassword(password);
         defer self.allocator.free(computed_hash);
 
-        return std.mem.eql(u8, computed_hash, stored_hash);
+        // CRITICAL SECURITY FIX: Use constant-time comparison to prevent timing attacks
+        // Using std.mem.eql would leak information about hash prefixes through timing
+        return constantTimeEqual(computed_hash, stored_hash);
     }
     // Create user helper
     // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
