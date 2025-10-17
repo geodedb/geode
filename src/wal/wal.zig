@@ -157,7 +157,9 @@ pub const Wal = struct {
         defer self.ally.free(path);
         self.file = try dir.createFile(path, .{ .read = true, .truncate = false, .exclusive = false, .mode = 0o600 });
         self.segment_bytes = 0;
-        fsync_util.fsyncParent(path) catch {};
+        fsync_util.fsyncParent(path) catch |err| {
+            std.log.err("CRITICAL: Failed to fsync WAL parent directory  '{s}': {any} (durability at risk)", .{ path, err });
+        };
     }
 
     pub fn openFile(self: *Wal, base_path: []const u8) !void {
@@ -186,7 +188,11 @@ pub const Wal = struct {
         // Count commit records in in-memory buffer plus recovered_committed.
         var map = std.AutoHashMap(u64, void).init(self.ally);
         defer map.deinit();
-        for (self.buf.items) |r| if (r.typ == .Commit) map.put(r.txn_id, {}) catch {};
+        for (self.buf.items) |r| if (r.typ == .Commit) {
+            map.put(r.txn_id, {}) catch |err| {
+                std.log.warn("Failed to track committed txn {} in count (OOM): {any}", .{ r.txn_id, err });
+            };
+        };
         return self.recovered_committed + map.count();
     }
 
@@ -213,7 +219,9 @@ pub const Wal = struct {
                 const typ: RecordType = @enumFromInt(buf[0]);
                 if (typ == .Commit) {
                     const txn_id = std.mem.readInt(u64, buf[1..9], .little);
-                    _ = seen.put(txn_id, {}) catch {};
+                    _ = seen.put(txn_id, {}) catch |err| {
+                        std.log.warn("Failed to track txn {} in scan (OOM): {any}", .{ txn_id, err });
+                    };
                 }
                 const plen = std.mem.readInt(u32, buf[9..13], .little);
                 if (plen > 0) try f.seekBy(@as(i64, plen));
@@ -345,8 +353,12 @@ pub const Wal = struct {
             std.mem.writeInt(u32, header[29..33], 0, .little); // zero before checksum
             var cs_buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch @panic("OOM");
             defer cs_buf.deinit(std.heap.page_allocator);
-            cs_buf.appendSlice(std.heap.page_allocator, header[0..]) catch {};
-            cs_buf.appendSlice(std.heap.page_allocator, payload_buf) catch {};
+            cs_buf.appendSlice(std.heap.page_allocator, header[0..]) catch |err| {
+                std.log.err("CRITICAL: Failed to append header to checksum buffer: {any}", .{err});
+            };
+            cs_buf.appendSlice(std.heap.page_allocator, payload_buf) catch |err| {
+                std.log.err("CRITICAL: Failed to append payload to checksum buffer: {any}", .{err});
+            };
             const cs = adler32(cs_buf.items);
             std.mem.writeInt(u32, header[29..33], cs, .little);
             // Rollover check: if writing header+payload+sentinel would exceed limit, rotate segment first.
@@ -377,13 +389,17 @@ pub const Wal = struct {
         if (typ == .Commit) {
             self.commits_since_checkpoint += 1;
             if (self.commits_since_checkpoint >= self.checkpoint_interval) {
-                _ = self.writeCheckpoint() catch {};
+                _ = self.writeCheckpoint() catch |err| {
+                    std.log.err("CRITICAL: Failed to write WAL checkpoint (recovery may be slow): {any}", .{err});
+                };
                 self.commits_since_checkpoint = 0;
                 self.checkpoints_since_compaction += 1;
 
                 if (self.checkpoints_since_compaction >= self.compaction_interval) {
                     // Use current LSN as durable horizon for compaction
-                    self.compact(lsn_val) catch {};
+                    self.compact(lsn_val) catch |err| {
+                        std.log.err("CRITICAL: Failed to compact WAL (disk space may fill): {any}", .{err});
+                    };
                     self.checkpoints_since_compaction = 0;
                 }
             }
@@ -688,7 +704,9 @@ pub const Wal = struct {
                         var p = pm.asPage(ins.page);
                         if (p.lsn() >= rec.lsn.value) continue; // already applied
                         if (ins.slot >= p.slotCount()) {
-                            _ = p.insert(ins.data) catch {};
+                            _ = p.insert(ins.data) catch |err| {
+                                std.log.err("CRITICAL: Failed to insert during WAL replay (page={}, slot={}, LSN={}): {any}", .{ ins.page, ins.slot, rec.lsn.value, err });
+                            };
                         }
                         p.setLsn(rec.lsn.value);
                         applied += 1;
@@ -699,7 +717,9 @@ pub const Wal = struct {
                         if (del.page < pm.pages.items.len) {
                             var p = pm.asPage(del.page);
                             if (p.lsn() >= rec.lsn.value) continue;
-                            p.tombstone(del.slot) catch {};
+                            p.tombstone(del.slot) catch |err| {
+                                std.log.err("CRITICAL: Failed to tombstone during WAL replay (page={}, slot={}, LSN={}): {any}", .{ del.page, del.slot, rec.lsn.value, err });
+                            };
                             p.setLsn(rec.lsn.value);
                             applied += 1;
                         }
@@ -726,7 +746,9 @@ pub const Wal = struct {
                         const slot = std.mem.readInt(u16, rec.payload[4..6], .little);
                         if (page < pm.pages.items.len) {
                             var p = pm.asPage(page);
-                            p.tombstone(slot) catch {};
+                            p.tombstone(slot) catch |err| {
+                                std.log.err("CRITICAL: Failed to tombstone during WAL UNDO (page={}, slot={}, txn={}): {any}", .{ page, slot, rec.txn_id, err });
+                            };
                         }
                         if (self.file != null) {
                             const clr_payload = try encodeDelete(self.ally, page, slot);
@@ -740,14 +762,18 @@ pub const Wal = struct {
                         while (delb.page >= pm.pages.items.len) try pm.newPage();
                         var p = pm.asPage(delb.page);
                         if (delb.slot >= p.slotCount()) {
-                            _ = p.insert(delb.data) catch {};
+                            _ = p.insert(delb.data) catch |err| {
+                                std.log.err("CRITICAL: Failed to insert during WAL UNDO (page={}, slot={}, txn={}): {any}", .{ delb.page, delb.slot, rec.txn_id, err });
+                            };
                         } else {
                             const slot_meta = p.readSlot(delb.slot);
                             if (slot_meta.sz == 0 and @as(usize, slot_meta.off) + delb.len <= p.buf.len) {
                                 @memcpy(p.buf[slot_meta.off .. slot_meta.off + delb.len], delb.data);
                                 p.writeSlot(delb.slot, slot_meta.off, delb.len);
                             } else if (slot_meta.sz == 0) {
-                                _ = p.insert(delb.data) catch {};
+                                _ = p.insert(delb.data) catch |err| {
+                                    std.log.err("CRITICAL: Failed to insert during WAL UNDO (page={}, slot={}, txn={}): {any}", .{ delb.page, delb.slot, rec.txn_id, err });
+                                };
                             }
                         }
                         if (self.file != null) {
