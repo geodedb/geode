@@ -165,7 +165,7 @@ pub const KMSProvider = struct {
 
         // Parse envelope from metadata
         const envelope = try external_kms.envelopeFromJson(wrapped.metadata.?);
-        defer std.heap.page_allocator.free(envelope.ct); // Free allocated ciphertext
+        // P2-3: envelope.ct is inline array [32]u8, not allocated memory - no need to free
 
         const plaintext = try self.external_client.?.unwrap(envelope);
         return try self.allocator.dupe(u8, &plaintext);
@@ -237,7 +237,7 @@ pub const KMSProvider = struct {
 
         // Parse envelope from metadata
         const envelope = try external_kms.envelopeFromJson(wrapped.metadata.?);
-        defer std.heap.page_allocator.free(envelope.ct); // Free allocated ciphertext
+        // P2-3: envelope.ct is inline array [32]u8, not allocated memory - no need to free
 
         // Convert to remote KMS envelope format
         const remote_envelope = kms_remote.Envelope{
@@ -280,8 +280,15 @@ pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, va
 }
 
 // Legacy function for backward compatibility
+// P2-3: Use static GPA instead of page_allocator for global provider
+var default_provider_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var default_provider_init = false;
+
 pub fn defaultProvider() KMSProvider {
-    return localDevProvider(std.heap.page_allocator);
+    if (!default_provider_init) {
+        default_provider_init = true;
+    }
+    return localDevProvider(default_provider_gpa.allocator());
 }
 
 test "local dev provider wrap/unwrap roundtrip" {
