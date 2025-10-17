@@ -21,11 +21,11 @@ pub const BackupConfig = struct {
     retention_days: u32 = 30,
 };
 
-pub const CompressionType = enum {
-    none,
-    zstd,
-    lz4,
-    gzip,
+pub const CompressionType = enum(u32) {
+    none = 0,
+    zstd = 1,
+    lz4 = 2,
+    gzip = 3,
 };
 
 /// Backup metadata
@@ -56,10 +56,10 @@ pub const BackupMetadata = struct {
     }
 };
 
-pub const BackupType = enum {
-    full,
-    incremental,
-    differential,
+pub const BackupType = enum(u32) {
+    full = 0,
+    incremental = 1,
+    differential = 2,
 };
 
 /// Point-in-time recovery information

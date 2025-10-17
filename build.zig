@@ -54,6 +54,10 @@ pub fn build(b: *std.Build) void {
     const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("protocol", protocol_mod);
 
+    // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
+    const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
+
     if (target.result.os.tag == .windows) {
         geode_exe.linkLibC();
     }

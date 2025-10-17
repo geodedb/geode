@@ -9,42 +9,9 @@ const crypto = std.crypto;
 // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; TEST=TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_001_UnifiedBinary; OWNER=cli; UPDATED=2025-10-05
 // Direct calls to server and client main functions to eliminate subprocess spawning
 
-// Import backup-related modules through geode module
-const backup_types = struct {
-    pub const BackupConfig = struct {
-        max_incremental_size: u64 = 1024 * 1024 * 1024,
-        max_incremental_count: u32 = 10,
-        compression: CompressionType = .none,
-        encryption: bool = false,
-        retention_days: u32 = 30,
-    };
-
-    pub const CompressionType = enum(u32) {
-        none = 0,
-        zstd = 1,
-        lz4 = 2,
-        gzip = 3,
-    };
-
-    pub const BackupType = enum(u32) {
-        full = 0,
-        incremental = 1,
-        differential = 2,
-    };
-
-    pub const BackupMetadata = struct {
-        backup_id: u128,
-        timestamp: i64,
-        backup_type: BackupType,
-        start_lsn: u64,
-        end_lsn: u64,
-        size_bytes: u64,
-        compression: CompressionType,
-        encrypted: bool,
-        checksum: u64,
-        parent_backup_id: ?u128,
-    };
-};
+// CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
+const backup_types = @import("storage/backup");
 
 // Import QUIC modules for real transport implementation
 const quic = @import("transport/quic");
