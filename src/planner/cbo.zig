@@ -85,14 +85,8 @@ pub const CostBasedOptimizer = struct {
             }
         }
 
-        // Log chosen plan
+        // Return best plan
         _ = ctx; // unused in stub
-        if (self.enabled) {
-            std.debug.print("CBO_ON_CHOSE_HASH_JOIN\n", .{});
-        } else {
-            std.debug.print("CBO_OFF_RULE_PLANS\n", .{});
-        }
-
         return best_plan;
     }
 

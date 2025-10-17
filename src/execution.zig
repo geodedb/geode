@@ -791,7 +791,7 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
 pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
     if (input_result.columns.len > 1000000) {
-        std.debug.print("ERROR: Corrupted input_result.columns.len = {d} in executeWithClause\n", .{input_result.columns.len});
+        std.log.err("Corrupted input_result.columns.len = {d} in executeWithClause", .{input_result.columns.len});
         return error.CorruptedExecutionResult;
     }
 
