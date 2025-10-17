@@ -622,11 +622,12 @@ pub const MVCCManager = struct {
     }
 
     // Map conflict to ISO SQL error code 40001 (serialization failure)
-    pub fn conflictToError(conflict: ConflictInfo) !DiagnosticInfo {
+    // P2-3: Now accepts allocator parameter for error message allocation
+    pub fn conflictToError(allocator: std.mem.Allocator, conflict: ConflictInfo) !DiagnosticInfo {
         return DiagnosticInfo{
             .status_class = "40",
             .status_subclass = "001",
-            .message = try std.fmt.allocPrint(std.heap.page_allocator, "Serialization failure: {s} conflict on resource {} with transaction {}", .{ @tagName(conflict.conflict_type), conflict.resource_id, conflict.conflicting_txn }),
+            .message = try std.fmt.allocPrint(allocator, "Serialization failure: {s} conflict on resource {} with transaction {}", .{ @tagName(conflict.conflict_type), conflict.resource_id, conflict.conflicting_txn }),
             .anchor = null,
         };
     }
