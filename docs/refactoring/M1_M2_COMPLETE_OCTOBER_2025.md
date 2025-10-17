@@ -1,7 +1,7 @@
-# M1-M2 + M10-M11-M12 Technical Debt Remediation - COMPLETE
+# M1-M2 + M6-M10-M11-M12 Technical Debt Remediation - COMPLETE
 
 **Date**: October 17, 2025
-**Status**: ✅ **FIVE MILESTONES COMPLETE** (M1, M2, M10-P1, M11, M12-P1)
+**Status**: ✅ **SIX MILESTONES COMPLETE** (M1, M2, M6, M10-P1, M11, M12-P1)
 **Build Status**: ✅ All tests passing (1629/1666 - 97.8%)
 **Memory Safety**: ✅ Zero memory leaks
 
@@ -9,8 +9,9 @@
 
 ## Executive Summary
 
-Successfully completed five technical debt milestones from [CODE_REVIEW_OCTOBER_2025.md](../CODE_REVIEW_OCTOBER_2025.md):
+Successfully completed six technical debt milestones from [CODE_REVIEW_OCTOBER_2025.md](../CODE_REVIEW_OCTOBER_2025.md):
 - **M1-M2**: Major architectural refactoring (file size reduction, global state elimination)
+- **M6**: Unreachable code elimination in KMS (proper error handling)
 - **M10-M11-M12 Phase 1**: Quick win code quality improvements (magic numbers, duplicate code, debug prints)
 
 ### Achievement Metrics
@@ -400,14 +401,51 @@ const ENHANCED_RLS_CACHE_DEFAULT_TTL_MS = 300_000; // 5 minutes
 
 ---
 
-### Summary: M10-M11-M12 Phase 1 Impact
+### M6: Unreachable Code Elimination - ✅ COMPLETE
 
-| Milestone | Status | Lines Eliminated | Constants Added | CANARY Markers |
-|-----------|--------|------------------|-----------------|----------------|
-| **M10 Phase 1** | ✅ Complete | 0 (refactor) | 5 | 3 |
-| **M11 Phase 1-2** | ✅ Complete | 65 (duplicates) | 0 | 2 |
-| **M12 Phase 1** | ✅ Complete | 2 (debug prints) | 0 | 1 |
-| **Total** | - | **67 lines** | **5 constants** | **6 markers** |
+**Problem**: 9 unreachable statements in KMS code that could cause undefined behavior
+
+**Scope**: All KMS remote implementation files
+
+**Changes**:
+1. **ArrayList.initCapacity (6 instances)**: Changed `catch unreachable` → `try`
+   - Memory allocation failures now properly propagate to callers
+   - Functions already returned `!void`, so no signature changes needed
+2. **Ed25519.KeyPair.generateDeterministic (1 instance)**: Changed `catch unreachable` → `try`
+   - Changed `Server.setAuthToken` signature: `void` → `!void`
+   - Updated 9 call sites across 5 test files
+3. **Ed25519.KeyPair.sign (2 instances)**: Changed `catch unreachable` → `try`
+   - Already in functions returning `!void`, proper error propagation
+
+**Files Modified**:
+- `src/security/kms_remote.zig`: 9 unreachable fixes, 1 signature change
+- `tests/test_remote_kms_attestation.zig`: 2 call sites updated
+- `tests/canary_remote_kms_hardening.zig`: 2 call sites updated
+- `tests/test_remote_kms_unwrap_attest.zig`: 1 call site updated
+- `tests/test_remote_kms_auth_negative.zig`: 1 call site updated
+- `tests/canary_remote_kms.zig`: 3 call sites updated
+
+**Impact**:
+- Zero unreachable statements in KMS code
+- OutOfMemory errors properly handled instead of causing undefined behavior
+- Ed25519 cryptographic operation failures properly surfaced to callers
+- Code follows Zig error handling best practices
+
+**Git Commit**: 309bb4e
+
+**CANARY Marker**: REQ-M6-UNREACHABLE-001
+
+---
+
+### Summary: M10-M11-M12-M6 Quick Win Impact
+
+| Milestone | Status | Lines Eliminated | Constants Added | Unreachable Fixed | CANARY Markers |
+|-----------|--------|------------------|-----------------|-------------------|----------------|
+| **M10 Phase 1** | ✅ Complete | 0 (refactor) | 5 | 0 | 3 |
+| **M11 Phase 1-2** | ✅ Complete | 65 (duplicates) | 0 | 0 | 2 |
+| **M12 Phase 1** | ✅ Complete | 2 (debug prints) | 0 | 0 | 1 |
+| **M6** | ✅ Complete | 0 (refactor) | 0 | 9 | 1 |
+| **Total** | - | **67 lines** | **5 constants** | **9 unreachable** | **7 markers** |
 
 **Git Commits** (chronological):
 ```
@@ -415,6 +453,7 @@ e08fe58 - refactor(M12): Phase 1 - Remove debug prints from production code
 445f923 - refactor(M10): Phase 1 - Replace magic numbers with named constants
 c50451e - refactor(M11): Phase 1 - Eliminate BackupConfig duplication in server/main
 9617ead - refactor(M11): Phase 2 - Complete BackupConfig deduplication in CLI
+309bb4e - refactor(M6): Replace unreachable statements with proper error handling
 ```
 
 **Test Status**: 1629/1666 tests passing (97.8%) - Zero regressions
