@@ -2570,6 +2570,56 @@ fn tryBasicFunction(ally: std.mem.Allocator, function_name: []const u8, args: []
         return Value{ .Decimal = .{ .coeff = jaccard_coeff, .scale = 2 } };
     }
 
+    // Handle algo.similarity.cosine(vector1, vector2) - Cosine similarity
+    // CANARY: REQ=REQ-ALG-SIM-001; FEATURE="SimilarityAlgorithms"; ASPECT=Cosine; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-16
+    if (std.mem.eql(u8, function_name, "algo.similarity.cosine") or std.mem.eql(u8, function_name, "cosine")) {
+        if (args.len != 2) return null;
+        const arg1 = try evalExpr(ally, args[0].*, env);
+        const arg2 = try evalExpr(ally, args[1].*, env);
+
+        const vec1 = switch (arg1) {
+            .List => |l| l,
+            else => return Value{ .Null = {} },
+        };
+        const vec2 = switch (arg2) {
+            .List => |l| l,
+            else => return Value{ .Null = {} },
+        };
+
+        if (vec1.len != vec2.len) {
+            return Value{ .Null = {} };
+        }
+
+        // Calculate dot product and magnitudes
+        var dot_product: f64 = 0.0;
+        var norm1: f64 = 0.0;
+        var norm2: f64 = 0.0;
+
+        for (vec1, vec2) |v1, v2| {
+            const val1: f64 = switch (v1) {
+                .Int => |i| @floatFromInt(i),
+                .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+                else => continue,
+            };
+            const val2: f64 = switch (v2) {
+                .Int => |i| @floatFromInt(i),
+                .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+                else => continue,
+            };
+
+            dot_product += val1 * val2;
+            norm1 += val1 * val1;
+            norm2 += val2 * val2;
+        }
+
+        if (norm1 == 0.0 or norm2 == 0.0) {
+            return Value{ .Null = {} };
+        }
+
+        const similarity = dot_product / (@sqrt(norm1) * @sqrt(norm2));
+        return Value{ .Decimal = .{ .coeff = @intFromFloat(similarity * 1000000), .scale = 6 } };
+    }
+
     // Evaluate arguments first
     if (args.len == 0) return null;
 

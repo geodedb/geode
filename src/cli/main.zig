@@ -2220,6 +2220,29 @@ fn executeEmbeddedQuery(ally: std.mem.Allocator, query_text: []const u8, format:
                 !std.mem.eql(u8, status_category, "02") and
                 !std.mem.eql(u8, status_category, "0A"))
             {
+                // Extract error message and write to stderr
+                const stderr_fd = std.fs.File{ .handle = 2 };
+
+                // Try to extract error message from JSON
+                if (std.mem.indexOf(u8, result, "\"error\":\"")) |error_start| {
+                    const error_value_start = error_start + "\"error\":\"".len;
+                    if (std.mem.indexOfPos(u8, result, error_value_start, "\"")) |error_end| {
+                        const error_msg = result[error_value_start..error_end];
+                        _ = stderr_fd.writeAll(error_msg) catch {};
+                        _ = stderr_fd.writeAll("\n") catch {};
+                    }
+                } else if (std.mem.indexOf(u8, result, "\"message\":\"")) |message_start| {
+                    const message_value_start = message_start + "\"message\":\"".len;
+                    if (std.mem.indexOfPos(u8, result, message_value_start, "\"")) |message_end| {
+                        const message_msg = result[message_value_start..message_end];
+                        _ = stderr_fd.writeAll(message_msg) catch {};
+                        _ = stderr_fd.writeAll("\n") catch {};
+                    }
+                } else {
+                    // Fallback: generic syntax error message
+                    _ = stderr_fd.writeAll("syntax error\n") catch {};
+                }
+
                 std.process.exit(1);
             }
         }
