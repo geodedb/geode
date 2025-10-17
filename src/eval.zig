@@ -1497,7 +1497,14 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             if (isNull(v)) return Value{ .Null = {} };
 
             // Execute the subquery
-            var result = execution.executeQueryWithContext(ally, isq.subquery.*, .{}) catch |err| {
+            // M2: Use default context with global catalog for legacy code path
+            const context = execution.getDefaultContext(ally) catch |err| {
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.Unsupported,
+                };
+            };
+            var result = execution.executeQueryWithContext(ally, isq.subquery.*, context) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
@@ -1537,7 +1544,14 @@ pub fn evalExpr(ally: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value 
             if (isNull(v)) return Value{ .Null = {} };
 
             // Execute the subquery
-            var result = execution.executeQueryWithContext(ally, nisq.subquery.*, .{}) catch |err| {
+            // M2: Use default context with global catalog for legacy code path
+            const context = execution.getDefaultContext(ally) catch |err| {
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.Unsupported,
+                };
+            };
+            var result = execution.executeQueryWithContext(ally, nisq.subquery.*, context) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,

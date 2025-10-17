@@ -18,7 +18,7 @@ const executeStatementWithContext = execution.executeStatementWithContext;
 
 pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: ExecutionContext) !ExecutionResult {
     // M2: Get catalog from context via dependency injection
-    const cat = try getCatalog(allocator, context);
+    const cat = getCatalog(allocator, context);
 
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -519,7 +519,7 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
 
                         // Check catalog for matching index
                         // M2: Get catalog from context via dependency injection
-                        const cat = try getCatalog(allocator, context);
+                        const cat = getCatalog(allocator, context);
                         // Phase 3: Shared lock for EXPLAIN (read-only, allows concurrent query planning)
                         cat.rwlock.lockShared();
                         defer cat.rwlock.unlockShared();

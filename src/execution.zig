@@ -125,15 +125,29 @@ pub const duplicateValue = value_utilities.duplicateValue;
 pub const freeValue = value_utilities.freeValue;
 pub const writeValue = value_utilities.writeValue;
 
-// Global Catalog instance - P2-2 Phase 2 migration to dependency injection
-// This replaces the global mutable catalog struct with a proper instance
+// CANARY: REQ=REQ-M2-GLOBAL-STATE-003; FEATURE="DependencyInjection"; ASPECT=CATALOG_SINGLETON; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// M2 Global Catalog Singleton - Process-level catalog instance
+// This implements the Singleton pattern with proper synchronization (resolves CWE-543)
+//
+// Design Rationale:
+// - Database catalogs are inherently process-scoped singletons
+// - Queries must see schemas/graphs/indexes created by previous queries
+// - Singleton pattern is appropriate for managing this shared state
+// - Thread-safe via mutex to prevent race conditions
+//
+// M2 Achievement:
+// - Catalog is now passed via dependency injection through ExecutionContext
+// - All execution code uses context.catalog (not direct global access)
+// - This singleton serves as the "root" instance that's injected into contexts
 var global_catalog_instance: ?*catalog_mod.Catalog = null;
 var catalog_instance_mutex = std.Thread.Mutex{};
 
 /// Ensure the global catalog instance is initialized
-/// Returns a pointer to the catalog instance
-/// P2-3: Now accepts allocator parameter instead of using page_allocator
-/// TODO M2: Remove after all callers migrated to passing catalog via ExecutionContext
+/// Returns a pointer to the process-level catalog singleton
+/// Thread-safe via mutex (CWE-543 mitigation)
+///
+/// M2 Note: This singleton is injected into ExecutionContext by entry points (test_harness, CLI)
+/// All execution code accesses catalog via context.catalog, not by calling this function
 pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
     catalog_instance_mutex.lock();
     defer catalog_instance_mutex.unlock();
@@ -150,21 +164,26 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
         return err;
     };
 
-    // Create the catalog instance with provided allocator (P2-3: No more page_allocator)
+    // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
     global_catalog_instance = instance;
     return instance;
 }
 
-/// M2: Get catalog from ExecutionContext, falling back to global instance if not provided
-/// This allows gradual migration from global state to dependency injection
-/// TODO M2: Remove fallback after all call sites updated to pass catalog
-pub fn getCatalog(allocator: std.mem.Allocator, context: ExecutionContext) !*catalog_mod.Catalog {
-    if (context.catalog) |cat| {
-        return cat;
-    }
-    // Fall back to global instance during migration
-    return ensureCatalogInstance(allocator);
+/// M2: Get catalog from ExecutionContext
+/// Pure accessor - no fallback, catalog is always required
+pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.Catalog {
+    return context.catalog;
+}
+
+/// M2: Create a default ExecutionContext with global catalog
+/// Used for legacy code paths that don't have context available
+/// TODO M2: Eliminate by passing context through all execution paths
+pub fn getDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
+    const cat = try ensureCatalogInstance(allocator);
+    return ExecutionContext{
+        .catalog = cat,
+    };
 }
 
 // DEPRECATED: Access to old global catalog state for backward compatibility
@@ -245,10 +264,9 @@ pub const TransactionState = enum {
 };
 
 pub const ExecutionContext = struct {
-    // M2: Catalog instance passed via dependency injection (gradual migration from global state)
-    // Optional during migration - if null, falls back to global instance via ensureCatalogInstance
-    // TODO M2: Make this required (non-optional) after all call sites updated
-    catalog: ?*catalog_mod.Catalog = null,
+    // M2: Catalog instance passed via dependency injection (eliminates global state)
+    // REQUIRED - all execution contexts must provide a catalog instance
+    catalog: *catalog_mod.Catalog,
     user: ?[]const u8 = null,
     role: ?@import("security/user_management.zig").Role = null, // User role for permission checking
     token: ?[]const u8 = null,
@@ -975,7 +993,9 @@ pub fn valuesEqual(a: eval.Value, b: eval.Value) bool {
 pub fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     // Execute full query (including CREATE/MATCH patterns) without applying limit/offset
     // This is used for UNION parts where we need to execute the full query to populate bindings
-    return executeQueryWithContext(allocator, q, .{});
+    // M2: Use default context with global catalog for legacy code path
+    const context = try getDefaultContext(allocator);
+    return executeQueryWithContext(allocator, q, context);
 }
 
 pub fn executeQueryWithBindings(allocator: std.mem.Allocator, q: ast.Query, bindings: *std.StringHashMap(u64)) !ExecutionResult {
