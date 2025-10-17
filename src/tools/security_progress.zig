@@ -31,8 +31,16 @@ const Canary = struct {
     test_name: []const u8,
 };
 
+/// P2-3: Static GPA for status parsing
+var parse_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var parse_gpa_init = false;
+
 fn parseStatus(s: []const u8) !AreaStatus {
-    var buf = std.ArrayList(u8).init(std.heap.page_allocator);
+    // P2-3: Use static GPA for temporary buffer
+    if (!parse_gpa_init) {
+        parse_gpa_init = true;
+    }
+    var buf = std.ArrayList(u8).init(parse_gpa.allocator());
     defer buf.deinit();
     try buf.appendSlice(s);
     std.ascii.upperString(buf.items, buf.items);

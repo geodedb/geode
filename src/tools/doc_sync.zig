@@ -42,7 +42,10 @@ fn scanReqIds(ally: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
 }
 
 pub fn main() !void {
-    const gpa = std.heap.page_allocator;
+    // P2-3: Use GeneralPurposeAllocator for tool main
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const gpa = gpa_instance.allocator();
 
     // Parse optional --check flag after "--"
     var args_iter = try std.process.argsWithAllocator(gpa);
@@ -66,8 +69,8 @@ pub fn main() !void {
         std.debug.print("doc_sync: failed to scan {s}: {s}\n", .{ p, @errorName(e) });
     };
     // Simple report: count and sorted list
-    var keys = try std.heap.page_allocator.alloc([]const u8, reqs.counts.count());
-    defer std.heap.page_allocator.free(keys);
+    var keys = try gpa.alloc([]const u8, reqs.counts.count());
+    defer gpa.free(keys);
     var it = reqs.counts.iterator();
     var i: usize = 0;
     while (it.next()) |e| : (i += 1) keys[i] = e.key_ptr.*;

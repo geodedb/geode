@@ -1,7 +1,8 @@
 const std = @import("std");
 const geode = @import("geode");
 
-fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
+/// P2-3: Now accepts allocator parameter for temporary sorting buffer
+fn stats(allocator: std.mem.Allocator, values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
     var sum: f128 = 0;
     for (values) |v| sum += @as(f128, @floatFromInt(v));
     const mean_f = sum / @as(f128, @floatFromInt(values.len));
@@ -13,8 +14,8 @@ fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
     const variance = acc / @as(f128, @floatFromInt(values.len));
     const stddev = @as(f64, @floatCast(@sqrt(variance)));
     const mean = @as(f64, @floatCast(mean_f));
-    const tmp = std.heap.page_allocator.alloc(u64, values.len) catch unreachable;
-    defer std.heap.page_allocator.free(tmp);
+    const tmp = allocator.alloc(u64, values.len) catch unreachable;
+    defer allocator.free(tmp);
     std.mem.copyForwards(u64, tmp, values);
     std.sort.pdq(u64, tmp, {}, comptime std.sort.asc(u64));
     const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
@@ -123,7 +124,7 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
         }
     }
     var effective = timings[0..record_index];
-    var st = stats(effective); // mutable shadow for adaptive refinement
+    var st = stats(ally, effective); // mutable shadow for adaptive refinement
     // Extra stats for schema_version=2
     var min_ns: u64 = std.math.maxInt(u64);
     var max_ns: u64 = 0;
@@ -181,7 +182,7 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
                         record_index += 1;
                     }
                     effective = timings[0..record_index];
-                    st = stats(effective);
+                    st = stats(ally, effective);
                     p95_over_mean = if (st.mean == 0) 0 else @as(f64, @floatFromInt(st.p95)) / st.mean;
                     pass = (st.cv <= cv_max) and (p95_over_mean <= ratio_max);
                     // recalc min/max on each refinement iteration for final emission
@@ -347,7 +348,7 @@ fn runSyntheticRaftCommitVariance(ally: std.mem.Allocator) !void {
         if (v > max_ns) max_ns = v;
     }
     if (effective.len == 0) min_ns = 0;
-    const st = stats(effective);
+    const st = stats(ally, effective);
     const p95_over_mean: f64 = if (st.mean == 0) 0 else @as(f64, @floatFromInt(st.p95)) / st.mean;
     const cv_max: f64 = 0.35; // looser for synthetic distribution
     const ratio_max: f64 = 3.0;

@@ -5,7 +5,10 @@ const builtin = @import("builtin");
 // Reads stdin and emits JSON lines for recognized benchmark prefixes.
 
 pub fn main() !void {
-    const ally = std.heap.page_allocator;
+    // P2-3: Use GeneralPurposeAllocator for tool main
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const ally = gpa_instance.allocator();
     var stdin_file = if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
     else

@@ -3,7 +3,10 @@ const std = @import("std");
 const wal_mod = @import("wal");
 
 pub fn main() !void {
-    const gpa = std.heap.page_allocator;
+    // P2-3: Use GeneralPurposeAllocator for tool main
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const gpa = gpa_instance.allocator();
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     var base: ?[]const u8 = null;
