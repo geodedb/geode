@@ -3347,7 +3347,10 @@ fn processMessage(
 }
 
 pub fn main() !void {
-    const gpa = std.heap.page_allocator;
+    // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const gpa = gpa_instance.allocator();
     // Parse server CLI args for optional result format and QUIC listener.
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
