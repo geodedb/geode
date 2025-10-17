@@ -216,7 +216,8 @@ fn hasEqPred(e: ast.Expr) bool {
     };
 }
 
-pub fn planQuery(q: ast.Query, opts: PlannerOptions) PlanError!Plan {
+/// P2-3: Now accepts allocator for temporary validation allocations
+pub fn planQuery(allocator: std.mem.Allocator, q: ast.Query, opts: PlannerOptions) PlanError!Plan {
     const ordered = q.order_by != null;
     // Policy: do not allow OFFSET pushdown without an explicit order (US001)
     if (opts.attempt_pushdown and q.offset != null and !ordered) {
@@ -226,13 +227,14 @@ pub fn planQuery(q: ast.Query, opts: PlannerOptions) PlanError!Plan {
     // Adaptive planner: simple selectivity heuristic for index vs scan
     const use_index = if (q.where_clause) |wc| hasEqPred(wc) else false;
     const note = if (use_index) "INDEX" else "";
-    try validateGroupBy(q);
+    try validateGroupBy(allocator, q);
     return .{ .ordered = ordered, .note = note };
 }
 
 // Sub-phase orchestrated planner with timing segmentation for rewrite, group validation, cost heuristic.
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerSubPhaseHooks; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks; OWNER=planner; UPDATED=2025-09-21
-pub fn planQueryPhasedTimed(q_in: ast.Query, opts: PlannerOptions) PlanError!struct { plan: Plan, timings: phase_timing.PhaseTimings } {
+/// P2-3: Now accepts allocator for temporary validation allocations
+pub fn planQueryPhasedTimed(allocator: std.mem.Allocator, q_in: ast.Query, opts: PlannerOptions) PlanError!struct { plan: Plan, timings: phase_timing.PhaseTimings } {
     // Local reference (placeholder for future in-place rewrites)
     const q = q_in;
     var timings: phase_timing.PhaseTimings = .{};
@@ -249,7 +251,7 @@ pub fn planQueryPhasedTimed(q_in: ast.Query, opts: PlannerOptions) PlanError!str
 
     // Group validation phase mapped onto 'cardinality' timing bucket (reusing enum to avoid breaking benches)
     pt.begin(.cardinality);
-    try validateGroupBy(q);
+    try validateGroupBy(allocator, q);
     pt.end();
 
     // Cost heuristic phase
@@ -343,17 +345,19 @@ fn isAggregateCall(e: ast.Expr) bool {
     };
 }
 
-fn validateGroupBy(q: ast.Query) PlanError!void {
+/// P2-3: Now accepts allocator for temporary validation allocations
+fn validateGroupBy(allocator: std.mem.Allocator, q: ast.Query) PlanError!void {
     if (q.group_by == null) return;
     const gb = q.group_by.?;
     // Collect allowed group-by keys (identifier or simple member) using stable stringification for comparison.
-    var allowed = std.StringHashMap(void).init(std.heap.page_allocator);
+    // P2-3: Use provided allocator instead of page_allocator
+    var allowed = std.StringHashMap(void).init(allocator);
     defer allowed.deinit();
     // Track allocated key strings to free after
-    var allocd = std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
+    var allocd = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     defer {
-        for (allocd.items) |s| std.heap.page_allocator.free(s);
-        allocd.deinit(std.heap.page_allocator);
+        for (allocd.items) |s| allocator.free(s);
+        allocd.deinit(allocator);
     }
     for (gb.keys) |k| {
         switch (k) {
@@ -361,9 +365,9 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
                 _ = allowed.put(id.orig, {}) catch {};
             },
             .Member => {
-                const ss = printer.stringifyExprAlloc(std.heap.page_allocator, k, .{}) catch continue;
+                const ss = printer.stringifyExprAlloc(allocator, k, .{}) catch continue;
                 _ = allowed.put(ss, {}) catch {};
-                allocd.append(std.heap.page_allocator, ss) catch {};
+                allocd.append(allocator, ss) catch {};
             },
             else => {}, // keep strict for other kinds
         }
@@ -371,7 +375,7 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
     if (allowed.count() == 0) return PlanError.GroupByIllegal;
     // Return items must be either aggregate calls or belong to allowed set (by ident/member).
     // Additionally, every GROUP BY key must appear as a non-aggregate RETURN item (policy for this project).
-    var nonagg = std.StringHashMap(void).init(std.heap.page_allocator);
+    var nonagg = std.StringHashMap(void).init(allocator);
     defer nonagg.deinit();
     for (q.ret.items) |it| {
         const e = it.expr;
@@ -382,8 +386,8 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
                 _ = nonagg.put(id.orig, {}) catch {};
             },
             .Member => {
-                const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch return PlanError.GroupByIllegal;
-                defer std.heap.page_allocator.free(ss);
+                const ss = printer.stringifyExprAlloc(allocator, e, .{}) catch return PlanError.GroupByIllegal;
+                defer allocator.free(ss);
                 if (!allowed.contains(ss)) return PlanError.GroupByIllegal;
                 _ = nonagg.put(ss, {}) catch {};
             },
@@ -398,22 +402,23 @@ fn validateGroupBy(q: ast.Query) PlanError!void {
     }
     // HAVING: must be aggregate predicate or refer only to grouped identifiers/members (strict)
     if (q.having) |hv| {
-        if (!exprAllowedInGroup(hv, &allowed)) return PlanError.GroupByIllegal;
+        if (!exprAllowedInGroup(allocator, hv, &allowed)) return PlanError.GroupByIllegal;
     }
 }
 
-fn exprAllowedInGroup(e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
+/// P2-3: Now accepts allocator for temporary string allocations
+fn exprAllowedInGroup(allocator: std.mem.Allocator, e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
     return switch (e) {
         .Int, .Bool, .Null, .String => true,
         .Ident => |id| allowed.contains(id.orig),
         .Member => blk: {
-            const ss = printer.stringifyExprAlloc(std.heap.page_allocator, e, .{}) catch break :blk false;
-            defer std.heap.page_allocator.free(ss);
+            const ss = printer.stringifyExprAlloc(allocator, e, .{}) catch break :blk false;
+            defer allocator.free(ss);
             break :blk allowed.contains(ss);
         },
         .Call => isAggregateCall(e),
-        .Unary => |u| exprAllowedInGroup(u.expr.*, allowed),
-        .Binary => |b| exprAllowedInGroup(b.left.*, allowed) and exprAllowedInGroup(b.right.*, allowed),
+        .Unary => |u| exprAllowedInGroup(allocator, u.expr.*, allowed),
+        .Binary => |b| exprAllowedInGroup(allocator, b.left.*, allowed) and exprAllowedInGroup(allocator, b.right.*, allowed),
         else => false, // phase 1: be strict
     };
 }

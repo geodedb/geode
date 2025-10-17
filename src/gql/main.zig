@@ -400,7 +400,8 @@ pub fn main() !void {
                     const pr = gql.printer;
                     if (q.group_by != null) {
                         // Validate GROUP BY semantics first; surface diagnostics
-                        _ = planner.planQuery(q, .{}) catch |e| {
+                        // P2-3: Pass allocator to planQuery
+                        _ = planner.planQuery(ally, q, .{}) catch |e| {
                             std.debug.print("demo-eval(grouped): planner error {s}\n", .{@errorName(e)});
                             return;
                         };
@@ -518,7 +519,8 @@ pub fn main() !void {
             const st = res.program.statements[0];
             switch (st) {
                 .Query => |q| {
-                    const plan = planner.planQuery(q, .{ .attempt_pushdown = true }) catch |e| {
+                    // P2-3: Pass allocator to planQuery
+                    const plan = planner.planQuery(gpa, q, .{ .attempt_pushdown = true }) catch |e| {
                         if (diagnostics.mapPlannerError(e)) |code| {
                             std.debug.print("diagnostic: {s} ({s})\n", .{ diagnostics.codeName(code), @errorName(e) });
                         } else {

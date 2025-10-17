@@ -243,7 +243,8 @@ pub fn runGroupedQuery(
     timings: ?*AggStageTimings,
 ) ![]const []const BindingValue {
     // Validate GROUP BY legality using planner first
-    _ = try planner.planQuery(q, .{});
+    // P2-3: Pass allocator to planQuery
+    _ = try planner.planQuery(ally, q, .{});
     if (q.group_by == null) return error.Invalid; // requires GROUP BY
     const gb = q.group_by.?;
     // 1) Collect aggregates from RETURN and HAVING
