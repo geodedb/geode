@@ -33,43 +33,14 @@ const logger = struct {
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
-// Backup system integration - using build system module paths
-// For now, we'll create a simplified backup implementation instead of importing the full module
 
-// Simplified backup structures for integration
-const BackupConfig = struct {
-    max_incremental_size: u64 = 1024 * 1024 * 1024, // 1GB
-    max_incremental_count: u32 = 10,
-    compression: CompressionType = .zstd,
-    encryption: bool = false,
-    retention_days: u32 = 30,
-};
-
-const CompressionType = enum {
-    none,
-    zstd,
-    lz4,
-    gzip,
-};
-
-const BackupType = enum {
-    full,
-    incremental,
-    differential,
-};
-
-const BackupMetadata = struct {
-    backup_id: u128,
-    timestamp: i64,
-    backup_type: BackupType,
-    start_lsn: u64,
-    end_lsn: u64,
-    size_bytes: u64,
-    compression: CompressionType,
-    encrypted: bool,
-    checksum: u64,
-    parent_backup_id: ?u128,
-};
+// CANARY: REQ=REQ-M11-DRY-001; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
+const backup = @import("../storage/backup.zig");
+const BackupConfig = backup.BackupConfig;
+const CompressionType = backup.CompressionType;
+const BackupType = backup.BackupType;
+const BackupMetadata = backup.BackupMetadata;
 
 // Simplified backup manager for server integration
 const SimplifiedBackupManager = struct {
