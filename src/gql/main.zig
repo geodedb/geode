@@ -10,7 +10,10 @@ const ast = gql.ast;
 const status = gql.gql.status;
 
 pub fn main() !void {
-    const gpa = std.heap.page_allocator;
+    // P2-3: Use GeneralPurposeAllocator instead of page_allocator
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const gpa = gpa_instance.allocator();
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
     if (args.len < 2) {
@@ -216,7 +219,8 @@ pub fn main() !void {
     } else {
         if (demo_sort) {
             // Minimal demo: use the parsed ORDER BY settings and session offset to sort sample temporal rows.
-            const ally = std.heap.page_allocator;
+            // P2-3: Use main GPA instead of page_allocator
+            const ally = gpa;
             // Expect a single statement query.
             if (res.program.statements.len == 0) {
                 std.debug.print("demo-sort: no statements in file\n", .{});
@@ -281,7 +285,8 @@ pub fn main() !void {
             }
         } else if (demo_setops) {
             // Demonstrate UNION/INTERSECT/EXCEPT semantics on sample binding rows
-            const ally = std.heap.page_allocator;
+            // P2-3: Use main GPA instead of page_allocator
+            const ally = gpa;
             const A0 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
             const A1 = [_]exec.BindingValue{ .{ .Null = {} }, .{ .Str = "x" } };
             const A2 = [_]exec.BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
@@ -318,7 +323,8 @@ pub fn main() !void {
             try w.print("  EXCEPT DISTINCT: {d} rows (sorted)\n", .{ed.len});
         } else if (bench_setops) {
             // Tiny microbenchmark: UNION DISTINCT on synthetic data and optimized path
-            const ally = std.heap.page_allocator;
+            // P2-3: Use main GPA instead of page_allocator
+            const ally = gpa;
             const N: usize = 10_000;
             var a_rows = try ally.alloc([]const exec.BindingValue, N);
             defer ally.free(a_rows);
@@ -342,7 +348,8 @@ pub fn main() !void {
             try w.print("bench-setops: N={d}\n  unionDistinctRows    => {d} ns\n  unionDistinct(opt)   => {d} ns\n  same cardinality?     {s}\n", .{ N, t1 - t0, t2 - t1, if (ud1.len == ud2.len) "yes" else "no" });
         } else if (bench_eval) {
             // Micro-bench: regex =~ and IN/NOT IN evaluation
-            const ally = std.heap.page_allocator;
+            // P2-3: Use main GPA instead of page_allocator
+            const ally = gpa;
             const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             // Regex benchmark
             const samples = [_][]const u8{ "Alice.", "Bob", "Carol123", "Z", "Alic", "Alice." };
@@ -390,7 +397,8 @@ pub fn main() !void {
             try w.print("bench-eval: IN R={d} -> {d} trues in {d} ns; NOT IN -> {d} trues in {d} ns\n", .{ R2, t_in, ta1 - ta0, t_nin, tb1 - tb0 });
         } else if (demo_eval) {
             // Demo: evaluate WHERE and RETURN using the evaluator over a small synthetic rowset {a:int, s:str}
-            const ally = std.heap.page_allocator;
+            // P2-3: Use main GPA instead of page_allocator
+            const ally = gpa;
             if (res.program.statements.len == 0) {
                 std.debug.print("demo-eval: no statements in file\n", .{});
                 return;
