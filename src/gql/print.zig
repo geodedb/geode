@@ -35,8 +35,16 @@ pub fn printProgramHumanWith(w: anytype, prog: ast.Program, opts: PrintOptions) 
 
 pub const PrintJsonOptions = struct { verbose_temporals: bool = false, session_offset_minutes: ?i16 = null };
 
+/// P2-3: Static GPA for convenience wrapper
+var print_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var print_gpa_init = false;
+
 pub fn printProgramJson(w: anytype, prog: ast.Program) !void {
-    return printProgramJsonWith(std.heap.page_allocator, w, prog, .{});
+    // P2-3: Use static GPA for temporary allocations
+    if (!print_gpa_init) {
+        print_gpa_init = true;
+    }
+    return printProgramJsonWith(print_gpa.allocator(), w, prog, .{});
 }
 
 /// P2-3: Now accepts allocator parameter for temporary allocations

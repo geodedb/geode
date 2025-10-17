@@ -20,6 +20,10 @@ pub const Sink = union(enum) {
 
 var g_sink: Sink = .stderr;
 
+/// P2-3: Static GPA for logger buffer sink
+var logger_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var logger_gpa_init = false;
+
 pub fn setLevel(l: Level) void {
     g_level = l;
 }
@@ -121,7 +125,13 @@ pub fn log(l: Level, msg: []const u8, kvs: anytype) void {
                 std.fs.File{ .handle = std.posix.STDERR_FILENO };
             stderr_file.writeAll(out_slice) catch return;
         },
-        .buffer => |list| list.appendSlice(std.heap.page_allocator, out_slice) catch return,
+        .buffer => |list| {
+            // P2-3: Use static GPA for logger buffer
+            if (!logger_gpa_init) {
+                logger_gpa_init = true;
+            }
+            list.appendSlice(logger_gpa.allocator(), out_slice) catch return;
+        },
     }
 }
 
