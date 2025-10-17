@@ -853,19 +853,10 @@ pub const SecurityManager = struct {
         // Hash the password
         const password_hash = try self.hashPassword(default_password);
 
-        // Check if password meets security standards
-        const needs_reset = blk: {
-            if (password_from_env) {
-                // Validate against secure policy
-                _ = self.password_policy; // Reference to avoid unused variable
-                self.validatePassword(default_password) catch {
-                    break :blk true; // Password doesn't meet standards, force reset
-                };
-                break :blk false; // Password meets standards
-            } else {
-                break :blk true; // Default "geodesic" always requires reset
-            }
-        };
+        // CRITICAL SECURITY FIX (C5): ALWAYS require password reset for default user
+        // Even if env password is strong, it may be committed to git/logs/CI
+        // Per OWASP ASVS 2.1.9: Force password change on first use of default credentials
+        const needs_reset = true;
 
         const user = User{
             .id = id,
@@ -888,14 +879,12 @@ pub const SecurityManager = struct {
         try self.users.put(id, user);
         try self.audit_log.logUserCreated(id, admin_username);
 
+        // SECURITY FIX (C5): Log with HIGH severity - default credentials are critical security event
+        const password_source = if (password_from_env) "environment" else "hardcoded";
+        try self.audit_log.append(.user_created, id, "DEFAULT_USER_CREATED username={s} password_source={s} REQUIRES_IMMEDIATE_RESET", .{ admin_username, password_source });
+
         if (password_from_env) {
-            if (needs_reset) {
-                try self.audit_log.append(.user_created, id, "Default user created with env password (insecure, reset required)", .{});
-            } else {
-                try self.audit_log.append(.user_created, id, "Default user created with secure env password", .{});
-            }
-        } else {
-            try self.audit_log.append(.user_created, id, "Default user created with default password (reset required)", .{});
+            std.log.warn("Default user created with env password. SECURITY: Ensure GEODE_DEFAULT_PASSWORD is not in git/logs. Password reset required on first login.", .{});
         }
     }
 
@@ -978,6 +967,14 @@ pub const SecurityManager = struct {
         }
         const user = user_opt orelse return error.UserNotFound;
         if (!user.is_active) return error.UserDisabled;
+
+        // CRITICAL SECURITY FIX (C5): Block default users until password changed
+        // Prevents authentication with predictable default credentials
+        if (user.is_default_user and user.password_reset_required) {
+            try self.audit_log.append(.auth_failed, user.id, "Authentication blocked: default user must change password", .{});
+            return error.DefaultPasswordMustBeChanged;
+        }
+
         if (!try self.verifyPassword(password, user.password_hash)) {
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
@@ -1028,6 +1025,13 @@ pub const SecurityManager = struct {
         }
         const user = user_opt orelse return error.UserNotFound;
         if (!user.is_active) return error.UserDisabled;
+
+        // SECURITY FIX (C5): Block default users in MFA path too
+        if (user.is_default_user and user.password_reset_required) {
+            try self.audit_log.append(.auth_failed, user.id, "MFA authentication blocked: default user must change password", .{});
+            return error.DefaultPasswordMustBeChanged;
+        }
+
         if (!try self.verifyPassword(password, user.password_hash)) {
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
