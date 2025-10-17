@@ -383,8 +383,9 @@ pub fn Bytea(allocator: std.mem.Allocator, hex_str: []const u8) EvaluatorError!V
     return Value{ .Bytea = bytes };
 }
 
-pub fn Json(json_str: []const u8) EvaluatorError!Value {
-    var parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, json_str, .{}) catch return EvaluatorError.JsonInvalid;
+/// P2-3: Now accepts allocator parameter for JSON parsing
+pub fn Json(allocator: std.mem.Allocator, json_str: []const u8) EvaluatorError!Value {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch return EvaluatorError.JsonInvalid;
     defer parsed.deinit();
     return Value{ .Json = json_str };
 }
@@ -704,21 +705,23 @@ pub fn url_path(val: Value) EvaluatorError!Value {
     return Value{ .Text = parsed_url.getPath() };
 }
 
-pub fn domain_labels(val: Value) EvaluatorError!Value {
+/// P2-3: Now accepts allocator parameter for array allocation
+pub fn domain_labels(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
     const domain = switch (val) {
         .Domain => |d| d,
         else => return EvaluatorError.TypeMismatch,
     };
 
-    var elements = std.ArrayList(Value).init(std.heap.page_allocator);
+    // P2-3: Use provided allocator instead of page_allocator
+    var elements = std.ArrayList(Value).init(allocator);
     defer elements.deinit();
 
     for (domain.getLabels()) |label| {
         try elements.append(Value{ .Text = label });
     }
 
-    const array_data = try std.heap.page_allocator.alloc(u8, elements.items.len * 32);
-    const array = arrays.DynamicArray{ .elem_type = .text, .data = array_data, .allocator = std.heap.page_allocator };
+    const array_data = try allocator.alloc(u8, elements.items.len * 32);
+    const array = arrays.DynamicArray{ .elem_type = .text, .data = array_data, .allocator = allocator };
     return Value{ .Array = array };
 }
 
