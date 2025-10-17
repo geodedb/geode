@@ -58,6 +58,6 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect" {
     var sig: [64]u8 = undefined;
     @memset(&sig, 0xEF);
     // This should fail because pub/sig are random noise
-    const ok = kms.RemoteKmsClient.verifyAttestation(pub_key, hash, sig, true);
+    const ok = kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, sig, true);
     try std.testing.expect(!ok);
 }

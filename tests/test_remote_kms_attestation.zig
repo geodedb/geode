@@ -39,7 +39,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify" {
     start = sigpos + 8;
     while (i < 64) : (i += 1) sig[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
     // Verify signature via exported helper
-    const ok = kms.RemoteKmsClient.verifyAttestation(pub_key, hash, sig, false);
+    const ok = kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, sig, false);
     try std.testing.expect(ok);
     // Non-zero hash sanity
     var zero: [32]u8 = [_]u8{0} ** 32;
@@ -85,9 +85,9 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect" {
     // Tamper with signature (flip byte) -> must fail
     var sig_tampered = sig;
     sig_tampered[10] ^= 0xAA;
-    const ok1 = kms.RemoteKmsClient.verifyAttestation(pub_key, hash, sig, false);
+    const ok1 = kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, sig, false);
     try std.testing.expect(ok1);
-    const ok2 = kms.RemoteKmsClient.verifyAttestation(pub_key, hash, sig_tampered, false);
+    const ok2 = kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, sig_tampered, false);
     try std.testing.expect(!ok2);
 }
 

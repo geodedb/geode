@@ -148,10 +148,17 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![75]u8 
     return result;
 }
 
+/// P2-3: Static GPA for password verification (small temporary allocation)
+var verify_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var verify_gpa_init = false;
+
 /// Verify password against stored hash using Argon2id
 pub fn verifyPassword(password: []const u8, hash: [75]u8) bool {
-    // Hash the provided password with same parameters
-    const computed = hashPassword(std.heap.page_allocator, password) catch return false;
+    // P2-3: Use static GPA for temporary hash computation
+    if (!verify_gpa_init) {
+        verify_gpa_init = true;
+    }
+    const computed = hashPassword(verify_gpa.allocator(), password) catch return false;
 
     // Constant-time comparison to prevent timing attacks
     return crypto.timing_safe.eql([75]u8, computed, hash);

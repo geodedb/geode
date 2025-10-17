@@ -69,7 +69,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
             @memset(&bogus_sig, 0);
             var pub_key: [32]u8 = undefined;
             @memset(&pub_key, 0);
-            const ok = kms.RemoteKmsClient.verifyAttestation(pub_key, hash, bogus_sig, false);
+            const ok = kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, bogus_sig, false);
             try std.testing.expect(!ok);
             std.debug.print("[HARDENING] ExpiredAttestation simulated\n", .{});
         }

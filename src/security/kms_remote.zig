@@ -408,15 +408,16 @@ pub const RemoteKmsClient = struct {
         i = 0;
         start = sigpos + 8;
         while (i < 64) : (i += 1) sig[i] = parseHexByte(resp[start + i * 2 .. start + i * 2 + 2]);
-        if (!verifyAttestation(pub_key, hash, sig, false)) return error.InvalidResponse;
+        if (!verifyAttestation(self.allocator, pub_key, hash, sig, false)) return error.InvalidResponse;
         return hash;
     }
 
-    pub fn verifyAttestation(pub_key: [32]u8, hash: [32]u8, sig: [64]u8, is_unwrap: bool) bool {
+    /// P2-3: Now accepts allocator parameter for temporary message allocation
+    pub fn verifyAttestation(allocator: std.mem.Allocator, pub_key: [32]u8, hash: [32]u8, sig: [64]u8, is_unwrap: bool) bool {
         const domain_attest = if (is_unwrap) "GEODE-KMS-ATTEST-UNWRAP" else "GEODE-KMS-ATTEST";
         const msg_len = domain_attest.len + hash.len;
-        var msg = std.heap.page_allocator.alloc(u8, msg_len) catch return false;
-        defer std.heap.page_allocator.free(msg);
+        var msg = allocator.alloc(u8, msg_len) catch return false;
+        defer allocator.free(msg);
         std.mem.copyForwards(u8, msg[0..domain_attest.len], domain_attest);
         std.mem.copyForwards(u8, msg[domain_attest.len..msg_len], &hash);
         const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(pub_key) catch return false;
