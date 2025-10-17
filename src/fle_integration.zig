@@ -35,9 +35,16 @@ pub fn setCurrentUserRole(role: ?[]const u8) void {
 
 /// Get the current user role
 /// Checks environment variable GEODE_CURRENT_ROLE first, then falls back to global variable
+// P2-3: Use static GPA for env var reading
+var role_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var role_gpa_init = false;
+
 pub fn getCurrentUserRole() ?[]const u8 {
     // Check environment variable first (for CLI testing across process boundaries)
-    if (std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_CURRENT_ROLE")) |env_role| {
+    if (!role_gpa_init) {
+        role_gpa_init = true;
+    }
+    if (std.process.getEnvVarOwned(role_gpa.allocator(), "GEODE_CURRENT_ROLE")) |env_role| {
         return env_role;
     } else |_| {
         // Fall back to global variable

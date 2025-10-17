@@ -56,8 +56,15 @@ pub const RaftNode = struct {
         checksum: u32,
     };
 
+    // P2-3: Use static GPA for persistent Raft node allocation
+    var raft_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var raft_gpa_init = false;
+
     pub fn raftOpen(storage_path: []const u8) !*RaftNode {
-        const allocator = std.heap.page_allocator;
+        if (!raft_gpa_init) {
+            raft_gpa_init = true;
+        }
+        const allocator = raft_gpa.allocator();
 
         const self = try allocator.create(RaftNode);
         self.* = .{
