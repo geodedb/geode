@@ -345,7 +345,9 @@ pub const PageManager = struct {
 
     pub fn deinit(self: *PageManager) void {
         // Phase 2 optimization: Flush any remaining dirty pages before cleanup
-        self.flushDirtyPages() catch {};
+        self.flushDirtyPages() catch |err| {
+            std.log.err("CRITICAL: Failed to flush dirty pages on deinit (unflushed writes lost): {any}", .{err});
+        };
         for (self.pages.items) |p| self.allocator.free(p);
         self.pages.deinit(self.allocator);
         self.free_pages.deinit(self.allocator);
@@ -449,14 +451,18 @@ pub const PageManager = struct {
         if (page_index >= self.pages.items.len) return;
         var p = self.asPage(page_index);
         p.setLsn(lsn);
-        if (self.base_path) |bp| self.writePage(bp, page_index) catch {};
+        if (self.base_path) |bp| self.writePage(bp, page_index) catch |err| {
+            std.log.err("CRITICAL: Failed to persist page LSN update (durability compromised, page={}): {any}", .{ page_index, err });
+        };
     }
 
     pub fn insert(self: *PageManager, bytes: []const u8) !iface.RecordId {
         var i = try self.ensurePage();
         var p = self.asPage(i);
         if (p.insert(bytes)) |slot| {
-            if (self.base_path) |bp| self.writePage(bp, i) catch {};
+            if (self.base_path) |bp| self.writePage(bp, i) catch |err| {
+                std.log.err("CRITICAL: Failed to persist page after insert (data loss, page={}): {any}", .{ i, err });
+            };
             return .{ .page = @intCast(i), .slot = slot };
         } else |e| switch (e) {
             error.NoSpace => {
@@ -464,7 +470,9 @@ pub const PageManager = struct {
                 i = self.pages.items.len - 1;
                 var p2 = self.asPage(i);
                 const s2 = try p2.insert(bytes);
-                if (self.base_path) |bp| self.writePage(bp, i) catch {};
+                if (self.base_path) |bp| self.writePage(bp, i) catch |err| {
+                    std.log.err("CRITICAL: Failed to persist new page after insert (data loss, page={}): {any}", .{ i, err });
+                };
                 return .{ .page = @intCast(i), .slot = s2 };
             },
             else => return e,
