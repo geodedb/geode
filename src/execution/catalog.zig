@@ -94,10 +94,10 @@ pub const Catalog = struct {
     }
 
     /// Save catalog to disk
+    /// NOTE: Caller must hold rwlock (either shared or exclusive) before calling
     pub fn save(self: *Catalog) !void {
-        // Lock for reading catalog state
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        // No locking - caller must hold rwlock
+        // This is necessary because save() is typically called while holding a write lock
 
         const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
         defer self.allocator.free(catalog_path);

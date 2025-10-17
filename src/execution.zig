@@ -28,7 +28,8 @@ var catalog_instance_mutex = std.Thread.Mutex{};
 
 /// Ensure the global catalog instance is initialized
 /// Returns a pointer to the catalog instance
-fn ensureCatalogInstance() !*catalog_mod.Catalog {
+/// P2-3: Now accepts allocator parameter instead of using page_allocator
+fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
     catalog_instance_mutex.lock();
     defer catalog_instance_mutex.unlock();
 
@@ -37,7 +38,6 @@ fn ensureCatalogInstance() !*catalog_mod.Catalog {
     }
 
     // Get data directory from environment or use default
-    const allocator = std.heap.page_allocator; // TODO P2-3: Replace with proper allocator
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
         if (err == error.EnvironmentVariableNotFound) {
             break :blk "/tmp";
@@ -45,7 +45,7 @@ fn ensureCatalogInstance() !*catalog_mod.Catalog {
         return err;
     };
 
-    // Create the catalog instance
+    // Create the catalog instance with provided allocator (P2-3: No more page_allocator)
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
     global_catalog_instance = instance;
     return instance;
@@ -1109,7 +1109,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CREATE INDEX implementation with validation
             // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
-            const cat = try ensureCatalogInstance();
+            // P2-3: Pass allocator to ensureCatalogInstance
+            const cat = try ensureCatalogInstance(allocator);
 
             const index_name = ci.name;
             const label = ci.label;
@@ -1120,8 +1121,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Generate scoped key: "label:index_name"
             // This allows the same index name on different labels (e.g., Person:idx and Company:idx)
-            const scoped_key = try getScopedIndexKey(std.heap.page_allocator, label, index_name);
-            defer std.heap.page_allocator.free(scoped_key);
+            // P2-3: Use provided allocator instead of page_allocator
+            const scoped_key = try getScopedIndexKey(allocator, label, index_name);
+            defer allocator.free(scoped_key);
 
             // Check if index already exists for this label
             if (!ci.if_not_exists and cat.indexes.contains(scoped_key)) {
@@ -1155,8 +1157,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Add to catalog if not exists
             if (!cat.indexes.contains(scoped_key)) {
                 // Create IndexInfo with all the details
+                // P2-3: Use catalog's allocator for index info (owned by catalog)
                 const index_info = IndexInfo{
-                    .name = try std.heap.page_allocator.dupe(u8, index_name),
+                    .name = try cat.allocator.dupe(u8, index_name),
                     .index_type = switch (ci.index_type) {
                         .btree => "btree",
                         .hash => "hash",
@@ -1168,17 +1171,18 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .network_cidr => "network_cidr",
                         .signature_crypto => "signature_crypto",
                     },
-                    .table_name = try std.heap.page_allocator.dupe(u8, label),
+                    .table_name = try cat.allocator.dupe(u8, label),
                     .columns = blk: {
-                        var cols = try std.heap.page_allocator.alloc([]const u8, ci.properties.len);
+                        var cols = try cat.allocator.alloc([]const u8, ci.properties.len);
                         for (ci.properties, 0..) |prop, i| {
-                            cols[i] = try std.heap.page_allocator.dupe(u8, prop);
+                            cols[i] = try cat.allocator.dupe(u8, prop);
                         }
                         break :blk cols;
                     },
                 };
                 // Use scoped key for storage: "label:index_name"
-                const stored_key = try getScopedIndexKey(std.heap.page_allocator, label, index_name);
+                // P2-3: Use catalog's allocator for the key (owned by catalog)
+                const stored_key = try getScopedIndexKey(cat.allocator, label, index_name);
                 try cat.indexes.put(stored_key, index_info);
                 // Save catalog to disk after creating index
                 cat.save() catch |err| {
@@ -1215,7 +1219,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // DROP INDEX implementation
             // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
-            const cat = try ensureCatalogInstance();
+            // P2-3: Pass allocator to ensureCatalogInstance
+            const cat = try ensureCatalogInstance(allocator);
 
             const index_name = di.name;
 
@@ -1239,13 +1244,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 // Found the index, remove it
                 if (cat.indexes.fetchRemove(key)) |removed| {
                     // Free the allocated memory
-                    std.heap.page_allocator.free(removed.key);
-                    std.heap.page_allocator.free(removed.value.name);
-                    std.heap.page_allocator.free(removed.value.table_name);
+                    // P2-3: Use catalog's allocator (data was allocated with cat.allocator)
+                    cat.allocator.free(removed.key);
+                    cat.allocator.free(removed.value.name);
+                    cat.allocator.free(removed.value.table_name);
                     for (removed.value.columns) |col| {
-                        std.heap.page_allocator.free(col);
+                        cat.allocator.free(col);
                     }
-                    std.heap.page_allocator.free(removed.value.columns);
+                    cat.allocator.free(removed.value.columns);
                 }
                 // Save catalog after dropping index
                 cat.save() catch |err| {
@@ -1323,7 +1329,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .CreateGraph => |cg| {
             // CREATE GRAPH implementation with duplicate detection
             // P2-2 Phase 2: Use Catalog instance instead of global state
-            const cat = try ensureCatalogInstance();
+            // P2-3: Pass allocator to ensureCatalogInstance
+            const cat = try ensureCatalogInstance(allocator);
 
             const graph_name = cg.name;
 
@@ -1335,7 +1342,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             if (cg.or_replace) {
                 // Remove existing graph if it exists
                 if (cat.graphs.fetchRemove(graph_name)) |entry| {
-                    std.heap.page_allocator.free(entry.key);
+                    // P2-3: Use catalog's allocator
+                    cat.allocator.free(entry.key);
                 }
             } else {
                 // Check if graph already exists
@@ -1353,7 +1361,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             }
 
             // Add to catalog
-            try cat.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
+            // P2-3: Use catalog's allocator (owned by catalog)
+            try cat.graphs.put(try cat.allocator.dupe(u8, graph_name), {});
             // Save catalog to disk after creating graph
             cat.save() catch |err| {
                 std.log.err("CRITICAL: Failed to persist catalog after graph creation  '{s}': {any}", .{ graph_name, err });
@@ -1423,7 +1432,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .DropGraph => |dg| {
             // DROP GRAPH implementation with existence check
             // P2-2 Phase 2: Use Catalog instance instead of global state
-            const cat = try ensureCatalogInstance();
+            // P2-3: Pass allocator to ensureCatalogInstance
+            const cat = try ensureCatalogInstance(allocator);
 
             const graph_name = dg.name;
 
@@ -1457,7 +1467,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .CreateSchema => |cs| {
             // CREATE SCHEMA implementation with duplicate detection
             // P2-2 Phase 2: Use Catalog instance instead of global state
-            const cat = try ensureCatalogInstance();
+            // P2-3: Pass allocator to ensureCatalogInstance
+            const cat = try ensureCatalogInstance(allocator);
 
             const schema_name = cs.name;
 
@@ -1472,7 +1483,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Add to catalog if not exists
             if (!cat.schemas.contains(schema_name)) {
-                try cat.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
+                // P2-3: Use catalog's allocator (owned by catalog)
+                try cat.schemas.put(try cat.allocator.dupe(u8, schema_name), {});
                 // Save catalog to disk after creating schema
                 cat.save() catch |err| {
                     std.log.err("CRITICAL: Failed to persist catalog after schema creation  '{s}': {any}", .{ schema_name, err });
@@ -1488,7 +1500,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .DropSchema => |ds| {
             // DROP SCHEMA implementation with existence check
             // P2-2 Phase 2: Use Catalog instance instead of global state
-            const cat = try ensureCatalogInstance();
+            // P2-3: Pass allocator to ensureCatalogInstance
+            const cat = try ensureCatalogInstance(allocator);
 
             const schema_name = ds.name;
 
@@ -1621,7 +1634,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
 fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionResult {
     // P2-2 Phase 2: Use Catalog instance instead of global state
-    const cat = try ensureCatalogInstance();
+    // P2-3: Pass allocator to ensureCatalogInstance
+    const cat = try ensureCatalogInstance(allocator);
 
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -2122,7 +2136,8 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
 
                         // Check catalog for matching index
                         // P2-2 Phase 2: Use Catalog instance instead of global state
-                        const cat = try ensureCatalogInstance();
+                        // P2-3: Pass allocator to ensureCatalogInstance
+                        const cat = try ensureCatalogInstance(allocator);
                         // Phase 3: Shared lock for EXPLAIN (read-only, allows concurrent query planning)
                         cat.rwlock.lockShared();
                         defer cat.rwlock.unlockShared();
