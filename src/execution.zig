@@ -21,7 +21,38 @@ pub const saveCatalog = catalog_mod.saveCatalog;
 pub const loadCatalog = catalog_mod.loadCatalog;
 pub const getScopedIndexKey = catalog_mod.getScopedIndexKey;
 
-// Access to global catalog state - execution.zig needs direct access to these
+// Global Catalog instance - P2-2 Phase 2 migration to dependency injection
+// This replaces the global mutable catalog struct with a proper instance
+var global_catalog_instance: ?*catalog_mod.Catalog = null;
+var catalog_instance_mutex = std.Thread.Mutex{};
+
+/// Ensure the global catalog instance is initialized
+/// Returns a pointer to the catalog instance
+fn ensureCatalogInstance() !*catalog_mod.Catalog {
+    catalog_instance_mutex.lock();
+    defer catalog_instance_mutex.unlock();
+
+    if (global_catalog_instance) |instance| {
+        return instance;
+    }
+
+    // Get data directory from environment or use default
+    const allocator = std.heap.page_allocator; // TODO P2-3: Replace with proper allocator
+    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk "/tmp";
+        }
+        return err;
+    };
+
+    // Create the catalog instance
+    const instance = try catalog_mod.Catalog.init(allocator, data_dir);
+    global_catalog_instance = instance;
+    return instance;
+}
+
+// DEPRECATED: Access to old global catalog state for backward compatibility
+// TODO P2-2 Phase 3: Remove after all callers migrated to instance
 const catalog_rwlock = &catalog_mod.catalog_rwlock;
 const catalog_initialized = &catalog_mod.catalog_initialized;
 const last_catalog_data_dir = &catalog_mod.last_catalog_data_dir;
@@ -1077,14 +1108,15 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .CreateIndex => |ci| {
             // CREATE INDEX implementation with validation
             // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
-            initCatalog();
+            // P2-2 Phase 2: Use Catalog instance instead of global state
+            const cat = try ensureCatalogInstance();
 
             const index_name = ci.name;
             const label = ci.label;
 
             // Phase 3: Write lock for CREATE INDEX
-            catalog_rwlock.lock();
-            defer catalog_rwlock.unlock();
+            cat.rwlock.lock();
+            defer cat.rwlock.unlock();
 
             // Generate scoped key: "label:index_name"
             // This allows the same index name on different labels (e.g., Person:idx and Company:idx)
@@ -1092,7 +1124,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             defer std.heap.page_allocator.free(scoped_key);
 
             // Check if index already exists for this label
-            if (!ci.if_not_exists and catalog.indexes.contains(scoped_key)) {
+            if (!ci.if_not_exists and cat.indexes.contains(scoped_key)) {
                 return error.DuplicateIndex;
             }
 
@@ -1121,7 +1153,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             }
 
             // Add to catalog if not exists
-            if (!catalog.indexes.contains(scoped_key)) {
+            if (!cat.indexes.contains(scoped_key)) {
                 // Create IndexInfo with all the details
                 const index_info = IndexInfo{
                     .name = try std.heap.page_allocator.dupe(u8, index_name),
@@ -1147,9 +1179,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 };
                 // Use scoped key for storage: "label:index_name"
                 const stored_key = try getScopedIndexKey(std.heap.page_allocator, label, index_name);
-                try catalog.indexes.put(stored_key, index_info);
+                try cat.indexes.put(stored_key, index_info);
                 // Save catalog to disk after creating index
-                saveCatalog() catch |err| {
+                cat.save() catch |err| {
                     std.log.err("CRITICAL: Failed to persist catalog after index creation  '{s}': {any}", .{ index_name, err });
                 };
             }
@@ -1182,18 +1214,19 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .DropIndex => |di| {
             // DROP INDEX implementation
             // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
-            initCatalog();
+            // P2-2 Phase 2: Use Catalog instance instead of global state
+            const cat = try ensureCatalogInstance();
 
             const index_name = di.name;
 
             // Phase 3: Write lock for DROP INDEX
-            catalog_rwlock.lock();
-            defer catalog_rwlock.unlock();
+            cat.rwlock.lock();
+            defer cat.rwlock.unlock();
 
             // Search for index by name across all labels
             // Since we use scoped keys ("label:index_name"), we need to find the matching entry
             var found_key: ?[]const u8 = null;
-            var iter = catalog.indexes.iterator();
+            var iter = cat.indexes.iterator();
             while (iter.next()) |entry| {
                 const info = entry.value_ptr.*;
                 if (std.mem.eql(u8, info.name, index_name)) {
@@ -1204,7 +1237,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             if (found_key) |key| {
                 // Found the index, remove it
-                if (catalog.indexes.fetchRemove(key)) |removed| {
+                if (cat.indexes.fetchRemove(key)) |removed| {
                     // Free the allocated memory
                     std.heap.page_allocator.free(removed.key);
                     std.heap.page_allocator.free(removed.value.name);
@@ -1215,7 +1248,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     std.heap.page_allocator.free(removed.value.columns);
                 }
                 // Save catalog after dropping index
-                saveCatalog() catch |err| {
+                cat.save() catch |err| {
                     std.log.err("CRITICAL: Failed to persist catalog after index drop  '{s}': {any}", .{ index_name, err });
                 };
             } else if (!di.if_exists) {
@@ -1289,23 +1322,24 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .CreateGraph => |cg| {
             // CREATE GRAPH implementation with duplicate detection
-            initCatalog();
+            // P2-2 Phase 2: Use Catalog instance instead of global state
+            const cat = try ensureCatalogInstance();
 
             const graph_name = cg.name;
 
             // Phase 3: Write lock for CREATE GRAPH
-            catalog_rwlock.lock();
-            defer catalog_rwlock.unlock();
+            cat.rwlock.lock();
+            defer cat.rwlock.unlock();
 
             // Handle OR REPLACE
             if (cg.or_replace) {
                 // Remove existing graph if it exists
-                if (catalog.graphs.fetchRemove(graph_name)) |entry| {
+                if (cat.graphs.fetchRemove(graph_name)) |entry| {
                     std.heap.page_allocator.free(entry.key);
                 }
             } else {
                 // Check if graph already exists
-                if (catalog.graphs.contains(graph_name)) {
+                if (cat.graphs.contains(graph_name)) {
                     // If IF NOT EXISTS is specified, silently succeed
                     if (cg.if_not_exists) {
                         return ExecutionResult{
@@ -1319,9 +1353,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             }
 
             // Add to catalog
-            try catalog.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
+            try cat.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
             // Save catalog to disk after creating graph
-            saveCatalog() catch |err| {
+            cat.save() catch |err| {
                 std.log.err("CRITICAL: Failed to persist catalog after graph creation  '{s}': {any}", .{ graph_name, err });
             };
 
@@ -1388,21 +1422,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .DropGraph => |dg| {
             // DROP GRAPH implementation with existence check
-            initCatalog();
+            // P2-2 Phase 2: Use Catalog instance instead of global state
+            const cat = try ensureCatalogInstance();
 
             const graph_name = dg.name;
 
             // Phase 3: Write lock for DROP GRAPH
-            catalog_rwlock.lock();
-            defer catalog_rwlock.unlock();
+            cat.rwlock.lock();
+            defer cat.rwlock.unlock();
 
             // Check if graph exists (unless IF EXISTS is used)
-            if (!dg.if_exists and !catalog.graphs.contains(graph_name)) {
+            if (!dg.if_exists and !cat.graphs.contains(graph_name)) {
                 return error.GraphNotFound;
             }
 
             // Remove from catalog if it exists
-            _ = catalog.graphs.remove(graph_name);
+            _ = cat.graphs.remove(graph_name);
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1421,24 +1456,25 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .CreateSchema => |cs| {
             // CREATE SCHEMA implementation with duplicate detection
-            initCatalog();
+            // P2-2 Phase 2: Use Catalog instance instead of global state
+            const cat = try ensureCatalogInstance();
 
             const schema_name = cs.name;
 
             // Phase 3: Write lock for CREATE SCHEMA
-            catalog_rwlock.lock();
-            defer catalog_rwlock.unlock();
+            cat.rwlock.lock();
+            defer cat.rwlock.unlock();
 
             // Check if schema already exists
-            if (!cs.if_not_exists and catalog.schemas.contains(schema_name)) {
+            if (!cs.if_not_exists and cat.schemas.contains(schema_name)) {
                 return error.DuplicateSchema;
             }
 
             // Add to catalog if not exists
-            if (!catalog.schemas.contains(schema_name)) {
-                try catalog.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
+            if (!cat.schemas.contains(schema_name)) {
+                try cat.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
                 // Save catalog to disk after creating schema
-                saveCatalog() catch |err| {
+                cat.save() catch |err| {
                     std.log.err("CRITICAL: Failed to persist catalog after schema creation  '{s}': {any}", .{ schema_name, err });
                 };
             }
@@ -1451,21 +1487,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .DropSchema => |ds| {
             // DROP SCHEMA implementation with existence check
-            initCatalog();
+            // P2-2 Phase 2: Use Catalog instance instead of global state
+            const cat = try ensureCatalogInstance();
 
             const schema_name = ds.name;
 
             // Phase 3: Write lock for DROP SCHEMA
-            catalog_rwlock.lock();
-            defer catalog_rwlock.unlock();
+            cat.rwlock.lock();
+            defer cat.rwlock.unlock();
 
             // Check if schema exists (unless IF EXISTS is used)
-            if (!ds.if_exists and !catalog.schemas.contains(schema_name)) {
+            if (!ds.if_exists and !cat.schemas.contains(schema_name)) {
                 return error.SchemaNotFound;
             }
 
             // Remove from catalog if it exists
-            _ = catalog.schemas.remove(schema_name);
+            _ = cat.schemas.remove(schema_name);
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1583,7 +1620,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 }
 
 fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionResult {
-    initCatalog();
+    // P2-2 Phase 2: Use Catalog instance instead of global state
+    const cat = try ensureCatalogInstance();
 
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -1604,13 +1642,13 @@ fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionRes
     var rows_list = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
 
     // Phase 3: Shared lock for SHOW (read-only, allows concurrent access)
-    catalog_rwlock.lockShared();
-    defer catalog_rwlock.unlockShared();
+    cat.rwlock.lockShared();
+    defer cat.rwlock.unlockShared();
 
     switch (s.show_type) {
         .indexes => {
             // Return index data from catalog
-            var iter = catalog.indexes.iterator();
+            var iter = cat.indexes.iterator();
             while (iter.next()) |entry| {
                 const info = entry.value_ptr.*;
                 var row = try allocator.alloc(eval.Value, 4);
@@ -1631,7 +1669,7 @@ fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionRes
         },
         .graphs => {
             // Return graph names from catalog
-            var iter = catalog.graphs.iterator();
+            var iter = cat.graphs.iterator();
             while (iter.next()) |entry| {
                 var row = try allocator.alloc(eval.Value, 1);
                 row[0] = eval.Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
@@ -2083,12 +2121,13 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
                         const prop_name = head.props.?[0].key;
 
                         // Check catalog for matching index
-                        initCatalog();
+                        // P2-2 Phase 2: Use Catalog instance instead of global state
+                        const cat = try ensureCatalogInstance();
                         // Phase 3: Shared lock for EXPLAIN (read-only, allows concurrent query planning)
-                        catalog_rwlock.lockShared();
-                        defer catalog_rwlock.unlockShared();
+                        cat.rwlock.lockShared();
+                        defer cat.rwlock.unlockShared();
 
-                        var index_iter = catalog.indexes.valueIterator();
+                        var index_iter = cat.indexes.valueIterator();
                         while (index_iter.next()) |index_info| {
                             // Check if index matches this label and property
                             if (std.mem.eql(u8, index_info.table_name, label) and
