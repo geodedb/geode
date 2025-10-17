@@ -29,10 +29,10 @@
 | **P0-6** | Silent error swallowing (44+ locations) | 🔴 Critical | ✅ COMPLETE | 55+ paths fixed, 1 remaining |
 | **P0-7** | Insecure TLS fallback in QUIC | 🔴 Critical | ✅ COMPLETE | `src/transport/quic.zig:131-136, 196` |
 
-### Major Issues - Updated Status
+### Major Issues - Updated Status (October 17, 2025)
 
-- **M1**: Massive file size - `execution.zig` (11,163 lines) violates SRP - 🟡 Remaining (P1)
-- **M2**: Global mutable state with improper synchronization - 🟡 Remaining (P1)
+- **M1**: ~~Massive file size - `execution.zig` (11,163 lines) violates SRP~~ - ✅ **COMPLETE** (977 lines, 91.1% reduction)
+- **M2**: ~~Global mutable state with improper synchronization~~ - ✅ **COMPLETE** (Dependency injection via ExecutionContext)
 - **M3**: ~~Page allocator usage in production (40+ occurrences)~~ - ✅ **COMPLETE** (0/156 remaining)
 - **M4-M13**: See detailed breakdown in remediation plan - 🟡 Remaining (P1)
 
@@ -52,10 +52,10 @@
 ### Next Steps
 
 **Phase 2: Major Issues & Technical Debt (P1)** - Non-blocking for production
-1. M1: File size reduction (execution.zig refactoring)
-2. M2: Global state synchronization
-3. M4-M13: Additional technical debt items
-4. Estimated: 4-6 weeks
+1. ~~M1: File size reduction (execution.zig refactoring)~~ - ✅ **COMPLETE** (October 17, 2025)
+2. ~~M2: Global state synchronization~~ - ✅ **COMPLETE** (October 17, 2025)
+3. M4-M13: Additional technical debt items - 🟡 **REMAINING**
+4. Estimated: 2-4 weeks remaining (2 weeks completed)
 
 **See**: [REMEDIATION_PLAN_OCTOBER_2025.md](./REMEDIATION_PLAN_OCTOBER_2025.md) for detailed implementation plans
 
