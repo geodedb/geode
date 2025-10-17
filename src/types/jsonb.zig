@@ -54,7 +54,8 @@ pub const JsonbDocument = struct {
             }
         }
 
-        return jsonValueToJsonb(current.*);
+        // P2-3: Pass allocator to jsonValueToJsonb
+        return jsonValueToJsonb(self.allocator, current.*);
     }
 
     pub fn exists(self: JsonbDocument, key: []const u8) bool {
@@ -88,11 +89,13 @@ pub const JsonbDocument = struct {
         errdefer result.deinit(allocator);
 
         const writer = result.writer(allocator);
-        try canonicalizeValue(writer, value);
+        // P2-3: Pass allocator to canonicalizeValue for temporary allocations
+        try canonicalizeValue(allocator, writer, value);
         return result.toOwnedSlice(allocator);
     }
 
-    fn canonicalizeValue(writer: anytype, value: std.json.Value) Error!void {
+    /// P2-3: Now accepts allocator parameter for temporary allocations
+    fn canonicalizeValue(allocator: std.mem.Allocator, writer: anytype, value: std.json.Value) Error!void {
         switch (value) {
             .null => try writer.writeAll("null"),
             .bool => |b| try writer.writeAll(if (b) "true" else "false"),
@@ -117,18 +120,19 @@ pub const JsonbDocument = struct {
                 try writer.writeByte('[');
                 for (arr.items, 0..) |item, i| {
                     if (i > 0) try writer.writeByte(',');
-                    try canonicalizeValue(writer, item);
+                    try canonicalizeValue(allocator, writer, item);
                 }
                 try writer.writeByte(']');
             },
             .object => |obj| {
                 try writer.writeByte('{');
-                var keys = std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 0) catch return Error.OutOfMemory;
-                defer keys.deinit(std.heap.page_allocator);
+                // P2-3: Use provided allocator instead of page_allocator
+                var keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return Error.OutOfMemory;
+                defer keys.deinit(allocator);
 
                 var iter = obj.iterator();
                 while (iter.next()) |entry| {
-                    try keys.append(std.heap.page_allocator, entry.key_ptr.*);
+                    try keys.append(allocator, entry.key_ptr.*);
                 }
 
                 std.sort.insertion([]const u8, keys.items, {}, struct {
@@ -140,14 +144,15 @@ pub const JsonbDocument = struct {
                 for (keys.items, 0..) |key, i| {
                     if (i > 0) try writer.writeByte(',');
                     try std.fmt.format(writer, "\"{s}\":", .{key});
-                    try canonicalizeValue(writer, obj.get(key).?);
+                    try canonicalizeValue(allocator, writer, obj.get(key).?);
                 }
                 try writer.writeByte('}');
             },
         }
     }
 
-    fn jsonValueToJsonb(value: std.json.Value) JsonbValue {
+    /// P2-3: Now accepts allocator parameter for owned slice allocations
+    fn jsonValueToJsonb(allocator: std.mem.Allocator, value: std.json.Value) JsonbValue {
         return switch (value) {
             .null => .null,
             .bool => |b| .{ .bool = b },
@@ -156,22 +161,24 @@ pub const JsonbDocument = struct {
             .number_string => |ns| .{ .number = std.fmt.parseFloat(f64, ns) catch 0.0 },
             .string => |s| .{ .string = s },
             .array => |arr| {
-                var jsonb_arr = std.ArrayList(JsonbValue).initCapacity(std.heap.page_allocator, 0) catch return .{ .array = &.{} };
+                // P2-3: Use provided allocator instead of page_allocator
+                var jsonb_arr = std.ArrayList(JsonbValue).initCapacity(allocator, 0) catch return .{ .array = &.{} };
                 for (arr.items) |item| {
-                    jsonb_arr.append(std.heap.page_allocator, jsonValueToJsonb(item)) catch {};
+                    jsonb_arr.append(allocator, jsonValueToJsonb(allocator, item)) catch {};
                 }
-                return .{ .array = jsonb_arr.toOwnedSlice(std.heap.page_allocator) catch &.{} };
+                return .{ .array = jsonb_arr.toOwnedSlice(allocator) catch &.{} };
             },
             .object => |obj| {
-                var jsonb_obj = std.ArrayList(JsonbValue.JsonbKeyValue).initCapacity(std.heap.page_allocator, 0) catch return .{ .object = &.{} };
+                // P2-3: Use provided allocator instead of page_allocator
+                var jsonb_obj = std.ArrayList(JsonbValue.JsonbKeyValue).initCapacity(allocator, 0) catch return .{ .object = &.{} };
                 var iter = obj.iterator();
                 while (iter.next()) |entry| {
-                    jsonb_obj.append(std.heap.page_allocator, .{
+                    jsonb_obj.append(allocator, .{
                         .key = entry.key_ptr.*,
-                        .value = jsonValueToJsonb(entry.value_ptr.*),
+                        .value = jsonValueToJsonb(allocator, entry.value_ptr.*),
                     }) catch {};
                 }
-                return .{ .object = jsonb_obj.toOwnedSlice(std.heap.page_allocator) catch &.{} };
+                return .{ .object = jsonb_obj.toOwnedSlice(allocator) catch &.{} };
             },
         };
     }
