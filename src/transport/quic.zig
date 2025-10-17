@@ -16,7 +16,6 @@ const tls = std.crypto.tls;
 /// - Zero runtime overhead for debug logs in release builds
 /// - Smaller binary size (10-15% reduction)
 /// - No string formatting cost for eliminated logs
-
 inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
     if (comptime builtin.mode == .Debug) {
         std.debug.print(fmt ++ "\n", args);

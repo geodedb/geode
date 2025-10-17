@@ -2064,7 +2064,7 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
 
     // Build arrays for iteration environment (pre-sized for variable + optionals)
     const env_capacity = 1 + (if (for_stmt.ordinality_var != null) @as(usize, 1) else 0) +
-                        (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
+        (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
     var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, env_capacity);
     var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, env_capacity);
 
