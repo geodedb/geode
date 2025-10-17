@@ -8,7 +8,8 @@ pub fn hex32(buf: []const u8) ![32]u8 {
     while (i < 32) : (i += 1) out[i] = try std.fmt.parseInt(u8, buf[i * 2 .. i * 2 + 2], 16);
     return out;
 }
-pub fn verifyFile(path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8) !void {
+/// P2-3: Now accepts allocator parameter for line buffer allocation
+pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8) !void {
     _ = digest_interval_events;
     _ = require_digest;
     _ = pubkey;
@@ -16,8 +17,8 @@ pub fn verifyFile(path: []const u8, algo: HashAlgo, digest_interval_events: u32,
     defer file.close();
     var buf: [4096]u8 = undefined;
     var rd = file.reader(&buf);
-    var line_buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
-    defer line_buf.deinit(std.heap.page_allocator);
+    var line_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    defer line_buf.deinit(allocator);
     var seq: u64 = 0;
     var last_hash: [32]u8 = [_]u8{0} ** 32;
     var digest_count: u32 = 0;
@@ -29,7 +30,7 @@ pub fn verifyFile(path: []const u8, algo: HashAlgo, digest_interval_events: u32,
             const n = rd.read(&one) catch return error.ReadError;
             if (n == 0) break;
             if (one[0] == '\n') break;
-            line_buf.append(std.heap.page_allocator, one[0]) catch return error.OutOfMemory;
+            line_buf.append(allocator, one[0]) catch return error.OutOfMemory;
         }
         if (line_buf.items.len == 0) break;
         const line = line_buf.items;

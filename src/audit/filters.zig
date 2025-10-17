@@ -35,9 +35,10 @@ pub const RedactionToken = enum {
     }
 };
 
-pub fn isSensitiveKey(key: []const u8) ?RedactionToken {
-    const lower_key = std.ascii.allocLowerString(std.heap.page_allocator, key) catch return null;
-    defer std.heap.page_allocator.free(lower_key);
+/// P2-3: Now accepts allocator parameter for temporary lowercase string allocation
+pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionToken {
+    const lower_key = std.ascii.allocLowerString(allocator, key) catch return null;
+    defer allocator.free(lower_key);
 
     // Password-related
     if (std.mem.indexOf(u8, lower_key, "password") != null or

@@ -5,29 +5,29 @@ const config = @import("../audit/config.zig");
 
 test "sensitive key detection" {
     // Test password-related keys
-    try testing.expect(filters.isSensitiveKey("password") == .password);
-    try testing.expect(filters.isSensitiveKey("Password") == .password);
-    try testing.expect(filters.isSensitiveKey("user_password") == .password);
-    try testing.expect(filters.isSensitiveKey("passwd") == .password);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "password") == .password);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "Password") == .password);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "user_password") == .password);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "passwd") == .password);
 
     // Test token-related keys
-    try testing.expect(filters.isSensitiveKey("token") == .token);
-    try testing.expect(filters.isSensitiveKey("api_key") == .token);
-    try testing.expect(filters.isSensitiveKey("apikey") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "token") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "api_key") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "apikey") == .token);
 
     // Test JWT
-    try testing.expect(filters.isSensitiveKey("jwt") == .jwt);
-    try testing.expect(filters.isSensitiveKey("JWT_TOKEN") == .jwt);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "jwt") == .jwt);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "JWT_TOKEN") == .jwt);
 
     // Test payment card
-    try testing.expect(filters.isSensitiveKey("card") == .card);
-    try testing.expect(filters.isSensitiveKey("credit_card") == .card);
-    try testing.expect(filters.isSensitiveKey("cc_number") == .card);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "card") == .card);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "credit_card") == .card);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "cc_number") == .card);
 
     // Test non-sensitive keys
-    try testing.expect(filters.isSensitiveKey("username") == null);
-    try testing.expect(filters.isSensitiveKey("user_id") == null);
-    try testing.expect(filters.isSensitiveKey("timestamp") == null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "username") == null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "user_id") == null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "timestamp") == null);
 }
 
 test "JWT detection" {

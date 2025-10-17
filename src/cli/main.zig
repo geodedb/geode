@@ -3992,7 +3992,7 @@ pub fn main() !void {
                 audit_i += 1;
             }
         }
-        try audit_cli.verifyFile(path, algo, 100, require_digest, pubkey);
+        try audit_cli.verifyFile(ally, path, algo, 100, require_digest, pubkey);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else {
         // Check if this is an option that should be handled by query command
