@@ -1,0 +1,340 @@
+const std = @import("std");
+const ast = @import("../gql/ast.zig");
+const eval = @import("../eval.zig");
+const graph_store = @import("../graph_store.zig");
+
+const execution = @import("../execution.zig");
+const ExecutionResult = execution.ExecutionResult;
+const ExecutionContext = execution.ExecutionContext;
+
+// Import helper functions used by return and sorting
+const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
+
+// CANARY: REQ=REQ-EXEC-REFACTOR-009; FEATURE="FileModularization"; ASPECT=ReturnAndSorting; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
+pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {
+    // Check if we're using ordinals (need to add flag) - do this before early return
+    var uses_ordinal = false;
+    for (order.keys) |key| {
+        if (key.expr == .Int) {
+            uses_ordinal = true;
+            break;
+        }
+    }
+    if (uses_ordinal) {
+        try result.flags.append(allocator, "E:OrdinalSortKey");
+    }
+
+    if (result.rows.len <= 1) return;
+
+    // For now, implement a simple bubble sort
+    // TODO: Replace with better sorting algorithm
+    var swapped = true;
+    while (swapped) {
+        swapped = false;
+        var i: usize = 0;
+        while (i < result.rows.len - 1) : (i += 1) {
+            // Compare rows based on ORDER BY keys
+            var should_swap = false;
+
+            for (order.keys) |key| {
+                // CANARY: REQ=REQ-GQL-101; FEATURE="ORDER BY Expression Evaluation"; ASPECT=Execution; STATUS=FIXED; TEST=gql_conformance.T3; OWNER=execution; UPDATED=2025-10-14
+                // Handle ordinal references (ORDER BY 2 means second column)
+                var val1: eval.Value = undefined;
+                var val2: eval.Value = undefined;
+
+                if (key.expr == .Int) {
+                    // Ordinal reference - use 1-based indexing
+                    const col_idx = @as(usize, @intCast(key.expr.Int - 1));
+                    if (col_idx < result.rows[i].len) {
+                        val1 = result.rows[i][col_idx];
+                        val2 = result.rows[i + 1][col_idx];
+                    } else {
+                        // Invalid column index
+                        val1 = .{ .Null = {} };
+                        val2 = .{ .Null = {} };
+                    }
+                } else if (key.expr == .Ident) {
+                    // Simple column reference - look up by name
+                    const col_name = key.expr.Ident.orig;
+                    var col_idx_opt: ?usize = null;
+                    for (result.columns, 0..) |result_col, idx| {
+                        if (std.mem.eql(u8, result_col, col_name)) {
+                            col_idx_opt = idx;
+                            break;
+                        }
+                    }
+                    if (col_idx_opt) |col_idx| {
+                        val1 = result.rows[i][col_idx];
+                        val2 = result.rows[i + 1][col_idx];
+                    } else {
+                        // Column not found
+                        val1 = .{ .Null = {} };
+                        val2 = .{ .Null = {} };
+                    }
+                } else {
+                    // Complex expression - need to evaluate it for each row
+                    // Create environment from row values
+                    const env1 = eval.Env{
+                        .names = result.columns,
+                        .values = result.rows[i],
+                        .allocator = allocator,
+                    };
+                    const env2 = eval.Env{
+                        .names = result.columns,
+                        .values = result.rows[i + 1],
+                        .allocator = allocator,
+                    };
+
+                    // Evaluate expressions (errors default to Null)
+                    val1 = eval.evalExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                    val2 = eval.evalExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                }
+
+                const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
+                if (cmp == 0) continue; // Equal, check next key
+
+                if (key.desc) {
+                    should_swap = cmp < 0;
+                } else {
+                    should_swap = cmp > 0;
+                }
+                break;
+            }
+
+            if (should_swap) {
+                const temp = result.rows[i];
+                result.rows[i] = result.rows[i + 1];
+                result.rows[i + 1] = temp;
+                swapped = true;
+            }
+        }
+    }
+}
+
+fn compareValues(a: eval.Value, b: eval.Value) i8 {
+    return compareValuesWithNullsPolicy(a, b, .default);
+}
+
+fn compareValuesWithNullsPolicy(a: eval.Value, b: eval.Value, nulls: ast.OrderBy.NullsPolicy) i8 {
+    // Compare values for sorting
+    // Returns: -1 if a < b, 0 if a == b, 1 if a > b
+
+    // Handle nulls based on policy
+    if (a == .Null and b == .Null) return 0;
+    if (a == .Null) {
+        return switch (nulls) {
+            .default, .first => -1,
+            .last => 1,
+        };
+    }
+    if (b == .Null) {
+        return switch (nulls) {
+            .default, .first => 1,
+            .last => -1,
+        };
+    }
+
+    // Compare same types
+    if (a == .Int and b == .Int) {
+        if (a.Int < b.Int) return -1;
+        if (a.Int > b.Int) return 1;
+        return 0;
+    }
+
+    if (a == .Str and b == .Str) {
+        const cmp = std.mem.order(u8, a.Str, b.Str);
+        return switch (cmp) {
+            .lt => -1,
+            .eq => 0,
+            .gt => 1,
+        };
+    }
+
+    if (a == .Bool and b == .Bool) {
+        if (a.Bool == b.Bool) return 0;
+        return if (a.Bool) 1 else -1;
+    }
+
+    // Different types - define an arbitrary order
+    const type_order_a = getTypeOrder(a);
+    const type_order_b = getTypeOrder(b);
+    if (type_order_a < type_order_b) return -1;
+    if (type_order_a > type_order_b) return 1;
+    return 0;
+}
+
+fn getTypeOrder(v: eval.Value) u8 {
+    return switch (v) {
+        .Null => 0,
+        .Bool => 1,
+        .Int => 2,
+        .Decimal => 3,
+        .Str => 4,
+        .List => 5,
+        .Node => 6,
+        .Edge => 7,
+        .Map => 8,
+        .ExtValue => 9,
+        .Path => 10,
+    };
+}
+
+pub fn isAggregationExpr(expr: ast.Expr) bool {
+    switch (expr) {
+        .Call => |call| {
+            if (call.callee.* == .Ident) {
+                const func_name = call.callee.Ident.orig;
+                // Use case-insensitive comparison for aggregation functions
+                return std.ascii.eqlIgnoreCase(func_name, "count") or
+                    std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
+                    std.ascii.eqlIgnoreCase(func_name, "sum") or
+                    std.ascii.eqlIgnoreCase(func_name, "avg") or
+                    std.ascii.eqlIgnoreCase(func_name, "min") or
+                    std.ascii.eqlIgnoreCase(func_name, "max");
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+pub fn isNonConstantExpr(expr: ast.Expr) bool {
+    switch (expr) {
+        .PropertyAccess => return true,
+        .Ident => return true,
+        .Member => return true,
+        .Call => {
+            // Check if it's not an aggregation function
+            return !isAggregationExpr(expr);
+        },
+        .Binary => |bin| {
+            return isNonConstantExpr(bin.left.*) or isNonConstantExpr(bin.right.*);
+        },
+        .Unary => |un| {
+            return isNonConstantExpr(un.expr.*);
+        },
+        // Constants are not non-constant
+        .Int, .String, .Bool, .Null, .Decimal => return false,
+        else => return true,
+    }
+}
+
+pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClause, env: eval.Env) !ExecutionResult {
+    const items = ret.items;
+
+    // Handle RETURN * - expand to all bound variables
+    if (items.len == 1 and items[0].expr == .Ident and std.mem.eql(u8, items[0].expr.Ident.orig, "*")) {
+        // Return all variables from the environment
+        const total_vars = env.names.len + env.param_names.len;
+        var columns = try allocator.alloc([]const u8, total_vars);
+        var row = try allocator.alloc(eval.Value, total_vars);
+
+        var idx: usize = 0;
+        // Add regular environment variables
+        for (env.names, 0..) |name, i| {
+            columns[idx] = try allocator.dupe(u8, name);
+            row[idx] = env.values[i];
+            idx += 1;
+        }
+        // Add parameter variables
+        for (env.param_names, 0..) |name, i| {
+            columns[idx] = try allocator.dupe(u8, name);
+            row[idx] = env.param_values[i];
+            idx += 1;
+        }
+
+        var rows = try allocator.alloc([]eval.Value, 1);
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = blk: {
+                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                break :blk list;
+            },
+        };
+    }
+
+    // Collect column names
+    var columns = try allocator.alloc([]const u8, items.len);
+    for (items, 0..) |item, i| {
+        const column_name = item.alias orelse blk: {
+            // Use expression-based column name if no alias provided
+            switch (item.expr) {
+                .Ident => |ident| break :blk ident.orig,
+                .PropertyAccess => |prop| break :blk prop.property,
+                .Member => |mem| break :blk mem.field,
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        break :blk call.callee.Ident.orig;
+                    }
+                    break :blk "column";
+                },
+                else => break :blk "column",
+            }
+        };
+        columns[i] = try allocator.dupe(u8, column_name);
+    }
+
+    // Evaluate expressions with provided environment
+    var row = try allocator.alloc(eval.Value, items.len);
+    for (items, 0..) |item, i| {
+        row[i] = try eval.evalExpr(allocator, item.expr, env);
+    }
+
+    var rows = try allocator.alloc([]eval.Value, 1);
+    rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = blk: {
+            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            break :blk list;
+        },
+    };
+}
+
+fn executeReturnClause(allocator: std.mem.Allocator, ret: ast.ReturnClause) !ExecutionResult {
+    return executeReturnClauseWithContext(allocator, ret, .{});
+}
+
+fn executeReturnClauseWithContext(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext) !ExecutionResult {
+    return executeReturnClauseWithParams(allocator, ret, context, &.{}, &.{});
+}
+
+pub fn executeReturnClauseWithParams(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
+    // Build environment with authentication context
+    var names_list = std.ArrayList([]const u8){};
+    defer names_list.deinit(allocator);
+    var values_list = std.ArrayList(eval.Value){};
+    defer values_list.deinit(allocator);
+
+    // Add token user to environment if authenticated
+    if (context.token != null) {
+        try names_list.append(allocator, "__token_user__");
+        try values_list.append(allocator, eval.Value{ .Str = context.user orelse "authenticated_user" });
+    }
+
+    const env = eval.Env{
+        .names = names_list.items,
+        .values = values_list.items,
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+    return executeReturnClauseWithEnv(allocator, ret, env);
+}
+
+// Execute SESSION SET statement
+fn executeSessionSet(allocator: std.mem.Allocator, ss: ast.SessionSetStatement) !ExecutionResult {
+    _ = ss; // Accept the statement but no-op for now
+
+    // Return empty result indicating success
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]eval.Value, 0),
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
