@@ -1922,6 +1922,7 @@ fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStateme
     const env = eval.Env{
         .names = with_result.columns,
         .values = with_result.rows[0], // Use first row
+        .allocator = allocator,
     };
 
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
@@ -1979,6 +1980,7 @@ fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStateme
         const iteration_env = eval.Env{
             .names = env_names_list.items,
             .values = env_values_list.items,
+            .allocator = allocator,
         };
 
         // Evaluate RETURN items for this iteration
@@ -2050,6 +2052,7 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
 
     // Evaluate the collection expression with an empty environment
     const empty_env = eval.Env{
+        .allocator = allocator,
         .names = &.{},
         .values = &.{},
     };
@@ -2105,6 +2108,7 @@ fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context:
         const iteration_env = eval.Env{
             .names = env_names_list.items,
             .values = env_values_list.items,
+            .allocator = allocator,
         };
 
         // Evaluate RETURN items for this iteration (pre-sized to return clause length)
@@ -2147,6 +2151,7 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
 
     // Evaluate all row expressions with empty environment
     const empty_env = eval.Env{
+        .allocator = allocator,
         .names = &.{},
         .values = &.{},
     };
@@ -2242,6 +2247,7 @@ fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement,
 
                         // Create environment for this row
                         const row_env = eval.Env{
+                            .allocator = allocator,
                             .names = env_names_list.items,
                             .values = env_values_list.items,
                         };
@@ -3027,6 +3033,7 @@ fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: E
         var row = try allocator.alloc(eval.Value, items.len);
 
         const env = eval.Env{
+            .allocator = allocator,
             .names = binding_names,
             .values = binding_values,
         };
@@ -3065,6 +3072,7 @@ fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: E
         var row = try allocator.alloc(eval.Value, items.len);
 
         const env = eval.Env{
+            .allocator = allocator,
             .names = bound_var_env_names.items,
             .values = bound_var_env_values.items,
             .param_names = binding_names,
@@ -3113,6 +3121,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     const let_env = eval.Env{
         .names = &.{},
         .values = &.{},
+        .allocator = allocator,
     };
 
     for (q.let_bindings) |binding| {
@@ -3163,6 +3172,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                         .values = row,
                         .param_names = param_names.items,
                         .param_values = param_values.items,
+                        .allocator = allocator,
                     };
 
                     const matches = try eval.evalExpr(allocator, where_expr, env);
@@ -3195,6 +3205,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                     .values = row,
                     .param_names = param_names.items,
                     .param_values = param_values.items,
+                    .allocator = allocator,
                 };
 
                 for (q.ret.items, 0..) |item, i| {
@@ -3249,6 +3260,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                         .values = row,
                         .param_names = param_names.items,
                         .param_values = param_values.items,
+                        .allocator = allocator,
                     };
 
                     const matches = try eval.evalExpr(allocator, where_expr, env);
@@ -3280,6 +3292,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                     .values = row,
                     .param_names = param_names.items,
                     .param_values = param_values.items,
+                    .allocator = allocator,
                 };
 
                 for (q.ret.items, 0..) |item, i| {
@@ -3356,6 +3369,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                 .values = with_row,
                 .param_names = param_names.items,
                 .param_values = param_values.items,
+                .allocator = allocator,
             };
 
             for (q.ret.items, 0..) |item, i| {
@@ -3572,6 +3586,7 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -3652,6 +3667,7 @@ fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.Graph
             // Set relationship properties if present
             if (hop.rel.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -3736,6 +3752,7 @@ fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_patter
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -3803,6 +3820,7 @@ fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_patter
             // Set relationship properties if present
             if (hop.rel.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -3892,6 +3910,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -3956,6 +3975,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -3987,6 +4007,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -4022,6 +4043,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -4090,6 +4112,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                 const env = eval.Env{
                     .names = names.items,
                     .values = values.items,
+                    .allocator = allocator,
                 };
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
@@ -4149,6 +4172,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                     const env = eval.Env{
                         .names = names.items,
                         .values = values.items,
+                        .allocator = allocator,
                     };
 
                     const value = try eval.evalExpr(allocator, prop.value, env);
@@ -4208,6 +4232,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
                     const env = eval.Env{
                         .names = names.items,
                         .values = values.items,
+                        .allocator = allocator,
                     };
 
                     // Evaluate the properties expression (should be a map literal)
@@ -4290,6 +4315,7 @@ fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern
 
             // Create environment from WITH result columns and this row's values
             const env = eval.Env{
+                .allocator = allocator,
                 .names = result.columns,
                 .values = with_row,
             };
@@ -4373,6 +4399,7 @@ fn executeReturnClauseWithNodes(
     }
 
     const env = eval.Env{
+        .allocator = allocator,
         .names = names.items,
         .values = values.items,
     };
@@ -4535,6 +4562,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -4586,6 +4614,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
             // Set properties on left node if present and not already set
             if (hop.left.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -4631,6 +4660,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
             // Set properties on right node if present and not already set
             if (hop.right.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -4671,6 +4701,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
             // Set edge properties if present
             if (hop.rel.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -4740,6 +4771,7 @@ fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Executio
         }
 
         const env = eval.Env{
+            .allocator = allocator,
             .names = names,
             .values = values,
         };
@@ -4776,6 +4808,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
                 const env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -4827,6 +4860,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
             // Set properties on left node if present and not already set
             if (hop.left.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -4872,6 +4906,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
             // Set properties on right node if present and not already set
             if (hop.right.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -4912,6 +4947,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
             // Set edge properties if present
             if (hop.rel.props) |props| {
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
                 };
@@ -4963,6 +4999,7 @@ fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Execut
         }
 
         const env = eval.Env{
+            .allocator = allocator,
             .names = names,
             .values = values,
         };
@@ -5060,7 +5097,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .names = &.{}, .values = &.{} });
+                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Get node to determine its labels for encryption
@@ -5102,7 +5139,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, all_props.node, var_name)) {
                                 // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .names = &.{}, .values = &.{} });
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
 
                                 // Clear all existing properties by getting node and manually clearing
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -5147,7 +5184,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
             // Set properties from pattern
             if (node_pattern.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .names = &.{}, .values = &.{} });
+                    const value = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
                     const prop_value = switch (value) {
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
@@ -5166,7 +5203,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .names = &.{}, .values = &.{} });
+                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Get node to determine its labels for encryption
@@ -5208,7 +5245,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, all_props.node, var_name)) {
                                 // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .names = &.{}, .values = &.{} });
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
 
                                 // Clear all existing properties by getting node and manually clearing
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -5295,6 +5332,7 @@ fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionR
             }
 
             const env = eval.Env{
+                .allocator = allocator,
                 .names = env_names,
                 .values = env_values,
             };
@@ -5536,6 +5574,7 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
                 const empty_env = eval.Env{
                     .names = &.{},
                     .values = &.{},
+                    .allocator = allocator,
                 };
                 for (properties) |prop| {
                     if (node.properties.get(prop.key)) |node_prop_val| {
@@ -5618,6 +5657,7 @@ fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: Ex
         for (call_result.rows) |call_row| {
             // Create environment from CALL result columns and values
             const env = eval.Env{
+                .allocator = allocator,
                 .names = call_result.columns,
                 .values = call_row,
             };
@@ -5758,6 +5798,7 @@ fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names
                     .values = &.{},
                     .param_names = param_names,
                     .param_values = param_values,
+                    .allocator = allocator,
                 };
 
                 for (props) |prop| {
@@ -5854,6 +5895,7 @@ fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names
                     .values = env_values,
                     .param_names = self.param_names,
                     .param_values = self.param_values,
+                    .allocator = self.allocator,
                 };
 
                 // Evaluate WHERE clause
@@ -5991,6 +6033,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     const env = eval.Env{
                         .names = param_names,
                         .values = param_values,
+                        .allocator = allocator,
                     };
 
                     // Execute shortestPath
@@ -6030,6 +6073,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     const path_env = eval.Env{
                         .names = path_env_names,
                         .values = path_env_values,
+                        .allocator = allocator,
                     };
 
                     // Evaluate RETURN expressions with path in environment
@@ -6177,6 +6221,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     .values = env_values,
                     .param_names = param_names,
                     .param_values = param_values,
+                    .allocator = allocator,
                 };
 
                 // Evaluate WHERE clause if present
@@ -6364,6 +6409,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     .values = env_values,
                     .param_names = param_names,
                     .param_values = param_values,
+                    .allocator = allocator,
                 };
 
                 // Evaluate WHERE clause if present
@@ -6518,6 +6564,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                         .values = with_row,
                         .param_names = param_names,
                         .param_values = param_values,
+                        .allocator = allocator,
                     };
 
                     for (q.ret.items, 0..) |item, i| {
@@ -6660,6 +6707,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                             .values = env_values,
                             .param_names = param_names,
                             .param_values = param_values,
+                            .allocator = allocator,
                         };
 
                         // Evaluate WHERE clause if present
@@ -6759,6 +6807,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                             .values = env_values,
                             .param_names = param_names,
                             .param_values = param_values,
+                            .allocator = allocator,
                         };
 
                         // Evaluate WHERE clause if present
@@ -6935,6 +6984,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                         .values = &.{},
                         .param_names = param_names,
                         .param_values = param_values,
+                        .allocator = allocator,
                     };
 
                     for (props) |prop| {
@@ -6980,6 +7030,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                     .values = env_values,
                     .param_names = param_names,
                     .param_values = param_values,
+                    .allocator = allocator,
                 };
 
                 // Evaluate WHERE clause if present
@@ -7154,6 +7205,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
                         .values = all_values,
                         .param_names = param_names,
                         .param_values = param_values,
+                        .allocator = allocator,
                     };
                 }
 
@@ -7293,6 +7345,7 @@ fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names
 
                 // Create environment from WITH result columns and this row's values
                 const env = eval.Env{
+                    .allocator = allocator,
                     .names = with_result.columns,
                     .values = with_row,
                     .param_names = param_names,
@@ -7358,6 +7411,7 @@ fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult
         const env = eval.Env{
             .names = input_result.columns,
             .values = input_row,
+            .allocator = allocator,
         };
 
         for (with_items, 0..) |item, i| {
@@ -7395,10 +7449,12 @@ fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult
                     const env_a = eval.Env{
                         .names = context.columns,
                         .values = a,
+                        .allocator = context.allocator,
                     };
                     const env_b = eval.Env{
                         .names = context.columns,
                         .values = b,
+                        .allocator = context.allocator,
                     };
 
                     const val_a = eval.evalExpr(context.allocator, key.expr, env_a) catch eval.Value{ .Null = {} };
@@ -7738,6 +7794,7 @@ fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *c
             const env = eval.Env{
                 .names = &.{},
                 .values = &.{},
+                .allocator = allocator,
             };
             return try eval.evalExpr(allocator, expr, env);
         },
@@ -8711,10 +8768,12 @@ fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.O
                     const env1 = eval.Env{
                         .names = result.columns,
                         .values = result.rows[i],
+                        .allocator = allocator,
                     };
                     const env2 = eval.Env{
                         .names = result.columns,
                         .values = result.rows[i + 1],
+                        .allocator = allocator,
                     };
 
                     // Evaluate expressions (errors default to Null)
@@ -8954,6 +9013,7 @@ fn executeReturnClauseWithParams(allocator: std.mem.Allocator, ret: ast.ReturnCl
         .values = values_list.items,
         .param_names = param_names,
         .param_values = param_values,
+        .allocator = allocator,
     };
     return executeReturnClauseWithEnv(allocator, ret, env);
 }
@@ -9951,6 +10011,7 @@ fn executeCallSubquery(allocator: std.mem.Allocator, call_subq: ast.CallSubquery
             }
 
             const env = eval.Env{
+                .allocator = allocator,
                 .names = env_names.items,
                 .values = env_values.items,
             };
@@ -10350,7 +10411,7 @@ fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
 
         if (call_args.len > 0) {
             // Evaluate the first argument to get the provider name
-            const env = eval.Env{ .names = &.{}, .values = &.{} };
+            const env = eval.Env{ .names = &.{}, .values = &.{}, .allocator = allocator };
             const provider_value = try eval.evalExpr(allocator, call_args[0].*, env);
 
             if (provider_value == .Str) {
@@ -10398,7 +10459,7 @@ fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
 
         if (call_args.len >= 2) {
             // Evaluate arguments
-            const env = eval.Env{ .names = &.{}, .values = &.{} };
+            const env = eval.Env{ .names = &.{}, .values = &.{}, .allocator = allocator };
             const threshold_type = try eval.evalExpr(allocator, call_args[0].*, env);
             const threshold_value = try eval.evalExpr(allocator, call_args[1].*, env);
 
@@ -10461,7 +10522,7 @@ fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
 
         var limit: usize = 10; // default limit
         if (call_args.len > 0) {
-            const env = eval.Env{ .names = &.{}, .values = &.{} };
+            const env = eval.Env{ .names = &.{}, .values = &.{}, .allocator = allocator };
             // Check if argument is a map with 'limit' parameter
             if (call_args[0].* == .Map) {
                 const map_props = call_args[0].Map;
@@ -10555,7 +10616,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 if (matches and node_pattern.props != null) {
                     for (node_pattern.props.?) |prop| {
                         // For pattern counting, we evaluate the property value
-                        const expected = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .names = &.{}, .values = &.{} });
+                        const expected = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
 
                         // Check if node has this property with matching value
                         if (node.properties.get(prop.key)) |node_prop_val| {

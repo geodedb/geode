@@ -357,7 +357,7 @@ pub fn main() !void {
             try w.print("bench-eval: regex =~ R={d} -> {d} matches in {d} ns\n", .{ R, cnt, t1 - t0 });
             // IN/NOT IN benchmark using evaluator
             const names = &.{ "a", "s" };
-            const env = eval.Env{ .names = names, .values = &.{ .{ .Int = 42 }, .{ .Str = "42" } } };
+            const env = eval.Env{ .names = names, .values = &.{ .{ .Int = 42 }, .{ .Str = "42" } }, .allocator = ally };
             var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
             var lit41 = ast.Expr{ .String = "41" };
             var lit42 = ast.Expr{ .String = "42" };
@@ -462,7 +462,7 @@ pub fn main() !void {
                         try w.print("\n", .{});
                         var i: usize = 0;
                         while (i < Avals.len and i < Svals.len) : (i += 1) {
-                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items };
+                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items, .allocator = ally };
                             var pass = true;
                             if (q.where_clause) |wc| {
                                 const v = eval.evalExpr(ally, wc, env) catch |e| {
@@ -702,7 +702,7 @@ pub fn main() !void {
                             const v = eval.evalExpr(
                                 gpa,
                                 rewritten,
-                                eval.Env{ .names = &.{}, .values = &.{}, .param_names = &.{}, .param_values = &.{} },
+                                eval.Env{ .names = &.{}, .values = &.{}, .param_names = &.{}, .param_values = &.{}, .allocator = gpa },
                             ) catch eval.Value{ .Null = {} };
                             if (!(v == .Bool and v.Bool)) continue;
                         }
