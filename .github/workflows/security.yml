@@ -53,12 +53,21 @@ jobs:
       run: |
         # Check for common security issues
         grep -r "strcpy\|sprintf\|gets" src/ && echo "WARNING: Unsafe functions detected" || echo "No unsafe functions found"
-        
+
         # Check for hardcoded credentials
         grep -rE "(password|secret|token|key)\s*=\s*[\"'][^\"']+[\"']" src/ --exclude="*test*" && echo "WARNING: Possible hardcoded credentials" || echo "No hardcoded credentials found"
-        
+
         # Check for SQL injection vulnerabilities
         grep -r "std.fmt.allocPrint.*WHERE" src/ && echo "WARNING: Potential SQL injection" || echo "No SQL injection patterns found"
+
+        # CWE-401: Check for page_allocator in production code (P2-3 remediation)
+        if grep -r 'std\.heap\.page_allocator' src/ -q; then
+          echo "ERROR: page_allocator found in production code (CWE-401 memory leak)"
+          grep -rn 'std\.heap\.page_allocator' src/
+          exit 1
+        else
+          echo "✅ No page_allocator in production code (CWE-401 remediated)"
+        fi
 
   license-check:
     name: License Compliance
