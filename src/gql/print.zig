@@ -5,6 +5,8 @@ const temporal = @import("../temporal.zig");
 pub const PrintOptions = struct {
     normalize_temporals: bool = false,
     clamp_frac_digits: ?u8 = null,
+    /// P2-3: Allocator for temporary allocations during printing (required when normalize_temporals=true)
+    allocator: ?std.mem.Allocator = null,
 };
 
 pub fn printProgramHuman(w: anytype, prog: ast.Program) !void {
@@ -34,10 +36,11 @@ pub fn printProgramHumanWith(w: anytype, prog: ast.Program, opts: PrintOptions) 
 pub const PrintJsonOptions = struct { verbose_temporals: bool = false, session_offset_minutes: ?i16 = null };
 
 pub fn printProgramJson(w: anytype, prog: ast.Program) !void {
-    return printProgramJsonWith(w, prog, .{});
+    return printProgramJsonWith(std.heap.page_allocator, w, prog, .{});
 }
 
-pub fn printProgramJsonWith(w: anytype, prog: ast.Program, jopts: PrintJsonOptions) !void {
+/// P2-3: Now accepts allocator parameter for temporary allocations
+pub fn printProgramJsonWith(allocator: std.mem.Allocator, w: anytype, prog: ast.Program, jopts: PrintJsonOptions) !void {
     try w.writeByte('{');
 
     var first = true;
@@ -56,8 +59,9 @@ pub fn printProgramJsonWith(w: anytype, prog: ast.Program, jopts: PrintJsonOptio
 
     if (jopts.verbose_temporals) {
         try w.writeAll(",\"temporals\":[");
-        var list = try collectTemporalsList(std.heap.page_allocator, prog);
-        defer list.deinit(std.heap.page_allocator);
+        // P2-3: Use provided allocator instead of page_allocator
+        var list = try collectTemporalsList(allocator, prog);
+        defer list.deinit(allocator);
 
         for (list.items, 0..) |ent, i| {
             if (i > 0) try w.writeByte(',');
@@ -452,33 +456,41 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .Date => |d| if (!opts.normalize_temporals) {
             try w.print("DATE\"{s}\"", .{d.raw});
         } else {
-            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
-            defer buf.deinit(std.heap.page_allocator);
-            try temporal.formatDate(buf.writer(std.heap.page_allocator), d.parsed);
+            // P2-3: Use provided allocator instead of page_allocator
+            const alloc = opts.allocator orelse return error.AllocatorRequired;
+            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            defer buf.deinit(alloc);
+            try temporal.formatDate(buf.writer(alloc), d.parsed);
             try w.print("DATE\"{s}\"", .{buf.items});
         },
         .DateTime => |dt| if (!opts.normalize_temporals) {
             try w.print("DATETIME\"{s}\"", .{dt.raw});
         } else {
-            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
-            defer buf.deinit(std.heap.page_allocator);
-            try temporal.formatDateTime(buf.writer(std.heap.page_allocator), dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            // P2-3: Use provided allocator instead of page_allocator
+            const alloc = opts.allocator orelse return error.AllocatorRequired;
+            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            defer buf.deinit(alloc);
+            try temporal.formatDateTime(buf.writer(alloc), dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("DATETIME\"{s}\"", .{buf.items});
         },
         .Time => |t| if (!opts.normalize_temporals) {
             try w.print("TIME\"{s}\"", .{t.raw});
         } else {
-            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
-            defer buf.deinit(std.heap.page_allocator);
-            try temporal.formatTime(buf.writer(std.heap.page_allocator), t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            // P2-3: Use provided allocator instead of page_allocator
+            const alloc = opts.allocator orelse return error.AllocatorRequired;
+            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            defer buf.deinit(alloc);
+            try temporal.formatTime(buf.writer(alloc), t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("TIME\"{s}\"", .{buf.items});
         },
         .LocalDateTime => |ldt| if (!opts.normalize_temporals) {
             try w.print("LOCAL DATETIME\"{s}\"", .{ldt.raw});
         } else {
-            var buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch unreachable;
-            defer buf.deinit(std.heap.page_allocator);
-            try temporal.formatDateTime(buf.writer(std.heap.page_allocator), ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            // P2-3: Use provided allocator instead of page_allocator
+            const alloc = opts.allocator orelse return error.AllocatorRequired;
+            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            defer buf.deinit(alloc);
+            try temporal.formatDateTime(buf.writer(alloc), ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("LOCAL DATETIME\"{s}\"", .{buf.items});
         },
         .StartsWith => |sw| {

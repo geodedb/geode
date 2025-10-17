@@ -193,17 +193,20 @@ pub fn main() !void {
                 {
                     const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                     const w = out_file.deprecatedWriter();
-                    try printer.printProgramJsonWith(w, res.program, .{ .verbose_temporals = true, .session_offset_minutes = session_offset });
+                    // P2-3: Pass allocator to printProgramJsonWith
+                    try printer.printProgramJsonWith(gpa, w, res.program, .{ .verbose_temporals = true, .session_offset_minutes = session_offset });
                 }
             } else {
                 {
                     const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                     const w = out_file.deprecatedWriter();
-                    try printer.printProgramJsonWith(w, res.program, .{ .session_offset_minutes = session_offset });
+                    // P2-3: Pass allocator to printProgramJsonWith
+                    try printer.printProgramJsonWith(gpa, w, res.program, .{ .session_offset_minutes = session_offset });
                 }
             }
         } else {
-            const popts = printer.PrintOptions{ .normalize_temporals = normalize_temporals, .clamp_frac_digits = clamp_frac_digits };
+            // P2-3: Add allocator to PrintOptions for temporal formatting
+            const popts = printer.PrintOptions{ .normalize_temporals = normalize_temporals, .clamp_frac_digits = clamp_frac_digits, .allocator = gpa };
             {
                 const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                 const w = out_file.deprecatedWriter();
