@@ -197,8 +197,15 @@ pub const CostBasedOptimizer = struct {
 // Top-level convenience wrappers (runtime flag gated) for acceptance tests expecting
 // simple invocation without constructing a full optimizer instance. These return
 // FeatureDisabled when GEODE_ENABLE_CBO is not set to "1".
+// P2-3: Use static GPA for legacy stub function
+var choosePlanAPI_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var choosePlanAPI_gpa_init = false;
+
 pub fn choosePlanAPI() !void {
-    const alloc = std.heap.page_allocator;
+    if (!choosePlanAPI_gpa_init) {
+        choosePlanAPI_gpa_init = true;
+    }
+    const alloc = choosePlanAPI_gpa.allocator();
     var cbo = try CostBasedOptimizer.init(alloc);
     defer cbo.deinit();
     if (!cbo.enabled) return error.FeatureDisabled;
