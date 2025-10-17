@@ -259,30 +259,58 @@ pub fn runGroupedQuery(
                     .Ident => |id| {
                         if (std.ascii.eqlIgnoreCase(id.orig, "count")) {
                             if (c.args.len == 0) {
-                                aggs_out.append(ally_inner, .CountStar) catch {};
-                                args_out.append(ally_inner, null) catch {};
+                                aggs_out.append(ally_inner, .CountStar) catch |err| {
+                                    std.log.err("CRITICAL: Failed to append COUNT(*) aggregate (OOM, query will fail): {any}", .{err});
+                                };
+                                args_out.append(ally_inner, null) catch |err| {
+                                    std.log.err("CRITICAL: Failed to append COUNT(*) args (OOM, query will fail): {any}", .{err});
+                                };
                             } else {
-                                aggs_out.append(ally_inner, .Count) catch {};
-                                args_out.append(ally_inner, c.args[0].*) catch {};
+                                aggs_out.append(ally_inner, .Count) catch |err| {
+                                    std.log.err("CRITICAL: Failed to append COUNT aggregate (OOM, query will fail): {any}", .{err});
+                                };
+                                args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                    std.log.err("CRITICAL: Failed to append COUNT args (OOM, query will fail): {any}", .{err});
+                                };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "countdistinct") or std.ascii.eqlIgnoreCase(id.orig, "count_distinct")) {
                             // Interim syntax: COUNT_DISTINCT(expr) or countDistinct(expr) until parser supports COUNT(DISTINCT expr)
                             if (c.args.len == 1) {
-                                aggs_out.append(ally_inner, .CountDistinct) catch {};
-                                args_out.append(ally_inner, c.args[0].*) catch {};
+                                aggs_out.append(ally_inner, .CountDistinct) catch |err| {
+                                    std.log.err("CRITICAL: Failed to append COUNT DISTINCT aggregate (OOM, query will fail): {any}", .{err});
+                                };
+                                args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                    std.log.err("CRITICAL: Failed to append COUNT DISTINCT args (OOM, query will fail): {any}", .{err});
+                                };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "sum")) {
-                            aggs_out.append(ally_inner, .Sum) catch {};
-                            args_out.append(ally_inner, c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Sum) catch |err| {
+                                std.log.err("CRITICAL: Failed to append SUM aggregate (OOM, query will fail): {any}", .{err});
+                            };
+                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                std.log.err("CRITICAL: Failed to append SUM args (OOM, query will fail): {any}", .{err});
+                            };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "min")) {
-                            aggs_out.append(ally_inner, .Min) catch {};
-                            args_out.append(ally_inner, c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Min) catch |err| {
+                                std.log.err("CRITICAL: Failed to append MIN aggregate (OOM, query will fail): {any}", .{err});
+                            };
+                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                std.log.err("CRITICAL: Failed to append MIN args (OOM, query will fail): {any}", .{err});
+                            };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "max")) {
-                            aggs_out.append(ally_inner, .Max) catch {};
-                            args_out.append(ally_inner, c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Max) catch |err| {
+                                std.log.err("CRITICAL: Failed to append MAX aggregate (OOM, query will fail): {any}", .{err});
+                            };
+                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                std.log.err("CRITICAL: Failed to append MAX args (OOM, query will fail): {any}", .{err});
+                            };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "avg")) {
-                            aggs_out.append(ally_inner, .Avg) catch {};
-                            args_out.append(ally_inner, c.args[0].*) catch {};
+                            aggs_out.append(ally_inner, .Avg) catch |err| {
+                                std.log.err("CRITICAL: Failed to append AVG aggregate (OOM, query will fail): {any}", .{err});
+                            };
+                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                std.log.err("CRITICAL: Failed to append AVG args (OOM, query will fail): {any}", .{err});
+                            };
                         }
                     },
                     else => {},
@@ -1098,7 +1126,9 @@ pub const HashAggregator = struct {
         var i: usize = 0;
         while (i < self.spill_segments.items.len) : (i += 1) {
             // Best effort cleanup
-            std.fs.cwd().deleteFile(self.spill_segments.items[i]) catch {};
+            std.fs.cwd().deleteFile(self.spill_segments.items[i]) catch |err| {
+                std.log.warn("Failed to delete spill segment '{s}' (disk space leak possible): {any}", .{ self.spill_segments.items[i], err });
+            };
             self.allocator.free(self.spill_segments.items[i]);
         }
         self.spill_segments.deinit();
@@ -1527,7 +1557,11 @@ pub const HashAggregator = struct {
         }
         // After loading, remove files (they are no longer needed)
         i = 0;
-        while (i < filename_list.len) : (i += 1) std.fs.cwd().deleteFile(filename_list[i]) catch {};
+        while (i < filename_list.len) : (i += 1) {
+            std.fs.cwd().deleteFile(filename_list[i]) catch |err| {
+                std.log.warn("Failed to delete reloaded spill file '{s}' (disk space leak possible): {any}", .{ filename_list[i], err });
+            };
+        }
         // Clear segment tracking
         i = 0;
         while (i < self.spill_segments.items.len) : (i += 1) self.allocator.free(self.spill_segments.items[i]);
