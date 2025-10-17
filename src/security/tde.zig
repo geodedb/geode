@@ -85,11 +85,12 @@ pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const
     const key_opt = try loadRawKey(allocator);
     if (key_opt == null) return error.KeyNotLoaded;
     const key = key_opt.?;
+
+    // CRITICAL SECURITY FIX (C1): Use cryptographically secure random nonce
+    // NIST SP 800-38D requires unique nonces for AES-GCM security
+    // Deterministic nonces would allow catastrophic IV reuse attacks
     var nonce: [NonceBytes]u8 = undefined;
-    // Deterministic nonce for test reproducibility: hash of plaintext length & first bytes (not production safe)
-    const h = std.hash.Wyhash.hash(0, plaintext[0..@min(plaintext.len, 8)]);
-    std.mem.writeInt(u64, nonce[0..8], h, .little);
-    std.mem.writeInt(u32, nonce[8..12], @as(u32, @intCast(plaintext.len)), .little);
+    std.crypto.random.bytes(&nonce);
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
