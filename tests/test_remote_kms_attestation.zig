@@ -8,7 +8,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify" {
     const alloc = gpa.allocator();
     var server = kms.RemoteKmsServer.init(alloc, 0x1234);
     try server.start(44556);
-    server.server.setAuthToken("tok-attest");
+    try server.server.setAuthToken("tok-attest");
 
     var client = kms.RemoteKmsClient.init(alloc);
     try client.connect("127.0.0.1", 44556);
@@ -52,7 +52,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect" {
     const alloc = gpa.allocator();
     var server = kms.RemoteKmsServer.init(alloc, 0x9999);
     try server.start(44557);
-    server.server.setAuthToken("tok-attest2");
+    try server.server.setAuthToken("tok-attest2");
 
     var client = kms.RemoteKmsClient.init(alloc);
     try client.connect("127.0.0.1", 44557);

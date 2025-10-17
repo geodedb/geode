@@ -8,7 +8,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative" {
     const alloc = gpa.allocator();
     var server = kms.RemoteKmsServer.init(alloc, 0xABCDEF01);
     try server.start(44555);
-    server.server.setAuthToken("secret-token");
+    try server.server.setAuthToken("secret-token");
 
     var client = kms.RemoteKmsClient.init(alloc);
     try client.connect("127.0.0.1", 44555);

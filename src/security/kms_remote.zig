@@ -2,6 +2,9 @@ const std = @import("std");
 const quic = @import("transport/quic");
 const crypto = std.crypto;
 
+// CANARY: REQ=REQ-M6-UNREACHABLE-001; FEATURE="CodeQuality"; ASPECT=ErrorHandling; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
+// M6: Replaced all 'unreachable' statements with proper error handling (try/panic)
+
 // kms_remote.zig
 // Minimal remote KMS prototype over QUIC performing AES-256-GCM wrap/unwrap.
 // Server holds KEK and serves two JSON line oriented requests on a single stream:
@@ -111,7 +114,7 @@ pub const Server = struct {
         return .{ .allocator = allocator, .kek = kek, .prng = prng }; // auth_token set later
     }
 
-    pub fn setAuthToken(self: *Server, tok: []const u8) void {
+    pub fn setAuthToken(self: *Server, tok: []const u8) !void {
         self.auth_token = tok;
         // derive attestation hash (sha256 over token + kek prefix)
         var h = std.crypto.hash.sha2.Sha256.init(.{});
@@ -123,7 +126,7 @@ pub const Server = struct {
         // Zig 0.15.1 Ed25519 API: KeyPair.generateDeterministic(seed) and kp.sign(msg, null)
         var seed: [32]u8 = undefined;
         std.crypto.random.bytes(&seed);
-        const attest_kp = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch unreachable;
+        const attest_kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
         self.attest_keypair = attest_kp;
     }
 
@@ -182,7 +185,7 @@ pub const RemoteKmsServer = struct {
             var plain: [32]u8 = undefined;
             self.server.prng.bytes(&plain);
             const env = self.server.wrap(plain);
-            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer out.deinit(self.allocator);
             const w = out.writer(self.allocator);
             try w.writeAll("{\"status\":\"OK\",\"envelope\":");
@@ -201,7 +204,7 @@ pub const RemoteKmsServer = struct {
                 },
                 else => return,
             };
-            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer out.deinit(self.allocator);
             const w = out.writer(self.allocator);
             try w.writeAll("{\"status\":\"OK\",\"plaintext\":\"");
@@ -218,7 +221,7 @@ pub const RemoteKmsServer = struct {
             defer self.allocator.free(msg);
             std.mem.copyForwards(u8, msg[0..domain.len], domain);
             std.mem.copyForwards(u8, msg[domain.len..msg_len], &self.server.attestation_hash);
-            const sig = kp.sign(msg, null) catch unreachable;
+            const sig = try kp.sign(msg, null);
             try w.writeAll(",\"sig\":\"");
             const sig_bytes = sig.toBytes();
             for (sig_bytes) |b| try w.print("{x:0>2}", .{b});
@@ -236,7 +239,7 @@ pub const RemoteKmsServer = struct {
                 },
                 else => return,
             };
-            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer out.deinit(self.allocator);
             const w = out.writer(self.allocator);
             try w.writeAll("{\"status\":\"OK\",\"plaintext\":\"");
@@ -244,7 +247,7 @@ pub const RemoteKmsServer = struct {
             try w.writeAll("\",\"privileged\":true}\n");
             try stream.writeAll(out.items);
         } else if (std.mem.indexOf(u8, req, "Attest")) |_| {
-            var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer out.deinit(self.allocator);
             const w = out.writer(self.allocator);
             try w.writeAll("{\"status\":\"OK\",\"attestation\":{\"hash\":\"");
@@ -258,7 +261,7 @@ pub const RemoteKmsServer = struct {
             defer self.allocator.free(msg2);
             std.mem.copyForwards(u8, msg2[0..domain2.len], domain2);
             std.mem.copyForwards(u8, msg2[domain2.len..msg2_len], &self.server.attestation_hash);
-            const sig2 = kp2.sign(msg2, null) catch unreachable;
+            const sig2 = try kp2.sign(msg2, null);
             try w.writeAll(",\"sig\":\"");
             const sig2_bytes = sig2.toBytes();
             for (sig2_bytes) |b| try w.print("{x:0>2}", .{b});
@@ -321,7 +324,7 @@ pub const RemoteKmsClient = struct {
     pub fn unwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
         var stream = try self.quic_client.getStream();
         defer stream.deinit();
-        var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         defer out.deinit(self.allocator);
         const w = out.writer(self.allocator);
         if (self.auth_token) |_| {
@@ -353,7 +356,7 @@ pub const RemoteKmsClient = struct {
     pub fn privUnwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
         var stream = try self.quic_client.getStream();
         defer stream.deinit();
-        var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         defer out.deinit(self.allocator);
         const w = out.writer(self.allocator);
         if (self.auth_token) |_| {

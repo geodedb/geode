@@ -10,7 +10,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify" {
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xA1B2C3D4);
     try server.start(8890);
-    server.server.setAuthToken("TOKEN123");
+    try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
             s.serveLoop(8) catch {};

@@ -12,7 +12,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xBEEFCAFE);
     try server.start(8876);
-    server.server.setAuthToken("TOKEN123");
+    try server.server.setAuthToken("TOKEN123");
 
     // Spawn a thread to process a few requests sequentially
     var t = try std.Thread.spawn(.{}, struct {
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
     try server.start(8877);
-    server.server.setAuthToken("TOKEN123");
+    try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
             s.serveLoop(3) catch {};
@@ -51,7 +51,7 @@ test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x11223344);
     try server.start(8878);
-    server.server.setAuthToken("TOKEN123");
+    try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
             s.serveLoop(10) catch {};

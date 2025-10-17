@@ -16,7 +16,7 @@ fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyer
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xdeadbeefcafebabe);
     try server.start(port);
-    server.server.setAuthToken(auth);
+    try server.server.setAuthToken(auth);
     try body(&server);
 }
 
@@ -121,7 +121,7 @@ pub fn runUnwrapConcurrencyVariance() !void {
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x123456789abcdef0);
     try server.start(port);
-    server.server.setAuthToken("bench-token");
+    try server.server.setAuthToken("bench-token");
     var client = try connectClient(port, "bench-token");
     const env = try client.generate();
     const iterations: usize = 64;
