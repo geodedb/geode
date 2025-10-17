@@ -87,7 +87,9 @@ fn initCatalog() void {
         last_catalog_data_dir = allocator.dupe(u8, current_data_dir) catch null;
 
         // Load persisted catalog if it exists
-        loadCatalog() catch {};
+        loadCatalog() catch |err| {
+            std.log.warn("Failed to load catalog from disk: {any}", .{err});
+        };
     } else {
         allocator.free(current_data_dir);
     }
@@ -1403,7 +1405,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 const stored_key = try getScopedIndexKey(std.heap.page_allocator, label, index_name);
                 try catalog.indexes.put(stored_key, index_info);
                 // Save catalog to disk after creating index
-                saveCatalog() catch {};
+                saveCatalog() catch |err| {
+                    std.log.err("CRITICAL: Failed to persist catalog after index creation  '{s}': {any}", .{ index_name, err });
+                };
             }
 
             return ExecutionResult{
@@ -1467,7 +1471,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     std.heap.page_allocator.free(removed.value.columns);
                 }
                 // Save catalog after dropping index
-                saveCatalog() catch {};
+                saveCatalog() catch |err| {
+                    std.log.err("CRITICAL: Failed to persist catalog after index drop  '{s}': {any}", .{ index_name, err });
+                };
             } else if (!di.if_exists) {
                 return error.IndexNotFound;
             }
@@ -1571,7 +1577,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Add to catalog
             try catalog.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
             // Save catalog to disk after creating graph
-            saveCatalog() catch {};
+            saveCatalog() catch |err| {
+                std.log.err("CRITICAL: Failed to persist catalog after graph creation  '{s}': {any}", .{ graph_name, err });
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1624,7 +1632,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             try fle_cat.registerType(cgt.name, type_meta);
 
             // Save FLE catalog to disk
-            fle_catalog.saveCatalog(fle_cat) catch {};
+            fle_catalog.saveCatalog(fle_cat) catch |err| {
+                std.log.err("CRITICAL: Failed to persist FLE catalog after type creation  '{s}': {any}", .{ cgt.name, err });
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1684,7 +1694,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             if (!catalog.schemas.contains(schema_name)) {
                 try catalog.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
                 // Save catalog to disk after creating schema
-                saveCatalog() catch {};
+                saveCatalog() catch |err| {
+                    std.log.err("CRITICAL: Failed to persist catalog after schema creation  '{s}': {any}", .{ schema_name, err });
+                };
             }
 
             return ExecutionResult{
@@ -5405,7 +5417,9 @@ fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Executio
         }
 
         // Save changes to persistent storage
-        store.saveToFile() catch {};
+        store.saveToFile() catch |err| {
+            std.log.err("CRITICAL: Failed to persist graph store after deletion: {any}", .{err});
+        };
     } else if (d.items.len > 0) {
         // Delete specific items
         for (d.items) |item| {
