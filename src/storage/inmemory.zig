@@ -68,7 +68,9 @@ pub const InMemory = struct {
                 lst_ptr.items.len = w;
 
                 // Mark as sorted (ignore errors - worst case is re-sorting)
-                self.adj_sorted.put(src, true) catch {};
+                self.adj_sorted.put(src, true) catch |err| {
+                    std.log.debug("Failed to mark adjacency list as sorted (performance impact only, src={}): {any}", .{ src, err });
+                };
             }
 
             return .{ .items = lst_ptr.items };
@@ -90,7 +92,9 @@ pub const InMemory = struct {
         if (self.adj.get(src)) |lst| {
             var tmp = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return .{ .items = &.{} };
             for (lst.items) |nid| {
-                if (self.hasLabel(nid, label)) tmp.append(self.allocator, nid) catch {};
+                if (self.hasLabel(nid, label)) tmp.append(self.allocator, nid) catch |err| {
+                    std.log.warn("Failed to append labeled neighbor (query results truncated, src={}, label={s}): {any}", .{ src, label, err });
+                };
             }
             std.mem.sort(u64, tmp.items, {}, std.sort.asc(u64));
             return .{ .items = tmp.toOwnedSlice(self.allocator) catch &.{} };
@@ -106,7 +110,9 @@ pub const InMemory = struct {
         defer frontier.deinit(self.allocator);
         defer next.deinit(self.allocator);
         defer visited.deinit();
-        frontier.append(self.allocator, seed) catch {};
+        frontier.append(self.allocator, seed) catch |err| {
+            std.log.err("CRITICAL: Failed to initialize n-hop traversal (query will fail, seed={}): {any}", .{ seed, err });
+        };
         var h: u32 = 0;
         while (h < hops) : (h += 1) {
             next.clearRetainingCapacity();
@@ -118,8 +124,12 @@ pub const InMemory = struct {
                 while (j < it.items.len) : (j += 1) {
                     const nid = it.items[j];
                     if (visited.get(nid) == null) {
-                        visited.put(nid, {}) catch {};
-                        next.append(self.allocator, nid) catch {};
+                        visited.put(nid, {}) catch |err| {
+                            std.log.warn("Failed to track visited node (infinite loop possible if OOM, nid={}): {any}", .{ nid, err });
+                        };
+                        next.append(self.allocator, nid) catch |err| {
+                            std.log.warn("Failed to append to n-hop frontier (traversal truncated, nid={}): {any}", .{ nid, err });
+                        };
                     }
                 }
             }
