@@ -1017,7 +1017,16 @@ var global_arena: ?std.heap.ArenaAllocator = null;
 var initialized = false;
 var last_data_dir: ?[]u8 = null;
 
+/// P2-3: Global allocator for persistent graph store data (better than page_allocator)
+var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var global_allocator_init = false;
+
 pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+    // P2-3: Initialize global allocator on first use
+    if (!global_allocator_init) {
+        global_allocator_init = true;
+    }
+
     // Check if GEODE_DATA_DIR has changed since last initialization
     const current_data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
     defer if (current_data_dir) |dir| allocator.free(dir);
@@ -1049,17 +1058,19 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         }
 
         // Update last_data_dir
+        // P2-3: Use global allocator instead of page_allocator
         if (last_data_dir) |dir| {
-            std.heap.page_allocator.free(dir);
+            global_gpa.allocator().free(dir);
         }
         if (current_data_dir) |curr_dir| {
-            last_data_dir = std.heap.page_allocator.dupe(u8, curr_dir) catch null;
+            last_data_dir = global_gpa.allocator().dupe(u8, curr_dir) catch null;
         } else {
             last_data_dir = null;
         }
 
         // Use a persistent arena allocator for the global store
-        global_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        // P2-3: Use global allocator instead of page_allocator
+        global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
         global_store = GraphStore.init(global_arena.?.allocator());
         // Try to load existing data from the new location
         global_store.?.loadFromFile() catch |err| {
