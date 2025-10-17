@@ -99,12 +99,13 @@ fn walkExpr(stats: *RewriteStats, e: *gql_ast.Expr) void {
 
 pub const GroupValidationError = error{ GroupKeyMissing, NonGroupReturn };
 
-pub fn performGroupValidation(q: *const gql_ast.Query) GroupValidationError!GroupValidationStats {
+/// P2-3: Now accepts allocator parameter for temporary HashMaps
+pub fn performGroupValidation(allocator: std.mem.Allocator, q: *const gql_ast.Query) GroupValidationError!GroupValidationStats {
     var stats: GroupValidationStats = .{};
     if (q.group_by) |gb| {
         stats.group_key_count = gb.keys.len;
         // Build set of allowed keys (ident only for now)
-        var allowed = std.StringHashMap(void).init(std.heap.page_allocator);
+        var allowed = std.StringHashMap(void).init(allocator);
         defer allowed.deinit();
         for (gb.keys) |k| switch (k) {
             .Ident => |s| _ = allowed.put(s, {}) catch {},
@@ -112,7 +113,7 @@ pub fn performGroupValidation(q: *const gql_ast.Query) GroupValidationError!Grou
         };
         if (allowed.count() == 0) return GroupValidationError.GroupKeyMissing;
         // Track non-aggregate returns present
-        var present = std.StringHashMap(void).init(std.heap.page_allocator);
+        var present = std.StringHashMap(void).init(allocator);
         defer present.deinit();
         for (q.ret.items) |it| switch (it.expr) {
             .Ident => |s| if (allowed.contains(s)) {

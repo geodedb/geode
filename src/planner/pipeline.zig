@@ -99,7 +99,7 @@ pub fn runPipeline(
     const sub_group_start = std.time.nanoTimestamp();
     timer.begin(.cardinality);
     // Group validation hook over same fabricated query (adds negligible overhead)
-    _ = rewrite_hooks.performGroupValidation(&mini_q) catch |err| switch (err) {
+    _ = rewrite_hooks.performGroupValidation(allocator, &mini_q) catch |err| switch (err) {
         error.GroupKeyMissing, error.NonGroupReturn => {}, // ignored for synthetic mini query
     };
     // Synthetic expected rows derived from hash high bits + 1 (avoid zero)
