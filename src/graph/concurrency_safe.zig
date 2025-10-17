@@ -82,8 +82,9 @@ test "TestCANARY_REQ_GQL_060_ConcurrencySafe multi-thread writers and readers" {
             fn run(cg_ptr: *ConcurrencySafeGraph) void {
                 var k: usize = 0;
                 while (k < 200) : (k += 1) {
-                    const e = cg_ptr.snapshotOutEdges(std.heap.page_allocator, 0) catch null;
-                    if (e) |edges| std.heap.page_allocator.free(edges);
+                    // P2-3: Use testing allocator in tests instead of page_allocator
+                    const e = cg_ptr.snapshotOutEdges(std.testing.allocator, 0) catch null;
+                    if (e) |edges| std.testing.allocator.free(edges);
                 }
             }
         }.run, .{&cg});

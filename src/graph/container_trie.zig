@@ -150,14 +150,15 @@ pub fn Trie(comptime V: type) type {
         }
 
         pub fn iterator(self: *Self) Iterator {
-            return Iterator.init(self.root);
+            return Iterator.init(self.alloc, self.root);
         }
         const Iterator = struct {
             stack: std.ArrayList(struct { node: *Node, idx: usize }),
             buf: std.ArrayList(u8),
             init_node: *Node,
-            pub fn init(root: *Node) Iterator {
-                return Iterator{ .stack = std.ArrayList(struct { node: *Node, idx: usize }).init(std.heap.page_allocator), .buf = std.ArrayList(u8).init(std.heap.page_allocator), .init_node = root };
+            /// P2-3: Now accepts allocator parameter for iterator ArrayLists
+            pub fn init(allocator: Allocator, root: *Node) Iterator {
+                return Iterator{ .stack = std.ArrayList(struct { node: *Node, idx: usize }).init(allocator), .buf = std.ArrayList(u8).init(allocator), .init_node = root };
             }
             pub fn next(self: *Iterator) ?struct { key: []const u8 } {
                 if (self.stack.items.len == 0) {
