@@ -2,6 +2,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const auth = @import("auth");
 
+// CANARY: REQ=REQ-M10-CONSTANTS-002; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
+// RLS cache configuration constants
+const RLS_POLICY_CACHE_MAX_SIZE = 10_000; // Maximum cached policy evaluations
+const RLS_POLICY_CACHE_TTL_MS = 60_000; // Cache TTL: 60 seconds (1 minute)
+
 // Type definitions that would normally come from other modules
 pub const ValueType = enum {
     null,
@@ -513,8 +518,8 @@ pub const PolicyCache = struct {
         return PolicyCache{
             .allocator = allocator,
             .cache = std.HashMap(CacheKey, CacheEntry, CacheKey.HashContext, 80).init(allocator),
-            .max_size = 10000,
-            .ttl_ms = 60000, // 1 minute
+            .max_size = RLS_POLICY_CACHE_MAX_SIZE,
+            .ttl_ms = RLS_POLICY_CACHE_TTL_MS,
         };
     }
 

@@ -198,6 +198,10 @@ pub const encryptPropertyIfNeeded = fle_hooks_mod.encryptPropertyIfNeeded;
 pub const encryptEdgePropertyIfNeeded = fle_hooks_mod.encryptEdgePropertyIfNeeded;
 const decryptPropertyIfNeeded = fle_hooks_mod.decryptPropertyIfNeeded;
 
+// CANARY: REQ=REQ-M10-CONSTANTS-001; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// Execution limits and validation thresholds
+const MAX_COLUMNS_PER_RESULT = 1_000_000; // Maximum columns in ExecutionResult (memory safety validation)
+
 // Binding for MATCH variables (node/edge references)
 pub const Binding = union(enum) {
     node_id: u64,
@@ -790,8 +794,8 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
 }
 pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
-    if (input_result.columns.len > 1000000) {
-        std.log.err("Corrupted input_result.columns.len = {d} in executeWithClause", .{input_result.columns.len});
+    if (input_result.columns.len > MAX_COLUMNS_PER_RESULT) {
+        std.log.err("Corrupted input_result.columns.len = {d} in executeWithClause (max: {d})", .{ input_result.columns.len, MAX_COLUMNS_PER_RESULT });
         return error.CorruptedExecutionResult;
     }
 

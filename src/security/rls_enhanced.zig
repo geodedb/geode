@@ -3,6 +3,11 @@ const Allocator = std.mem.Allocator;
 const auth = @import("auth.zig");
 const rls = @import("rls.zig");
 
+// CANARY: REQ=REQ-M10-CONSTANTS-003; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
+// Enhanced RLS cache configuration constants
+const ENHANCED_RLS_CACHE_MAX_SIZE = 10_000; // Maximum cached policy evaluations (enhanced cache)
+const ENHANCED_RLS_CACHE_DEFAULT_TTL_MS = 300_000; // Cache TTL: 300 seconds (5 minutes)
+
 // Enhanced Row-Level Security Implementation with Real Functionality
 // This module provides production-ready RLS capabilities with comprehensive
 // policy evaluation, query rewriting, and performance optimization
@@ -866,8 +871,8 @@ pub const EnhancedCacheManager = struct {
             .allocator = allocator,
             .cache = std.HashMap(CacheKey, CacheEntry, CacheKey.HashContext, 80).init(allocator),
             .access_order = std.ArrayList(CacheKey).init(allocator),
-            .max_size = 10000,
-            .default_ttl_ms = 300000, // 5 minutes
+            .max_size = ENHANCED_RLS_CACHE_MAX_SIZE,
+            .default_ttl_ms = ENHANCED_RLS_CACHE_DEFAULT_TTL_MS,
         };
     }
 
