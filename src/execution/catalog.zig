@@ -291,6 +291,10 @@ pub var catalog_rwlock = std.Thread.RwLock{};
 pub var catalog_initialized = false;
 pub var last_catalog_data_dir: ?[]u8 = null;
 
+/// P2-3: Global allocator for catalog operations (better than page_allocator)
+var catalog_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var catalog_allocator_init = false;
+
 pub var catalog: struct {
     schemas: std.StringHashMap(void),
     graphs: std.StringHashMap(void),
@@ -298,7 +302,11 @@ pub var catalog: struct {
 } = undefined;
 
 pub fn initCatalog() void {
-    const allocator = std.heap.page_allocator;
+    // P2-3: Initialize global allocator on first use
+    if (!catalog_allocator_init) {
+        catalog_allocator_init = true;
+    }
+    const allocator = catalog_gpa.allocator();
 
     // Check if GEODE_DATA_DIR has changed
     const current_data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
@@ -352,7 +360,8 @@ pub fn initCatalog() void {
 }
 
 pub fn saveCatalog() !void {
-    const allocator = std.heap.page_allocator;
+    // P2-3: Use catalog global allocator instead of page_allocator
+    const allocator = catalog_gpa.allocator();
 
     // Get catalog path from GEODE_DATA_DIR or use default
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
@@ -434,7 +443,8 @@ pub fn saveCatalog() !void {
 }
 
 pub fn loadCatalog() !void {
-    const allocator = std.heap.page_allocator;
+    // P2-3: Use catalog global allocator instead of page_allocator
+    const allocator = catalog_gpa.allocator();
 
     // Get catalog path from GEODE_DATA_DIR or use default
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
