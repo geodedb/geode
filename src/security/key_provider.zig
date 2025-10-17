@@ -24,26 +24,27 @@ pub const Provider = struct {
     }
 
     /// Fetch current key material (blocking). For StaticEnv, derives from GEODE_DISK_KEY_HEX.
+    /// P2-3: Now uses provided allocator for temporary allocations
     pub fn fetch(self: Provider, ally: std.mem.Allocator) !?KeyMaterial {
-        _ = ally; // reserved for future allocations
         switch (self.typ) {
-            .StaticEnv => return try loadStatic(),
+            .StaticEnv => return try loadStatic(ally),
             .MockKms => return self.fetchMockKms(),
-            .ExternalKms => return try fetchExternalKms(),
+            .ExternalKms => return try fetchExternalKms(ally),
         }
     }
 };
 
-fn loadStatic() !?KeyMaterial {
-    const hex = std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
+/// P2-3: Now accepts allocator parameter
+fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
+    const hex = std.process.getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
     if (hex.len != 64) {
-        std.heap.page_allocator.free(hex);
+        allocator.free(hex);
         return null;
     }
-    defer std.heap.page_allocator.free(hex);
+    defer allocator.free(hex);
     var master: [32]u8 = undefined;
     var i: usize = 0;
     while (i < 32) : (i += 1) {
@@ -93,19 +94,20 @@ fn fetchMockKms(self: Provider) ?KeyMaterial {
 
 // External KMS stub: deterministically derive keys from env (GEODE_KMS_ENDPOINT + GEODE_KMS_API_KEY)
 // This is a placeholder until real network KMS binding is implemented.
-fn fetchExternalKms() !?KeyMaterial {
+/// P2-3: Now accepts allocator parameter
+fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     // Use endpoint + api key presence to seed deterministic KEK, but each wrap derives
     // distinct data/wal keys via envelopes to simulate remote service providing new DEKs.
-    const endpoint = std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_KMS_ENDPOINT") catch |e| switch (e) {
+    const endpoint = std.process.getEnvVarOwned(allocator, "GEODE_KMS_ENDPOINT") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
-    defer std.heap.page_allocator.free(endpoint);
-    const api_key = std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_KMS_API_KEY") catch |e| switch (e) {
+    defer allocator.free(endpoint);
+    const api_key = std.process.getEnvVarOwned(allocator, "GEODE_KMS_API_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
-    defer std.heap.page_allocator.free(api_key);
+    defer allocator.free(api_key);
 
     var h = std.crypto.hash.sha2.Sha256.init(.{});
     h.update(endpoint);
@@ -115,7 +117,8 @@ fn fetchExternalKms() !?KeyMaterial {
     // Take first 8 bytes as deterministic seed for KEK generator.
     const seed = std.mem.readInt(u64, seed_digest[0..8], .little);
     const kms = @import("external_kms_client.zig");
-    var client = kms.Client.init(std.heap.page_allocator, seed);
+    // P2-3: Use provided allocator instead of page_allocator
+    var client = kms.Client.init(allocator, seed);
     // Generate two random data keys locally (simulate KMS generating & returning wrapped keys)
     var prng = std.rand.DefaultPrng.init(seed ^ 0xCAFEBABEDEADBEEF);
     var data_plain: [32]u8 = undefined;
