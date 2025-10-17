@@ -147,10 +147,13 @@ pub fn computeStatsF128(ally: std.mem.Allocator, data: []const f128) Stats {
 }
 
 pub fn thresholdsForBenchmark(name: []const u8) ThresholdSet {
-    // NOTE: Uses substring matching; if none match, fall back to general class thresholds (cv<=0.22, p95/mean<=2.60)
-    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // P2-3: Use GeneralPurposeAllocator for arena backing
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    var gpa = std.heap.ArenaAllocator.init(gpa_instance.allocator());
     defer gpa.deinit();
     const a = gpa.allocator();
+    // NOTE: Uses substring matching; if none match, fall back to general class thresholds (cv<=0.22, p95/mean<=2.60)
     var base: ThresholdSet = undefined;
     if (std.mem.indexOf(u8, name, "redo_optimization_delta")) |_| {
         // Adjusted cv/p95 thresholds (cv 0.18->0.22, p95_ratio 1.35->1.45) to account for

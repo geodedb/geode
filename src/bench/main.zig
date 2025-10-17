@@ -11,13 +11,18 @@ const QueryCase = struct {
 };
 
 fn runLoop(iterations: usize, q: QueryCase, enable_heur: bool) !u128 {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // P2-3: Use GeneralPurposeAllocator for benchmark arena backing
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const gpa = gpa_instance.allocator();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     var total: u128 = 0;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         arena.deinit();
-        arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        arena = std.heap.ArenaAllocator.init(gpa);
         const ally = arena.allocator();
         var parse_res = try geode.parseGql(q.text, ally);
         defer parse_res.deinit();
