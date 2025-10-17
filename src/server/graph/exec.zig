@@ -321,7 +321,7 @@ pub fn executeWith(
 
         // Process each WITH item to create new variable bindings
         for (with_clause.items) |item| {
-            const alias = item.alias orelse getExpressionName(item.expr);
+            const alias = item.alias orelse getExpressionName(allocator, item.expr);
 
             // Evaluate the expression in the context of the current binding
             const value = try evaluateExpressionInBinding(allocator, item.expr, &input_binding);
@@ -341,7 +341,8 @@ pub fn executeWith(
 }
 
 // Helper function to get a name for an expression (for aliasing)
-fn getExpressionName(expr: ast.Expr) []const u8 {
+// P2-3: Now accepts allocator parameter for property access string allocation
+fn getExpressionName(allocator: std.mem.Allocator, expr: ast.Expr) []const u8 {
     return switch (expr) {
         .Ident => |ident| ident.orig,
         .PropertyAccess => |prop| blk: {
@@ -349,7 +350,6 @@ fn getExpressionName(expr: ast.Expr) []const u8 {
             // Note: This creates a string that should be valid for the duration of the query
             // In practice, this will work since both object and property are from the AST
             // which lives for the query duration
-            const allocator = std.heap.page_allocator; // Use page allocator for simplicity
             const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prop.object, prop.property }) catch "prop";
             break :blk combined;
         },
@@ -620,7 +620,7 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
             if (j > 0) try result.appendSlice(allocator, ", ");
 
             // Get the column name (alias or expression name)
-            const alias = ret_item.alias orelse getExpressionName(ret_item.expr);
+            const alias = ret_item.alias orelse getExpressionName(allocator, ret_item.expr);
 
             try result.append(allocator, '"');
             try result.appendSlice(allocator, alias);
