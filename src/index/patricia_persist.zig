@@ -118,15 +118,24 @@ fn readNode(allocator: std.mem.Allocator, file: std.fs.File) !*patricia.Patricia
     return node;
 }
 
+/// P2-3: Static GPA for WAL encoding (small temporary allocation)
+var wal_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var wal_gpa_init = false;
+
 pub fn appendWal(path: []const u8, entry: WalEntry) !void {
+    // P2-3: Use static GPA for temporary encoding
+    if (!wal_gpa_init) {
+        wal_gpa_init = true;
+    }
+
     const file = try std.fs.cwd().openFile(path, .{ .mode = .write_only });
     defer file.close();
     try file.seekFromEnd(0);
 
     try file.writeAll(&[_]u8{@intFromEnum(entry.op)});
 
-    const subnet_bytes = try heap.encodeValue(std.heap.page_allocator, .{ .Subnet = entry.subnet });
-    defer std.heap.page_allocator.free(subnet_bytes);
+    const subnet_bytes = try heap.encodeValue(wal_gpa.allocator(), .{ .Subnet = entry.subnet });
+    defer wal_gpa.allocator().free(subnet_bytes);
 
     var len_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_buf, @intCast(subnet_bytes.len), .little);

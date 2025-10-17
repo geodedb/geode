@@ -41,9 +41,17 @@ fn tdeEnabled() bool {
 
 pub const Overhead = NonceBytes + TagBytes; // 28
 
+/// P2-3: Static GPA for env var check
+var env_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var env_gpa_init = false;
+
 pub fn shouldEncrypt() bool {
+    // P2-3: Use static GPA for env var check
+    if (!env_gpa_init) {
+        env_gpa_init = true;
+    }
     // Always attempt encryption if key present; feature flags removed.
-    return std.process.hasEnvVar(std.heap.page_allocator, "GEODE_TDE_KEY") catch false;
+    return std.process.hasEnvVar(env_gpa.allocator(), "GEODE_TDE_KEY") catch false;
 }
 
 pub fn encryptForWrite(ally: std.mem.Allocator, page_index: usize, plaintext: []const u8) ![]u8 {
