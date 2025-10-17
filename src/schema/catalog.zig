@@ -179,7 +179,9 @@ pub const SchemaCatalog = struct {
         field_meta_ptr.visibility.to_roles = new_roles;
 
         // Save catalog after grant
-        saveCatalog(self) catch {};
+        saveCatalog(self) catch |err| {
+            std.log.err("CRITICAL: Failed to persist catalog after plaintext access grant (security config lost on restart): {any}", .{err});
+        };
     }
 
     /// Revoke READ_PLAINTEXT privilege from a role for a specific field
@@ -235,7 +237,9 @@ pub const SchemaCatalog = struct {
         }
 
         // Save catalog after revoke
-        saveCatalog(self) catch {};
+        saveCatalog(self) catch |err| {
+            std.log.err("CRITICAL: Failed to persist catalog after plaintext access revoke (security config lost on restart): {any}", .{err});
+        };
     }
 
     /// Get count of registered types
@@ -262,7 +266,9 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
         catalog.* = SchemaCatalog.init(allocator);
 
         // Load persisted catalog if it exists
-        loadCatalog(catalog) catch {};
+        loadCatalog(catalog) catch |err| {
+            std.log.warn("Failed to load persisted catalog (starting with empty catalog): {any}", .{err});
+        };
 
         global_catalog = catalog;
     }
