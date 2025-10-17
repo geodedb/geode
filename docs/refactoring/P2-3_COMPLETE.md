@@ -310,6 +310,36 @@ All production code in `src/` has been successfully remediated, eliminating the 
 
 ---
 
+## Follow-up Work Completed
+
+After the core P2-3 remediation, the following recommended enhancements were implemented:
+
+### 1. CI Prevention Check ✅
+**Commit**: `c1f76a6`
+
+Added automated check to `.github/workflows/security.yml` to prevent `page_allocator` reintroduction:
+- Fails CI build if `std.heap.page_allocator` is found in `src/`
+- Provides clear CWE-401 error message with line numbers
+- Ensures remediation stays remediated
+
+### 2. Contributor Documentation ✅
+**Commit**: `be9f64c`
+
+Created comprehensive `CONTRIBUTING.md` with:
+- Memory management best practices
+- 5 allocator patterns with examples
+- Code review checklist
+- Zig 0.15.1 API notes
+- CANARY system documentation
+- Security guidelines
+
+### 3. Tests Cleanup
+**Status**: Not pursued (low priority)
+
+Test code can legitimately use `page_allocator` - no action needed.
+
+---
+
 **Completed**: October 17, 2025
-**Status**: CLOSED - Remediation Complete
-**Next Steps**: None - Work Complete
+**Status**: CLOSED - Remediation Complete + Follow-up Enhancements
+**Next Steps**: None - All Work Complete
