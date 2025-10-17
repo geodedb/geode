@@ -234,7 +234,7 @@ pub const ExecutionResult = struct {
             try writer.writeByte('[');
             for (row, 0..) |val, j| {
                 if (j > 0) try writer.writeAll(",");
-                try writeValue(writer, val);
+                try writeValue(allocator, writer, val);
             }
             try writer.writeByte(']');
         }
@@ -324,7 +324,8 @@ fn freeValue(allocator: std.mem.Allocator, value: eval.Value) void {
     }
 }
 
-fn writeValue(writer: anytype, value: eval.Value) !void {
+/// P2-3: Now accepts allocator parameter for temporary allocations
+fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: eval.Value) !void {
     switch (value) {
         .Null => try writer.writeAll("null"),
         .Int => |n| try writer.print("{d}", .{n}),
@@ -400,7 +401,7 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
             try writer.writeByte('[');
             for (list, 0..) |item, i| {
                 if (i > 0) try writer.writeAll(", ");
-                try writeValue(writer, item);
+                try writeValue(allocator, writer, item);
             }
             try writer.writeByte(']');
         },
@@ -434,14 +435,15 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                             // Field-Level Encryption: decrypt if configured
                             const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
                             const user_role = fle_integration.getCurrentUserRole();
+                            // P2-3: Use provided allocator instead of page_allocator
                             const fle_ctx = fle_integration.EncryptionContext{
                                 .tenant_id = "default",
                                 .schema_name = type_name, // Use actual node type
-                                .allocator = std.heap.page_allocator,
+                                .allocator = allocator,
                                 .current_user_role = user_role,
                             };
-                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{node.id});
-                            defer std.heap.page_allocator.free(record_id_buf);
+                            const record_id_buf = try std.fmt.allocPrint(allocator, "{d}", .{node.id});
+                            defer allocator.free(record_id_buf);
 
                             const decrypted = fle_integration.decryptFieldIfNeeded(
                                 fle_ctx,
@@ -494,14 +496,15 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                         .String => |s| {
                             // Field-Level Encryption: decrypt if configured
                             const type_name = edge.label;
+                            // P2-3: Use provided allocator instead of page_allocator
                             const fle_ctx = fle_integration.EncryptionContext{
                                 .tenant_id = "default",
                                 .schema_name = type_name, // Use actual edge type
-                                .allocator = std.heap.page_allocator,
+                                .allocator = allocator,
                                 .current_user_role = fle_integration.getCurrentUserRole(),
                             };
-                            const record_id_buf = try std.fmt.allocPrint(std.heap.page_allocator, "edge_{d}", .{edge.id});
-                            defer std.heap.page_allocator.free(record_id_buf);
+                            const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
+                            defer allocator.free(record_id_buf);
 
                             const decrypted = fle_integration.decryptFieldIfNeeded(
                                 fle_ctx,
@@ -544,7 +547,7 @@ fn writeValue(writer: anytype, value: eval.Value) !void {
                 try writer.writeByte('"');
                 try writer.writeAll(entry.key_ptr.*);
                 try writer.writeAll("\":");
-                try writeValue(writer, entry.value_ptr.*);
+                try writeValue(allocator, writer, entry.value_ptr.*);
             }
             try writer.writeByte('}');
         },
