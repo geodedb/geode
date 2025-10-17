@@ -95,9 +95,9 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
         alloc.free(inbound);
     }
     var j: usize = 0;
-    while (j < n) : (j += 1) inbound[j] = std.ArrayList(u32).initCapacity(alloc, 0) catch unreachable;
+    while (j < n) : (j += 1) inbound[j] = std.ArrayList(u32).init(alloc);
     for (edge_indices) |edge_idx| {
-        inbound[edge_idx.dst_idx].append(alloc, edge_idx.src_idx) catch {};
+        inbound[edge_idx.dst_idx].append(edge_idx.src_idx) catch {};
     }
 
     var ranks = try alloc.alloc(f64, n);

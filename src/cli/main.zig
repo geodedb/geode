@@ -2200,62 +2200,27 @@ fn executeEmbeddedQuery(ally: std.mem.Allocator, query_text: []const u8, format:
     };
     defer ally.free(result);
 
-    // Check if the result indicates any error (any status_class != "00000")
-    const has_error = blk: {
-        if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |sc_start| {
-            const sc_value_start = sc_start + "\"status_class\":\"".len;
-            if (sc_value_start + 5 <= result.len) {
-                const status_code = result[sc_value_start .. sc_value_start + 5];
-                break :blk !std.mem.eql(u8, status_code, "00000");
-            }
-        }
-        break :blk false;
-    };
-
-    if (has_error) {
-        // This is an error - extract and write error message to stderr
-        const stderr_fd = std.fs.File{ .handle = 2 };
-
-        // Try to extract the error message from the JSON
-        var error_msg: []const u8 = "error";
-        if (std.mem.indexOf(u8, result, "\"message\":\"")) |msg_start| {
-            const msg_content_start = msg_start + "\"message\":\"".len;
-            if (std.mem.indexOfPos(u8, result, msg_content_start, "\"")) |msg_end| {
-                error_msg = result[msg_content_start..msg_end];
-            }
-        } else if (std.mem.indexOf(u8, result, "\"error\":\"")) |err_start| {
-            const err_content_start = err_start + "\"error\":\"".len;
-            if (std.mem.indexOfPos(u8, result, err_content_start, "\"")) |err_end| {
-                error_msg = result[err_content_start..err_end];
-            }
-        }
-
-        _ = try stderr_fd.writeAll(error_msg);
-        _ = try stderr_fd.writeAll("\n");
-        std.process.exit(1);
-    }
-
     // Write result to stdout
     const stdout_fd = std.fs.File{ .handle = 1 };
     _ = try stdout_fd.writeAll(result);
     // Add newline to ensure Python TextIOWrapper detects end of output
     _ = try stdout_fd.writeAll("\n");
 
-    // Check for error status_class and exit with code 1
-    // Per ISO GQL: 00xxx=success, 01xxx=warning, 02xxx=no-data, others=error
-    if (std.mem.indexOf(u8, result, "\"status_class\":\"") != null) {
-        // Find the status class value
-        if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
-            const value_start = status_start + "\"status_class\":\"".len;
-            if (value_start + 2 <= result.len) {
-                const status_category = result[value_start .. value_start + 2];
-                // Exit with code 1 for error status classes (not 00, 01, or 02)
-                if (!std.mem.eql(u8, status_category, "00") and
-                    !std.mem.eql(u8, status_category, "01") and
-                    !std.mem.eql(u8, status_category, "02"))
-                {
-                    std.process.exit(1);
-                }
+    // Check status_class and exit with appropriate code
+    // Exit code 0: Success (00xxx), Warning (01xxx), No Data (02xxx), Dynamic Errors (0Axxx)
+    // Exit code 1: Syntax Errors (42xxx), Other Errors
+    if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
+        const value_start = status_start + "\"status_class\":\"".len;
+        if (value_start + 2 <= result.len) {
+            const status_category = result[value_start .. value_start + 2];
+            // Dynamic errors (0A) and other success/warning categories exit with 0
+            // Only syntax errors (42) and severe errors exit with 1
+            if (!std.mem.eql(u8, status_category, "00") and
+                !std.mem.eql(u8, status_category, "01") and
+                !std.mem.eql(u8, status_category, "02") and
+                !std.mem.eql(u8, status_category, "0A"))
+            {
+                std.process.exit(1);
             }
         }
     }
