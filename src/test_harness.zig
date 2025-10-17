@@ -68,6 +68,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         transaction_session = null;
     }
 
+    // M2: Create catalog instance for dependency injection (no more global state)
+    const catalog = try execution.ensureCatalogInstance(allocator.*);
+
     // Create session state for SESSION SET GRAPH support
     var session_state = execution.SessionState.init(allocator.*);
     defer session_state.deinit();
@@ -94,7 +97,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     }
 
     // Create execution context with authentication and transaction state
+    // M2: Pass catalog via dependency injection
     const exec_context = execution.ExecutionContext{
+        .catalog = catalog,
         .user = authenticated_user,
         .role = user_role,
         .token = options.token,
