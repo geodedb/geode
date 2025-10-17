@@ -61,9 +61,9 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             if (hi != 0) try writer.writeByte(';');
             // Left node labels
             try writer.writeAll("L[");
-            try writeSortedLabels(writer, hop.left.labels);
+            try writeSortedLabels(allocator, writer, hop.left.labels);
             try writer.writeAll("]P[");
-            try writeSortedPropKeys(writer, hop.left.props);
+            try writeSortedPropKeys(allocator, writer, hop.left.props);
             try writer.writeAll("]V[");
             try writeValueShape(writer, hop.left.props);
             try writer.writeByte(']');
@@ -83,9 +83,9 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writeQuant(writer, hop.rel.max_len);
             // Right node
             try writer.writeAll("R[");
-            try writeSortedLabels(writer, hop.right.labels);
+            try writeSortedLabels(allocator, writer, hop.right.labels);
             try writer.writeAll("]P[");
-            try writeSortedPropKeys(writer, hop.right.props);
+            try writeSortedPropKeys(allocator, writer, hop.right.props);
             try writer.writeAll("]V[");
             try writeValueShape(writer, hop.right.props);
             try writer.writeByte(']');
@@ -99,9 +99,10 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
     return buf.toOwnedSlice(allocator);
 }
 
-fn writeSortedPropKeys(writer: anytype, props: ?[]planner_root.ast.Property) !void {
+/// P2-3: Now accepts allocator parameter for temporary arena
+fn writeSortedPropKeys(allocator: std.mem.Allocator, writer: anytype, props: ?[]planner_root.ast.Property) !void {
     if (props == null or props.?.len == 0) return; // empty set
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const al = arena.allocator();
     const arr = props.?;
@@ -173,10 +174,11 @@ fn degreeBucketClass(deg: usize) u8 {
     return if (deg == 0) 'Z' else if (deg == 1) 'L' else if (deg <= 3) 'M' else 'H';
 }
 
-fn writeSortedLabels(writer: anytype, labels: [][]const u8) !void {
+/// P2-3: Now accepts allocator parameter for temporary arena
+fn writeSortedLabels(allocator: std.mem.Allocator, writer: anytype, labels: [][]const u8) !void {
     if (labels.len == 0) return; // empty
     // Copy to temporary slice for sorting
-    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
     defer arena_allocator.deinit();
     const al = arena_allocator.allocator();
     var tmp = try al.alloc([]const u8, labels.len);
