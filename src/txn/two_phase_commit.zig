@@ -60,6 +60,13 @@ pub const Coordinator = struct {
     }
 };
 
+// P2-3: Use static GPA for env var check
+var enabled_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var enabled_gpa_init = false;
+
 fn enabled() bool {
-    return std.process.hasEnvVar(std.heap.page_allocator, "GEODE_ENABLE_DISTRIBUTED_WRITES") catch false;
+    if (!enabled_gpa_init) {
+        enabled_gpa_init = true;
+    }
+    return std.process.hasEnvVar(enabled_gpa.allocator(), "GEODE_ENABLE_DISTRIBUTED_WRITES") catch false;
 }

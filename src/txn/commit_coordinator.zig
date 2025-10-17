@@ -4,7 +4,9 @@ pub const WalHandle = struct {
     flushUpToFn: *const fn (lsn: u64) anyerror!void,
 };
 
-var wal_handles = std.ArrayList(*WalHandle).init(std.heap.page_allocator);
+// P2-3: Use static GPA for global WAL handles list
+var wal_handles_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var wal_handles = std.ArrayList(*WalHandle).init(wal_handles_gpa.allocator());
 
 pub fn registerWal(handle: *WalHandle) void {
     _ = wal_handles.append(handle) catch {};
