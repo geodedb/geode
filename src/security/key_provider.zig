@@ -153,20 +153,22 @@ test "key provider static env absent returns null" {
     // Ensure variable not set (ignore error if not present)
     _ = std.os.unsetenvZ("GEODE_DISK_KEY_HEX") catch {};
     const p = Provider.init(.StaticEnv);
-    const km = try p.fetch(std.heap.page_allocator);
+    // P2-3: Use testing allocator in tests instead of page_allocator
+    const km = try p.fetch(std.testing.allocator);
     try std.testing.expect(km == null);
 }
 
 // CANARY: REQ=REQ-GQL-TDE-004; FEATURE="MockKMSProvider"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_004_MockKMS; OWNER=security; UPDATED=2025-09-26
 test "mock kms deterministic and distinct seeds differ" {
     var p1 = Provider.init(.MockKms);
-    const km1 = (try p1.fetch(std.heap.page_allocator)).?;
-    const km2 = (try p1.fetch(std.heap.page_allocator)).?; // repeat fetch, should be identical
+    // P2-3: Use testing allocator in tests instead of page_allocator
+    const km1 = (try p1.fetch(std.testing.allocator)).?;
+    const km2 = (try p1.fetch(std.testing.allocator)).?; // repeat fetch, should be identical
     try std.testing.expect(std.mem.eql(u8, &km1.data_key, &km2.data_key));
     try std.testing.expect(std.mem.eql(u8, &km1.wal_key, &km2.wal_key));
     // Different seed => different keys
     var p2 = Provider{ .typ = .MockKms, .mock_seed = 0xDEADBEEFCAFEBABE };
-    const km3 = (try p2.fetch(std.heap.page_allocator)).?;
+    const km3 = (try p2.fetch(std.testing.allocator)).?;
     try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key));
     try std.testing.expect(!std.mem.eql(u8, &km1.wal_key, &km3.wal_key));
 }
@@ -175,14 +177,15 @@ test "external kms provider generates non-deterministic envelopes but stable see
     std.os.setenvZ("GEODE_KMS_ENDPOINT", "https://kms.example.local") catch {};
     std.os.setenvZ("GEODE_KMS_API_KEY", "abc123") catch {};
     const p = Provider.init(.ExternalKms);
-    const km1 = (try p.fetch(std.heap.page_allocator)).?;
-    const km2 = (try p.fetch(std.heap.page_allocator)).?; // new random keys each fetch
+    // P2-3: Use testing allocator in tests instead of page_allocator
+    const km1 = (try p.fetch(std.testing.allocator)).?;
+    const km2 = (try p.fetch(std.testing.allocator)).?; // new random keys each fetch
     // Expect keys differ most of the time (non-deterministic); allow rare collision fallback
     const identical = std.mem.eql(u8, &km1.data_key, &km2.data_key) and std.mem.eql(u8, &km1.wal_key, &km2.wal_key);
     if (identical) std.debug.print("WARNING: identical keys generated twice; extremely low probability but acceptable for test rerun\n", .{});
     // Changing API key changes PRNG seed => distribution changes (not directly testable without internal stats)
     std.os.setenvZ("GEODE_KMS_API_KEY", "def456") catch {};
-    const km3 = (try p.fetch(std.heap.page_allocator)).?;
+    const km3 = (try p.fetch(std.testing.allocator)).?;
     // Highly likely to differ from first fetch
     try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key) or !std.mem.eql(u8, &km1.wal_key, &km3.wal_key));
 }
