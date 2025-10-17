@@ -5,6 +5,10 @@ const std = @import("std");
 // Provides deterministic test overrides without mutating real process env.
 // CANARY: REQ=REQ-GQL-FLAGS-001; FEATURE="Shared Feature Flag Wrapper"; ASPECT=INFRA; STATUS=IMPL; TEST=tests/unit_feature_flags.zig:1; OWNER=core; UPDATED=2025-09-26
 
+/// P2-3: Static GPA for env var checks in feature flags
+var flags_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var flags_gpa_init = false;
+
 pub const Flag = struct {
     env_var: []const u8,
     test_override: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -22,7 +26,11 @@ pub const Flag = struct {
 
     pub fn enabled(self: *Flag) bool {
         if (self.test_override.load(.acquire)) return true;
-        return std.process.hasEnvVar(std.heap.page_allocator, self.env_var) catch false;
+        // P2-3: Use static GPA for env var check
+        if (!flags_gpa_init) {
+            flags_gpa_init = true;
+        }
+        return std.process.hasEnvVar(flags_gpa.allocator(), self.env_var) catch false;
     }
 };
 
