@@ -133,6 +133,7 @@ var catalog_instance_mutex = std.Thread.Mutex{};
 /// Ensure the global catalog instance is initialized
 /// Returns a pointer to the catalog instance
 /// P2-3: Now accepts allocator parameter instead of using page_allocator
+/// TODO M2: Remove after all callers migrated to passing catalog via ExecutionContext
 pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
     catalog_instance_mutex.lock();
     defer catalog_instance_mutex.unlock();
@@ -153,6 +154,17 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
     global_catalog_instance = instance;
     return instance;
+}
+
+/// M2: Get catalog from ExecutionContext, falling back to global instance if not provided
+/// This allows gradual migration from global state to dependency injection
+/// TODO M2: Remove fallback after all call sites updated to pass catalog
+pub fn getCatalog(allocator: std.mem.Allocator, context: ExecutionContext) !*catalog_mod.Catalog {
+    if (context.catalog) |cat| {
+        return cat;
+    }
+    // Fall back to global instance during migration
+    return ensureCatalogInstance(allocator);
 }
 
 // DEPRECATED: Access to old global catalog state for backward compatibility
@@ -233,6 +245,10 @@ pub const TransactionState = enum {
 };
 
 pub const ExecutionContext = struct {
+    // M2: Catalog instance passed via dependency injection (gradual migration from global state)
+    // Optional during migration - if null, falls back to global instance via ensureCatalogInstance
+    // TODO M2: Make this required (non-optional) after all call sites updated
+    catalog: ?*catalog_mod.Catalog = null,
     user: ?[]const u8 = null,
     role: ?@import("security/user_management.zig").Role = null, // User role for permission checking
     token: ?[]const u8 = null,
