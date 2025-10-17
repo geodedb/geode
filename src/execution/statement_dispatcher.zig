@@ -15,7 +15,7 @@ const fle_annotations = @import("../schema/annotations.zig");
 
 // Import helper functions used by statement dispatcher
 const checkPermission = execution.checkPermission;
-const ensureCatalogInstance = execution.ensureCatalogInstance;
+const getCatalog = execution.getCatalog;
 const getScopedIndexKey = execution.getScopedIndexKey;
 const createTestGraphG1 = execution.createTestGraphG1;
 const createTestGraphG2 = execution.createTestGraphG2;
@@ -319,7 +319,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Show => |s| {
-            return executeShow(allocator, s);
+            return executeShow(allocator, s, context);
         },
         .Explain => |exp| {
             return executeExplain(allocator, exp, context);
@@ -332,7 +332,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
-            const cat = try ensureCatalogInstance(allocator);
+            const cat = try getCatalog(allocator, context);
 
             const index_name = ci.name;
             const label = ci.label;
@@ -442,7 +442,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
-            const cat = try ensureCatalogInstance(allocator);
+            const cat = try getCatalog(allocator, context);
 
             const index_name = di.name;
 
@@ -552,7 +552,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CREATE GRAPH implementation with duplicate detection
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
-            const cat = try ensureCatalogInstance(allocator);
+            const cat = try getCatalog(allocator, context);
 
             const graph_name = cg.name;
 
@@ -655,7 +655,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // DROP GRAPH implementation with existence check
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
-            const cat = try ensureCatalogInstance(allocator);
+            const cat = try getCatalog(allocator, context);
 
             const graph_name = dg.name;
 
@@ -690,7 +690,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CREATE SCHEMA implementation with duplicate detection
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
-            const cat = try ensureCatalogInstance(allocator);
+            const cat = try getCatalog(allocator, context);
 
             const schema_name = cs.name;
 
@@ -723,7 +723,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // DROP SCHEMA implementation with existence check
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
-            const cat = try ensureCatalogInstance(allocator);
+            const cat = try getCatalog(allocator, context);
 
             const schema_name = ds.name;
 

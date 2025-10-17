@@ -9,17 +9,16 @@ const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 
 // Import helper functions used by statement handlers
-const ensureCatalogInstance = execution.ensureCatalogInstance;
+const getCatalog = execution.getCatalog;
 const executeMatchQueryWithParams = execution.executeMatchQueryWithParams;
 const executeStatementWithContext = execution.executeStatementWithContext;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-007; FEATURE="ExecutionRefactoring"; ASPECT=STATEMENT_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted statement handlers (SHOW, FOR, VALUES, EXPLAIN, PROFILE) from execution.zig for better modularity (M1 Phase 7)
 
-pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement) !ExecutionResult {
-    // P2-2 Phase 2: Use Catalog instance instead of global state
-    // P2-3: Pass allocator to ensureCatalogInstance
-    const cat = try ensureCatalogInstance(allocator);
+pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: ExecutionContext) !ExecutionResult {
+    // M2: Get catalog from context via dependency injection
+    const cat = try getCatalog(allocator, context);
 
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -484,7 +483,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
 }
 
 pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, context: ExecutionContext) anyerror!ExecutionResult {
-    _ = context; // May be used for permissions in future
+    // M2: context now used for catalog access via dependency injection
     // EXPLAIN shows the query execution plan with cost estimates
 
     // Helper to format plan operations with stack buffer (performance optimization)
@@ -519,9 +518,8 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
                         const prop_name = head.props.?[0].key;
 
                         // Check catalog for matching index
-                        // P2-2 Phase 2: Use Catalog instance instead of global state
-                        // P2-3: Pass allocator to ensureCatalogInstance
-                        const cat = try ensureCatalogInstance(allocator);
+                        // M2: Get catalog from context via dependency injection
+                        const cat = try getCatalog(allocator, context);
                         // Phase 3: Shared lock for EXPLAIN (read-only, allows concurrent query planning)
                         cat.rwlock.lockShared();
                         defer cat.rwlock.unlockShared();
