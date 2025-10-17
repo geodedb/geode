@@ -16,11 +16,13 @@ const Value = @import("../protocol.zig").Value;
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern State Dedup Memory"; ASPECT=PatternStateDedupMem; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Escape Support"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_PatternRegexEscape; OWNER=schema; UPDATED=2025-09-20
 pub const SchemaConstraints = struct {
+    allocator: Allocator,
     node_constraints: std.StringHashMap(NodeConstraints),
     edge_constraints: std.StringHashMap(EdgeConstraints),
     unique_indexes: std.ArrayList(UniqueIndex),
     check_constraints: std.ArrayList(CheckConstraint),
     unique_value_sets: std.StringHashMap(std.AutoHashMap(u64, void)), // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Uniqueness"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_UniqueEnforce; OWNER=schema; UPDATED=2025-09-20
+    composite_unique_sets: std.StringHashMap(std.AutoHashMap(u64, void)),
 
     pub const NodeConstraints = struct {
         label: []const u8,
@@ -446,14 +448,14 @@ pub const SchemaConstraints = struct {
     }
 
     fn checkPattern(self: *SchemaConstraints, value: Value, pattern: []const u8) bool {
-        _ = self;
         return switch (value) {
-            .string => |s| patternMatch(s, pattern),
+            .string => |s| patternMatch(self.allocator, s, pattern),
             else => false,
         };
     }
 
-    fn patternMatch(input: []const u8, pattern: []const u8) bool {
+    /// P2-3: Now accepts allocator parameter for temporary allocations
+    fn patternMatch(allocator: std.mem.Allocator, input: []const u8, pattern: []const u8) bool {
         // Extended mini-regex subset supporting:
         // ^ $ anchors, * ? . , character classes with ranges, negated classes [^...]
         // No escapes, byte-wise matching.
@@ -470,9 +472,9 @@ pub const SchemaConstraints = struct {
         }
 
         const State = struct { pi: usize, si: usize };
-        var stack = std.ArrayList(State).init(std.heap.page_allocator);
+        var stack = std.ArrayList(State).init(allocator);
         defer stack.deinit();
-        var visited = std.AutoHashMap(u64, void).init(std.heap.page_allocator);
+        var visited = std.AutoHashMap(u64, void).init(allocator);
         defer visited.deinit();
         stack.append(.{ .pi = 0, .si = 0 }) catch return false;
 
