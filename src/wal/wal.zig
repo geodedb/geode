@@ -351,12 +351,13 @@ pub const Wal = struct {
             std.mem.writeInt(u64, header[13..21], rec.lsn.value, .little);
             std.mem.writeInt(u64, header[21..29], rec.prev_lsn, .little);
             std.mem.writeInt(u32, header[29..33], 0, .little); // zero before checksum
-            var cs_buf = std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0) catch @panic("OOM");
-            defer cs_buf.deinit(std.heap.page_allocator);
-            cs_buf.appendSlice(std.heap.page_allocator, header[0..]) catch |err| {
+            // P2-3: Use WAL's allocator instead of page_allocator
+            var cs_buf = std.ArrayList(u8).initCapacity(self.ally, 0) catch @panic("OOM");
+            defer cs_buf.deinit(self.ally);
+            cs_buf.appendSlice(self.ally, header[0..]) catch |err| {
                 std.log.err("CRITICAL: Failed to append header to checksum buffer: {any}", .{err});
             };
-            cs_buf.appendSlice(std.heap.page_allocator, payload_buf) catch |err| {
+            cs_buf.appendSlice(self.ally, payload_buf) catch |err| {
                 std.log.err("CRITICAL: Failed to append payload to checksum buffer: {any}", .{err});
             };
             const cs = adler32(cs_buf.items);
