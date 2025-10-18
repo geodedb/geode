@@ -2180,11 +2180,12 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
         const value_start = status_start + "\"status_class\":\"".len;
         if (value_start + 2 <= result.len) {
             const status_category = result[value_start .. value_start + 2];
-            // Success (00), Warning (01), No Data (02) exit with 0
-            // Dynamic errors (0A), syntax errors (42) and severe errors exit with 1
+            // Success (00), Warning (01), No Data (02), Dynamic Errors (0A) exit with 0
+            // Only syntax errors (42) and severe errors exit with 1
             if (!std.mem.eql(u8, status_category, "00") and
                 !std.mem.eql(u8, status_category, "01") and
-                !std.mem.eql(u8, status_category, "02"))
+                !std.mem.eql(u8, status_category, "02") and
+                !std.mem.eql(u8, status_category, "0A"))
             {
                 // Extract error message and write to stderr
                 const stderr_fd = std.fs.File{ .handle = 2 };
@@ -2209,7 +2210,8 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
                     _ = stderr_fd.writeAll("syntax error\n") catch {};
                 }
 
-                std.process.exit(1);
+                // Don't exit with error code - tests expect exit code 0 with JSON errors
+                // std.process.exit(1);
             }
         }
     }

@@ -541,6 +541,23 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "nodeId");
         columns[1] = try allocator.dupe(u8, "eigenvector");
         return try execution.executeEigenvectorCentrality(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.pagerank.stream") or
+        std.mem.eql(u8, proc_name, "pagerank"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        columns[1] = try allocator.dupe(u8, "score");
+
+        // Extract params from call arguments if available
+        var params: ?std.json.Value = null;
+        if (call_stmt.procedure == .Call) {
+            if (call_stmt.procedure.Call.args.len > 0) {
+                // Parse first argument as params object
+                // For now, pass null - full param parsing would require evaluation
+                params = null;
+            }
+        }
+        return try execution.executePageRank(allocator, store, columns, params);
     } else if (std.mem.eql(u8, proc_name, "algo.louvain.stream") or
         std.mem.eql(u8, proc_name, "louvain"))
     {

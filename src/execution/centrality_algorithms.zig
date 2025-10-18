@@ -307,6 +307,112 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
     };
 }
 
+/// PageRank Algorithm
+pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value) !ExecutionResult {
+    var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
+    defer node_list.deinit(allocator);
+
+    var node_iter = store.nodes.iterator();
+    while (node_iter.next()) |entry| {
+        try node_list.append(allocator, entry.key_ptr.*);
+    }
+
+    if (node_list.items.len == 0) {
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]eval.Value, 0),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    // Parse parameters
+    var damping_factor: f64 = 0.85;
+    var max_iterations: u32 = 20;
+    var tolerance: f64 = 0.0001;
+
+    if (params) |p| {
+        if (p == .object) {
+            if (p.object.get("dampingFactor")) |df| {
+                if (df == .float) damping_factor = df.float;
+                if (df == .integer) damping_factor = @floatFromInt(df.integer);
+            }
+            if (p.object.get("maxIterations")) |mi| {
+                if (mi == .integer) max_iterations = @intCast(mi.integer);
+            }
+            if (p.object.get("tolerance")) |tol| {
+                if (tol == .float) tolerance = tol.float;
+            }
+        }
+    }
+
+    var pagerank = std.AutoHashMap(u64, f64).init(allocator);
+    defer pagerank.deinit();
+
+    const initial_rank = 1.0 / @as(f64, @floatFromInt(node_list.items.len));
+    for (node_list.items) |node| {
+        try pagerank.put(node, initial_rank);
+    }
+
+    var iteration: u32 = 0;
+    while (iteration < max_iterations) : (iteration += 1) {
+        var new_pagerank = std.AutoHashMap(u64, f64).init(allocator);
+        defer new_pagerank.deinit();
+
+        const base_rank = (1.0 - damping_factor) / @as(f64, @floatFromInt(node_list.items.len));
+
+        for (node_list.items) |node| {
+            var rank_sum: f64 = 0;
+
+            // Find nodes that link to this node
+            var linking_iter = store.nodes.iterator();
+            while (linking_iter.next()) |linking_entry| {
+                const linking_node = linking_entry.key_ptr.*;
+                const neighbors = try getNeighbors(store, linking_node, allocator);
+                defer allocator.free(neighbors);
+
+                for (neighbors) |neighbor| {
+                    if (neighbor == node) {
+                        const out_degree = @as(f64, @floatFromInt(neighbors.len));
+                        if (out_degree > 0) {
+                            rank_sum += (pagerank.get(linking_node) orelse initial_rank) / out_degree;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            const new_rank = base_rank + damping_factor * rank_sum;
+            try new_pagerank.put(node, new_rank);
+        }
+
+        // Check convergence
+        var max_diff: f64 = 0;
+        for (node_list.items) |node| {
+            const new_val = new_pagerank.get(node) orelse initial_rank;
+            const old_val = pagerank.get(node) orelse initial_rank;
+            max_diff = @max(max_diff, @abs(new_val - old_val));
+            try pagerank.put(node, new_val);
+        }
+
+        if (max_diff < tolerance) break;
+    }
+
+    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    for (node_list.items, 0..) |node_id, i| {
+        var row = try allocator.alloc(eval.Value, 2);
+        row[0] = eval.Value{ .Int = @intCast(node_id) };
+        const score = pagerank.get(node_id).?;
+        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        rows[i] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
 /// Louvain Community Detection
 pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);

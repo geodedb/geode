@@ -51,6 +51,7 @@ pub const executeDegreeCentrality = centrality_algorithms.executeDegreeCentralit
 pub const executeBetweennessCentrality = centrality_algorithms.executeBetweennessCentrality;
 pub const executeClosenessCentrality = centrality_algorithms.executeClosenessCentrality;
 pub const executeEigenvectorCentrality = centrality_algorithms.executeEigenvectorCentrality;
+pub const executePageRank = centrality_algorithms.executePageRank;
 pub const executeLouvainCommunities = centrality_algorithms.executeLouvainCommunities;
 pub const executeLabelPropagation = centrality_algorithms.executeLabelPropagation;
 pub const executeUnionFind = centrality_algorithms.executeUnionFind;
