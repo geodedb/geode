@@ -16,18 +16,18 @@ pub const Params = struct {
 pub const Result = struct {
     node_ids: []u32,
     scores: []f64,
-    pub fn deinit(self: *Result, ally: std.mem.Allocator) void {
-        ally.free(self.node_ids);
-        ally.free(self.scores);
+    pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_ids);
+        allocator.free(self.scores);
         self.* = undefined;
     }
 };
 
-pub fn compute(ally: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
+pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
     const n = g.nodes.count();
     if (n == 0) return .{ .node_ids = &[_]u32{}, .scores = &[_]f64{} };
-    var node_ids = try ally.alloc(u32, n);
-    errdefer ally.free(node_ids);
+    var node_ids = try allocator.alloc(u32, n);
+    errdefer allocator.free(node_ids);
     var it = g.nodes.iterator();
     var idx: usize = 0;
     while (it.next()) |e| {
@@ -35,16 +35,16 @@ pub fn compute(ally: std.mem.Allocator, g: *const builders.Graph, p: Params) !Re
         idx += 1;
     }
     std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
-    var id_to_index = std.AutoHashMap(u32, u32).init(ally);
+    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
     defer id_to_index.deinit();
     for (node_ids, 0..) |id, i| id_to_index.put(id, @as(u32, @intCast(i))) catch {};
 
-    var scores = try ally.alloc(f64, n);
-    errdefer ally.free(scores);
+    var scores = try allocator.alloc(f64, n);
+    errdefer allocator.free(scores);
 
-    var dist = try ally.alloc(i32, n);
-    defer ally.free(dist);
-    var queue = try std.ArrayList(u32).initCapacity(ally, n);
+    var dist = try allocator.alloc(i32, n);
+    defer allocator.free(dist);
+    var queue = try std.ArrayList(u32).initCapacity(allocator, n);
     defer queue.deinit();
 
     var s_idx: usize = 0;

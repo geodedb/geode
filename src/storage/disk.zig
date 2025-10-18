@@ -29,18 +29,18 @@ pub const Disk = struct {
     enc_enabled: bool = false,
     key: [32]u8 = undefined,
 
-    pub fn init(ally: std.mem.Allocator, path: []const u8) !Disk {
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !Disk {
         var f = try std.fs.cwd().createFile(path, .{ .truncate = false, .read = true, .mode = 0o600 });
-        var d = Disk{ .allocator = ally, .file = f };
+        var d = Disk{ .allocator = allocator, .file = f };
         // encryption toggle
-        if (std.process.getEnvVarOwned(ally, "GEODE_DISK_ENCRYPTION")) |v| {
-            defer ally.free(v);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_DISK_ENCRYPTION")) |v| {
+            defer allocator.free(v);
             if (std.mem.eql(u8, v, "on")) d.enc_enabled = true;
         } else |_| {}
         if (d.enc_enabled) {
-            const hex = std.process.getEnvVarOwned(ally, "GEODE_DISK_KEY_HEX") catch null;
+            const hex = std.process.getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch null;
             if (hex == null or hex.?.len != 64) return error.InvalidKey;
-            defer ally.free(hex.?);
+            defer allocator.free(hex.?);
             // parse hex into master key then derive data key
             var master: [32]u8 = undefined;
             var i: usize = 0;

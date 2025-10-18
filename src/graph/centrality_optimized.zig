@@ -16,9 +16,9 @@ pub const OptimizedResult = struct {
     computation_time_ns: u64,
     nodes_processed: u32,
 
-    pub fn deinit(self: *OptimizedResult, ally: std.mem.Allocator) void {
-        ally.free(self.node_ids);
-        ally.free(self.scores);
+    pub fn deinit(self: *OptimizedResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_ids);
+        allocator.free(self.scores);
         self.* = undefined;
     }
 };
@@ -31,9 +31,9 @@ const CircularQueue = struct {
     size: usize,
     capacity: usize,
 
-    fn init(ally: std.mem.Allocator, capacity: usize) !CircularQueue {
+    fn init(allocator: std.mem.Allocator, capacity: usize) !CircularQueue {
         return CircularQueue{
-            .buffer = try ally.alloc(u32, capacity),
+            .buffer = try allocator.alloc(u32, capacity),
             .head = 0,
             .tail = 0,
             .size = 0,
@@ -41,8 +41,8 @@ const CircularQueue = struct {
         };
     }
 
-    fn deinit(self: *CircularQueue, ally: std.mem.Allocator) void {
-        ally.free(self.buffer);
+    fn deinit(self: *CircularQueue, allocator: std.mem.Allocator) void {
+        allocator.free(self.buffer);
     }
 
     fn push(self: *CircularQueue, item: u32) !void {
@@ -98,7 +98,7 @@ fn resetDistanceArray(distances: []i32) void {
 
 /// Optimized closeness centrality computation
 pub fn computeOptimizedCloseness(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     g: *const builders.Graph,
     mode: enum { standard, harmonic },
     normalize: bool,
@@ -116,8 +116,8 @@ pub fn computeOptimizedCloseness(
     }
 
     // Pre-allocate and sort node IDs
-    var node_ids = try ally.alloc(u32, n);
-    errdefer ally.free(node_ids);
+    var node_ids = try allocator.alloc(u32, n);
+    errdefer allocator.free(node_ids);
 
     var it = g.nodes.iterator();
     var idx: usize = 0;
@@ -128,7 +128,7 @@ pub fn computeOptimizedCloseness(
     std.sort.heap(u32, node_ids, {}, std.sort.asc(u32));
 
     // Create optimized node ID to index mapping using perfect hash if possible
-    var id_to_index = std.AutoHashMap(u32, u32).init(ally);
+    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
     defer id_to_index.deinit();
     try id_to_index.ensureTotalCapacity(@as(u32, @intCast(n)));
 
@@ -136,15 +136,15 @@ pub fn computeOptimizedCloseness(
         try id_to_index.put(id, @as(u32, @intCast(i)));
     }
 
-    var scores = try ally.alloc(f64, n);
-    errdefer ally.free(scores);
+    var scores = try allocator.alloc(f64, n);
+    errdefer allocator.free(scores);
 
     // Pre-allocate arrays for BFS
-    var distances = try ally.alloc(i32, n);
-    defer ally.free(distances);
+    var distances = try allocator.alloc(i32, n);
+    defer allocator.free(distances);
 
-    var queue = try CircularQueue.init(ally, n);
-    defer queue.deinit(ally);
+    var queue = try CircularQueue.init(allocator, n);
+    defer queue.deinit(allocator);
 
     // Main computation loop with optimizations
     for (0..n) |s_idx| {
@@ -217,7 +217,7 @@ pub fn computeOptimizedCloseness(
 
 /// Parallel closeness centrality for large graphs
 pub fn computeParallelCloseness(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     g: *const builders.Graph,
     mode: enum { standard, harmonic },
     normalize: bool,
@@ -237,12 +237,12 @@ pub fn computeParallelCloseness(
 
     // For small graphs, use sequential version
     if (n < 100 or thread_count <= 1) {
-        return computeOptimizedCloseness(ally, g, mode, normalize);
+        return computeOptimizedCloseness(allocator, g, mode, normalize);
     }
 
     // Pre-allocate and sort node IDs
-    var node_ids = try ally.alloc(u32, n);
-    errdefer ally.free(node_ids);
+    var node_ids = try allocator.alloc(u32, n);
+    errdefer allocator.free(node_ids);
 
     var it = g.nodes.iterator();
     var idx: usize = 0;
@@ -253,7 +253,7 @@ pub fn computeParallelCloseness(
     std.sort.heap(u32, node_ids, {}, std.sort.asc(u32));
 
     // Create shared node ID to index mapping
-    var id_to_index = std.AutoHashMap(u32, u32).init(ally);
+    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
     defer id_to_index.deinit();
     try id_to_index.ensureTotalCapacity(@as(u32, @intCast(n)));
 
@@ -261,8 +261,8 @@ pub fn computeParallelCloseness(
         try id_to_index.put(id, @as(u32, @intCast(i)));
     }
 
-    var scores = try ally.alloc(f64, n);
-    errdefer ally.free(scores);
+    var scores = try allocator.alloc(f64, n);
+    errdefer allocator.free(scores);
 
     // Parallel computation would require thread pool implementation
     // For now, implement optimized sequential with parallel structure ready
@@ -270,13 +270,13 @@ pub fn computeParallelCloseness(
 
     for (0..n) |s_idx| {
         // BFS computation for node s_idx
-        var distances = try ally.alloc(i32, n);
-        defer ally.free(distances);
+        var distances = try allocator.alloc(i32, n);
+        defer allocator.free(distances);
 
         resetDistanceArray(distances);
 
-        var queue = try CircularQueue.init(ally, n);
-        defer queue.deinit(ally);
+        var queue = try CircularQueue.init(allocator, n);
+        defer queue.deinit(allocator);
 
         distances[s_idx] = 0;
         try queue.push(@as(u32, @intCast(s_idx)));
@@ -341,7 +341,7 @@ pub fn computeParallelCloseness(
 
 /// Cache-optimized PageRank implementation
 pub fn computeOptimizedPageRank(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     g: *const builders.Graph,
     damping: f64,
     epsilon: f64,
@@ -360,8 +360,8 @@ pub fn computeOptimizedPageRank(
     }
 
     // Pre-allocate and sort node IDs
-    var node_ids = try ally.alloc(u32, n);
-    errdefer ally.free(node_ids);
+    var node_ids = try allocator.alloc(u32, n);
+    errdefer allocator.free(node_ids);
 
     var it = g.nodes.iterator();
     var idx: usize = 0;
@@ -371,7 +371,7 @@ pub fn computeOptimizedPageRank(
     }
     std.sort.heap(u32, node_ids, {}, std.sort.asc(u32));
 
-    var id_to_index = std.AutoHashMap(u32, u32).init(ally);
+    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
     defer id_to_index.deinit();
     try id_to_index.ensureTotalCapacity(@as(u32, @intCast(n)));
 
@@ -380,14 +380,14 @@ pub fn computeOptimizedPageRank(
     }
 
     // Double-buffered rank arrays for cache efficiency
-    var ranks_current = try ally.alloc(f64, n);
-    defer ally.free(ranks_current);
-    var ranks_next = try ally.alloc(f64, n);
-    defer ally.free(ranks_next);
+    var ranks_current = try allocator.alloc(f64, n);
+    defer allocator.free(ranks_current);
+    var ranks_next = try allocator.alloc(f64, n);
+    defer allocator.free(ranks_next);
 
     // Pre-compute out-degrees for efficiency
-    var out_degrees = try ally.alloc(u32, n);
-    defer ally.free(out_degrees);
+    var out_degrees = try allocator.alloc(u32, n);
+    defer allocator.free(out_degrees);
 
     for (node_ids, 0..) |node_id, i| {
         var out_it = g.outEdges(node_id);
@@ -449,8 +449,8 @@ pub fn computeOptimizedPageRank(
     }
 
     // Copy final results
-    const final_scores = try ally.alloc(f64, n);
-    errdefer ally.free(final_scores);
+    const final_scores = try allocator.alloc(f64, n);
+    errdefer allocator.free(final_scores);
     @memcpy(final_scores, ranks_current);
 
     const end_time = std.time.nanoTimestamp();
@@ -478,7 +478,7 @@ pub const PerformanceMetrics = struct {
 
 /// Benchmark comparison between original and optimized algorithms
 pub fn benchmarkComparison(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     g: *const builders.Graph,
     algorithm: enum { closeness, pagerank },
 ) !PerformanceMetrics {
@@ -496,8 +496,8 @@ pub fn benchmarkComparison(
             original_time = @as(u64, @intCast(end1 - start1));
 
             // Measure optimized implementation
-            var result = try computeOptimizedCloseness(ally, g, .harmonic, true);
-            defer result.deinit(ally);
+            var result = try computeOptimizedCloseness(allocator, g, .harmonic, true);
+            defer result.deinit(allocator);
             optimized_time = result.computation_time_ns;
         },
         .pagerank => {
@@ -508,8 +508,8 @@ pub fn benchmarkComparison(
             original_time = @as(u64, @intCast(end1 - start1));
 
             // Measure optimized implementation
-            var result = try computeOptimizedPageRank(ally, g, 0.85, 1e-8, 100);
-            defer result.deinit(ally);
+            var result = try computeOptimizedPageRank(allocator, g, 0.85, 1e-8, 100);
+            defer result.deinit(allocator);
             optimized_time = result.computation_time_ns;
         },
     }

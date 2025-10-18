@@ -165,19 +165,19 @@ pub fn foldCase(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
 // CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UnicodeUtf16"; ASPECT=Utf16ToUtf8; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_013_Utf16ToUtf8RoundTrip; OWNER=unicode; UPDATED=2025-09-27
 // CANARY: REQ=REQ-GQL-UNICODE-014; FEATURE="UnicodeWtf8"; ASPECT=Wtf8LossyDecode; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_014_Wtf8Lossy; OWNER=unicode; UPDATED=2025-09-27
 
-pub fn utf8ToUtf16Alloc(ally: std.mem.Allocator, s: []const u8) ![]u16 {
+pub fn utf8ToUtf16Alloc(allocator: std.mem.Allocator, s: []const u8) ![]u16 {
     // Validate first (defensive)
     if (!std.unicode.utf8ValidateSlice(s)) {
         return error.InvalidUtf8;
     }
-    return try std.unicode.utf8ToUtf16LeAlloc(ally, s);
+    return try std.unicode.utf8ToUtf16LeAlloc(allocator, s);
 }
 
-pub fn utf16ToUtf8Alloc(ally: std.mem.Allocator, units: []const u16) ![]u8 {
-    return try std.unicode.utf16LeToUtf8Alloc(ally, units);
+pub fn utf16ToUtf8Alloc(allocator: std.mem.Allocator, units: []const u16) ![]u8 {
+    return try std.unicode.utf16LeToUtf8Alloc(allocator, units);
 }
 
-pub fn wtf8LossyToUtf8Alloc(ally: std.mem.Allocator, bytes: []const u8) ![]u8 {
+pub fn wtf8LossyToUtf8Alloc(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
     // Convert potentially ill-formed WTF-8 into valid UTF-8 by lossy replacement
-    return try std.unicode.wtf8ToUtf8LossyAlloc(ally, bytes);
+    return try std.unicode.wtf8ToUtf8LossyAlloc(allocator, bytes);
 }

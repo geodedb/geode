@@ -63,8 +63,8 @@ test "conformance json outputs expected keys" {
     try std.testing.expect(std.mem.indexOf(u8, s, "\"group_by_phase1\"") != null);
 }
 
-pub fn collectImplDefinedFlags(ally: std.mem.Allocator) ![][]const u8 {
-    var list = try ally.alloc([]const u8, 5);
+pub fn collectImplDefinedFlags(allocator: std.mem.Allocator) ![][]const u8 {
+    var list = try allocator.alloc([]const u8, 5);
     list[0] = "CollationBinaryDefault";
     list[1] = "NullOrderPolicyDefault";
     list[2] = "UnorderedPaginationAllowed"; // Changed from US001

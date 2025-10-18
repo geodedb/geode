@@ -11,8 +11,8 @@ pub const Entry = struct {
     payload: []const u8, // hex material or envelope JSON
 };
 
-pub fn exportManifest(ally: std.mem.Allocator, entries: []const Entry) ![]u8 {
-    var w = std.ArrayList(u8).init(ally);
+pub fn exportManifest(allocator: std.mem.Allocator, entries: []const Entry) ![]u8 {
+    var w = std.ArrayList(u8).init(allocator);
     errdefer w.deinit();
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
     try w.writer().print("{\n  \"version\":1,\n  \"entries\":[\n", .{});
@@ -39,11 +39,11 @@ pub fn exportManifest(ally: std.mem.Allocator, entries: []const Entry) ![]u8 {
 
 pub const ImportResult = struct { valid: bool, entries: []Entry };
 
-pub fn import(ally: std.mem.Allocator, blob: []const u8) !ImportResult {
+pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
     var lines = std.mem.tokenizeAny(u8, blob, "\n\r");
     var checksum: [16]u8 = [_]u8{0} ** 16;
     var have_checksum = false;
-    var tmp_entries = std.ArrayList(Entry).init(ally);
+    var tmp_entries = std.ArrayList(Entry).init(allocator);
     errdefer tmp_entries.deinit();
     while (lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "\"checksum\"")) |_| {
@@ -83,7 +83,7 @@ pub fn import(ally: std.mem.Allocator, blob: []const u8) !ImportResult {
             const payload_quote4 = std.mem.lastIndexOfScalar(u8, line, '"') orelse continue; // closing value
             if (payload_quote4 <= payload_quote3) continue;
             const payload_slice = line[payload_quote3 + 1 .. payload_quote4];
-            const payload_copy = try ally.alloc(u8, payload_slice.len);
+            const payload_copy = try allocator.alloc(u8, payload_slice.len);
             std.mem.copy(u8, payload_copy, payload_slice);
             try tmp_entries.append(.{ .id = id, .created = created, .wrapped = wrapped, .payload = payload_copy });
         }

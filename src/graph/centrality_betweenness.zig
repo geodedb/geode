@@ -20,12 +20,12 @@ pub const Result = struct {
 };
 
 // Compute betweenness centrality using Brandes algorithm (O(V * (V + E))). Suitable for test-size graphs.
-pub fn compute(ally: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
+pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
     const n = g.nodes.count();
     if (n == 0) return .{ .node_ids = &[_]u32{}, .scores = &[_]f64{} };
     // Collect node ids sorted
-    var node_ids = try ally.alloc(u32, n);
-    errdefer ally.free(node_ids);
+    var node_ids = try allocator.alloc(u32, n);
+    errdefer allocator.free(node_ids);
     var it = g.nodes.iterator();
     var i: usize = 0;
     while (it.next()) |e| {
@@ -33,32 +33,32 @@ pub fn compute(ally: std.mem.Allocator, g: *const builders.Graph, p: Params) !Re
         i += 1;
     }
     std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
-    var id_to_index = std.AutoHashMap(u32, u32).init(ally);
+    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
     defer id_to_index.deinit();
     for (node_ids, 0..) |id, idx| id_to_index.put(id, @as(u32, @intCast(idx))) catch {};
 
-    var Cb = try ally.alloc(f64, n); // centrality scores
-    errdefer ally.free(Cb);
+    var Cb = try allocator.alloc(f64, n); // centrality scores
+    errdefer allocator.free(Cb);
     for (Cb) |*v| v.* = 0;
 
     // Reusable arrays
-    var stack = try std.ArrayList(u32).initCapacity(ally, n);
+    var stack = try std.ArrayList(u32).initCapacity(allocator, n);
     defer stack.deinit();
-    var P = try ally.alloc(std.ArrayList(u32), n); // predecessors per node (indices)
+    var P = try allocator.alloc(std.ArrayList(u32), n); // predecessors per node (indices)
     defer {
         var j: usize = 0;
         while (j < n) : (j += 1) P[j].deinit();
-        ally.free(P);
+        allocator.free(P);
     }
     var j: usize = 0;
-    while (j < n) : (j += 1) P[j] = std.ArrayList(u32).init(ally);
-    var sigma = try ally.alloc(f64, n);
-    defer ally.free(sigma);
-    var dist = try ally.alloc(i32, n);
-    defer ally.free(dist);
-    var delta = try ally.alloc(f64, n);
-    defer ally.free(delta);
-    var queue = try std.ArrayList(u32).initCapacity(ally, n);
+    while (j < n) : (j += 1) P[j] = std.ArrayList(u32).init(allocator);
+    var sigma = try allocator.alloc(f64, n);
+    defer allocator.free(sigma);
+    var dist = try allocator.alloc(i32, n);
+    defer allocator.free(dist);
+    var delta = try allocator.alloc(f64, n);
+    defer allocator.free(delta);
+    var queue = try std.ArrayList(u32).initCapacity(allocator, n);
     defer queue.deinit();
 
     // For each source s

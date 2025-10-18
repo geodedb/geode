@@ -9,8 +9,8 @@ pub const EarlyDetector = struct {
     // txn_id -> list of accesses (tracked order not currently exploited)
     keys: std.AutoHashMap(u64, std.ArrayList(Access)),
 
-    pub fn init(ally: std.mem.Allocator) EarlyDetector {
-        return .{ .allocator = ally, .keys = std.AutoHashMap(u64, std.ArrayList(Access)).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) EarlyDetector {
+        return .{ .allocator = allocator, .keys = std.AutoHashMap(u64, std.ArrayList(Access)).init(allocator) };
     }
 
     pub fn deinit(self: *EarlyDetector) void {

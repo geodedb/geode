@@ -133,7 +133,7 @@ pub const Store = struct {
         start_ts: i64,
         end_ts: i64,
         aggregation: enum { avg, sum, min, max, count, first, last },
-        ally: std.mem.Allocator,
+        allocator: std.mem.Allocator,
     ) ![]const struct { ts: i64, value: ?i64 } {
         if (interval_ms <= 0 or end_ts <= start_ts) return &.{};
 
@@ -141,7 +141,7 @@ pub const Store = struct {
         const sp = self.by_key.get(hk) orelse return &.{};
         const n_buckets: usize = @intCast(((end_ts - start_ts) + interval_ms - 1) / interval_ms);
 
-        var buckets = try ally.alloc(struct {
+        var buckets = try allocator.alloc(struct {
             start_ts: i64,
             end_ts: i64,
             count: i64,
@@ -192,7 +192,7 @@ pub const Store = struct {
         }
 
         // Generate output based on aggregation type
-        var out = try ally.alloc(struct { ts: i64, value: ?i64 }, n_buckets);
+        var out = try allocator.alloc(struct { ts: i64, value: ?i64 }, n_buckets);
         i = 0;
         while (i < n_buckets) : (i += 1) {
             const b = buckets[i];
@@ -211,12 +211,12 @@ pub const Store = struct {
         return out;
     }
 
-    pub fn timeBucketAvg(self: *Store, key: SeriesKey, bucket_seconds: i64, t0: i64, t1: i64, ally: std.mem.Allocator) ![]const struct { ts: i64, avg: ?i64 } {
+    pub fn timeBucketAvg(self: *Store, key: SeriesKey, bucket_seconds: i64, t0: i64, t1: i64, allocator: std.mem.Allocator) ![]const struct { ts: i64, avg: ?i64 } {
         if (bucket_seconds <= 0 or t1 <= t0) return &.{};
         const hk = self.hashKey(key);
         const sp = self.by_key.get(hk) orelse return &.{};
         const n_buckets: usize = @intCast(((t1 - t0) + bucket_seconds - 1) / bucket_seconds);
-        var buckets = try ally.alloc(Bucket, n_buckets);
+        var buckets = try allocator.alloc(Bucket, n_buckets);
         var i: usize = 0;
         while (i < n_buckets) : (i += 1) {
             const s_ts = t0 + @as(i64, @intCast(i)) * bucket_seconds;
@@ -231,7 +231,7 @@ pub const Store = struct {
             buckets[idx].count += 1;
             buckets[idx].sum += @as(i128, p.value);
         }
-        var out = try ally.alloc(struct { ts: i64, avg: ?i64 }, n_buckets);
+        var out = try allocator.alloc(struct { ts: i64, avg: ?i64 }, n_buckets);
         i = 0;
         while (i < n_buckets) : (i += 1) {
             const b = buckets[i];
@@ -248,8 +248,8 @@ pub const Store = struct {
 };
 
 test "ts: insert/order/last/asof" {
-    const ally = std.testing.allocator;
-    var st = Store.init(ally);
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
     defer st.deinit();
     const key = SeriesKey{ .device_id = 1, .metric = "temp" };
     try st.insertMany(key, &.{ .{ .ts = 100, .value = 10 }, .{ .ts = 90, .value = 9 }, .{ .ts = 110, .value = 11 } });
@@ -260,20 +260,20 @@ test "ts: insert/order/last/asof" {
 }
 
 test "ts: timeBucketAvg basic" {
-    const ally = std.testing.allocator;
-    var st = Store.init(ally);
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
     defer st.deinit();
     const key = SeriesKey{ .device_id = 1, .metric = "temp" };
     try st.insertMany(key, &.{ .{ .ts = 0, .value = 10 }, .{ .ts = 5, .value = 20 }, .{ .ts = 10, .value = 30 } });
-    const out = try st.timeBucketAvg(key, 10, 0, 20, ally);
+    const out = try st.timeBucketAvg(key, 10, 0, 20, allocator);
     try std.testing.expect(out.len == 2);
     try std.testing.expect(out[0].ts == 0 and out[0].avg.? == 15);
     try std.testing.expect(out[1].ts == 10 and out[1].avg.? == 30);
 }
 
 test "ts: sampleBy aggregations" {
-    const ally = std.testing.allocator;
-    var st = Store.init(ally);
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
     defer st.deinit();
 
     const key = SeriesKey{ .device_id = 1, .metric = "cpu" };
@@ -286,34 +286,34 @@ test "ts: sampleBy aggregations" {
     });
 
     // Test AVG aggregation
-    const avg_result = try st.sampleBy(key, 10000, 0, 20000, .avg, ally);
-    defer ally.free(avg_result);
+    const avg_result = try st.sampleBy(key, 10000, 0, 20000, .avg, allocator);
+    defer allocator.free(avg_result);
     try std.testing.expect(avg_result.len == 2);
     try std.testing.expect(avg_result[0].value.? == 20); // avg of 10,20,30
     try std.testing.expect(avg_result[1].value.? == 45); // avg of 40,50
 
     // Test MIN aggregation
-    const min_result = try st.sampleBy(key, 10000, 0, 20000, .min, ally);
-    defer ally.free(min_result);
+    const min_result = try st.sampleBy(key, 10000, 0, 20000, .min, allocator);
+    defer allocator.free(min_result);
     try std.testing.expect(min_result[0].value.? == 10);
     try std.testing.expect(min_result[1].value.? == 40);
 
     // Test MAX aggregation
-    const max_result = try st.sampleBy(key, 10000, 0, 20000, .max, ally);
-    defer ally.free(max_result);
+    const max_result = try st.sampleBy(key, 10000, 0, 20000, .max, allocator);
+    defer allocator.free(max_result);
     try std.testing.expect(max_result[0].value.? == 30);
     try std.testing.expect(max_result[1].value.? == 50);
 
     // Test COUNT aggregation
-    const count_result = try st.sampleBy(key, 10000, 0, 20000, .count, ally);
-    defer ally.free(count_result);
+    const count_result = try st.sampleBy(key, 10000, 0, 20000, .count, allocator);
+    defer allocator.free(count_result);
     try std.testing.expect(count_result[0].value.? == 3);
     try std.testing.expect(count_result[1].value.? == 2);
 }
 
 test "ts: valueAt and lastValue" {
-    const ally = std.testing.allocator;
-    var st = Store.init(ally);
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
     defer st.deinit();
 
     const key = SeriesKey{ .device_id = 1, .metric = "memory" };

@@ -24,21 +24,21 @@ const WalEnc = struct {
         return n;
     }
 
-    pub fn encrypt(ally: std.mem.Allocator, key: *const [32]u8, lsn: u64, plaintext: []const u8) ![]u8 {
+    pub fn encrypt(allocator: std.mem.Allocator, key: *const [32]u8, lsn: u64, plaintext: []const u8) ![]u8 {
         var nonce = deriveNonce(lsn, plaintext.len);
         var tag: [TagBytes]u8 = undefined;
         const aad = std.mem.asBytes(&lsn); // minimal AAD: LSN number
-        const ct = try ally.alloc(u8, plaintext.len);
+        const ct = try allocator.alloc(u8, plaintext.len);
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(ct, &tag, plaintext, aad, nonce, key.*);
-        const out = try ally.alloc(u8, Overhead + ct.len);
+        const out = try allocator.alloc(u8, Overhead + ct.len);
         @memcpy(out[0..NonceBytes], &nonce);
         @memcpy(out[NonceBytes .. NonceBytes + TagBytes], &tag);
         @memcpy(out[NonceBytes + TagBytes ..], ct);
-        ally.free(ct);
+        allocator.free(ct);
         return out; // caller owns
     }
 
-    pub fn decrypt(ally: std.mem.Allocator, key: *const [32]u8, lsn: u64, enc: []u8) ![]u8 {
+    pub fn decrypt(allocator: std.mem.Allocator, key: *const [32]u8, lsn: u64, enc: []u8) ![]u8 {
         if (enc.len < Overhead) return error.CorruptCiphertext;
         var nonce: [NonceBytes]u8 = undefined;
         var tag: [TagBytes]u8 = undefined;
@@ -46,9 +46,9 @@ const WalEnc = struct {
         @memcpy(&tag, enc[NonceBytes .. NonceBytes + TagBytes]);
         const ciphertext = enc[Overhead..];
         const aad = std.mem.asBytes(&lsn);
-        const out = try ally.alloc(u8, ciphertext.len);
+        const out = try allocator.alloc(u8, ciphertext.len);
         crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ciphertext, tag, aad, nonce, key.*) catch {
-            ally.free(out);
+            allocator.free(out);
             return error.DecryptFailed;
         };
         return out;
@@ -81,7 +81,7 @@ pub const Record = struct {
 };
 
 pub const Wal = struct {
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     next_lsn: u64 = 1,
     buf: std.ArrayList(Record),
     file: ?std.fs.File = null,
@@ -117,28 +117,28 @@ pub const Wal = struct {
     last_flush_lsn: u64 = 0,
     last_flush_ms: i64 = 0,
 
-    pub fn init(ally: std.mem.Allocator) Wal {
-        const list = std.ArrayList(Record).initCapacity(ally, 0) catch @panic("OOM WAL init");
-        return .{ .ally = ally, .buf = list };
+    pub fn init(allocator: std.mem.Allocator) Wal {
+        const list = std.ArrayList(Record).initCapacity(allocator, 0) catch @panic("OOM WAL init");
+        return .{ .allocator = allocator, .buf = list };
     }
 
     fn loadEncConfig(self: *Wal) void {
         self.enc_enabled = false;
-        if (std.process.getEnvVarOwned(self.ally, "GEODE_WAL_ENCRYPTION")) |v| {
-            defer self.ally.free(v);
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_WAL_ENCRYPTION")) |v| {
+            defer self.allocator.free(v);
             if (std.mem.eql(u8, v, "on")) self.enc_enabled = true;
         } else |_| {
-            if (std.process.getEnvVarOwned(self.ally, "GEODE_DISK_ENCRYPTION")) |v2| {
-                defer self.ally.free(v2);
+            if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_ENCRYPTION")) |v2| {
+                defer self.allocator.free(v2);
                 if (std.mem.eql(u8, v2, "on")) self.enc_enabled = true;
             } else |_| {}
         }
         if (self.enc_enabled) {
-            const hex = std.process.getEnvVarOwned(self.ally, "GEODE_DISK_KEY_HEX") catch null;
+            const hex = std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX") catch null;
             if (hex == null or hex.?.len != 64) {
                 self.enc_enabled = false;
             } else {
-                defer self.ally.free(hex.?);
+                defer self.allocator.free(hex.?);
                 var master: [32]u8 = undefined;
                 var i: usize = 0;
                 while (i < 32) : (i += 1) master[i] = std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16) catch 0;
@@ -153,8 +153,8 @@ pub const Wal = struct {
         // Close previous if open
         if (self.file) |*f| f.close();
         const dir = std.fs.cwd();
-        const path = try std.fmt.allocPrint(self.ally, "{s}.wal.{d}", .{ self.base_path, self.segment_index });
-        defer self.ally.free(path);
+        const path = try std.fmt.allocPrint(self.allocator, "{s}.wal.{d}", .{ self.base_path, self.segment_index });
+        defer self.allocator.free(path);
         self.file = try dir.createFile(path, .{ .read = true, .truncate = false, .exclusive = false, .mode = 0o600 });
         self.segment_bytes = 0;
         fsync_util.fsyncParent(path) catch |err| {
@@ -163,7 +163,7 @@ pub const Wal = struct {
     }
 
     pub fn openFile(self: *Wal, base_path: []const u8) !void {
-        self.base_path = try self.ally.dupe(u8, base_path);
+        self.base_path = try self.allocator.dupe(u8, base_path);
         self.segment_index = 0;
         self.loadEncConfig();
         try self.openSegment();
@@ -173,9 +173,9 @@ pub const Wal = struct {
 
     pub fn deinit(self: *Wal) void {
         if (self.file) |*f| f.close();
-        self.buf.deinit(self.ally);
+        self.buf.deinit(self.allocator);
         if (self.page_lsn_index) |*m| m.deinit();
-        if (self.base_path.len > 0) self.ally.free(self.base_path);
+        if (self.base_path.len > 0) self.allocator.free(self.base_path);
     }
 
     pub fn skipRatio(self: *const Wal) f64 {
@@ -186,7 +186,7 @@ pub const Wal = struct {
 
     pub fn committedTxnTotal(self: *const Wal) usize {
         // Count commit records in in-memory buffer plus recovered_committed.
-        var map = std.AutoHashMap(u64, void).init(self.ally);
+        var map = std.AutoHashMap(u64, void).init(self.allocator);
         defer map.deinit();
         for (self.buf.items) |r| if (r.typ == .Commit) {
             map.put(r.txn_id, {}) catch |err| {
@@ -200,13 +200,13 @@ pub const Wal = struct {
     pub fn scanCommitted(self: *Wal) !usize {
         if (self.base_path.len == 0) return 0;
         const dir = std.fs.cwd();
-        var seen = std.AutoHashMap(u64, void).init(self.ally);
+        var seen = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen.deinit();
         var seg_index: u32 = 0;
         const HeaderLen = 1 + 8 + 4 + 8 + 8 + 4;
         while (seg_index <= self.segment_index + 128) : (seg_index += 1) {
-            const path = try std.fmt.allocPrint(self.ally, "{s}.wal.{d}", .{ self.base_path, seg_index });
-            defer self.ally.free(path);
+            const path = try std.fmt.allocPrint(self.allocator, "{s}.wal.{d}", .{ self.base_path, seg_index });
+            defer self.allocator.free(path);
             const f = dir.openFile(path, .{ .mode = .read_only }) catch |err| switch (err) {
                 error.FileNotFound => break,
                 else => return err,
@@ -238,7 +238,7 @@ pub const Wal = struct {
     pub fn compact(self: *Wal, durable_lsn: u64) !void {
         if (self.base_path.len == 0) return; // not opened
         const dir = std.fs.cwd();
-        var arena = std.heap.ArenaAllocator.init(self.ally);
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const a = arena.allocator();
         // Enumerate sequential segment indices until a gap; stop at first missing.
@@ -293,8 +293,8 @@ pub const Wal = struct {
         var highest: u32 = 0;
         const HeaderLen = 1 + 8 + 4 + 8 + 8 + 4;
         while (seg_index <= self.segment_index + 128) : (seg_index += 1) {
-            const path = try std.fmt.allocPrint(self.ally, "{s}.wal.{d}", .{ self.base_path, seg_index });
-            defer self.ally.free(path);
+            const path = try std.fmt.allocPrint(self.allocator, "{s}.wal.{d}", .{ self.base_path, seg_index });
+            defer self.allocator.free(path);
             const f = dir.openFile(path, .{ .mode = .read_only }) catch |err| switch (err) {
                 error.FileNotFound => break,
                 else => return err,
@@ -342,9 +342,9 @@ pub const Wal = struct {
             std.mem.writeInt(u64, header[1..9], rec.txn_id, .little);
             var payload_buf = rec.payload;
             var enc_owned: []u8 = &.{};
-            defer if (enc_owned.len != 0) self.ally.free(enc_owned);
+            defer if (enc_owned.len != 0) self.allocator.free(enc_owned);
             if (self.enc_enabled and rec.payload.len > 0) {
-                enc_owned = try WalEnc.encrypt(self.ally, &self.enc_key, rec.lsn.value, rec.payload);
+                enc_owned = try WalEnc.encrypt(self.allocator, &self.enc_key, rec.lsn.value, rec.payload);
                 payload_buf = enc_owned;
             }
             std.mem.writeInt(u32, header[9..13], @intCast(payload_buf.len), .little); // may be plaintext or encrypted length
@@ -352,12 +352,12 @@ pub const Wal = struct {
             std.mem.writeInt(u64, header[21..29], rec.prev_lsn, .little);
             std.mem.writeInt(u32, header[29..33], 0, .little); // zero before checksum
             // P2-3: Use WAL's allocator instead of page_allocator
-            var cs_buf = std.ArrayList(u8).initCapacity(self.ally, 0) catch @panic("OOM");
-            defer cs_buf.deinit(self.ally);
-            cs_buf.appendSlice(self.ally, header[0..]) catch |err| {
+            var cs_buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch @panic("OOM");
+            defer cs_buf.deinit(self.allocator);
+            cs_buf.appendSlice(self.allocator, header[0..]) catch |err| {
                 std.log.err("CRITICAL: Failed to append header to checksum buffer: {any}", .{err});
             };
-            cs_buf.appendSlice(self.ally, payload_buf) catch |err| {
+            cs_buf.appendSlice(self.allocator, payload_buf) catch |err| {
                 std.log.err("CRITICAL: Failed to append payload to checksum buffer: {any}", .{err});
             };
             const cs = adler32(cs_buf.items);
@@ -383,7 +383,7 @@ pub const Wal = struct {
         self.next_lsn += 1;
         const rec_lsn: Lsn = .{ .value = lsn_val };
         const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = txn_id, .typ = typ, .payload = payload, .prev_lsn = prev_lsn };
-        try self.buf.append(self.ally, rec);
+        try self.buf.append(self.allocator, rec);
         try self.diskWrite(rec);
 
         // Automatic compaction cadence
@@ -410,8 +410,8 @@ pub const Wal = struct {
     }
 
     // Structured payload encoders -------------------------------------------------
-    pub fn encodeInsert(ally: std.mem.Allocator, page: u32, slot: u16, data: []const u8) ![]u8 {
-        var buf = try ally.alloc(u8, 8 + data.len);
+    pub fn encodeInsert(allocator: std.mem.Allocator, page: u32, slot: u16, data: []const u8) ![]u8 {
+        var buf = try allocator.alloc(u8, 8 + data.len);
         std.mem.writeInt(u32, buf[0..4], page, .little);
         std.mem.writeInt(u16, buf[4..6], slot, .little);
         std.mem.writeInt(u16, buf[6..8], @intCast(data.len), .little);
@@ -419,16 +419,16 @@ pub const Wal = struct {
         return buf;
     }
 
-    pub fn encodeDelete(ally: std.mem.Allocator, page: u32, slot: u16) ![]u8 {
-        var buf = try ally.alloc(u8, 6);
+    pub fn encodeDelete(allocator: std.mem.Allocator, page: u32, slot: u16) ![]u8 {
+        var buf = try allocator.alloc(u8, 6);
         std.mem.writeInt(u32, buf[0..4], page, .little);
         std.mem.writeInt(u16, buf[4..6], slot, .little);
         return buf;
     }
 
     // Delete with before-image: [page(4)|slot(2)|len(2)|data]
-    pub fn encodeDeleteBefore(ally: std.mem.Allocator, page: u32, slot: u16, data: []const u8) ![]u8 {
-        var buf = try ally.alloc(u8, 8 + data.len);
+    pub fn encodeDeleteBefore(allocator: std.mem.Allocator, page: u32, slot: u16, data: []const u8) ![]u8 {
+        var buf = try allocator.alloc(u8, 8 + data.len);
         std.mem.writeInt(u32, buf[0..4], page, .little);
         std.mem.writeInt(u16, buf[4..6], slot, .little);
         std.mem.writeInt(u16, buf[6..8], @intCast(data.len), .little);
@@ -470,7 +470,7 @@ pub const Wal = struct {
         self.next_lsn += 1;
         const rec_lsn: Lsn = .{ .value = lsn_val };
         const rec = Record{ .lsn = .{ .value = lsn_val }, .txn_id = 0, .typ = .Checkpoint, .payload = &.{}, .prev_lsn = 0 };
-        try self.buf.append(self.ally, rec);
+        try self.buf.append(self.allocator, rec);
         try self.diskWrite(rec);
 
         self.last_checkpoint_lsn = lsn_val;
@@ -518,7 +518,7 @@ pub const Wal = struct {
                 .Insert => {
                     // generate CLR tombstoning same slot
                     if (decodeInsert(rec.payload)) |ins| {
-                        const clr_payload = try encodeDelete(self.ally, ins.page, ins.slot);
+                        const clr_payload = try encodeDelete(self.allocator, ins.page, ins.slot);
                         _ = try self.append(txn_id, .CLR, clr_payload, rec.lsn.value);
                     }
                 },
@@ -558,10 +558,10 @@ pub const Wal = struct {
         defer f.close();
         const HeaderLen = 1 + 8 + 4 + 8 + 8 + 4; // w/ checksum
         // txn table
-        var txn_map = std.AutoHashMap(u64, struct { committed: bool, last_lsn: u64 }).init(self.ally);
+        var txn_map = std.AutoHashMap(u64, struct { committed: bool, last_lsn: u64 }).init(self.allocator);
         defer txn_map.deinit();
         var records = std.ArrayListUnmanaged(Record){};
-        defer records.deinit(self.ally);
+        defer records.deinit(self.allocator);
         var buf: [HeaderLen]u8 = undefined;
         // Find last checkpoint offset (linear scan; future: index).
         var last_ckpt: usize = 0;
@@ -569,7 +569,7 @@ pub const Wal = struct {
         try f.seekTo(0);
         // Build sparse page->lsn index while scanning headers (payload needed for page id extraction on Insert/Delete/CLR).
         if (self.page_lsn_index == null) {
-            self.page_lsn_index = std.AutoHashMap(u32, u64).init(self.ally);
+            self.page_lsn_index = std.AutoHashMap(u32, u64).init(self.allocator);
         } else {
             // clear previous
             var it_clear = self.page_lsn_index.?.iterator();
@@ -598,10 +598,10 @@ pub const Wal = struct {
                     // Skip materializing payload prior to last checkpoint when optimizing.
                     try f.seekBy(@as(i64, plen));
                 } else {
-                    payload_slice = try self.ally.alloc(u8, plen);
+                    payload_slice = try self.allocator.alloc(u8, plen);
                     const got = f.readAll(payload_slice) catch 0;
                     if (got != plen) {
-                        self.ally.free(payload_slice);
+                        self.allocator.free(payload_slice);
                         break;
                     }
                 }
@@ -614,7 +614,7 @@ pub const Wal = struct {
             const calc_cs = adler32(verify_header[0..HeaderLen]) ^ adler32(payload_slice);
             if (calc_cs != file_cs) {
                 // stop recovery at first checksum failure (truncate tail)
-                if (payload_slice.len > 0) self.ally.free(payload_slice);
+                if (payload_slice.len > 0) self.allocator.free(payload_slice);
                 break;
             }
             // Read and validate torn-write sentinel (4 bytes). If mismatch, treat as torn tail and stop.
@@ -626,19 +626,19 @@ pub const Wal = struct {
             // Decrypt payload if enabled
             if (self.enc_enabled and payload_slice.len > 0) {
                 // Decrypt into fresh buffer; free encrypted slice afterwards.
-                const dec = WalEnc.decrypt(self.ally, &self.enc_key, lsn_v, payload_slice) catch {
+                const dec = WalEnc.decrypt(self.allocator, &self.enc_key, lsn_v, payload_slice) catch {
                     // If decryption fails treat as corruption/truncated tail.
-                    if (payload_slice.len > 0) self.ally.free(payload_slice);
+                    if (payload_slice.len > 0) self.allocator.free(payload_slice);
                     break;
                 };
-                if (payload_slice.len > 0) self.ally.free(payload_slice);
+                if (payload_slice.len > 0) self.allocator.free(payload_slice);
                 payload_slice = dec;
             }
             var entry = try txn_map.getOrPut(txn_id);
             if (!entry.found_existing) entry.value_ptr.* = .{ .committed = false, .last_lsn = 0 };
             entry.value_ptr.last_lsn = lsn_v;
             if (typ == .Commit) entry.value_ptr.committed = true;
-            try records.append(self.ally, .{ .lsn = .{ .value = lsn_v }, .txn_id = txn_id, .typ = typ, .payload = payload_slice, .prev_lsn = prev_lsn_v });
+            try records.append(self.allocator, .{ .lsn = .{ .value = lsn_v }, .txn_id = txn_id, .typ = typ, .payload = payload_slice, .prev_lsn = prev_lsn_v });
             // Populate sparse index for data-bearing records.
             switch (typ) {
                 .Insert, .Delete, .CLR => {
@@ -730,7 +730,7 @@ pub const Wal = struct {
             }
         }
         // UNDO pass
-        var losers = std.AutoHashMap(u64, u64).init(self.ally);
+        var losers = std.AutoHashMap(u64, u64).init(self.allocator);
         defer losers.deinit();
         var it_l = txn_map.iterator();
         while (it_l.next()) |e| {
@@ -752,8 +752,8 @@ pub const Wal = struct {
                             };
                         }
                         if (self.file != null) {
-                            const clr_payload = try encodeDelete(self.ally, page, slot);
-                            defer self.ally.free(clr_payload);
+                            const clr_payload = try encodeDelete(self.allocator, page, slot);
+                            defer self.allocator.free(clr_payload);
                             _ = try self.append(rec.txn_id, .CLR, clr_payload, rec.lsn.value);
                         }
                     }
@@ -778,8 +778,8 @@ pub const Wal = struct {
                             }
                         }
                         if (self.file != null) {
-                            const clr_ins = try encodeInsert(self.ally, delb.page, delb.slot, delb.data);
-                            defer self.ally.free(clr_ins);
+                            const clr_ins = try encodeInsert(self.allocator, delb.page, delb.slot, delb.data);
+                            defer self.allocator.free(clr_ins);
                             _ = try self.append(rec.txn_id, .CLR, clr_ins, rec.lsn.value);
                         }
                     }

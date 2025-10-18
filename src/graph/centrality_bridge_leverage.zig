@@ -18,9 +18,9 @@ pub const Options = struct {
 pub const Result = struct {
     node_ids: []u32,
     scores: []f64,
-    pub fn deinit(self: *Result, ally: std.mem.Allocator) void {
-        ally.free(self.node_ids);
-        ally.free(self.scores);
+    pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_ids);
+        allocator.free(self.scores);
     }
 };
 
@@ -47,20 +47,20 @@ fn UF(comptime N: usize) type {
     };
 }
 
-pub fn compute(ally: std.mem.Allocator, g: *builders.Graph, opts: Options) !Result {
+pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) !Result {
     const n = g.nodes.items.len;
-    var node_ids = try ally.alloc(u32, n);
-    var scores = try ally.alloc(f64, n);
+    var node_ids = try allocator.alloc(u32, n);
+    var scores = try allocator.alloc(f64, n);
     // Precompute degrees
-    var degrees = try ally.alloc(u32, n);
-    defer ally.free(degrees);
+    var degrees = try allocator.alloc(u32, n);
+    defer allocator.free(degrees);
     var idx: usize = 0;
     while (idx < n) : (idx += 1) {
         node_ids[idx] = g.nodes.items[idx].id;
         degrees[idx] = @as(u32, @intCast(g.nodes.items[idx].out_degree));
     }
     // Map id->index (assuming contiguous small id set not guaranteed; build hash map)
-    var map = std.AutoHashMap(u32, usize).init(ally);
+    var map = std.AutoHashMap(u32, usize).init(allocator);
     defer map.deinit();
     try map.ensureTotalCapacity(@as(u32, @intCast(n)));
     idx = 0;
@@ -91,8 +91,8 @@ pub fn compute(ally: std.mem.Allocator, g: *builders.Graph, opts: Options) !Resu
             continue;
         }
         // Collect neighbor ids & map to 0..k-1
-        var neigh_buf = try ally.alloc(u32, neighbor_count);
-        defer ally.free(neigh_buf);
+        var neigh_buf = try allocator.alloc(u32, neighbor_count);
+        defer allocator.free(neigh_buf);
         var pos: usize = 0;
         var e_it2 = v_node.first_out_edge;
         while (e_it2) |edge_ptr| : (e_it2 = edge_ptr.next_out) {
@@ -100,21 +100,21 @@ pub fn compute(ally: std.mem.Allocator, g: *builders.Graph, opts: Options) !Resu
             pos += 1;
         }
         // Build index for neighbors
-        var neigh_index = try ally.alloc(u16, neighbor_count);
-        defer ally.free(neigh_index);
+        var neigh_index = try allocator.alloc(u16, neighbor_count);
+        defer allocator.free(neigh_index);
         pos = 0;
         while (pos < neighbor_count) : (pos += 1) neigh_index[pos] = @as(u16, @intCast(pos));
 
         // For edges among neighbors, we need quick membership check -> hash set
-        var neigh_set = std.AutoHashMap(u32, u16).init(ally);
+        var neigh_set = std.AutoHashMap(u32, u16).init(allocator);
         defer neigh_set.deinit();
         try neigh_set.ensureTotalCapacity(@as(u32, @intCast(neighbor_count)));
         pos = 0;
         while (pos < neighbor_count) : (pos += 1) try neigh_set.put(neigh_buf[pos], @as(u16, @intCast(pos)));
 
         // Dynamic UF using arrays manually for current neighbor_count
-        var uf_parent = try ally.alloc(u16, neighbor_count);
-        defer ally.free(uf_parent);
+        var uf_parent = try allocator.alloc(u16, neighbor_count);
+        defer allocator.free(uf_parent);
         {
             var i: usize = 0;
             while (i < neighbor_count) : (i += 1) uf_parent[i] = @as(u16, @intCast(i));
@@ -150,7 +150,7 @@ pub fn compute(ally: std.mem.Allocator, g: *builders.Graph, opts: Options) !Resu
             }
         }
         // Count distinct components
-        var comps = std.AutoHashMap(u16, void).init(ally);
+        var comps = std.AutoHashMap(u16, void).init(allocator);
         defer comps.deinit();
         pos = 0;
         while (pos < neighbor_count) : (pos += 1) {

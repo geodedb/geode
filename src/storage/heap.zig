@@ -152,8 +152,8 @@ pub const VectorF32 = struct {
     data: []const f32,
 };
 
-pub fn encodeValue(ally: std.mem.Allocator, v: Value) ![]u8 {
-    var buf = std.ArrayList(u8).init(ally);
+pub fn encodeValue(allocator: std.mem.Allocator, v: Value) ![]u8 {
+    var buf = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
 
     switch (v) {
@@ -422,8 +422,8 @@ pub fn encodeValue(ally: std.mem.Allocator, v: Value) ![]u8 {
         },
         .Url => |u| {
             try buf.append(0x32);
-            const url_str = try u.toString(ally);
-            defer ally.free(url_str);
+            const url_str = try u.toString(allocator);
+            defer allocator.free(url_str);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(url_str.len), .little);
             try buf.appendSlice(&tmp);
@@ -431,8 +431,8 @@ pub fn encodeValue(ally: std.mem.Allocator, v: Value) ![]u8 {
         },
         .Domain => |d| {
             try buf.append(0x33);
-            const domain_str = try d.toString(ally);
-            defer ally.free(domain_str);
+            const domain_str = try d.toString(allocator);
+            defer allocator.free(domain_str);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(domain_str.len), .little);
             try buf.appendSlice(&tmp);
@@ -501,7 +501,7 @@ pub fn encodeValue(ally: std.mem.Allocator, v: Value) ![]u8 {
     return buf.toOwnedSlice();
 }
 
-pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
+pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
     if (bytes.len == 0) return error.Underflow;
     const tag = bytes[0];
     switch (tag) {
@@ -520,7 +520,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const n = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             const nn: usize = @intCast(n);
             if (bytes.len < 5 + nn) return error.Underflow;
-            const s = try ally.dupe(u8, bytes[5 .. 5 + nn]);
+            const s = try allocator.dupe(u8, bytes[5 .. 5 + nn]);
             return .{ .Str = s };
         },
         0x04 => { // TAG_IPv4
@@ -567,7 +567,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
                 .BLAKE3 => 32,
             };
             if (bytes.len < 1 + 1 + digest_len) return error.Underflow;
-            const digest = try ally.dupe(u8, bytes[2 .. 2 + digest_len]);
+            const digest = try allocator.dupe(u8, bytes[2 .. 2 + digest_len]);
             return .{ .Hash = .{ .alg = alg, .digest = digest } };
         },
         0x0A => { // TAG_Currency
@@ -581,7 +581,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const n = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             const nn: usize = @intCast(n);
             if (bytes.len < 5 + nn) return error.Underflow;
-            const lang_tag_dup = try ally.dupe(u8, bytes[5 .. 5 + nn]);
+            const lang_tag_dup = try allocator.dupe(u8, bytes[5 .. 5 + nn]);
             return .{ .LanguageTag = .{ .tag = lang_tag_dup } };
         },
         0x0C => { // TAG_LatLon
@@ -604,7 +604,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const n = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             const nn: usize = @intCast(n);
             if (bytes.len < 5 + nn) return error.Underflow;
-            const wkb = try ally.dupe(u8, bytes[5 .. 5 + nn]);
+            const wkb = try allocator.dupe(u8, bytes[5 .. 5 + nn]);
             return .{ .Geometry = .{ .wkb = wkb } };
         },
         0x0F => { // TAG_Temp
@@ -626,7 +626,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const dim = std.mem.readInt(u16, bytes[1..3][0..2], .little);
             const data_size = @as(usize, dim) * 4;
             if (bytes.len < 3 + data_size) return error.Underflow;
-            var data = try ally.alloc(f32, dim);
+            var data = try allocator.alloc(f32, dim);
             var i: usize = 0;
             while (i < dim) : (i += 1) {
                 const bits = std.mem.readInt(u32, bytes[3 + i * 4 .. 3 + i * 4 + 4][0..4], .little);
@@ -666,7 +666,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const n = std.mem.readInt(u16, bytes[1..3][0..2], .little);
             const len = std.mem.readInt(u32, bytes[3..7][0..4], .little);
             if (bytes.len < 7 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[7 .. 7 + len]);
+            const data = try allocator.dupe(u8, bytes[7 .. 7 + len]);
             return .{ .Char = .{ .data = data, .n = n } };
         },
         0x26 => { // Varchar
@@ -674,14 +674,14 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const n = std.mem.readInt(u16, bytes[1..3][0..2], .little);
             const len = std.mem.readInt(u32, bytes[3..7][0..4], .little);
             if (bytes.len < 7 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[7 .. 7 + len]);
+            const data = try allocator.dupe(u8, bytes[7 .. 7 + len]);
             return .{ .Varchar = .{ .data = data, .n = n } };
         },
         0x27 => { // Text
             if (bytes.len < 5) return error.Underflow;
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[5 .. 5 + len]);
+            const data = try allocator.dupe(u8, bytes[5 .. 5 + len]);
             return .{ .Text = data };
         },
         0x28 => { // Date
@@ -721,28 +721,28 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             if (bytes.len < 5) return error.Underflow;
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[5 .. 5 + len]);
+            const data = try allocator.dupe(u8, bytes[5 .. 5 + len]);
             return .{ .Bytea = data };
         },
         0x2F => { // Json
             if (bytes.len < 5) return error.Underflow;
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[5 .. 5 + len]);
+            const data = try allocator.dupe(u8, bytes[5 .. 5 + len]);
             return .{ .Json = data };
         },
         0x30 => { // Jsonb
             if (bytes.len < 5) return error.Underflow;
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[5 .. 5 + len]);
-            return .{ .Jsonb = jsonb.JsonbDocument{ .data = data, .allocator = ally } };
+            const data = try allocator.dupe(u8, bytes[5 .. 5 + len]);
+            return .{ .Jsonb = jsonb.JsonbDocument{ .data = data, .allocator = allocator } };
         },
         0x31 => { // Xml
             if (bytes.len < 5) return error.Underflow;
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
-            const data = try ally.dupe(u8, bytes[5 .. 5 + len]);
+            const data = try allocator.dupe(u8, bytes[5 .. 5 + len]);
             return .{ .Xml = xml.XmlDocument{ .data = data } };
         },
         0x32 => { // Url
@@ -750,7 +750,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
             const url_str = bytes[5 .. 5 + len];
-            const parsed_url = try url.Url.fromString(ally, url_str);
+            const parsed_url = try url.Url.fromString(allocator, url_str);
             return .{ .Url = parsed_url };
         },
         0x33 => { // Domain
@@ -758,7 +758,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const len = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             if (bytes.len < 5 + len) return error.Underflow;
             const domain_str = bytes[5 .. 5 + len];
-            const parsed_domain = try url.Domain.fromString(ally, domain_str);
+            const parsed_domain = try url.Domain.fromString(allocator, domain_str);
             return .{ .Domain = parsed_domain };
         },
         0x34 => { // UUID
@@ -781,15 +781,15 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             _ = count;
             const data_start = 7;
             const data_len = bytes.len - data_start;
-            const data = try ally.dupe(u8, bytes[data_start .. data_start + data_len]);
-            return .{ .Array = arrays.DynamicArray{ .elem_type = elem_type, .data = data, .allocator = ally } };
+            const data = try allocator.dupe(u8, bytes[data_start .. data_start + data_len]);
+            return .{ .Array = arrays.DynamicArray{ .elem_type = elem_type, .data = data, .allocator = allocator } };
         },
         0x37 => { // BitString
             if (bytes.len < 5) return error.Underflow;
             const bit_length = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             const byte_len = (bit_length + 7) / 8;
             if (bytes.len < 5 + byte_len) return error.Underflow;
-            const bit_bytes = try ally.dupe(u8, bytes[5 .. 5 + byte_len]);
+            const bit_bytes = try allocator.dupe(u8, bytes[5 .. 5 + byte_len]);
             return .{ .BitString = bitstring.BitString{ .bit_length = bit_length, .bytes = bit_bytes } };
         },
         0x38 => { // VarBit
@@ -797,7 +797,7 @@ pub fn decodeValue(ally: std.mem.Allocator, bytes: []const u8) !Value {
             const bit_length = std.mem.readInt(u32, bytes[1..5][0..4], .little);
             const byte_len = (bit_length + 7) / 8;
             if (bytes.len < 5 + byte_len) return error.Underflow;
-            const bit_bytes = try ally.dupe(u8, bytes[5 .. 5 + byte_len]);
+            const bit_bytes = try allocator.dupe(u8, bytes[5 .. 5 + byte_len]);
             return .{ .VarBit = bitstring.BitString{ .bit_length = bit_length, .bytes = bit_bytes } };
         },
         0x39 => { // IntRange

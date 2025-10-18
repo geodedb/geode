@@ -13,12 +13,12 @@ pub const InMemory = struct {
     // Phase 5.1.2: Track which adjacency lists are sorted (avoids O(n²) repeated sorting)
     adj_sorted: std.AutoHashMap(u64, bool),
 
-    pub fn init(ally: std.mem.Allocator) InMemory {
+    pub fn init(allocator: std.mem.Allocator) InMemory {
         return .{
-            .allocator = ally,
-            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(ally),
-            .labels = std.AutoHashMap(u64, std.StringHashMap(void)).init(ally),
-            .adj_sorted = std.AutoHashMap(u64, bool).init(ally),
+            .allocator = allocator,
+            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
+            .labels = std.AutoHashMap(u64, std.StringHashMap(void)).init(allocator),
+            .adj_sorted = std.AutoHashMap(u64, bool).init(allocator),
         };
     }
 

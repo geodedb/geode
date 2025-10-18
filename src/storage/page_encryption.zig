@@ -54,17 +54,17 @@ pub fn shouldEncrypt() bool {
     return std.process.hasEnvVar(env_gpa.allocator(), "GEODE_TDE_KEY") catch false;
 }
 
-pub fn encryptForWrite(ally: std.mem.Allocator, page_index: usize, plaintext: []const u8) ![]u8 {
+pub fn encryptForWrite(allocator: std.mem.Allocator, page_index: usize, plaintext: []const u8) ![]u8 {
     if (!shouldEncrypt()) {
         // Allocate copy so caller always receives mutable []u8 they may treat uniformly.
-        const copy = try ally.alloc(u8, plaintext.len);
+        const copy = try allocator.alloc(u8, plaintext.len);
         @memcpy(copy, plaintext);
         return copy;
     }
     const aad = std.mem.asBytes(&@as(u64, @intCast(page_index)));
-    const key_opt = try loadRawKey(ally);
+    const key_opt = try loadRawKey(allocator);
     if (key_opt == null) {
-        const copy2 = try ally.alloc(u8, plaintext.len);
+        const copy2 = try allocator.alloc(u8, plaintext.len);
         @memcpy(copy2, plaintext);
         return copy2;
     }
@@ -74,22 +74,22 @@ pub fn encryptForWrite(ally: std.mem.Allocator, page_index: usize, plaintext: []
     std.mem.writeInt(u64, nonce[0..8], h, .little);
     std.mem.writeInt(u32, nonce[8..12], @as(u32, @intCast(plaintext.len)), .little);
     var tag: [TagBytes]u8 = undefined;
-    const ct_buf = try ally.alloc(u8, plaintext.len);
+    const ct_buf = try allocator.alloc(u8, plaintext.len);
     crypto.aead.aes_gcm.Aes256Gcm.encrypt(ct_buf, &tag, plaintext, aad, nonce, key);
     const total = Overhead + ct_buf.len;
-    var out = try ally.alloc(u8, total);
+    var out = try allocator.alloc(u8, total);
     @memcpy(out[0..NonceBytes], &nonce);
     @memcpy(out[NonceBytes .. NonceBytes + TagBytes], &tag);
     @memcpy(out[NonceBytes + TagBytes ..], ct_buf);
-    ally.free(ct_buf);
+    allocator.free(ct_buf);
     return out;
 }
 
-pub fn decryptAfterRead(ally: std.mem.Allocator, page_index: usize, raw: []u8, expected_page_size: usize) ![]u8 {
+pub fn decryptAfterRead(allocator: std.mem.Allocator, page_index: usize, raw: []u8, expected_page_size: usize) ![]u8 {
     if (raw.len == expected_page_size) return raw; // not encrypted
     if (raw.len != expected_page_size + Overhead) return error.UnexpectedSize;
     if (!shouldEncrypt()) return error.FeatureDisabled;
-    const key_opt = try loadRawKey(ally);
+    const key_opt = try loadRawKey(allocator);
     if (key_opt == null) return error.FeatureDisabled;
     const key = key_opt.?;
     var nonce: [NonceBytes]u8 = undefined;
@@ -98,9 +98,9 @@ pub fn decryptAfterRead(ally: std.mem.Allocator, page_index: usize, raw: []u8, e
     @memcpy(&tag, raw[NonceBytes .. NonceBytes + TagBytes]);
     const payload = raw[Overhead..];
     const aad = std.mem.asBytes(&@as(u64, @intCast(page_index)));
-    const out = try ally.alloc(u8, expected_page_size);
+    const out = try allocator.alloc(u8, expected_page_size);
     crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, payload, tag, aad, nonce, key) catch |e| {
-        ally.free(out);
+        allocator.free(out);
         return e;
     };
     return out; // caller owns

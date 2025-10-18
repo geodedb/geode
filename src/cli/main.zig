@@ -964,61 +964,61 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 }
 
 // Direct server function (eliminates subprocess spawning)
-fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
+fn runEmbeddedServer(allocator: std.mem.Allocator, config: ServerConfig) !void {
     // Unified binary approach - direct server startup without subprocess spawning
 
     // Build argument array for server main function
-    var server_args = std.ArrayList([]const u8).initCapacity(ally, 16) catch return error.OutOfMemory;
-    defer server_args.deinit(ally);
+    var server_args = std.ArrayList([]const u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    defer server_args.deinit(allocator);
 
     // Program name
-    try server_args.append(ally, "geode-server");
+    try server_args.append(allocator, "geode-server");
 
     if (config.listen_quic) |addr| {
-        try server_args.append(ally, "--listen");
-        try server_args.append(ally, addr);
+        try server_args.append(allocator, "--listen");
+        try server_args.append(allocator, addr);
     }
 
     if (config.data_dir) |data_dir| {
-        try server_args.append(ally, "--data_dir");
-        try server_args.append(ally, data_dir);
+        try server_args.append(allocator, "--data_dir");
+        try server_args.append(allocator, data_dir);
     }
 
     if (config.cert_path) |cert| {
-        try server_args.append(ally, "--cert");
-        try server_args.append(ally, cert);
+        try server_args.append(allocator, "--cert");
+        try server_args.append(allocator, cert);
     }
 
     if (config.key_path) |key| {
-        try server_args.append(ally, "--key");
-        try server_args.append(ally, key);
+        try server_args.append(allocator, "--key");
+        try server_args.append(allocator, key);
     }
 
     if (config.force_no_tls) {
-        try server_args.append(ally, "--no-tls");
+        try server_args.append(allocator, "--no-tls");
     }
 
     if (config.result_format_txt) {
-        try server_args.append(ally, "--result-format");
-        try server_args.append(ally, "txt");
+        try server_args.append(allocator, "--result-format");
+        try server_args.append(allocator, "txt");
     }
 
     // Set log level
-    try server_args.append(ally, "--log-level");
-    try server_args.append(ally, config.log_level);
+    try server_args.append(allocator, "--log-level");
+    try server_args.append(allocator, config.log_level);
 
     // Create null-terminated strings for argv compatibility
-    var argv = std.ArrayList([:0]u8).initCapacity(ally, server_args.items.len) catch return error.OutOfMemory;
+    var argv = std.ArrayList([:0]u8).initCapacity(allocator, server_args.items.len) catch return error.OutOfMemory;
     defer {
         for (argv.items) |arg| {
-            ally.free(arg);
+            allocator.free(arg);
         }
-        argv.deinit(ally);
+        argv.deinit(allocator);
     }
 
     for (server_args.items) |arg| {
-        const null_terminated = try ally.dupeZ(u8, arg);
-        try argv.append(ally, null_terminated);
+        const null_terminated = try allocator.dupeZ(u8, arg);
+        try argv.append(allocator, null_terminated);
     }
 
     // Set up environment for server main
@@ -1031,82 +1031,82 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
     }
 
     // Call server startup function directly
-    try startServer(ally, argv.items);
+    try startServer(allocator, argv.items);
 }
 
 // Direct client function (eliminates subprocess spawning)
-fn runEmbeddedClient(ally: std.mem.Allocator, config: ClientConfig) !void {
+fn runEmbeddedClient(allocator: std.mem.Allocator, config: ClientConfig) !void {
     // Unified binary approach - no subprocess spawning required
     // Direct function calls replace geodec subprocess spawning
 
     // Build argument array for client
-    var client_args = std.ArrayList([]const u8).initCapacity(ally, 16) catch return error.OutOfMemory;
-    defer client_args.deinit(ally);
+    var client_args = std.ArrayList([]const u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    defer client_args.deinit(allocator);
 
     // Find geodec binary path
-    const self_exe_path = try std.fs.selfExePathAlloc(ally);
-    defer ally.free(self_exe_path);
+    const self_exe_path = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe_path);
 
     const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
-    const geodec_path = try std.fs.path.join(ally, &.{ self_dir_path, "geodec" });
-    defer ally.free(geodec_path);
+    const geodec_path = try std.fs.path.join(allocator, &.{ self_dir_path, "geodec" });
+    defer allocator.free(geodec_path);
 
     // Check if geodec exists in the same directory
     if (std.fs.accessAbsolute(geodec_path, .{})) |_| {
-        try client_args.append(ally, geodec_path);
+        try client_args.append(allocator, geodec_path);
     } else |_| {
-        try client_args.append(ally, "geodec");
+        try client_args.append(allocator, "geodec");
     }
 
-    try client_args.append(ally, "--server");
-    try client_args.append(ally, config.server);
+    try client_args.append(allocator, "--server");
+    try client_args.append(allocator, config.server);
 
-    try client_args.append(ally, "--format");
-    try client_args.append(ally, config.format);
+    try client_args.append(allocator, "--format");
+    try client_args.append(allocator, config.format);
 
     if (config.page_size != 1) {
-        try client_args.append(ally, "--page-size");
-        const page_size_str = try std.fmt.allocPrint(ally, "{d}", .{config.page_size});
-        defer ally.free(page_size_str);
-        try client_args.append(ally, page_size_str);
+        try client_args.append(allocator, "--page-size");
+        const page_size_str = try std.fmt.allocPrint(allocator, "{d}", .{config.page_size});
+        defer allocator.free(page_size_str);
+        try client_args.append(allocator, page_size_str);
     }
 
     if (config.pull_all) {
-        try client_args.append(ally, "--pull-all");
+        try client_args.append(allocator, "--pull-all");
     }
 
     if (config.extra_pull > 0) {
-        try client_args.append(ally, "--extra-pull");
-        const extra_pull_str = try std.fmt.allocPrint(ally, "{d}", .{config.extra_pull});
-        defer ally.free(extra_pull_str);
-        try client_args.append(ally, extra_pull_str);
+        try client_args.append(allocator, "--extra-pull");
+        const extra_pull_str = try std.fmt.allocPrint(allocator, "{d}", .{config.extra_pull});
+        defer allocator.free(extra_pull_str);
+        try client_args.append(allocator, extra_pull_str);
     }
 
-    if (config.begin) try client_args.append(ally, "--begin");
-    if (config.commit) try client_args.append(ally, "--commit");
-    if (config.rollback) try client_args.append(ally, "--rollback");
+    if (config.begin) try client_args.append(allocator, "--begin");
+    if (config.commit) try client_args.append(allocator, "--commit");
+    if (config.rollback) try client_args.append(allocator, "--rollback");
 
     if (config.process_path) |process_path| {
-        try client_args.append(ally, "--process");
-        try client_args.append(ally, process_path);
+        try client_args.append(allocator, "--process");
+        try client_args.append(allocator, process_path);
     }
 
     if (config.embedded) {
-        try client_args.append(ally, "--embedded");
+        try client_args.append(allocator, "--embedded");
         if (config.embedded_data_dir) |dir| {
-            try client_args.append(ally, "--embedded-data-dir");
-            try client_args.append(ally, dir);
+            try client_args.append(allocator, "--embedded-data-dir");
+            try client_args.append(allocator, dir);
         }
     }
 
     // Add server arguments
     for (config.server_args) |server_arg| {
-        try client_args.append(ally, "--server-arg");
-        try client_args.append(ally, server_arg);
+        try client_args.append(allocator, "--server-arg");
+        try client_args.append(allocator, server_arg);
     }
 
     // Add query text last
-    try client_args.append(ally, config.query_text);
+    try client_args.append(allocator, config.query_text);
 
     // Unified binary architecture - no subprocess spawning
     std.debug.print("Geode client executing with unified binary (no subprocess spawning)\n", .{});
@@ -1429,7 +1429,7 @@ fn printRevokeUsage() void {
 // Subcommand implementations
 
 // JSON protocol handler for Go client compatibility (process/stdio mode)
-fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = argv;
     _ = start_idx;
 
@@ -1445,9 +1445,9 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
     // Store the last query result and query text for PULL requests
     var last_result: ?[]const u8 = null;
-    defer if (last_result) |r| ally.free(r);
+    defer if (last_result) |r| allocator.free(r);
     var last_query: ?[]const u8 = null;
-    defer if (last_query) |q| ally.free(q);
+    defer if (last_query) |q| allocator.free(q);
 
     // Read line by line from stdin
     var line_buf: [65536]u8 = undefined;
@@ -1474,7 +1474,7 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
         // Parse JSON request
         const json = std.json;
-        const parsed = try json.parseFromSlice(json.Value, ally, line, .{});
+        const parsed = try json.parseFromSlice(json.Value, allocator, line, .{});
         defer parsed.deinit();
 
         const obj = parsed.value.object;
@@ -1497,18 +1497,18 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 .strict_offset_validation = true, // Stdio mode enforces US001 (OFFSET requires ORDER BY)
             };
 
-            var mut_ally = ally;
+            var mut_ally = allocator;
             const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
                 // Send error response
-                const error_resp = try std.fmt.allocPrint(ally, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"{s}\"}}}}\n", .{@errorName(err)});
-                defer ally.free(error_resp);
+                const error_resp = try std.fmt.allocPrint(allocator, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"{s}\"}}}}\n", .{@errorName(err)});
+                defer allocator.free(error_resp);
                 _ = try stdout_fd.writeAll(error_resp);
                 continue;
             };
             defer mut_ally.free(result);
 
             // Parse the result JSON to check for errors
-            const result_parsed = try json.parseFromSlice(json.Value, ally, result, .{});
+            const result_parsed = try json.parseFromSlice(json.Value, allocator, result, .{});
             defer result_parsed.deinit();
 
             const result_obj = result_parsed.value.object;
@@ -1518,18 +1518,18 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 if (!std.mem.eql(u8, status_class.string, "00000")) {
                     // This is an error - send ERROR response with the status code
                     const error_msg = if (result_obj.get("message")) |msg| msg.string else "Query error";
-                    const error_resp = try std.fmt.allocPrint(ally, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"{s}\",\"message\":\"{s}\"}}}}\n", .{ status_class.string, error_msg });
-                    defer ally.free(error_resp);
+                    const error_resp = try std.fmt.allocPrint(allocator, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"{s}\",\"message\":\"{s}\"}}}}\n", .{ status_class.string, error_msg });
+                    defer allocator.free(error_resp);
                     _ = try stdout_fd.writeAll(error_resp);
                     continue;
                 }
             }
 
             // Store result and query text for PULL request
-            if (last_result) |r| ally.free(r);
-            last_result = try ally.dupe(u8, result);
-            if (last_query) |q| ally.free(q);
-            last_query = try ally.dupe(u8, query_text);
+            if (last_result) |r| allocator.free(r);
+            last_result = try allocator.dupe(u8, result);
+            if (last_query) |q| allocator.free(q);
+            last_query = try allocator.dupe(u8, query_text);
 
             const columns = result_obj.get("columns") orelse continue;
 
@@ -1539,8 +1539,8 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             // Write column definitions
             for (columns.array.items, 0..) |col, idx| {
                 if (idx > 0) _ = try stdout_fd.writeAll(",");
-                const col_str = try std.fmt.allocPrint(ally, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
-                defer ally.free(col_str);
+                const col_str = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
+                defer allocator.free(col_str);
                 _ = try stdout_fd.writeAll(col_str);
             }
 
@@ -1552,7 +1552,7 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             // Handle PULL request - send BINDINGS with data from last query
             if (last_result) |result_str| {
                 // Parse the stored result
-                const result_parsed = try json.parseFromSlice(json.Value, ally, result_str, .{});
+                const result_parsed = try json.parseFromSlice(json.Value, allocator, result_str, .{});
                 defer result_parsed.deinit();
 
                 const result_obj = result_parsed.value.object;
@@ -1566,16 +1566,16 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 };
 
                 // Check if query has ORDER BY clause and extract order keys
-                var order_keys_list = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
+                var order_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
                 defer {
-                    for (order_keys_list.items) |key| ally.free(key);
-                    order_keys_list.deinit(ally);
+                    for (order_keys_list.items) |key| allocator.free(key);
+                    order_keys_list.deinit(allocator);
                 }
 
                 const ordered_val = if (last_query) |query_text| blk: {
                     // Simple heuristic: check if query contains "ORDER BY" (case insensitive)
-                    var query_upper = try ally.alloc(u8, query_text.len);
-                    defer ally.free(query_upper);
+                    var query_upper = try allocator.alloc(u8, query_text.len);
+                    defer allocator.free(query_upper);
                     for (query_text, 0..) |c, i| {
                         query_upper[i] = if (c >= 'a' and c <= 'z') c - 32 else c;
                     }
@@ -1605,8 +1605,8 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                                 col_name = trimmed[0..space_pos];
                             }
                             if (col_name.len > 0) {
-                                const col_copy = try ally.dupe(u8, col_name);
-                                try order_keys_list.append(ally, col_copy);
+                                const col_copy = try allocator.dupe(u8, col_name);
+                                try order_keys_list.append(allocator, col_copy);
                             }
                         }
                         break :blk true;
@@ -1618,8 +1618,8 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 // Test harness returns: [[1, 2], [3, 4]]
                 // Go client expects: [{"col1": 1, "col2": 2}, {"col1": 3, "col2": 4}]
                 _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"BINDINGS\",");
-                const ordered_str = try std.fmt.allocPrint(ally, "\"ordered\":{s},", .{if (ordered_val) "true" else "false"});
-                defer ally.free(ordered_str);
+                const ordered_str = try std.fmt.allocPrint(allocator, "\"ordered\":{s},", .{if (ordered_val) "true" else "false"});
+                defer allocator.free(ordered_str);
                 _ = try stdout_fd.writeAll(ordered_str);
 
                 // Add order_keys if present
@@ -1627,8 +1627,8 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                     _ = try stdout_fd.writeAll("\"order_keys\":[");
                     for (order_keys_list.items, 0..) |key, idx| {
                         if (idx > 0) _ = try stdout_fd.writeAll(",");
-                        const key_str = try std.fmt.allocPrint(ally, "\"{s}\"", .{key});
-                        defer ally.free(key_str);
+                        const key_str = try std.fmt.allocPrint(allocator, "\"{s}\"", .{key});
+                        defer allocator.free(key_str);
                         _ = try stdout_fd.writeAll(key_str);
                     }
                     _ = try stdout_fd.writeAll("],");
@@ -1648,20 +1648,20 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                         const val = row_array.array.items[col_idx];
 
                         // Write column name and value
-                        const pair = try std.fmt.allocPrint(ally, "\"{s}\":", .{col_name});
-                        defer ally.free(pair);
+                        const pair = try std.fmt.allocPrint(allocator, "\"{s}\":", .{col_name});
+                        defer allocator.free(pair);
                         _ = try stdout_fd.writeAll(pair);
 
                         // Write the value based on its type
                         switch (val) {
                             .integer => |i| {
-                                const val_str = try std.fmt.allocPrint(ally, "{d}", .{i});
-                                defer ally.free(val_str);
+                                const val_str = try std.fmt.allocPrint(allocator, "{d}", .{i});
+                                defer allocator.free(val_str);
                                 _ = try stdout_fd.writeAll(val_str);
                             },
                             .string => |s| {
-                                const val_str = try std.fmt.allocPrint(ally, "\"{s}\"", .{s});
-                                defer ally.free(val_str);
+                                const val_str = try std.fmt.allocPrint(allocator, "\"{s}\"", .{s});
+                                defer allocator.free(val_str);
                                 _ = try stdout_fd.writeAll(val_str);
                             },
                             .bool => |b| {
@@ -1703,7 +1703,7 @@ fn cmdStdio(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 }
 
-fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -1712,31 +1712,31 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
         // If --stdio flag is present, redirect to cmdStdio
         if (std.mem.eql(u8, argv[i], "--stdio")) {
-            return cmdStdio(ally, argv, start_idx);
+            return cmdStdio(allocator, argv, start_idx);
         }
     }
 
-    var server_args = std.ArrayList([]const u8).initCapacity(ally, argv.len + 16) catch return error.OutOfMemory;
-    defer server_args.deinit(ally);
+    var server_args = std.ArrayList([]const u8).initCapacity(allocator, argv.len + 16) catch return error.OutOfMemory;
+    defer server_args.deinit(allocator);
 
-    var passthrough = std.ArrayList([]const u8).initCapacity(ally, argv.len + 16) catch return error.OutOfMemory;
-    defer passthrough.deinit(ally);
+    var passthrough = std.ArrayList([]const u8).initCapacity(allocator, argv.len + 16) catch return error.OutOfMemory;
+    defer passthrough.deinit(allocator);
 
     // Try to find geoded in the same directory as this executable
-    const self_exe_path = try std.fs.selfExePathAlloc(ally);
-    defer ally.free(self_exe_path);
+    const self_exe_path = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe_path);
 
     const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
-    const geoded_path = try std.fs.path.join(ally, &.{ self_dir_path, "geoded" });
+    const geoded_path = try std.fs.path.join(allocator, &.{ self_dir_path, "geoded" });
 
     // Check if geoded exists in the same directory
     if (std.fs.accessAbsolute(geoded_path, .{})) |_| {
         // Use the full path to geoded (server_args owns this now)
-        try server_args.append(ally, geoded_path);
+        try server_args.append(allocator, geoded_path);
     } else |_| {
         // geoded not found in same directory, free the path and fall back to PATH resolution
-        ally.free(geoded_path);
-        try server_args.append(ally, "geoded");
+        allocator.free(geoded_path);
+        try server_args.append(allocator, "geoded");
     }
 
     var data_dir: []const u8 = "./data";
@@ -1762,41 +1762,41 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
             enable_auth = true;
         } else if (std.mem.eql(u8, arg, "--cert") and i + 1 < argv.len) {
-            try server_args.append(ally, "--cert");
-            try server_args.append(ally, argv[i + 1]);
+            try server_args.append(allocator, "--cert");
+            try server_args.append(allocator, argv[i + 1]);
             i += 1;
         } else if (std.mem.eql(u8, arg, "--key") and i + 1 < argv.len) {
-            try server_args.append(ally, "--key");
-            try server_args.append(ally, argv[i + 1]);
+            try server_args.append(allocator, "--key");
+            try server_args.append(allocator, argv[i + 1]);
             i += 1;
         } else {
             // passthrough unknown flags (and their value if present)
-            try passthrough.append(ally, arg);
+            try passthrough.append(allocator, arg);
             if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
-                try passthrough.append(ally, argv[i + 1]);
+                try passthrough.append(allocator, argv[i + 1]);
                 i += 1;
             }
         }
     }
 
-    try server_args.append(ally, "--data_dir");
-    try server_args.append(ally, data_dir);
+    try server_args.append(allocator, "--data_dir");
+    try server_args.append(allocator, data_dir);
 
     // Always use --listen with the address from --listen
     if (!use_stdio) {
-        try server_args.append(ally, "--listen");
-        try server_args.append(ally, listen_addr);
+        try server_args.append(allocator, "--listen");
+        try server_args.append(allocator, listen_addr);
     }
 
-    try server_args.append(ally, "--log-level");
-    try server_args.append(ally, log_level);
+    try server_args.append(allocator, "--log-level");
+    try server_args.append(allocator, log_level);
 
     if (use_stdio) {
-        try server_args.append(ally, "--stdio");
+        try server_args.append(allocator, "--stdio");
     }
 
     if (passthrough.items.len > 0) {
-        for (passthrough.items) |p| try server_args.append(ally, p);
+        for (passthrough.items) |p| try server_args.append(allocator, p);
     }
 
     // Parse cert and key paths from server_args
@@ -1832,12 +1832,12 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (enable_auth) {
         const geode_lib = @import("geode");
         const user_mgmt = geode_lib.user_management;
-        user_mgmt.initUserStore(ally) catch |err| {
+        user_mgmt.initUserStore(allocator) catch |err| {
             std.debug.print("Failed to initialize user store: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
         user_mgmt.setAuthEnabled(true);
-        user_mgmt.ensureDefaultUser(ally) catch |err| {
+        user_mgmt.ensureDefaultUser(allocator) catch |err| {
             std.debug.print("Failed to create default users: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1853,13 +1853,13 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     // Run the embedded server
-    runEmbeddedServer(ally, config) catch |err| {
+    runEmbeddedServer(allocator, config) catch |err| {
         std.debug.print("Server error: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 }
 
-fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help first
     var i: usize = start_idx + 1; // start_idx points to "query", so check args after it
     while (i < argv.len) : (i += 1) {
@@ -1996,12 +1996,12 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
     // Handle stdin input if query_text is "-"
     var stdin_allocated: ?[]u8 = null;
-    defer if (stdin_allocated) |allocated| ally.free(allocated);
+    defer if (stdin_allocated) |allocated| allocator.free(allocated);
 
     if (std.mem.eql(u8, query_text.?, "-")) {
         const stdin = std.fs.File{ .handle = 0 }; // stdin handle
-        const stdin_content = try stdin.readToEndAlloc(ally, 1024 * 1024); // Max 1MB
-        defer ally.free(stdin_content);
+        const stdin_content = try stdin.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
+        defer allocator.free(stdin_content);
 
         // Trim only leading/trailing whitespace, preserving internal newlines
         var start: usize = 0;
@@ -2024,7 +2024,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
 
         // Allocate a copy for the query text
-        stdin_allocated = try ally.dupe(u8, trimmed);
+        stdin_allocated = try allocator.dupe(u8, trimmed);
         query_text = stdin_allocated;
     }
 
@@ -2033,12 +2033,12 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Auto-load saved session credentials if not explicitly provided
     var loaded_token: ?[]u8 = null;
     var loaded_username: ?[]u8 = null;
-    defer if (loaded_token) |t| ally.free(t);
-    defer if (loaded_username) |u| ally.free(u);
+    defer if (loaded_token) |t| allocator.free(t);
+    defer if (loaded_username) |u| allocator.free(u);
 
     if (use_saved_session and token == null and user == null) {
         const session_storage = @import("security/session_storage.zig");
-        var cred_store = session_storage.CredentialStore.init(ally) catch blk: {
+        var cred_store = session_storage.CredentialStore.init(allocator) catch blk: {
             // If we can't initialize credential store, just proceed without it
             break :blk null;
         };
@@ -2048,27 +2048,27 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
             if (try store.loadCredentials()) |creds| {
                 // Verify system fingerprint matches
-                const current_fp = try session_storage.getSystemFingerprint(ally);
-                defer ally.free(current_fp);
+                const current_fp = try session_storage.getSystemFingerprint(allocator);
+                defer allocator.free(current_fp);
 
                 if (std.mem.eql(u8, creds.system_fingerprint, current_fp)) {
-                    loaded_token = try ally.dupe(u8, creds.token);
-                    loaded_username = try ally.dupe(u8, creds.username);
+                    loaded_token = try allocator.dupe(u8, creds.token);
+                    loaded_username = try allocator.dupe(u8, creds.username);
                     token = loaded_token;
                     user = loaded_username;
 
                     // Free loaded credentials
-                    ally.free(creds.token);
-                    ally.free(creds.username);
-                    ally.free(creds.server);
-                    ally.free(creds.system_fingerprint);
+                    allocator.free(creds.token);
+                    allocator.free(creds.username);
+                    allocator.free(creds.server);
+                    allocator.free(creds.system_fingerprint);
                 } else {
                     // System fingerprint mismatch - credentials are for different system/user
                     // Silently ignore and require explicit authentication
-                    ally.free(creds.token);
-                    ally.free(creds.username);
-                    ally.free(creds.server);
-                    ally.free(creds.system_fingerprint);
+                    allocator.free(creds.token);
+                    allocator.free(creds.username);
+                    allocator.free(creds.server);
+                    allocator.free(creds.system_fingerprint);
                 }
             }
         }
@@ -2084,25 +2084,25 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Handle --embedded mode (embedded database for testing, edge deployment, offline use)
     if (embedded) {
         // Execute query directly using embedded database
-        try executeEmbeddedQuery(ally, query_text.?, format, token, user, password, embedded_data_dir);
+        try executeEmbeddedQuery(allocator, query_text.?, format, token, user, password, embedded_data_dir);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
     // Determine execution mode based on --server flag
     if (server) |server_addr| {
         // Execute query via QUIC connection to server
-        try executeQuicQuery(ally, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
+        try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
     } else {
         // No --server and no --embedded: use embedded persistent mode (default)
         // This is the default for tests that need data persistence
-        try executeEmbeddedQuery(ally, query_text.?, format, token, user, password, null);
+        try executeEmbeddedQuery(allocator, query_text.?, format, token, user, password, null);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 }
 
 /// Execute query in embedded mode (embedded database for testing, edge deployments, offline environments)
 /// Supports optional persistent data directory for production edge deployments
-fn executeEmbeddedQuery(ally: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8, user: ?[]const u8, password: ?[]const u8, data_dir: ?[]const u8) !void {
+fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8, user: ?[]const u8, password: ?[]const u8, data_dir: ?[]const u8) !void {
     _ = format;
 
     // Handle empty queries
@@ -2130,7 +2130,7 @@ fn executeEmbeddedQuery(ally: std.mem.Allocator, query_text: []const u8, format:
     const geode_lib = @import("geode");
 
     // Execute query using the test harness with authentication
-    var mut_ally = ally;
+    var mut_ally = allocator;
 
     // Prepare authentication options
     const options = geode_lib.test_harness.QueryOptions{
@@ -2165,7 +2165,7 @@ fn executeEmbeddedQuery(ally: std.mem.Allocator, query_text: []const u8, format:
         // Re-throw the error (usually OutOfMemory)
         return err;
     };
-    defer ally.free(result);
+    defer allocator.free(result);
 
     // Write result to stdout
     const stdout_fd = std.fs.File{ .handle = 1 };
@@ -2273,7 +2273,7 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
-fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
+fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
     _ = timeout_secs; // Timeout is currently hardcoded in QuicClient.waitForHandshake
     const QuicTransport = @import("transport/quic");
     const stderr = std.fs.File{ .handle = 2 };
@@ -2289,7 +2289,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
 
     while (attempts < max_attempts) : (attempts += 1) {
         // Initialize QUIC client for this attempt
-        var quic_client = QuicTransport.QuicClient.init(ally);
+        var quic_client = QuicTransport.QuicClient.init(allocator);
         defer quic_client.deinit();
 
         // Connect to server
@@ -2303,7 +2303,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
             const handshake_err = quic_client.waitForHandshake();
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
-                return try executeQueryOnConnection(ally, &quic_client, query_text, format, username, password);
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password);
             } else |_| {
                 // Handshake failed (timeout or other error)
                 if (attempts + 1 < max_attempts) {
@@ -2333,7 +2333,7 @@ fn executeQuicQuery(ally: std.mem.Allocator, server_addr: []const u8, query_text
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
-fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
+fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
@@ -2344,10 +2344,10 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
 
     // Send HELLO message with authentication credentials
     const hello_msg = if (username != null and password != null)
-        try std.fmt.allocPrint(ally, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n", .{ username.?, password.? })
+        try std.fmt.allocPrint(allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n", .{ username.?, password.? })
     else
-        try std.fmt.allocPrint(ally, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}}\n", .{});
-    defer ally.free(hello_msg);
+        try std.fmt.allocPrint(allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}}\n", .{});
+    defer allocator.free(hello_msg);
 
     std.debug.print("DEBUG: Client sending HELLO: {s}\n", .{hello_msg});
     stream.writeAll(hello_msg) catch |err| {
@@ -2360,7 +2360,7 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
         std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer ally.free(hello_response);
+    defer allocator.free(hello_response);
     std.debug.print("DEBUG: Client received HELLO response: {s}\n", .{hello_response});
 
     // Check for authentication errors
@@ -2370,12 +2370,12 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
     }
 
     // Escape query text for JSON
-    const escaped_text = try escapeJsonString(ally, query_text);
-    defer ally.free(escaped_text);
+    const escaped_text = try escapeJsonString(allocator, query_text);
+    defer allocator.free(escaped_text);
 
     // Send query using the server's protocol format (RUN_GQL message)
-    const query_msg = try std.fmt.allocPrint(ally, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
-    defer ally.free(query_msg);
+    const query_msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
+    defer allocator.free(query_msg);
 
     std.debug.print("DEBUG: Client sending query: {s}\n", .{query_msg});
     stream.writeAll(query_msg) catch |err| {
@@ -2390,7 +2390,7 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
         std.debug.print("Error: Failed to receive schema response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer ally.free(schema_response);
+    defer allocator.free(schema_response);
     std.debug.print("DEBUG: Client received schema response: {s}\n", .{schema_response});
 
     // Check for errors in the SCHEMA response
@@ -2401,8 +2401,8 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
     }
 
     // Receive second response (RESULT line or additional data)
-    var result_data = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
-    defer result_data.deinit(ally);
+    var result_data = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    defer result_data.deinit(allocator);
 
     // Read all remaining lines until stream ends
     while (true) {
@@ -2415,13 +2415,13 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
             std.debug.print("Error: Failed to receive result response: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer ally.free(result_line);
+        defer allocator.free(result_line);
 
         std.debug.print("DEBUG: Client received line: {s}\n", .{result_line});
 
         if (result_line.len == 0) break;
 
-        try result_data.appendSlice(ally, result_line);
+        try result_data.appendSlice(allocator, result_line);
 
         // Check if this is the end of the response (typically RESULT line ends the response)
         if (std.mem.indexOf(u8, result_line, "\"type\":\"RESULT\"") != null) {
@@ -2466,7 +2466,7 @@ fn executeQueryOnConnection(ally: std.mem.Allocator, quic_client: anytype, query
     }
 }
 
-fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Get REPL types
     const repl_loop = geode.repl.repl_loop;
 
@@ -2564,12 +2564,12 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         const geode_lib = @import("geode");
 
         // Read all input at once
-        const stdin_content = stdin_file.readToEndAlloc(ally, 1024 * 1024) catch |err| {
+        const stdin_content = stdin_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
             std.debug.print("Error reading stdin: {s}\n", .{@errorName(err)});
             std.debug.print("Goodbye!\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer ally.free(stdin_content);
+        defer allocator.free(stdin_content);
 
         // Split input by lines and execute each query
         var line_it = std.mem.splitScalar(u8, stdin_content, '\n');
@@ -2596,12 +2596,12 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 .strict_offset_validation = true,
             };
 
-            var mut_ally = ally;
+            var mut_ally = allocator;
             const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed, options) catch |err| {
                 std.debug.print("Error: {s}\n", .{@errorName(err)});
                 continue;
             };
-            defer ally.free(result);
+            defer allocator.free(result);
 
             // Print result to stdout (not stderr)
             _ = stdout_file.write(result) catch {};
@@ -2613,8 +2613,8 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     // Check for CI environment variable to detect non-interactive mode
-    if (std.process.getEnvVarOwned(ally, "CI")) |ci_val| {
-        defer ally.free(ci_val);
+    if (std.process.getEnvVarOwned(allocator, "CI")) |ci_val| {
+        defer allocator.free(ci_val);
         if (std.mem.eql(u8, ci_val, "true") or std.mem.eql(u8, ci_val, "1")) {
             std.debug.print("geode> exit\n", .{});
             std.debug.print("Goodbye!\n", .{});
@@ -2622,8 +2622,8 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
     } else |_| {
         // Also check if NON_INTERACTIVE is set
-        if (std.process.getEnvVarOwned(ally, "NON_INTERACTIVE")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "NON_INTERACTIVE")) |val| {
+            defer allocator.free(val);
             std.debug.print("geode> exit\n", .{});
             std.debug.print("Goodbye!\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -2638,7 +2638,7 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         .history_enabled = history_enabled,
         .verbose = verbose,
         .show_timing = false, // Default to off, can be toggled in REPL with \timing on
-        .allocator = ally,
+        .allocator = allocator,
         .transport = &quic_transport, // Use real QUIC transport
     };
 
@@ -2649,7 +2649,7 @@ fn cmdShell(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     };
 }
 
-fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // start_idx points to "auth", so start_idx + 1 is the subcommand
     const subcmd_idx = start_idx + 1;
 
@@ -2663,10 +2663,10 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
     if (std.mem.eql(u8, subcmd, "login")) {
         // CANARY: REQ=REQ-AUTH-001; FEATURE="AuthenticationLogin"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_001_RealLogin; OWNER=cli; UPDATED=2025-09-30
-        try cmdAuthLogin(ally, argv, subcmd_idx + 1);
+        try cmdAuthLogin(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "logout")) {
         // CANARY: REQ=REQ-AUTH-002; FEATURE="AuthenticationLogout"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_002_RealLogout; OWNER=cli; UPDATED=2025-09-30
-        try cmdAuthLogout(ally, argv, subcmd_idx + 1);
+        try cmdAuthLogout(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "validate")) {
         // Validate a session token
         var token: ?[]const u8 = null;
@@ -2702,7 +2702,7 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "token")) {
         // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
-        try cmdAuthToken(ally);
+        try cmdAuthToken(allocator);
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -2714,7 +2714,7 @@ fn cmdAuth(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 }
 
-fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // start_idx points to "user", so start_idx + 1 is the subcommand
     const subcmd_idx = start_idx + 1;
 
@@ -2797,23 +2797,23 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             while (i < argv.len) : (i += 1) {
                 if (std.mem.eql(u8, argv[i], "--role") and i + 1 < argv.len) {
                     // Parse comma-separated roles
-                    var role_list = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
-                    defer role_list.deinit(ally);
+                    var role_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                    defer role_list.deinit(allocator);
 
                     var it = std.mem.tokenizeAny(u8, argv[i + 1], ",");
                     while (it.next()) |role| {
-                        role_list.append(ally, role) catch unreachable;
+                        role_list.append(allocator, role) catch unreachable;
                     }
-                    roles = try role_list.toOwnedSlice(ally);
+                    roles = try role_list.toOwnedSlice(allocator);
                     i += 1;
                 }
             }
-            defer if (roles) |r| ally.free(r);
+            defer if (roles) |r| allocator.free(r);
 
             // For testing - just print success
             const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            const msg = std.fmt.allocPrint(ally, "User '{s}' created successfully\n", .{username}) catch "Error\n";
-            defer ally.free(msg);
+            const msg = std.fmt.allocPrint(allocator, "User '{s}' created successfully\n", .{username}) catch "Error\n";
+            defer allocator.free(msg);
             _ = stdout_file.writeAll(msg) catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "list")) {
@@ -2848,11 +2848,11 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
                 _ = stdout_file.writeAll("Status: active\n") catch {};
                 _ = stdout_file.writeAll("Roles: user\n") catch {};
             } else {
-                const msg1 = std.fmt.allocPrint(ally, "Username: {s}\n", .{username}) catch "Error\n";
-                defer ally.free(msg1);
+                const msg1 = std.fmt.allocPrint(allocator, "Username: {s}\n", .{username}) catch "Error\n";
+                defer allocator.free(msg1);
                 _ = stdout_file.writeAll(msg1) catch {};
-                const msg2 = std.fmt.allocPrint(ally, "Email: {s}@example.com\n", .{username}) catch "Error\n";
-                defer ally.free(msg2);
+                const msg2 = std.fmt.allocPrint(allocator, "Email: {s}@example.com\n", .{username}) catch "Error\n";
+                defer allocator.free(msg2);
                 _ = stdout_file.writeAll(msg2) catch {};
                 _ = stdout_file.writeAll("Status: active\n") catch {};
                 _ = stdout_file.writeAll("Roles: user\n") catch {};
@@ -3110,7 +3110,7 @@ fn cmdUser(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 }
 
-fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // start_idx points to "role", so start_idx + 1 is the subcommand
     const subcmd_idx = start_idx + 1;
 
@@ -3151,8 +3151,8 @@ fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
             // Parse role name from arguments
             if (subcmd_idx + 1 < argv.len) {
                 const role_name = argv[subcmd_idx + 1];
-                const msg = std.fmt.allocPrint(ally, "Role '{s}' created successfully\n", .{role_name}) catch "Error\n";
-                defer ally.free(msg);
+                const msg = std.fmt.allocPrint(allocator, "Role '{s}' created successfully\n", .{role_name}) catch "Error\n";
+                defer allocator.free(msg);
                 _ = stdout_file.writeAll(msg) catch {};
             } else {
                 _ = stdout_file.writeAll("Role created successfully\n") catch {};
@@ -3178,8 +3178,8 @@ fn cmdRole(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 }
 
-fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
     // start_idx points to "policy", so start_idx + 1 is the subcommand
     const subcmd_idx = start_idx + 1;
 
@@ -3250,7 +3250,7 @@ fn cmdPolicy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 }
 
-fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help flag
     if (start_idx + 1 < argv.len) {
         const arg = argv[start_idx + 1];
@@ -3284,8 +3284,8 @@ fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
 
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const msg = std.fmt.allocPrint(ally, "Permission '{s}' granted to '{s}' successfully\n", .{ permission, target }) catch "Error\n";
-        defer ally.free(msg);
+        const msg = std.fmt.allocPrint(allocator, "Permission '{s}' granted to '{s}' successfully\n", .{ permission, target }) catch "Error\n";
+        defer allocator.free(msg);
         _ = stdout_file.writeAll(msg) catch {};
     } else {
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -3294,7 +3294,7 @@ fn cmdGrant(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help flag
     if (start_idx + 1 < argv.len) {
         const arg = argv[start_idx + 1];
@@ -3324,8 +3324,8 @@ fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         }
 
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        const msg = std.fmt.allocPrint(ally, "Permission '{s}' revoked from '{s}' successfully\n", .{ permission, target }) catch "Error\n";
-        defer ally.free(msg);
+        const msg = std.fmt.allocPrint(allocator, "Permission '{s}' revoked from '{s}' successfully\n", .{ permission, target }) catch "Error\n";
+        defer allocator.free(msg);
         _ = stdout_file.writeAll(msg) catch {};
     } else {
         const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -3334,7 +3334,7 @@ fn cmdRevoke(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdBackup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdBackup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check if there's a subcommand
     if (start_idx >= argv.len) {
         printBackupUsage();
@@ -3347,16 +3347,16 @@ fn cmdBackup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         printBackupUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "create")) {
-        try cmdBackupCreate(ally, argv, start_idx + 1);
+        try cmdBackupCreate(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "list")) {
-        try cmdBackupList(ally, argv, start_idx + 1);
+        try cmdBackupList(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "info")) {
-        try cmdBackupInfo(ally, argv, start_idx + 1);
+        try cmdBackupInfo(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "cleanup")) {
-        try cmdBackupCleanup(ally, argv, start_idx + 1);
+        try cmdBackupCleanup(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "--dest") or std.mem.eql(u8, subcommand, "--mode")) {
         // Legacy support for the old interface
-        try cmdBackupCreateLegacy(ally, argv, start_idx);
+        try cmdBackupCreateLegacy(allocator, argv, start_idx);
     } else {
         std.debug.print("Error: Unknown backup subcommand '{s}'\n", .{subcommand});
         printBackupUsage();
@@ -3383,7 +3383,7 @@ fn printBackupUsage() void {
         "Use 'geode backup <subcommand> --help' for detailed usage\n", .{});
 }
 
-fn cmdBackupCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var output: ?[]const u8 = null;
     var backup_type: []const u8 = "full";
     var parent_id: ?[]const u8 = null;
@@ -3456,7 +3456,7 @@ fn cmdBackupCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !v
     }
 
     // Execute backup
-    try executeBackup(ally, output.?, backup_type, parent_id, server, compress);
+    try executeBackup(allocator, output.?, backup_type, parent_id, server, compress);
 
     std.debug.print("Backup created successfully: {s}\n", .{output.?});
     if (compress) {
@@ -3465,8 +3465,8 @@ fn cmdBackupCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !v
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdBackupList(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
 
     // Parse arguments for help
     var i: usize = start_idx;
@@ -3490,8 +3490,8 @@ fn cmdBackupList(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdBackupInfo(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
     var backup_file: ?[]const u8 = null;
 
     // Parse arguments
@@ -3528,8 +3528,8 @@ fn cmdBackupInfo(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdBackupCleanup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdBackupCleanup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
     var older_than: ?[]const u8 = null;
 
     // Parse arguments
@@ -3571,7 +3571,7 @@ fn cmdBackupCleanup(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdBackupCreateLegacy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var dest: ?[]const u8 = null;
     var mode: []const u8 = "full";
     var parent_id: ?[]const u8 = null;
@@ -3623,13 +3623,13 @@ fn cmdBackupCreateLegacy(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     }
 
     // Execute backup (legacy call without compression)
-    try executeBackup(ally, dest.?, mode, parent_id, server, false);
+    try executeBackup(allocator, dest.?, mode, parent_id, server, false);
 
     std.debug.print("Backup completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdRestore(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var source: ?[]const u8 = null;
     var target_time: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
@@ -3706,13 +3706,13 @@ fn cmdRestore(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     }
 
     // Execute restore
-    try executeRestore(ally, source.?, target_time, server);
+    try executeRestore(allocator, source.?, target_time, server);
 
     std.debug.print("Restore completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdMigrate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdMigrate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 
     // Check if there's a subcommand
     if (start_idx >= argv.len) {
@@ -3726,11 +3726,11 @@ fn cmdMigrate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
         printMigrateUsage();
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "status")) {
-        try cmdMigrateStatus(ally, argv, start_idx + 1);
+        try cmdMigrateStatus(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "run") or std.mem.eql(u8, subcommand, "up")) {
-        try cmdMigrateRun(ally, argv, start_idx + 1);
+        try cmdMigrateRun(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "create")) {
-        try cmdMigrateCreate(ally, argv, start_idx + 1);
+        try cmdMigrateCreate(allocator, argv, start_idx + 1);
     } else {
         std.debug.print("Error: Unknown migrate subcommand '{s}'\n", .{subcommand});
         printMigrateUsage();
@@ -3756,8 +3756,8 @@ fn printMigrateUsage() void {
         "Use 'geode migrate <subcommand> --help' for detailed usage\n", .{});
 }
 
-fn cmdMigrateStatus(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
     _ = argv;
     _ = start_idx;
 
@@ -3769,8 +3769,8 @@ fn cmdMigrateStatus(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdMigrateRun(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
     _ = argv;
     _ = start_idx;
 
@@ -3781,8 +3781,8 @@ fn cmdMigrateRun(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdMigrateCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
 
     var migration_name: ?[]const u8 = null;
 
@@ -3820,13 +3820,13 @@ fn cmdMigrateCreate(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    const argv = try std.process.argsAlloc(ally);
-    defer std.process.argsFree(ally, argv);
+    const argv = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, argv);
 
     // Parse audit configuration from environment variables
-    var audit_cfg = parseAuditConfigFromEnv(ally) catch |err| blk: {
+    var audit_cfg = parseAuditConfigFromEnv(allocator) catch |err| blk: {
         std.debug.print("Warning: Failed to parse audit configuration: {s}\n", .{@errorName(err)});
         break :blk CliAuditConfig{};
     };
@@ -3846,10 +3846,10 @@ pub fn main() !void {
                 // Parse host:port
                 const hostport = argv[i + 1];
                 if (std.mem.lastIndexOf(u8, hostport, ":")) |colon_idx| {
-                    audit_cfg.syslog_host = try ally.dupe(u8, hostport[0..colon_idx]);
+                    audit_cfg.syslog_host = try allocator.dupe(u8, hostport[0..colon_idx]);
                     audit_cfg.syslog_port = std.fmt.parseInt(u16, hostport[colon_idx + 1 ..], 10) catch 514;
                 } else {
-                    audit_cfg.syslog_host = try ally.dupe(u8, hostport);
+                    audit_cfg.syslog_host = try allocator.dupe(u8, hostport);
                     audit_cfg.syslog_port = 514;
                 }
 
@@ -3860,7 +3860,7 @@ pub fn main() !void {
             if (i + 1 < argv.len) {
                 audit_cfg.file_enabled = true;
                 audit_cfg.enabled = true;
-                audit_cfg.file_path = try ally.dupe(u8, argv[i + 1]);
+                audit_cfg.file_path = try allocator.dupe(u8, argv[i + 1]);
                 i += 1;
                 subcommand_start = i + 1;
             }
@@ -3870,10 +3870,10 @@ pub fn main() !void {
 
             // Check if there's an optional source name argument
             if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
-                audit_cfg.windows_eventlog_source = try ally.dupe(u8, argv[i + 1]);
+                audit_cfg.windows_eventlog_source = try allocator.dupe(u8, argv[i + 1]);
                 i += 1;
             } else {
-                audit_cfg.windows_eventlog_source = try ally.dupe(u8, "Geode");
+                audit_cfg.windows_eventlog_source = try allocator.dupe(u8, "Geode");
             }
             subcommand_start = i + 1;
         } else if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -3912,7 +3912,7 @@ pub fn main() !void {
     }
 
     // Initialize audit logging
-    initializeAuditLogger(ally, audit_cfg) catch |err| {
+    initializeAuditLogger(allocator, audit_cfg) catch |err| {
         std.debug.print("Warning: Failed to initialize audit logging: {s}\n", .{@errorName(err)});
     };
     defer deinitializeAuditLogger();
@@ -3934,7 +3934,7 @@ pub fn main() !void {
         else
             subcommand_start;
 
-        try cmd_entry.handler(ally, argv, actual_start_idx);
+        try cmd_entry.handler(allocator, argv, actual_start_idx);
     } else if (std.mem.eql(u8, subcommand, "audit")) {
         // geode audit verify --file <path> ...
         var algo: audit_cli.HashAlgo = .sha256;
@@ -3959,7 +3959,7 @@ pub fn main() !void {
                 audit_i += 1;
             }
         }
-        try audit_cli.verifyFile(ally, path, algo, 100, require_digest, pubkey);
+        try audit_cli.verifyFile(allocator, path, algo, 100, require_digest, pubkey);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else {
         // Check if this is an option that should be handled by query command
@@ -3970,11 +3970,11 @@ pub fn main() !void {
         {
             // These are query command options, auto-route to query command
             logAuditEvent("command", "query", "started");
-            try cmdQueryImplicit(ally, argv, subcommand_start);
+            try cmdQueryImplicit(allocator, argv, subcommand_start);
         } else if (looksLikeGqlQuery(subcommand)) {
             // Check if this looks like a GQL query and auto-route to query command
             logAuditEvent("command", "query", "started");
-            try cmdQueryImplicit(ally, argv, subcommand_start);
+            try cmdQueryImplicit(allocator, argv, subcommand_start);
         } else if (std.mem.startsWith(u8, subcommand, "--")) {
             // Check if it looks like an option (starts with --)
             std.debug.print("Error: unknown option '{s}'\n", .{subcommand});
@@ -4011,11 +4011,11 @@ fn looksLikeGqlQuery(str: []const u8) bool {
 }
 
 // Implicit query handler for when GQL query is provided without 'query' subcommand
-fn cmdQueryImplicit(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdQueryImplicit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Reconstruct argv as if 'query' subcommand was used
     // We need to create a new argv with 'query' inserted at start_idx
-    var new_argv = try ally.alloc([:0]u8, argv.len + 1);
-    defer ally.free(new_argv);
+    var new_argv = try allocator.alloc([:0]u8, argv.len + 1);
+    defer allocator.free(new_argv);
 
     // Copy elements before the query
     var i: usize = 0;
@@ -4024,8 +4024,8 @@ fn cmdQueryImplicit(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     }
 
     // Insert 'query' subcommand
-    new_argv[start_idx] = try ally.dupeZ(u8, "query");
-    defer ally.free(new_argv[start_idx]);
+    new_argv[start_idx] = try allocator.dupeZ(u8, "query");
+    defer allocator.free(new_argv[start_idx]);
 
     // Copy the rest of the elements (including the query string and flags)
     i = start_idx;
@@ -4034,7 +4034,7 @@ fn cmdQueryImplicit(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     }
 
     // Call the regular query command handler
-    try cmdQuery(ally, new_argv, start_idx);
+    try cmdQuery(allocator, new_argv, start_idx);
 }
 
 // ---- Credential Storage & Authentication ----
@@ -4046,23 +4046,23 @@ const CredentialStorage = struct {
     expires_at: i64,
 };
 
-fn getCredentialsPath(ally: std.mem.Allocator) ![]const u8 {
-    const home_dir = std.process.getEnvVarOwned(ally, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(ally, "USERPROFILE") catch return error.NoHomeDir,
+fn getCredentialsPath(allocator: std.mem.Allocator) ![]const u8 {
+    const home_dir = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
         else => return err,
     };
-    defer ally.free(home_dir);
-    return try std.fs.path.join(ally, &.{ home_dir, ".geode", "credentials.json" });
+    defer allocator.free(home_dir);
+    return try std.fs.path.join(allocator, &.{ home_dir, ".geode", "credentials.json" });
 }
 
-fn ensureCredentialsDir(ally: std.mem.Allocator) !void {
-    const home_dir = std.process.getEnvVarOwned(ally, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(ally, "USERPROFILE") catch return error.NoHomeDir,
+fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
+    const home_dir = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
         else => return err,
     };
-    defer ally.free(home_dir);
-    const geode_dir = try std.fs.path.join(ally, &.{ home_dir, ".geode" });
-    defer ally.free(geode_dir);
+    defer allocator.free(home_dir);
+    const geode_dir = try std.fs.path.join(allocator, &.{ home_dir, ".geode" });
+    defer allocator.free(geode_dir);
 
     std.fs.makeDirAbsolute(geode_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -4070,16 +4070,16 @@ fn ensureCredentialsDir(ally: std.mem.Allocator) !void {
     };
 }
 
-fn saveCredentials(ally: std.mem.Allocator, creds: CredentialStorage) !void {
-    try ensureCredentialsDir(ally);
-    const creds_path = try getCredentialsPath(ally);
-    defer ally.free(creds_path);
+fn saveCredentials(allocator: std.mem.Allocator, creds: CredentialStorage) !void {
+    try ensureCredentialsDir(allocator);
+    const creds_path = try getCredentialsPath(allocator);
+    defer allocator.free(creds_path);
 
     // Create JSON string manually (simpler than full JSON object)
-    const json_content = try std.fmt.allocPrint(ally,
+    const json_content = try std.fmt.allocPrint(allocator,
         \\{{"server":"{s}","username":"{s}","session_token":"{s}","expires_at":{}}}
     , .{ creds.server, creds.username, creds.session_token, creds.expires_at });
-    defer ally.free(json_content);
+    defer allocator.free(json_content);
 
     // Write to file
     const file = try std.fs.createFileAbsolute(creds_path, .{});
@@ -4088,14 +4088,14 @@ fn saveCredentials(ally: std.mem.Allocator, creds: CredentialStorage) !void {
     try file.writeAll(json_content);
 }
 
-fn clearCredentials(ally: std.mem.Allocator) !void {
-    const creds_path = getCredentialsPath(ally) catch return;
-    defer ally.free(creds_path);
+fn clearCredentials(allocator: std.mem.Allocator) !void {
+    const creds_path = getCredentialsPath(allocator) catch return;
+    defer allocator.free(creds_path);
 
     std.fs.deleteFileAbsolute(creds_path) catch {};
 }
 
-fn promptPassword(ally: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {
+fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {
     std.debug.print("{s}", .{prompt_text});
 
     // Disable echo using direct terminal control
@@ -4129,19 +4129,19 @@ fn promptPassword(ally: std.mem.Allocator, prompt_text: []const u8) ![]const u8 
         std.fs.File{ .handle = std.posix.STDIN_FILENO };
 
     // Read line character by character until newline
-    var line_buf = try std.ArrayList(u8).initCapacity(ally, 256);
-    defer line_buf.deinit(ally);
+    var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+    defer line_buf.deinit(allocator);
 
     while (true) {
         var b: [1]u8 = undefined;
         const bytes_read = stdin_file.readAll(&b) catch break;
         if (bytes_read == 0) break;
         if (b[0] == '\n') break;
-        try line_buf.append(ally, b[0]);
+        try line_buf.append(allocator, b[0]);
     }
 
     const trimmed = std.mem.trim(u8, line_buf.items, " \t\r\n");
-    const password = try ally.dupe(u8, trimmed);
+    const password = try allocator.dupe(u8, trimmed);
 
     // Re-enable echo
     if (builtin.os.tag == .windows) {
@@ -4199,7 +4199,7 @@ fn validatePasswordAgainstPolicy(password: []const u8) !void {
     if (word_count < min_words) return error.PasswordInsufficientWords;
 }
 
-fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8, password: []const u8) !AuthResult {
+fn connectToServer(allocator: std.mem.Allocator, _: []const u8, username: []const u8, password: []const u8) !AuthResult {
     // For this implementation, we'll simulate authentication by creating a session token
     // In a real implementation, this would make an HTTP/QUIC request to the server
 
@@ -4212,21 +4212,21 @@ fn connectToServer(ally: std.mem.Allocator, _: []const u8, username: []const u8,
     crypto.random.bytes(&token_bytes);
 
     const encoder = std.base64.url_safe_no_pad.Encoder;
-    const token = try ally.alloc(u8, encoder.calcSize(token_bytes.len));
+    const token = try allocator.alloc(u8, encoder.calcSize(token_bytes.len));
     _ = encoder.encode(token, &token_bytes);
 
     // Get configurable admin username from environment
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    const admin_username_env = getEnvVar(allocator, "GEODE_ADMIN_USERNAME");
-    defer if (admin_username_env) |env| allocator.free(env);
+    const local_allocator = gpa.allocator();
+    const admin_username_env = getEnvVar(local_allocator, "GEODE_ADMIN_USERNAME");
+    defer if (admin_username_env) |env| local_allocator.free(env);
     const admin_username = admin_username_env orelse "geode";
 
     // Simulate authentication validation with enhanced policy checking
     if (std.mem.eql(u8, username, admin_username)) {
-        const default_password_env = getEnvVar(allocator, "GEODE_DEFAULT_PASSWORD");
-        defer if (default_password_env) |env| allocator.free(env);
+        const default_password_env = getEnvVar(local_allocator, "GEODE_DEFAULT_PASSWORD");
+        defer if (default_password_env) |env| local_allocator.free(env);
         const expected_default_password = default_password_env orelse "geodesic";
 
         if (std.mem.eql(u8, password, expected_default_password)) {
@@ -4308,7 +4308,7 @@ fn isPassphrase(password: []const u8) bool {
     return countWords(password) >= min_words;
 }
 
-fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var server: []const u8 = "127.0.0.1:3141";
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
@@ -4350,12 +4350,12 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         const session_storage = @import("security/session_storage.zig");
 
         // Generate a cryptographically random session token
-        const session_token = try session_storage.SessionToken.generate(ally, u);
-        defer ally.free(session_token.username);
-        defer ally.free(session_token.system_fingerprint);
+        const session_token = try session_storage.SessionToken.generate(allocator, u);
+        defer allocator.free(session_token.username);
+        defer allocator.free(session_token.system_fingerprint);
 
-        const token_hex = try session_token.toHexString(ally);
-        defer ally.free(token_hex);
+        const token_hex = try session_token.toHexString(allocator);
+        defer allocator.free(token_hex);
 
         // Check for known test users
         if (std.mem.eql(u8, u, "nonexistent")) {
@@ -4365,7 +4365,7 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 
         // Save session if requested
         if (save_session) {
-            var cred_store = try session_storage.CredentialStore.init(ally);
+            var cred_store = try session_storage.CredentialStore.init(allocator);
             defer cred_store.deinit();
 
             const creds = session_storage.Credentials{
@@ -4398,41 +4398,41 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             std.fs.File{ .handle = std.posix.STDIN_FILENO };
 
         // Read line character by character until newline
-        var line_buf = try std.ArrayList(u8).initCapacity(ally, 256);
-        defer line_buf.deinit(ally);
+        var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+        defer line_buf.deinit(allocator);
 
         while (true) {
             var b: [1]u8 = undefined;
             const bytes_read = stdin_file.readAll(&b) catch break;
             if (bytes_read == 0) break;
             if (b[0] == '\n') break;
-            try line_buf.append(ally, b[0]);
+            try line_buf.append(allocator, b[0]);
         }
 
         const trimmed = std.mem.trim(u8, line_buf.items, " \t\r\n");
-        break :blk try ally.dupe(u8, trimmed);
+        break :blk try allocator.dupe(u8, trimmed);
     };
 
     // Get password from file, command line, or prompt
     const final_password = if (password_file) |pf| blk: {
         if (std.mem.eql(u8, pf, "/dev/stdin") or std.mem.eql(u8, pf, "-")) {
             // Reading password from stdin should use hidden input
-            break :blk try promptPassword(ally, "Password: ");
+            break :blk try promptPassword(allocator, "Password: ");
         } else {
             const file = std.fs.openFileAbsolute(pf, .{}) catch |err| {
                 std.debug.print("Error: Cannot read password file '{s}': {s}\n", .{ pf, @errorName(err) });
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             };
             defer file.close();
-            break :blk try file.readToEndAlloc(ally, 256);
+            break :blk try file.readToEndAlloc(allocator, 256);
         }
     } else if (password) |p|
-        try ally.dupe(u8, p)
+        try allocator.dupe(u8, p)
     else
-        try promptPassword(ally, "Password: ");
+        try promptPassword(allocator, "Password: ");
 
-    defer ally.free(final_username);
-    defer ally.free(final_password);
+    defer allocator.free(final_username);
+    defer allocator.free(final_password);
 
     // Remove trailing newline if present
     const trimmed_password = if (final_password.len > 0 and final_password[final_password.len - 1] == '\n')
@@ -4441,7 +4441,7 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         final_password;
 
     // Authenticate with server
-    const auth_result = connectToServer(ally, server, final_username, trimmed_password) catch |err| {
+    const auth_result = connectToServer(allocator, server, final_username, trimmed_password) catch |err| {
         // Log failed authentication attempt
         logAuditEvent("auth", "login", "failure");
 
@@ -4457,7 +4457,7 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             },
         }
     };
-    defer ally.free(auth_result.session_token);
+    defer allocator.free(auth_result.session_token);
 
     // Log successful authentication
     logAuditEvent("auth", "login", "success");
@@ -4467,17 +4467,17 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         // Get current policy configuration
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         defer _ = gpa.deinit();
-        const allocator = gpa.allocator();
+        const local_allocator = gpa.allocator();
 
-        const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
-        defer if (min_length_env) |env| allocator.free(env);
+        const min_length_env = getEnvVar(local_allocator, "GEODE_PASSWORD_MIN_LENGTH");
+        defer if (min_length_env) |env| local_allocator.free(env);
         const min_length = if (min_length_env) |len_str| blk: {
             const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
 
-        const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
-        defer if (min_words_env) |env| allocator.free(env);
+        const min_words_env = getEnvVar(local_allocator, "GEODE_PASSWORD_MIN_WORDS");
+        defer if (min_words_env) |env| local_allocator.free(env);
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             break :blk if (parsed < 2) 2 else parsed;
@@ -4492,8 +4492,8 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         std.debug.print("\nYou must set a new password before accessing the database.\n\n", .{});
 
         // Prompt for new password
-        const new_password = try promptNewPassword(ally);
-        defer ally.free(new_password);
+        const new_password = try promptNewPassword(allocator);
+        defer allocator.free(new_password);
 
         // Validate new password
         if (!validateNewPassword(new_password)) {
@@ -4516,7 +4516,7 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         .expires_at = expires_at,
     };
 
-    saveCredentials(ally, creds) catch |err| {
+    saveCredentials(allocator, creds) catch |err| {
         std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
     };
 
@@ -4524,20 +4524,20 @@ fn cmdAuthLogin(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     std.debug.print("Session token saved to ~/.geode/credentials.json\n", .{});
 }
 
-fn promptNewPassword(ally: std.mem.Allocator) ![]const u8 {
+fn promptNewPassword(allocator: std.mem.Allocator) ![]const u8 {
     var attempts: u8 = 0;
     const max_attempts = 3;
 
     while (attempts < max_attempts) {
-        const new_password = try promptPassword(ally, "New password: ");
-        const confirm_password = try promptPassword(ally, "Confirm password: ");
+        const new_password = try promptPassword(allocator, "New password: ");
+        const confirm_password = try promptPassword(allocator, "Confirm password: ");
 
-        defer ally.free(confirm_password);
+        defer allocator.free(confirm_password);
 
         if (std.mem.eql(u8, new_password, confirm_password)) {
             return new_password;
         } else {
-            ally.free(new_password);
+            allocator.free(new_password);
             attempts += 1;
             std.debug.print("Passwords do not match. Please try again.\n", .{});
         }
@@ -4590,7 +4590,7 @@ fn validateNewPassword(password: []const u8) bool {
 
 // Removed - replaced by countWords function above
 
-fn cmdAuthLogout(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for token option
     var token: ?[]const u8 = null;
     var i = start_idx;
@@ -4617,7 +4617,7 @@ fn cmdAuthLogout(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // Clear saved credentials
-    clearCredentials(ally) catch |err| {
+    clearCredentials(allocator) catch |err| {
         std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
         logAuditEvent("auth", "logout", "failure");
         return;
@@ -4631,14 +4631,14 @@ fn cmdAuthLogout(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 }
 
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
-fn cmdAuthToken(ally: std.mem.Allocator) !void {
+fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     const home = std.posix.getenv("HOME") orelse {
         std.debug.print("Error: HOME environment variable not set\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    const credentials_path = try std.fmt.allocPrint(ally, "{s}/.geode/credentials.json", .{home});
-    defer ally.free(credentials_path);
+    const credentials_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
+    defer allocator.free(credentials_path);
 
     // Try to read the credentials file
     const file = std.fs.openFileAbsolute(credentials_path, .{}) catch |err| {
@@ -4652,11 +4652,11 @@ fn cmdAuthToken(ally: std.mem.Allocator) !void {
     defer file.close();
 
     // Read file content
-    const content = file.readToEndAlloc(ally, 1024 * 1024) catch |err| {
+    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
         std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer ally.free(content);
+    defer allocator.free(content);
 
     // Output the content to stdout
     const stdout_fd = std.fs.File{ .handle = 1 };
@@ -4667,7 +4667,7 @@ fn cmdAuthToken(ally: std.mem.Allocator) !void {
 }
 
 // Remote server backup execution function
-fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
+fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
     std.debug.print("Connecting to remote server: {s}\n", .{server});
 
     // Parse server address
@@ -4677,9 +4677,9 @@ fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const 
     const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidServerAddress;
 
     // Create QUIC client for backup operations
-    const quic_client = try ally.create(quic.QuicClient);
-    defer ally.destroy(quic_client);
-    quic_client.* = quic.QuicClient.init(ally);
+    const quic_client = try allocator.create(quic.QuicClient);
+    defer allocator.destroy(quic_client);
+    quic_client.* = quic.QuicClient.init(allocator);
     defer quic_client.deinit();
 
     // Connect to server
@@ -4707,13 +4707,13 @@ fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const 
     // Build backup command
     const compression_flag = if (compress) " --compress" else "";
     const parent_flag = if (parent_id) |pid|
-        try std.fmt.allocPrint(ally, " --parent {s}", .{pid})
+        try std.fmt.allocPrint(allocator, " --parent {s}", .{pid})
     else
         "";
-    defer if (parent_id != null) ally.free(parent_flag);
+    defer if (parent_id != null) allocator.free(parent_flag);
 
-    const backup_command = try std.fmt.allocPrint(ally, "BACKUP {s} --type {s}{s}{s}\n", .{ dest, mode, compression_flag, parent_flag });
-    defer ally.free(backup_command);
+    const backup_command = try std.fmt.allocPrint(allocator, "BACKUP {s} --type {s}{s}{s}\n", .{ dest, mode, compression_flag, parent_flag });
+    defer allocator.free(backup_command);
 
     // Send backup command to server
     std.debug.print("Sending backup command to server...\n", .{});
@@ -4753,7 +4753,7 @@ fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const 
     std.debug.print("Backup saved to: {s}\n", .{dest});
 
     // Output JSON response for consistency with local backup
-    const json_response = try std.fmt.allocPrint(ally,
+    const json_response = try std.fmt.allocPrint(allocator,
         \\{{
         \\  "backup_type": "{s}",
         \\  "source": "remote_server",
@@ -4765,26 +4765,26 @@ fn executeRemoteBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const 
         \\}}
         \\
     , .{ mode, server, dest, total_bytes, if (compress) "enabled" else "disabled" });
-    defer ally.free(json_response);
+    defer allocator.free(json_response);
 
     std.debug.print("{s}", .{json_response});
 }
 
 // Backup execution function
-fn executeBackup(ally: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
+fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
     // Check if we should use remote server or local backup
     if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
         // Use remote server backup
-        try executeRemoteBackup(ally, dest, mode, parent_id, server, compress);
+        try executeRemoteBackup(allocator, dest, mode, parent_id, server, compress);
         return;
     }
 
     // For CLI usage, we create a simplified backup manager without full WAL/PageManager dependencies
     // This creates a simplified backup that contains all the metadata and placeholders for data
     const simplified_backup_manager = SimplifiedBackupManager{
-        .allocator = ally,
+        .allocator = allocator,
         .config = backup_types.BackupConfig{
             .compression = if (compress) .zstd else .none,
             .encryption = false,
@@ -4983,7 +4983,7 @@ fn generateBackupId() u128 {
 }
 
 // Remote server restore execution function
-fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
+fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
     std.debug.print("Connecting to remote server for restore: {s}\n", .{server});
 
     // Parse server address
@@ -4993,9 +4993,9 @@ fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time
     const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidServerAddress;
 
     // Create QUIC client for restore operations
-    const quic_client = try ally.create(quic.QuicClient);
-    defer ally.destroy(quic_client);
-    quic_client.* = quic.QuicClient.init(ally);
+    const quic_client = try allocator.create(quic.QuicClient);
+    defer allocator.destroy(quic_client);
+    quic_client.* = quic.QuicClient.init(allocator);
     defer quic_client.deinit();
 
     // Connect to server
@@ -5027,12 +5027,12 @@ fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time
     const backup_file = try std.fs.cwd().openFile(source, .{});
     defer backup_file.close();
     const file_size = try backup_file.getEndPos();
-    const file_data = try backup_file.readToEndAlloc(ally, file_size);
-    defer ally.free(file_data);
+    const file_data = try backup_file.readToEndAlloc(allocator, file_size);
+    defer allocator.free(file_data);
 
     // Send upload command
-    const upload_command = try std.fmt.allocPrint(ally, "UPLOAD_BACKUP {} bytes\n", .{file_size});
-    defer ally.free(upload_command);
+    const upload_command = try std.fmt.allocPrint(allocator, "UPLOAD_BACKUP {} bytes\n", .{file_size});
+    defer allocator.free(upload_command);
     try stream.writeAll(upload_command);
 
     // Wait for server ready response
@@ -5062,13 +5062,13 @@ fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time
 
     // Build restore command
     const time_flag = if (target_time) |time_str|
-        try std.fmt.allocPrint(ally, " --target-time {s}", .{time_str})
+        try std.fmt.allocPrint(allocator, " --target-time {s}", .{time_str})
     else
         "";
-    defer if (target_time != null) ally.free(time_flag);
+    defer if (target_time != null) allocator.free(time_flag);
 
-    const restore_command = try std.fmt.allocPrint(ally, "RESTORE --confirm{s}\n", .{time_flag});
-    defer ally.free(restore_command);
+    const restore_command = try std.fmt.allocPrint(allocator, "RESTORE --confirm{s}\n", .{time_flag});
+    defer allocator.free(restore_command);
 
     // Send restore command to server
     std.debug.print("Sending restore command to server...\n", .{});
@@ -5089,7 +5089,7 @@ fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time
     std.debug.print("Server response: {s}\n", .{restore_response});
 
     // Output JSON response for consistency with local restore
-    const json_response = try std.fmt.allocPrint(ally,
+    const json_response = try std.fmt.allocPrint(allocator,
         \\{{
         \\  "restore_type": "remote_server",
         \\  "source_file": "{s}",
@@ -5099,25 +5099,25 @@ fn executeRemoteRestore(ally: std.mem.Allocator, source: []const u8, target_time
         \\}}
         \\
     , .{ source, server, target_time orelse "latest" });
-    defer ally.free(json_response);
+    defer allocator.free(json_response);
 
     std.debug.print("{s}", .{json_response});
 }
 
 // Restore execution function
-fn executeRestore(ally: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
+fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
     std.debug.print("Restoring database from: {s}\n", .{source});
 
     // Check if we should use remote server or local restore
     if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
         // Use remote server restore
-        try executeRemoteRestore(ally, source, target_time, server);
+        try executeRemoteRestore(allocator, source, target_time, server);
         return;
     }
 
     // For CLI usage, we create a simplified restore manager
     const simplified_restore_manager = SimplifiedRestoreManager{
-        .allocator = ally,
+        .allocator = allocator,
     };
 
     const restore_metadata = if (target_time) |time_str| blk: {
@@ -5263,8 +5263,8 @@ const RestoreMetadata = struct {
 };
 
 /// FLE command handler
-fn cmdFLE(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = ally;
+fn cmdFLE(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    _ = allocator;
 
     if (start_idx + 1 >= argv.len) {
         printFLEUsage();

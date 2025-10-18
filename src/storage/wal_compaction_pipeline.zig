@@ -21,8 +21,8 @@ pub const Pipeline = struct {
         archival_window: u64 = 1000,
     };
 
-    pub fn init(ally: std.mem.Allocator, w: *wal.Wal, cfg: Config) Pipeline {
-        return .{ .allocator = ally, .w = w, .config = cfg };
+    pub fn init(allocator: std.mem.Allocator, w: *wal.Wal, cfg: Config) Pipeline {
+        return .{ .allocator = allocator, .w = w, .config = cfg };
     }
 
     /// Decide if a checkpoint should be written now (returns true if criteria satisfied).

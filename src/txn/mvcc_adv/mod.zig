@@ -12,8 +12,8 @@ pub const Aggregator = struct {
     summary: predictive.VersionSummary,
     skew: ?skew.PredictiveSkewFilter = null,
 
-    pub fn init(ally: std.mem.Allocator) !Aggregator {
-        return .{ .allocator = ally, .early = early.EarlyDetector.init(ally), .summary = predictive.VersionSummary.init(ally), .skew = null };
+    pub fn init(allocator: std.mem.Allocator) !Aggregator {
+        return .{ .allocator = allocator, .early = early.EarlyDetector.init(allocator), .summary = predictive.VersionSummary.init(allocator), .skew = null };
     }
 
     pub fn deinit(self: *Aggregator) void {

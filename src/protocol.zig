@@ -80,10 +80,10 @@ pub const Status = struct {
     status_subclass: ?[]const u8 = null,
 };
 
-pub fn buildSchemaLine(ally: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 16) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
     var i: usize = 0;
     while (i < cols.len) : (i += 1) {
@@ -118,13 +118,13 @@ pub fn buildSchemaLine(ally: std.mem.Allocator, cols: []const SchemaCol, additio
         try w.writeAll("]");
     }
     try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final: bool, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+pub fn buildBindingsLine(allocator: std.mem.Allocator, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final: bool, additional: []const []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":");
     try w.writeAll(if (ordered) "true" else "false");
     try w.writeAll(",\"order_keys\":[");
@@ -162,7 +162,7 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
         try w.writeAll("]");
     }
     try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
 /// Enumerate implementation-defined / dependent behavior flags surfaced in protocol frames.
@@ -170,38 +170,38 @@ pub fn buildBindingsLine(ally: std.mem.Allocator, ordered: bool, order_keys: []c
 ///  I: Implementation-defined
 ///  U: Usage / policy toggle
 /// Returned slice lifetime: caller owned (single allocation of joined strings).
-pub fn collectImplementationFlags(ally: std.mem.Allocator, lexer_state: ?*const GqlLexer.Lexer, parser_state: ?*const GqlParser.Parser, session_ctx: ?*const SessionContext) ![][]const u8 {
+pub fn collectImplementationFlags(allocator: std.mem.Allocator, lexer_state: ?*const GqlLexer.Lexer, parser_state: ?*const GqlParser.Parser, session_ctx: ?*const SessionContext) ![][]const u8 {
     // Build dynamic list based on runtime state
-    var flags = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
 
     // Check if expressions are allowed in ORDER BY (now they are)
-    try flags.append(ally, "I:IllegalOrderKeyPolicy=expr");
+    try flags.append(allocator, "I:IllegalOrderKeyPolicy=expr");
 
     // Check for ORDER tie-break when no explicit ORDER BY
     if (session_ctx != null and session_ctx.?.implicit_order_applied) {
-        try flags.append(ally, "U:OrderTiebreak=LexJSON");
+        try flags.append(allocator, "U:OrderTiebreak=LexJSON");
     }
 
     // Check for double-solidus comment usage
     if (lexer_state != null and lexer_state.?.has_double_solidus_comment) {
-        try flags.append(ally, "GB03:DoubleSolidusComment");
+        try flags.append(allocator, "GB03:DoubleSolidusComment");
     }
 
     // Check for ordinal sort keys
     if (parser_state != null and parser_state.?.has_ordinal_sort_key) {
-        try flags.append(ally, "E:OrdinalSortKey");
+        try flags.append(allocator, "E:OrdinalSortKey");
     }
 
     // Check for multi-graph catalog
     if (session_ctx != null and session_ctx.?.graph_catalog != null) {
-        try flags.append(ally, "I:GraphCatalog=memory");
+        try flags.append(allocator, "I:GraphCatalog=memory");
     }
 
     // Static flags
-    try flags.append(ally, "I:PathTieBreak=LengthId");
-    try flags.append(ally, "I:Collation=binary");
+    try flags.append(allocator, "I:PathTieBreak=LengthId");
+    try flags.append(allocator, "I:Collation=binary");
 
-    return flags.toOwnedSlice(ally);
+    return flags.toOwnedSlice(allocator);
 }
 
 pub const SessionContext = struct {
@@ -229,10 +229,10 @@ test "TestCANARY_REQ_GQL_005_ProtocolImplementationFlagsEnumeration" {
     try std.testing.expect(found_illegal and found_tiebreak and found_collation);
 }
 
-pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+pub fn buildExplainLine(allocator: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\",\"json\":");
     try w.writeAll(json_payload);
     if (flags.len > 0) {
@@ -247,10 +247,10 @@ pub fn buildExplainLine(ally: std.mem.Allocator, json_payload: []const u8, flags
         try w.writeAll("]");
     }
     try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
+pub fn buildProfileLine(allocator: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
     const prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":";
     const suffix = "}}\n";
     // Compute flags serialization length
@@ -272,13 +272,13 @@ pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags
     if (total > 1_000_000 and json_payload.len < 10_000) {
         if (PROTOCOL_DEBUG) std.debug.print("[warn] buildProfileLine suspicious total={d} payload={d} flags={d}; using fallback minimal profile frame\n", .{ total, json_payload.len, flags.len });
         const fallback = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":{\"profile_version\":2,\"ops\":[],\"totals\":{}}}}\n";
-        if (ally.dupe(u8, fallback)) |dup| return dup else |_| {
-            const buf = try ally.alloc(u8, fallback.len);
+        if (allocator.dupe(u8, fallback)) |dup| return dup else |_| {
+            const buf = try allocator.alloc(u8, fallback.len);
             @memcpy(buf, fallback);
             return buf;
         }
     }
-    var out = try ally.alloc(u8, total);
+    var out = try allocator.alloc(u8, total);
     var idx: usize = 0;
     // Instrumentation
     if (PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine(safe) total={d} payload={d} flags={d}\n", .{ total, json_payload.len, flags.len });
@@ -317,23 +317,23 @@ pub fn buildProfileLine(ally: std.mem.Allocator, json_payload: []const u8, flags
     return out;
 }
 
-pub fn buildCdcDiagnosticsLine(ally: std.mem.Allocator, json_payload: []const u8) ![]u8 {
+pub fn buildCdcDiagnosticsLine(allocator: std.mem.Allocator, json_payload: []const u8) ![]u8 {
     // Minimal frame: status_class 00000 and result type CDC_DIAGNOSTICS with nested json field
     const prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"CDC_DIAGNOSTICS\",\"json\":";
     const suffix = "}}\n";
     const total = prefix.len + json_payload.len + suffix.len;
-    var out = try ally.alloc(u8, total);
+    var out = try allocator.alloc(u8, total);
     @memcpy(out[0..prefix.len], prefix);
     @memcpy(out[prefix.len .. prefix.len + json_payload.len], json_payload);
     @memcpy(out[prefix.len + json_payload.len .. total], suffix);
     return out;
 }
 
-pub fn buildCdcControlLine(ally: std.mem.Allocator, action: []const u8, status: []const u8, epoch: u64) ![]u8 {
+pub fn buildCdcControlLine(allocator: std.mem.Allocator, action: []const u8, status: []const u8, epoch: u64) ![]u8 {
     // Frame: {"status_class":"00000","result":{"type":"CDC_CONTROL","action":"<action>","status":"<status>","guardrail_epoch":<epoch>}}
-    var buf = std.ArrayList(u8).initCapacity(ally, 64) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+    var buf = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"CDC_CONTROL\",\"action\":\"");
     try w.writeAll(action);
     try w.writeAll("\",\"status\":\"");
@@ -343,13 +343,13 @@ pub fn buildCdcControlLine(ally: std.mem.Allocator, action: []const u8, status: 
     const s = std.fmt.bufPrint(&tmp, "{d}", .{epoch}) catch "0";
     try w.writeAll(s);
     try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+pub fn buildErrorLine(allocator: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
     try w.writeAll(code);
     try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
@@ -359,13 +359,13 @@ pub fn buildErrorLine(ally: std.mem.Allocator, code: []const u8, message: []cons
     try w.writeAll("\",\"anchor\":\"");
     try w.writeAll(anchor);
     try w.writeAll("\"}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+pub fn buildErrorLineWithFlags(allocator: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
     try w.writeAll(code);
     try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
@@ -398,14 +398,14 @@ pub fn buildErrorLineWithFlags(ally: std.mem.Allocator, code: []const u8, messag
         try w.writeAll("]");
     }
     try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-pub fn buildErrorLineWithFlagsCustomStatus(ally: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8, status_override: ?[]const u8) ![]u8 {
+pub fn buildErrorLineWithFlagsCustomStatus(allocator: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8, status_override: ?[]const u8) ![]u8 {
     const status_class = status_override orelse "02000";
-    var buf = std.ArrayList(u8).initCapacity(ally, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    const w = buf.writer(ally);
+    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
     try w.writeAll("{\"status_class\":\"");
     try w.writeAll(status_class);
     try w.writeAll("\",\"status_subclass\":\"");
@@ -440,11 +440,11 @@ pub fn buildErrorLineWithFlagsCustomStatus(ally: std.mem.Allocator, code: []cons
         try w.writeAll("]");
     }
     try w.writeAll("}}\n");
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMessage {
-    const parsed = try std.json.parseFromSlice(std.json.Value, ally, line, .{});
+pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !ClientMessage {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
     defer parsed.deinit();
     const root = parsed.value;
     if (root != .object) return error.Invalid;
@@ -458,21 +458,21 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         const wcv = obj.get("wanted_conformance") orelse return error.Invalid;
         if (cnv != .string or cvv != .string or wcv != .string) return error.Invalid;
         // Duplicate strings so they outlive the JSON Value arena
-        const cn = try ally.dupe(u8, cnv.string);
-        const cv = try ally.dupe(u8, cvv.string);
-        const wc = try ally.dupe(u8, wcv.string);
+        const cn = try allocator.dupe(u8, cnv.string);
+        const cv = try allocator.dupe(u8, cvv.string);
+        const wc = try allocator.dupe(u8, wcv.string);
 
         // Extract optional authentication fields
         var username: ?[]const u8 = null;
         var password: ?[]const u8 = null;
         if (obj.get("username")) |unv| {
             if (unv == .string) {
-                username = try ally.dupe(u8, unv.string);
+                username = try allocator.dupe(u8, unv.string);
             }
         }
         if (obj.get("password")) |pwv| {
             if (pwv == .string) {
-                password = try ally.dupe(u8, pwv.string);
+                password = try allocator.dupe(u8, pwv.string);
             }
         }
 
@@ -481,12 +481,12 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         const txtv = obj.get("text") orelse return error.Invalid;
         if (txtv != .string) return error.Invalid;
         // Duplicate text to avoid use-after-free of parsed JSON buffer
-        const txt = try ally.dupe(u8, txtv.string);
+        const txt = try allocator.dupe(u8, txtv.string);
         const params_val = obj.get("params");
         var params_json: ?[]const u8 = null;
         if (params_val) |pv| {
             // Allocate JSON string for params that outlives the parser
-            params_json = std.json.Stringify.valueAlloc(ally, pv, .{}) catch null;
+            params_json = std.json.Stringify.valueAlloc(allocator, pv, .{}) catch null;
         }
         return .{ .RUN_GQL = .{ .text = txt, .params_json = params_json } };
     } else if (std.mem.eql(u8, typ, "PULL")) {
@@ -505,12 +505,12 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
     } else if (std.mem.eql(u8, typ, "SAVEPOINT")) {
         const nv = obj.get("name") orelse return error.Invalid;
         if (nv != .string) return error.Invalid;
-        const name = try ally.dupe(u8, nv.string);
+        const name = try allocator.dupe(u8, nv.string);
         return .{ .SAVEPOINT = .{ .name = name } };
     } else if (std.mem.eql(u8, typ, "ROLLBACK_TO")) {
         const nv = obj.get("name") orelse return error.Invalid;
         if (nv != .string) return error.Invalid;
-        const name = try ally.dupe(u8, nv.string);
+        const name = try allocator.dupe(u8, nv.string);
         return .{ .ROLLBACK_TO = .{ .name = name } };
     } else if (std.mem.eql(u8, typ, "PING")) {
         return .{ .PING = {} };
@@ -521,20 +521,20 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         const av = obj.get("action");
         if (av) |aval| {
             if (aval != .string) return error.Invalid;
-            const act = try ally.dupe(u8, aval.string);
+            const act = try allocator.dupe(u8, aval.string);
             return .{ .CDC_CONTROL = .{ .action = act } };
         } else {
-            const empty = try ally.dupe(u8, "");
+            const empty = try allocator.dupe(u8, "");
             return .{ .CDC_CONTROL = .{ .action = empty } };
         }
     } else if (std.mem.eql(u8, typ, "BACKUP")) {
         const btv = obj.get("backup_type") orelse return error.Invalid;
         if (btv != .string) return error.Invalid;
-        const backup_type = try ally.dupe(u8, btv.string);
+        const backup_type = try allocator.dupe(u8, btv.string);
 
         const parent_id = if (obj.get("parent_id")) |pv| blk: {
             if (pv != .string) return error.Invalid;
-            break :blk try ally.dupe(u8, pv.string);
+            break :blk try allocator.dupe(u8, pv.string);
         } else null;
 
         const compress = if (obj.get("compress")) |cv|
@@ -546,7 +546,7 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
     } else if (std.mem.eql(u8, typ, "RESTORE")) {
         const target_time = if (obj.get("target_time")) |tv| blk: {
             if (tv != .string) return error.Invalid;
-            break :blk try ally.dupe(u8, tv.string);
+            break :blk try allocator.dupe(u8, tv.string);
         } else null;
 
         const confirm = if (obj.get("confirm")) |cv|
@@ -561,7 +561,7 @@ pub fn parseClientMessage(ally: std.mem.Allocator, line: []const u8) !ClientMess
         if (sbv != .integer or csv != .string) return error.Invalid;
 
         const size_bytes = @as(u64, @intCast(sbv.integer));
-        const checksum = try ally.dupe(u8, csv.string);
+        const checksum = try allocator.dupe(u8, csv.string);
 
         return .{ .UPLOAD_BACKUP = .{ .size_bytes = size_bytes, .checksum = checksum } };
     }

@@ -169,9 +169,9 @@ fn getStdErr() std.fs.File {
         std.fs.File{ .handle = std.posix.STDERR_FILENO };
 }
 
-fn readLineAlloc(ally: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
+fn readLineAlloc(allocator: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
     while (true) {
         var one: [1]u8 = undefined;
         const n = try file.read(&one);
@@ -180,10 +180,10 @@ fn readLineAlloc(ally: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {
             break;
         }
         if (one[0] == '\n') break;
-        buf.append(ally, one[0]) catch return error.OutOfMemory;
+        buf.append(allocator, one[0]) catch return error.OutOfMemory;
         if (buf.items.len >= max) break;
     }
-    return buf.toOwnedSlice(ally) catch error.OutOfMemory;
+    return buf.toOwnedSlice(allocator) catch error.OutOfMemory;
 }
 
 pub fn main() !void {

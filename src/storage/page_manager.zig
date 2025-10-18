@@ -252,34 +252,34 @@ pub const PageManager = struct {
     dirty_pages: std.AutoHashMap(u32, void),
     batch_threshold: usize = 64, // Flush when this many pages are dirty
 
-    pub fn init(ally: std.mem.Allocator) PageManager {
+    pub fn init(allocator: std.mem.Allocator) PageManager {
         return .{
-            .allocator = ally,
-            .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"),
+            .allocator = allocator,
+            .pages = std.ArrayList([]u8).initCapacity(allocator, 0) catch @panic("OOM"),
             .page_size = 4096,
             .base_path = null,
-            .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
+            .free_pages = std.ArrayList(u32).initCapacity(allocator, 0) catch @panic("OOM"),
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
             .enc_use_aes_gcm = false,
-            .dirty_pages = std.AutoHashMap(u32, void).init(ally),
+            .dirty_pages = std.AutoHashMap(u32, void).init(allocator),
             .batch_threshold = 64,
         };
     }
 
-    pub fn initInMemory(ally: std.mem.Allocator, page_size: usize) PageManager {
+    pub fn initInMemory(allocator: std.mem.Allocator, page_size: usize) PageManager {
         return .{
-            .allocator = ally,
-            .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"),
+            .allocator = allocator,
+            .pages = std.ArrayList([]u8).initCapacity(allocator, 0) catch @panic("OOM"),
             .page_size = page_size,
             .base_path = null,
-            .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
+            .free_pages = std.ArrayList(u32).initCapacity(allocator, 0) catch @panic("OOM"),
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
             .enc_use_aes_gcm = false,
-            .dirty_pages = std.AutoHashMap(u32, void).init(ally),
+            .dirty_pages = std.AutoHashMap(u32, void).init(allocator),
             .batch_threshold = 64,
         };
     }
@@ -325,18 +325,18 @@ pub const PageManager = struct {
         }
     }
 
-    pub fn initPersistent(ally: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
+    pub fn initPersistent(allocator: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
         var pm = PageManager{
-            .allocator = ally,
-            .pages = std.ArrayList([]u8).initCapacity(ally, 0) catch @panic("OOM"),
+            .allocator = allocator,
+            .pages = std.ArrayList([]u8).initCapacity(allocator, 0) catch @panic("OOM"),
             .page_size = page_size,
             .base_path = base_path,
-            .free_pages = std.ArrayList(u32).initCapacity(ally, 0) catch @panic("OOM"),
+            .free_pages = std.ArrayList(u32).initCapacity(allocator, 0) catch @panic("OOM"),
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
             .enc_use_aes_gcm = false,
-            .dirty_pages = std.AutoHashMap(u32, void).init(ally),
+            .dirty_pages = std.AutoHashMap(u32, void).init(allocator),
             .batch_threshold = 64,
         };
         pm.loadEncConfig();

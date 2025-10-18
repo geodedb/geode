@@ -205,8 +205,8 @@ const TemporalEntry = union(enum) {
     LocalDateTime: temporal.DateTime,
 };
 
-fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayList(TemporalEntry) {
-    var list = std.ArrayList(TemporalEntry).initCapacity(ally, 0) catch return error.OutOfMemory;
+fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.ArrayList(TemporalEntry) {
+    var list = std.ArrayList(TemporalEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
     const self = struct {
         fn walkStmt(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), st: ast.Statement) !void {
             switch (st) {
@@ -290,7 +290,7 @@ fn collectTemporalsList(ally: std.mem.Allocator, prog: ast.Program) !std.ArrayLi
             }
         }
     };
-    for (prog.statements) |st| try self.walkStmt(ally, &list, st);
+    for (prog.statements) |st| try self.walkStmt(allocator, &list, st);
     return list;
 }
 
@@ -421,11 +421,11 @@ pub fn printExpr(w: anytype, e: ast.Expr, prec: u8) !void {
 }
 
 // Helper to stringify a single expression with options, for granular tests and utilities.
-pub fn stringifyExprAlloc(ally: std.mem.Allocator, e: ast.Expr, opts: PrintOptions) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    try printExprWith(buf.writer(ally), e, 0, opts);
-    return buf.toOwnedSlice(ally);
+pub fn stringifyExprAlloc(allocator: std.mem.Allocator, e: ast.Expr, opts: PrintOptions) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    try printExprWith(buf.writer(allocator), e, 0, opts);
+    return buf.toOwnedSlice(allocator);
 }
 
 pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !void {

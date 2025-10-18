@@ -24,9 +24,9 @@ pub const Options = struct {
 pub const Result = struct {
     node_ids: []u32,
     scores: []f64,
-    pub fn deinit(self: *Result, ally: std.mem.Allocator) void {
-        ally.free(self.node_ids);
-        ally.free(self.scores);
+    pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_ids);
+        allocator.free(self.scores);
     }
 };
 
@@ -47,25 +47,25 @@ fn normalizeSlice(slice: []f64) void {
     }
 }
 
-pub fn compute(ally: std.mem.Allocator, g: *builders.Graph, opts: Options) !Result {
+pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) !Result {
     // Compute each metric (already BENCHED metrics) using existing modules.
-    var pr = try pagerank.compute(ally, g, .{ .damping = 0.85, .epsilon = 1e-6, .max_iters = 50 });
-    defer pr.deinit(ally);
-    var ev = try eigen.compute(ally, g, .{ .max_iters = 50, .epsilon = 1e-6, .normalize = true });
-    defer ev.deinit(ally);
-    var bt = try between.compute(ally, g, .{ .normalize = true });
-    defer bt.deinit(ally);
-    var cl = try close.compute(ally, g, .{ .mode = .harmonic, .normalize = true });
-    defer cl.deinit(ally);
-    var bl = try bridge.compute(ally, g, .{ .normalize = true });
-    defer bl.deinit(ally);
+    var pr = try pagerank.compute(allocator, g, .{ .damping = 0.85, .epsilon = 1e-6, .max_iters = 50 });
+    defer pr.deinit(allocator);
+    var ev = try eigen.compute(allocator, g, .{ .max_iters = 50, .epsilon = 1e-6, .normalize = true });
+    defer ev.deinit(allocator);
+    var bt = try between.compute(allocator, g, .{ .normalize = true });
+    defer bt.deinit(allocator);
+    var cl = try close.compute(allocator, g, .{ .mode = .harmonic, .normalize = true });
+    defer cl.deinit(allocator);
+    var bl = try bridge.compute(allocator, g, .{ .normalize = true });
+    defer bl.deinit(allocator);
 
     // Build id->index maps (assume graphs identical ordering by node id sets)
     const n = g.nodes.items.len;
-    var res_ids = try ally.alloc(u32, n);
-    var scores = try ally.alloc(f64, n);
+    var res_ids = try allocator.alloc(u32, n);
+    var scores = try allocator.alloc(f64, n);
     @memset(scores, 0);
-    var map = std.AutoHashMap(u32, usize).init(ally);
+    var map = std.AutoHashMap(u32, usize).init(allocator);
     defer map.deinit();
     try map.ensureTotalCapacity(@as(u32, @intCast(n)));
 

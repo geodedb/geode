@@ -10,8 +10,8 @@ pub const ConcurrencySafeGraph = struct {
     g: builders.Graph,
     rw: std.Thread.RwLock = .{},
 
-    pub fn init(ally: std.mem.Allocator) ConcurrencySafeGraph {
-        return .{ .g = builders.Graph.init(ally) };
+    pub fn init(allocator: std.mem.Allocator) ConcurrencySafeGraph {
+        return .{ .g = builders.Graph.init(allocator) };
     }
 
     pub fn deinit(self: *ConcurrencySafeGraph) void {
@@ -32,11 +32,11 @@ pub const ConcurrencySafeGraph = struct {
 
     pub const Edge = builders.Edge;
 
-    pub fn snapshotOutEdges(self: *ConcurrencySafeGraph, ally: std.mem.Allocator, node: u32) ![]Edge {
+    pub fn snapshotOutEdges(self: *ConcurrencySafeGraph, allocator: std.mem.Allocator, node: u32) ![]Edge {
         self.rw.lockShared();
         const it = self.g.outEdges(node);
         const slice = it.edges; // underlying slice
-        const dup = try ally.alloc(Edge, slice.len);
+        const dup = try allocator.alloc(Edge, slice.len);
         std.mem.copy(Edge, dup, slice);
         self.rw.unlockShared();
         return dup;

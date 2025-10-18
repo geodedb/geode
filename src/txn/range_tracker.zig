@@ -18,8 +18,8 @@ pub const RangeTracker = struct {
 
     // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; OWNER=txn; UPDATED=2025-09-26
 
-    pub fn init(ally: std.mem.Allocator) RangeTracker {
-        return .{ .allocator = ally, .map = std.AutoHashMap(u64, std.ArrayList(Entry)).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) RangeTracker {
+        return .{ .allocator = allocator, .map = std.AutoHashMap(u64, std.ArrayList(Entry)).init(allocator) };
     }
 
     pub fn deinit(self: *RangeTracker) void {

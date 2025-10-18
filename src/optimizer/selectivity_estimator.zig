@@ -13,8 +13,8 @@ pub const FrequencySampler = struct {
     max_samples: usize,
     total: u64 = 0,
 
-    pub fn init(ally: std.mem.Allocator, max_samples: usize) FrequencySampler {
-        return .{ .allocator = ally, .samples = std.ArrayList(Sample).init(ally), .max_samples = max_samples };
+    pub fn init(allocator: std.mem.Allocator, max_samples: usize) FrequencySampler {
+        return .{ .allocator = allocator, .samples = std.ArrayList(Sample).init(allocator), .max_samples = max_samples };
     }
     pub fn deinit(self: *FrequencySampler) void {
         self.samples.deinit();
@@ -59,8 +59,8 @@ pub const AdaptiveEstimator = struct {
     bias_alpha: f64 = 0.2,
     correction: f64 = 1.0,
 
-    pub fn init(ally: std.mem.Allocator, cap: usize) AdaptiveEstimator {
-        return .{ .allocator = ally, .sampler = FrequencySampler.init(ally, cap) };
+    pub fn init(allocator: std.mem.Allocator, cap: usize) AdaptiveEstimator {
+        return .{ .allocator = allocator, .sampler = FrequencySampler.init(allocator, cap) };
     }
     pub fn deinit(self: *AdaptiveEstimator) void {
         self.sampler.deinit();

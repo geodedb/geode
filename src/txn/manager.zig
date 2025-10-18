@@ -94,17 +94,17 @@ pub const Manager = struct {
     // Explicit range tracker (optional until phantom prevention enabled)
     rtracker: ?range_tracker.RangeTracker = null,
 
-    pub fn init(self: *Manager, ally: std.mem.Allocator) void {
+    pub fn init(self: *Manager, allocator: std.mem.Allocator) void {
         self.* = .{
             .next_id = 1,
             .next_ts = 1,
-            .locks = std.StringHashMap(std.ArrayList(LockEntry)).init(ally),
-            .active_txns = std.AutoHashMap(TxnId, Txn).init(ally),
-            .wait_for_graph = std.AutoHashMap(TxnId, std.ArrayList(TxnId)).init(ally),
-            .conflict_matrix = ConflictMatrix.init(ally),
-            .allocator = ally,
+            .locks = std.StringHashMap(std.ArrayList(LockEntry)).init(allocator),
+            .active_txns = std.AutoHashMap(TxnId, Txn).init(allocator),
+            .wait_for_graph = std.AutoHashMap(TxnId, std.ArrayList(TxnId)).init(allocator),
+            .conflict_matrix = ConflictMatrix.init(allocator),
+            .allocator = allocator,
             .phantom_enabled = false,
-            .predicates = std.AutoHashMap(TxnId, std.ArrayList([]u8)).init(ally),
+            .predicates = std.AutoHashMap(TxnId, std.ArrayList([]u8)).init(allocator),
             .writes = .{},
             .rtracker = null,
         };
@@ -175,20 +175,20 @@ pub const Manager = struct {
         active: []TxnId,
     };
 
-    pub fn captureSnapshot(self: *Manager, ally: std.mem.Allocator) Snapshot {
+    pub fn captureSnapshot(self: *Manager, allocator: std.mem.Allocator) Snapshot {
         const snap_ts = self.next_ts - 1; // last issued timestamp is visible frontier
         var count: usize = 0;
         var iter_count = self.active_txns.iterator();
         while (iter_count.next()) |_| count += 1;
-        var arr = ally.alloc(TxnId, count) catch @panic("OOM snapshot alloc");
+        var arr = allocator.alloc(TxnId, count) catch @panic("OOM snapshot alloc");
         var iter = self.active_txns.iterator();
         var i: usize = 0;
         while (iter.next()) |entry| : (i += 1) arr[i] = entry.value_ptr.id;
         return .{ .ts = snap_ts, .active = arr };
     }
 
-    pub fn releaseSnapshot(_: *Manager, ally: std.mem.Allocator, snap: Snapshot) void {
-        ally.free(snap.active);
+    pub fn releaseSnapshot(_: *Manager, allocator: std.mem.Allocator, snap: Snapshot) void {
+        allocator.free(snap.active);
     }
 
     pub fn commit(self: *Manager, txn: *Txn) !void {
@@ -323,7 +323,7 @@ pub const Manager = struct {
     }
 
     // Enhanced lock acquisition with conflict detection
-    pub fn acquireLock(self: *Manager, key: []const u8, txn: *Txn, mode: LockMode, ally: std.mem.Allocator) !void {
+    pub fn acquireLock(self: *Manager, key: []const u8, txn: *Txn, mode: LockMode, allocator: std.mem.Allocator) !void {
         if (mode == .Exclusive) {
             if (self.advanced) |*adv| if (adv.skew) |*f| {
                 if (f.isHot(key)) return error.HotSkew;
@@ -331,7 +331,7 @@ pub const Manager = struct {
         }
         const entry = try self.locks.getOrPut(key);
         if (!entry.found_existing) {
-            entry.key_ptr.* = try ally.dupe(u8, key);
+            entry.key_ptr.* = try allocator.dupe(u8, key);
             entry.value_ptr.* = std.ArrayList(LockEntry).initCapacity(self.allocator, 0) catch @panic("OOM");
         }
 
@@ -463,13 +463,13 @@ pub const Manager = struct {
     }
 
     // Acquire exclusive write lock; conflict if different txn holds it.
-    pub fn acquireWrite(self: *Manager, key: []const u8, txn: *Txn, ally: std.mem.Allocator) !void {
-        return self.acquireLock(key, txn, .Exclusive, ally);
+    pub fn acquireWrite(self: *Manager, key: []const u8, txn: *Txn, allocator: std.mem.Allocator) !void {
+        return self.acquireLock(key, txn, .Exclusive, allocator);
     }
 
     // Acquire shared read lock
-    pub fn acquireRead(self: *Manager, key: []const u8, txn: *Txn, ally: std.mem.Allocator) !void {
-        return self.acquireLock(key, txn, .Shared, ally);
+    pub fn acquireRead(self: *Manager, key: []const u8, txn: *Txn, allocator: std.mem.Allocator) !void {
+        return self.acquireLock(key, txn, .Shared, allocator);
     }
 
     pub fn releaseWrite(self: *Manager, key: []const u8, txn: *Txn) void {
@@ -537,8 +537,8 @@ pub fn visible(chain: *const RowChain, snap: Timestamp) ?*Version {
     return null;
 }
 
-pub fn mvccInsert(ally: std.mem.Allocator, chain: *RowChain, create_ts: Timestamp, payload: []const u8) !void {
-    const v = try ally.create(Version);
+pub fn mvccInsert(allocator: std.mem.Allocator, chain: *RowChain, create_ts: Timestamp, payload: []const u8) !void {
+    const v = try allocator.create(Version);
     v.* = .{ .create_ts = create_ts, .payload = payload, .prev = chain.head };
     chain.head = v;
 }
@@ -562,9 +562,9 @@ pub fn mvccRollback(chain: *RowChain, snapshot_ts: Timestamp) void {
 
 test "mvcc visibility with delete_ts and rollback" {
     var chain: RowChain = .{};
-    const ally = std.testing.allocator;
-    try mvccInsert(ally, &chain, 5, "a");
-    try mvccInsert(ally, &chain, 7, "b");
+    const allocator = std.testing.allocator;
+    try mvccInsert(allocator, &chain, 5, "a");
+    try mvccInsert(allocator, &chain, 7, "b");
     // snapshot at ts=6 should see version create_ts=5
     try std.testing.expect(visible(&chain, 6).?.create_ts == 5);
     // delete latest at ts=8
@@ -579,7 +579,7 @@ test "mvcc visibility with delete_ts and rollback" {
     var v = chain.head;
     while (v) |cur| {
         const next = cur.prev;
-        ally.destroy(cur);
+        allocator.destroy(cur);
         v = next;
     }
 }

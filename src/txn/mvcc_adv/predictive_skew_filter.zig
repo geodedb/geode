@@ -32,8 +32,8 @@ pub const PredictiveSkewFilter = struct {
     decay_factor: f64 = 0.5, // applied per epoch of inactivity
     skew_threshold: f64 = 25.0, // frequency threshold
 
-    pub fn init(ally: std.mem.Allocator) Self {
-        return .{ .allocator = ally, .table = std.AutoHashMap(u64, Entry).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{ .allocator = allocator, .table = std.AutoHashMap(u64, Entry).init(allocator) };
     }
 
     pub fn deinit(self: *Self) void {

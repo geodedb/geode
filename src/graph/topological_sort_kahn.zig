@@ -5,9 +5,9 @@ const builders = @import("builders.zig");
 
 pub const Error = error{CycleDetected} || std.mem.Allocator.Error;
 
-pub fn sort(ally: std.mem.Allocator, g: *const builders.Graph) Error![]u32 {
+pub fn sort(allocator: std.mem.Allocator, g: *const builders.Graph) Error![]u32 {
     // Compute indegree
-    var indeg = std.AutoHashMap(u32, u32).init(ally);
+    var indeg = std.AutoHashMap(u32, u32).init(allocator);
     errdefer indeg.deinit();
     var it_nodes = g.nodes.iterator();
     while (it_nodes.next()) |entry| try indeg.put(entry.key_ptr.*, 0);
@@ -16,12 +16,12 @@ pub fn sort(ally: std.mem.Allocator, g: *const builders.Graph) Error![]u32 {
         try indeg.put(e.dst, cur + 1);
     }
     // Min-heap (actually simple array + sort each iteration acceptable small scale) of zero indegree nodes for deterministic ordering
-    var zeros = std.ArrayList(u32).init(ally);
+    var zeros = std.ArrayList(u32).init(allocator);
     errdefer zeros.deinit();
     var it_nodes2 = g.nodes.iterator();
     while (it_nodes2.next()) |entry| if ((indeg.get(entry.key_ptr.*) orelse 0) == 0) try zeros.append(entry.key_ptr.*);
     std.sort.heap(u32, zeros.items, {}, comptime std.sort.asc(u32));
-    var out = std.ArrayList(u32).init(ally);
+    var out = std.ArrayList(u32).init(allocator);
     errdefer out.deinit();
     while (zeros.items.len > 0) {
         const v = zeros.pop(); // pop largest; maintain min behavior by reverse append then sort, simpler: we popped largest, so resort

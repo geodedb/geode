@@ -21,8 +21,8 @@ pub const Graph = struct {
     // adjacency index: node -> slice range (start,end)
     index: std.AutoHashMap(u32, struct { start: usize, end: usize }),
 
-    pub fn init(ally: std.mem.Allocator) Graph {
-        return .{ .allocator = ally, .nodes = std.AutoHashMap(u32, void).init(ally), .edges = std.ArrayList(Edge).initCapacity(ally, 0) catch unreachable, .index = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) Graph {
+        return .{ .allocator = allocator, .nodes = std.AutoHashMap(u32, void).init(allocator), .edges = std.ArrayList(Edge).initCapacity(allocator, 0) catch unreachable, .index = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(allocator) };
     }
 
     pub fn deinit(self: *Graph) void {

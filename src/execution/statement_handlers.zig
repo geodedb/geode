@@ -488,10 +488,10 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
 
     // Helper to format plan operations with stack buffer (performance optimization)
     const formatPlanOp = struct {
-        fn format(ally: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![]const u8 {
+        fn format(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![]const u8 {
             var buf: [256]u8 = undefined;
             const result = try std.fmt.bufPrint(&buf, fmt, args);
-            return try ally.dupe(u8, result);
+            return try alloc.dupe(u8, result);
         }
     }.format;
 

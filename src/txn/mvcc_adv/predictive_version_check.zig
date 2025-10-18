@@ -6,8 +6,8 @@ pub const VersionSummary = struct {
     allocator: std.mem.Allocator,
     table: std.AutoHashMap(u64, u64), // key -> version id captured
 
-    pub fn init(ally: std.mem.Allocator) VersionSummary {
-        return .{ .allocator = ally, .table = std.AutoHashMap(u64, u64).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) VersionSummary {
+        return .{ .allocator = allocator, .table = std.AutoHashMap(u64, u64).init(allocator) };
     }
 
     pub fn deinit(self: *VersionSummary) void {

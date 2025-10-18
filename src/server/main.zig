@@ -508,13 +508,13 @@ var g_index_catalog_inited = false;
 var g_disable_catalog = false; // env toggle
 var g_selectivity_estimator: ?*SelectivityEstimator = null;
 
-fn initIndexCatalog(ally: std.mem.Allocator) void {
+fn initIndexCatalog(allocator: std.mem.Allocator) void {
     if (g_index_catalog_inited) return;
-    g_index_catalog_map = std.StringHashMap(IndexStats).init(ally);
+    g_index_catalog_map = std.StringHashMap(IndexStats).init(allocator);
 
     // Initialize selectivity estimator
-    const estimator = ally.create(SelectivityEstimator) catch return;
-    estimator.* = SelectivityEstimator.init(ally);
+    const estimator = allocator.create(SelectivityEstimator) catch return;
+    estimator.* = SelectivityEstimator.init(allocator);
     g_selectivity_estimator = estimator;
 
     // Seed with synthetic stats for x,y columns
@@ -530,8 +530,8 @@ fn initIndexCatalog(ally: std.mem.Allocator) void {
     g_index_catalog_inited = true;
 }
 
-fn chooseIndexForPredicate(ally: std.mem.Allocator, predicate_expr: ?*const anyopaque, has_equality: bool, est_rows: usize) ?IndexStats {
-    _ = ally; // currently unused for phase 2 stub
+fn chooseIndexForPredicate(allocator: std.mem.Allocator, predicate_expr: ?*const anyopaque, has_equality: bool, est_rows: usize) ?IndexStats {
+    _ = allocator; // currently unused for phase 2 stub
     _ = predicate_expr; // future: inspect to derive property name
     if (g_disable_catalog or !has_equality) return null;
 
@@ -629,11 +629,11 @@ fn paginationStreamScaffold(total_rows: usize, page_size: usize) bool {
     return total_rows > page_size;
 }
 
-fn initImplDefinedFlags(ally: std.mem.Allocator) void {
+fn initImplDefinedFlags(allocator: std.mem.Allocator) void {
     if (g_impl_defined_inited) return;
-    if (impl_flagger.collect(ally, .{ .zero_length_paths_excluded = true, .collation_binary_default = true, .null_order_policy_default = true })) |findings| {
+    if (impl_flagger.collect(allocator, .{ .zero_length_paths_excluded = true, .collation_binary_default = true, .null_order_policy_default = true })) |findings| {
         // Extract codes slice
-        const codes = ally.alloc([]const u8, findings.len) catch return;
+        const codes = allocator.alloc([]const u8, findings.len) catch return;
         var i: usize = 0;
         while (i < findings.len) : (i += 1) codes[i] = findings[i].code;
         g_impl_defined_codes = codes;
@@ -643,18 +643,18 @@ fn initImplDefinedFlags(ally: std.mem.Allocator) void {
     }
 }
 
-fn getOrCreateMVCCManager(ally: std.mem.Allocator) *mvcc.MVCCManager {
+fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *mvcc.MVCCManager {
     if (g_mvcc_manager) |mgr| {
         return mgr;
     }
 
-    const mgr = ally.create(mvcc.MVCCManager) catch unreachable;
-    mgr.* = mvcc.MVCCManager.init(ally);
+    const mgr = allocator.create(mvcc.MVCCManager) catch unreachable;
+    mgr.* = mvcc.MVCCManager.init(allocator);
     g_mvcc_manager = mgr;
     return mgr;
 }
 
-fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
+fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *graph_exec.GraphStorage {
     std.log.err("DEBUG: getOrCreateGraphStorage called, g_graph_storage is {s}", .{if (g_graph_storage == null) "null" else "set"});
     if (g_graph_storage) |graph| {
         std.log.err("DEBUG: Returning existing graph with {} nodes", .{graph.nodes.count()});
@@ -663,7 +663,7 @@ fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
 
     // Try to load from persistent data first if data directory is available
     if (g_data_dir) |data_dir| {
-        if (tryLoadGraphFromDir(ally, data_dir)) |loaded_graph| {
+        if (tryLoadGraphFromDir(allocator, data_dir)) |loaded_graph| {
             std.log.err("DEBUG: Loaded graph from persistent data: {} nodes, {} edges", .{ loaded_graph.nodes.count(), loaded_graph.edges.items.len });
             g_graph_storage = loaded_graph;
             return loaded_graph;
@@ -676,9 +676,9 @@ fn getOrCreateGraphStorage(ally: std.mem.Allocator) *graph_exec.GraphStorage {
     }
 
     // Create new graph and initialize with sample data if no persistent data
-    const graph = ally.create(graph_exec.GraphStorage) catch unreachable;
-    graph.* = graph_exec.GraphStorage.init(ally);
-    initializeSampleGraph(ally, graph) catch {};
+    const graph = allocator.create(graph_exec.GraphStorage) catch unreachable;
+    graph.* = graph_exec.GraphStorage.init(allocator);
+    initializeSampleGraph(allocator, graph) catch {};
     g_graph_storage = graph;
     return graph;
 }
@@ -694,19 +694,19 @@ fn getNextNodeId(graph: *graph_exec.GraphStorage) graph_exec.NodeId {
     return max_id + 1;
 }
 
-fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
-    const g = ally.create(graph_exec.GraphStorage) catch return error.OutOfMemory;
-    g.* = graph_exec.GraphStorage.init(ally);
+fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
+    const g = allocator.create(graph_exec.GraphStorage) catch return error.OutOfMemory;
+    g.* = graph_exec.GraphStorage.init(allocator);
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
     // nodes.jsonl and edges.jsonl simple line-delimited json
     if (dir.openFile("nodes.jsonl", .{})) |nf| {
         defer nf.close();
-        const content = try nf.readToEndAlloc(ally, 1024 * 1024 * 10); // 10MB max
-        defer ally.free(content);
+        const content = try nf.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
+        defer allocator.free(content);
         var lines = std.mem.tokenizeScalar(u8, content, '\n');
         while (lines.next()) |line| {
-            const parsed = std.json.parseFromSlice(std.json.Value, ally, line, .{}) catch continue;
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
             defer parsed.deinit();
             if (parsed.value != .object) continue;
             const obj = parsed.value.object;
@@ -719,12 +719,12 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
             var labels: []const []const u8 = &.{};
             if (obj.get("labels")) |lv| if (lv == .array) {
                 const arr = lv.array.items;
-                var tmp = try ally.alloc([]const u8, arr.len);
+                var tmp = try allocator.alloc([]const u8, arr.len);
                 var i: usize = 0;
                 while (i < arr.len) : (i += 1) tmp[i] = if (arr[i] == .string) arr[i].string else "";
                 labels = tmp;
             };
-            try g.addNode(ally, id, labels);
+            try g.addNode(allocator, id, labels);
             if (obj.get("properties")) |pv| {
                 if (pv == .object) {
                     var it = pv.object.iterator();
@@ -735,10 +735,10 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
                             .null => .{ .Null = {} },
                             .bool => |b| .{ .Bool = b },
                             .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = ally.dupe(u8, s) catch s },
+                            .string => |s| .{ .String = allocator.dupe(u8, s) catch s },
                             else => .{ .Null = {} },
                         };
-                        g.setNodeProperty(ally, id, key, pv2) catch {};
+                        g.setNodeProperty(allocator, id, key, pv2) catch {};
                     }
                 }
             }
@@ -746,11 +746,11 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
     } else |_| {}
     if (dir.openFile("edges.jsonl", .{})) |ef| {
         defer ef.close();
-        const content = try ef.readToEndAlloc(ally, 1024 * 1024 * 10); // 10MB max
-        defer ally.free(content);
+        const content = try ef.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
+        defer allocator.free(content);
         var lines = std.mem.tokenizeScalar(u8, content, '\n');
         while (lines.next()) |line| {
-            const parsed = std.json.parseFromSlice(std.json.Value, ally, line, .{}) catch continue;
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
             defer parsed.deinit();
             if (parsed.value != .object) continue;
             const obj = parsed.value.object;
@@ -770,7 +770,7 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
                 else => "",
             };
             if (sid == 0 or tid == 0) continue;
-            const eid = try g.addEdge(ally, sid, tid, ety);
+            const eid = try g.addEdge(allocator, sid, tid, ety);
             if (obj.get("properties")) |pv| {
                 if (pv == .object) {
                     var it = pv.object.iterator();
@@ -781,10 +781,10 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
                             .null => .{ .Null = {} },
                             .bool => |b| .{ .Bool = b },
                             .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = ally.dupe(u8, s) catch s },
+                            .string => |s| .{ .String = allocator.dupe(u8, s) catch s },
                             else => .{ .Null = {} },
                         };
-                        g.setEdgeProperty(ally, @intCast(eid), key, pv2) catch {};
+                        g.setEdgeProperty(allocator, @intCast(eid), key, pv2) catch {};
                     }
                 }
             }
@@ -793,7 +793,7 @@ fn tryLoadGraphFromDir(ally: std.mem.Allocator, dir_path: []const u8) !*graph_ex
     return g;
 }
 
-fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
+fn saveGraphToDir(allocator: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
     // Create directory with error handling
     std.fs.cwd().makePath(dir_path) catch |err| {
         std.log.warn("Failed to create directory {s}: {}", .{ dir_path, err });
@@ -801,17 +801,17 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
     };
 
     // Save nodes with comprehensive error handling
-    const nodes_path = std.mem.concat(ally, u8, &.{ dir_path, "/nodes.jsonl" }) catch {
+    const nodes_path = std.mem.concat(allocator, u8, &.{ dir_path, "/nodes.jsonl" }) catch {
         std.log.warn("Failed to allocate nodes path", .{});
         return;
     };
-    defer ally.free(nodes_path);
+    defer allocator.free(nodes_path);
 
-    var nodes_content = std.ArrayList(u8).initCapacity(ally, 0) catch {
+    var nodes_content = std.ArrayList(u8).initCapacity(allocator, 0) catch {
         std.log.warn("Failed to allocate nodes content buffer", .{});
         return;
     };
-    defer nodes_content.deinit(ally);
+    defer nodes_content.deinit(allocator);
 
     var node_count: usize = 0;
     var it = g.nodes.iterator();
@@ -825,84 +825,84 @@ fn saveGraphToDir(ally: std.mem.Allocator, g: *const graph_exec.GraphStorage, di
             break;
         }
 
-        std.fmt.format(nodes_content.writer(ally), "{{\"id\":{d},\"labels\":[", .{node.id}) catch continue;
+        std.fmt.format(nodes_content.writer(allocator), "{{\"id\":{d},\"labels\":[", .{node.id}) catch continue;
 
         // Safe label processing with validation
         if (node.labels.len > 0 and node.labels.len < 100) { // Reasonable label count limit
             for (node.labels, 0..) |label, li| {
-                if (li > 0) nodes_content.appendSlice(ally, ",") catch continue;
+                if (li > 0) nodes_content.appendSlice(allocator, ",") catch continue;
 
                 // Validate label string
                 if (label.len > 0 and label.len < 256) { // Reasonable label length
-                    std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{label}) catch {
-                        nodes_content.appendSlice(ally, "\"\"") catch continue;
+                    std.fmt.format(nodes_content.writer(allocator), "\"{s}\"", .{label}) catch {
+                        nodes_content.appendSlice(allocator, "\"\"") catch continue;
                     };
                 } else {
-                    nodes_content.appendSlice(ally, "\"\"") catch continue;
+                    nodes_content.appendSlice(allocator, "\"\"") catch continue;
                 }
             }
         }
-        nodes_content.appendSlice(ally, "],\"properties\":{") catch {};
+        nodes_content.appendSlice(allocator, "],\"properties\":{") catch {};
         var pit = node.properties.iterator();
         var firstp = true;
         while (pit.next()) |p| {
-            if (!firstp) nodes_content.appendSlice(ally, ",") catch {} else firstp = false;
+            if (!firstp) nodes_content.appendSlice(allocator, ",") catch {} else firstp = false;
             const k = p.key_ptr.*;
             const v = p.value_ptr.*;
-            std.fmt.format(nodes_content.writer(ally), "\"{s}\":", .{k}) catch {};
+            std.fmt.format(nodes_content.writer(allocator), "\"{s}\":", .{k}) catch {};
             switch (v) {
-                .Null => nodes_content.appendSlice(ally, "null") catch {},
-                .Bool => |b| std.fmt.format(nodes_content.writer(ally), "{}", .{b}) catch {},
-                .Int => |iv| std.fmt.format(nodes_content.writer(ally), "{d}", .{iv}) catch {},
-                .String => |s| std.fmt.format(nodes_content.writer(ally), "\"{s}\"", .{s}) catch {},
-                .Decimal => nodes_content.appendSlice(ally, "null") catch {},
-                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(ally), "\"[vector:{d}x{d}]\"", .{ vec.dim, vec.data.len }) catch {},
+                .Null => nodes_content.appendSlice(allocator, "null") catch {},
+                .Bool => |b| std.fmt.format(nodes_content.writer(allocator), "{}", .{b}) catch {},
+                .Int => |iv| std.fmt.format(nodes_content.writer(allocator), "{d}", .{iv}) catch {},
+                .String => |s| std.fmt.format(nodes_content.writer(allocator), "\"{s}\"", .{s}) catch {},
+                .Decimal => nodes_content.appendSlice(allocator, "null") catch {},
+                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(allocator), "\"[vector:{d}x{d}]\"", .{ vec.dim, vec.data.len }) catch {},
             }
         }
-        nodes_content.appendSlice(ally, "}}\n") catch {};
+        nodes_content.appendSlice(allocator, "}}\n") catch {};
     }
 
     std.fs.cwd().writeFile(.{ .sub_path = nodes_path, .data = nodes_content.items }) catch {};
 
     // Save edges
-    const edges_path = std.mem.concat(ally, u8, &.{ dir_path, "/edges.jsonl" }) catch return;
-    defer ally.free(edges_path);
+    const edges_path = std.mem.concat(allocator, u8, &.{ dir_path, "/edges.jsonl" }) catch return;
+    defer allocator.free(edges_path);
 
-    var edges_content = std.ArrayList(u8).initCapacity(ally, 0) catch return;
-    defer edges_content.deinit(ally);
+    var edges_content = std.ArrayList(u8).initCapacity(allocator, 0) catch return;
+    defer edges_content.deinit(allocator);
 
     var i: usize = 0;
     while (i < g.edges.items.len) : (i += 1) {
         const e = g.edges.items[i];
-        std.fmt.format(edges_content.writer(ally), "{{\"source\":{d},\"target\":{d},\"type\":\"{s}\",\"properties\":{{}}}}\n", .{ e.source, e.target, e.edge_type }) catch {};
+        std.fmt.format(edges_content.writer(allocator), "{{\"source\":{d},\"target\":{d},\"type\":\"{s}\",\"properties\":{{}}}}\n", .{ e.source, e.target, e.edge_type }) catch {};
     }
 
     std.fs.cwd().writeFile(.{ .sub_path = edges_path, .data = edges_content.items }) catch {};
 }
 
-fn initializeSampleGraph(ally: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
+fn initializeSampleGraph(allocator: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
     // Add sample nodes
-    try graph.addNode(ally, 1, &.{"Person"});
-    try graph.setNodeProperty(ally, 1, "name", .{ .String = "Alice" });
-    try graph.setNodeProperty(ally, 1, "age", .{ .Int = 30 });
+    try graph.addNode(allocator, 1, &.{"Person"});
+    try graph.setNodeProperty(allocator, 1, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 30 });
 
-    try graph.addNode(ally, 2, &.{"Person"});
-    try graph.setNodeProperty(ally, 2, "name", .{ .String = "Bob" });
-    try graph.setNodeProperty(ally, 2, "age", .{ .Int = 25 });
+    try graph.addNode(allocator, 2, &.{"Person"});
+    try graph.setNodeProperty(allocator, 2, "name", .{ .String = "Bob" });
+    try graph.setNodeProperty(allocator, 2, "age", .{ .Int = 25 });
 
-    try graph.addNode(ally, 3, &.{"Person"});
-    try graph.setNodeProperty(ally, 3, "name", .{ .String = "Charlie" });
-    try graph.setNodeProperty(ally, 3, "age", .{ .Int = 35 });
+    try graph.addNode(allocator, 3, &.{"Person"});
+    try graph.setNodeProperty(allocator, 3, "name", .{ .String = "Charlie" });
+    try graph.setNodeProperty(allocator, 3, "age", .{ .Int = 35 });
 
     // Add sample edges
-    const e1 = try graph.addEdge(ally, 1, 2, "KNOWS");
-    try graph.setEdgeProperty(ally, e1, "since", .{ .Int = 2020 });
+    const e1 = try graph.addEdge(allocator, 1, 2, "KNOWS");
+    try graph.setEdgeProperty(allocator, e1, "since", .{ .Int = 2020 });
 
-    const e2 = try graph.addEdge(ally, 2, 3, "KNOWS");
-    try graph.setEdgeProperty(ally, e2, "since", .{ .Int = 2021 });
+    const e2 = try graph.addEdge(allocator, 2, 3, "KNOWS");
+    try graph.setEdgeProperty(allocator, e2, "since", .{ .Int = 2021 });
 
-    const e3 = try graph.addEdge(ally, 1, 3, "WORKS_WITH");
-    try graph.setEdgeProperty(ally, e3, "department", .{ .String = "Engineering" });
+    const e3 = try graph.addEdge(allocator, 1, 3, "WORKS_WITH");
+    try graph.setEdgeProperty(allocator, e3, "department", .{ .String = "Engineering" });
 }
 
 fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
@@ -1053,9 +1053,9 @@ inline fn bindingValueTypeName(v: anytype) []const u8 {
 }
 
 // Serialize a single aggregation BindingValue row to JSON using provided column metadata (names only used; types informational).
-fn bindingValueRowToJson(ally: std.mem.Allocator, cols: []const protocol.SchemaCol, brow: []const exec.BindingValue) []const u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return &.{};
-    const w = buf.writer(ally);
+fn bindingValueRowToJson(allocator: std.mem.Allocator, cols: []const protocol.SchemaCol, brow: []const exec.BindingValue) []const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return &.{};
+    const w = buf.writer(allocator);
     w.writeAll("{") catch {};
     var i: usize = 0;
     while (i < cols.len and i < brow.len) : (i += 1) {
@@ -1099,16 +1099,16 @@ fn bindingValueRowToJson(ally: std.mem.Allocator, cols: []const protocol.SchemaC
         }
     }
     w.writeAll("}") catch {};
-    return buf.toOwnedSlice(ally) catch &.{};
+    return buf.toOwnedSlice(allocator) catch &.{};
 }
 
-fn writeErrorWithFlags(ally: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
+fn writeErrorWithFlags(allocator: std.mem.Allocator, out_file: std.fs.File, code: diagnostics.Code, message: []const u8, anchor: []const u8, additional: []const []const u8, has_us001_any: bool) void {
     var flags_buf: [3][]const u8 = .{ if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL, "U:OrderTiebreak=LexJSON", "U:US001/enforced" };
     const flag_slice = if (has_us001_any) flags_buf[0..3] else flags_buf[0..2];
     // Storage corruption treated as class 58000 (data exception) instead of generic 02000.
     const status_override: ?[]const u8 = if (code == .StoragePageChecksum) "58000" else null;
-    if (protocol.buildErrorLineWithFlagsCustomStatus(ally, diagnostics.codeName(code), message, anchor, additional, flag_slice, status_override)) |line| {
-        defer ally.free(line);
+    if (protocol.buildErrorLineWithFlagsCustomStatus(allocator, diagnostics.codeName(code), message, anchor, additional, flag_slice, status_override)) |line| {
+        defer allocator.free(line);
         _ = out_file.write(line) catch {};
     } else |_| {}
 }
@@ -1207,10 +1207,10 @@ fn writeJsonValue(w: anytype, v: eval.Value) !void {
     }
 }
 
-fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[][]const u8, out_rows: *[][]const eval.Value) void {
+fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_names: *[][]const u8, out_rows: *[][]const eval.Value) void {
     if (params_json == null) return;
     const src = params_json.?;
-    const parsed = std.json.parseFromSlice(std.json.Value, ally, src, .{}) catch return;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, src, .{}) catch return;
     defer parsed.deinit();
     if (parsed.value != .object) return;
     var it = parsed.value.object.iterator();
@@ -1221,10 +1221,10 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
         if (val != .array) return;
         const arr = val.array.items;
         // Empty array -> zero rows (handled by caller when constructing row pages)
-        var names = ally.alloc([]const u8, 1) catch return;
-        names[0] = ally.dupe(u8, key) catch key;
+        var names = allocator.alloc([]const u8, 1) catch return;
+        names[0] = allocator.dupe(u8, key) catch key;
         // Collect raw scalar values first
-        var rows = ally.alloc(eval.Value, arr.len) catch return;
+        var rows = allocator.alloc(eval.Value, arr.len) catch return;
         var i: usize = 0;
         while (i < arr.len) : (i += 1) {
             const v = arr[i];
@@ -1242,16 +1242,16 @@ fn parseParams(ally: std.mem.Allocator, params_json: ?[]const u8, out_names: *[]
         out_names.* = names;
         // Wrap each into a single-column row matrix later during evaluation
         // We'll store as param vector values, not full rows yet.
-        out_rows.* = ally.alloc([]const eval.Value, rows.len) catch return;
+        out_rows.* = allocator.alloc([]const eval.Value, rows.len) catch return;
         var j: usize = 0;
         while (j < rows.len) : (j += 1) out_rows.*[j] = rows[j .. j + 1];
     }
 }
 
-fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool, setop_kind: ?[]const u8 }) []const u8 {
+fn buildExplainJson(allocator: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool, setop_kind: ?[]const u8 }) []const u8 {
     // Canonical pipeline order with monotonic id: Project(0), Distinct(1), Sort(2), Offset(3), Limit(4), SetOpUnion(5)
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return "{\"logical\":[]}";
-    const w = buf.writer(ally);
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return "{\"logical\":[]}";
+    const w = buf.writer(allocator);
     w.writeAll("{\"profile_version\":2,\"logical\":[") catch {};
     var id: usize = 0;
     // Project always present first
@@ -1322,7 +1322,7 @@ fn buildExplainJson(ally: std.mem.Allocator, params: struct { ordered: bool, lim
         w.writeAll("\"distinct\":true") catch {};
     }
     w.writeAll("}}") catch {}; // Close properties object and outer JSON object
-    return buf.toOwnedSlice(ally) catch "{\"logical\":[]}";
+    return buf.toOwnedSlice(allocator) catch "{\"logical\":[]}";
 }
 
 // Custom bindings writer: include final flag only if (has_params or multi_page_needed or explicit pagination triggered)
@@ -1408,9 +1408,9 @@ const StageTimings = struct {
 // TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
 
 // Value-based canonical key: encodes row values directly to avoid JSON reparsing.
-fn canonicalValuesKey(ally: std.mem.Allocator, vals: []const eval.Value) []const u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return &.{};
-    const w = buf.writer(ally);
+fn canonicalValuesKey(allocator: std.mem.Allocator, vals: []const eval.Value) []const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return &.{};
+    const w = buf.writer(allocator);
     var i: usize = 0;
     while (i < vals.len) : (i += 1) {
         if (i > 0) w.writeAll("|") catch {};
@@ -1440,16 +1440,16 @@ fn canonicalValuesKey(ally: std.mem.Allocator, vals: []const eval.Value) []const
             },
         }
     }
-    return buf.toOwnedSlice(ally) catch &.{};
+    return buf.toOwnedSlice(allocator) catch &.{};
 }
 
 // Build canonical key for a row JSON string so that numerically equal values with different scales map identically.
-fn canonicalRowKey(ally: std.mem.Allocator, row: []const u8) []const u8 {
+fn canonicalRowKey(allocator: std.mem.Allocator, row: []const u8) []const u8 {
     if (row.len < 2) return row; // fallback
     var idx: usize = 0;
     if (row[idx] == '{') idx += 1;
-    var key_buf = std.ArrayList(u8).initCapacity(ally, 0) catch return row;
-    const w = key_buf.writer(ally);
+    var key_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return row;
+    const w = key_buf.writer(allocator);
     var field_i: usize = 0;
     while (idx < row.len) : (idx += 1) {
         while (idx < row.len and (row[idx] == ' ' or row[idx] == ',')) idx += 1;
@@ -1543,12 +1543,12 @@ fn canonicalRowKey(ally: std.mem.Allocator, row: []const u8) []const u8 {
             continue;
         }
     }
-    return key_buf.toOwnedSlice(ally) catch row;
+    return key_buf.toOwnedSlice(allocator) catch row;
 }
 
-fn buildAdditionalStatusesAlloc(ally: std.mem.Allocator, codes: []const diagnostics.Code, primary: diagnostics.Code) []const []const u8 {
+fn buildAdditionalStatusesAlloc(allocator: std.mem.Allocator, codes: []const diagnostics.Code, primary: diagnostics.Code) []const []const u8 {
     if (codes.len <= 1) return &.{};
-    var extras = ally.alloc([]const u8, codes.len - 1) catch return &.{};
+    var extras = allocator.alloc([]const u8, codes.len - 1) catch return &.{};
     var ei: usize = 0;
     var i: usize = 0;
     while (i < codes.len) : (i += 1) {
@@ -1560,42 +1560,42 @@ fn buildAdditionalStatusesAlloc(ally: std.mem.Allocator, codes: []const diagnost
 }
 
 // Shared DISTINCT dedup helper: mutates rows_json in-place, frees removed row value slices when provided.
-fn distinctDedup(ally: std.mem.Allocator, have_values: bool, value_arity: usize, rows_json: *std.ArrayList([]const u8), rows_values: *std.ArrayList([]const eval.Value), out_hash_size: ?*usize) void {
-    var seen = std.StringHashMap(void).init(ally);
+fn distinctDedup(allocator: std.mem.Allocator, have_values: bool, value_arity: usize, rows_json: *std.ArrayList([]const u8), rows_values: *std.ArrayList([]const eval.Value), out_hash_size: ?*usize) void {
+    var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
-    var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return;
-    defer out_rows.deinit(ally);
-    var out_values = if (have_values) std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return else std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return;
-    defer out_values.deinit(ally);
-    var alloc_keys = std.ArrayList([]const u8).initCapacity(ally, 0) catch return;
+    var out_rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return;
+    defer out_rows.deinit(allocator);
+    var out_values = if (have_values) std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return else std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return;
+    defer out_values.deinit(allocator);
+    var alloc_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return;
     defer {
-        for (alloc_keys.items) |k| ally.free(k);
-        alloc_keys.deinit(ally);
+        for (alloc_keys.items) |k| allocator.free(k);
+        alloc_keys.deinit(allocator);
     }
     var idx: usize = 0;
     while (idx < rows_json.items.len) : (idx += 1) {
         const row = rows_json.items[idx];
-        const key = if (have_values and idx < rows_values.items.len) canonicalValuesKey(ally, rows_values.items[idx][0..value_arity]) else canonicalRowKey(ally, row);
+        const key = if (have_values and idx < rows_values.items.len) canonicalValuesKey(allocator, rows_values.items[idx][0..value_arity]) else canonicalRowKey(allocator, row);
         if (!seen.contains(key)) {
             seen.put(key, {}) catch {};
-            out_rows.append(ally, row) catch {};
-            if (have_values and idx < rows_values.items.len) out_values.append(ally, rows_values.items[idx]) catch {};
-            if (key.ptr != row.ptr) alloc_keys.append(ally, key) catch {};
+            out_rows.append(allocator, row) catch {};
+            if (have_values and idx < rows_values.items.len) out_values.append(allocator, rows_values.items[idx]) catch {};
+            if (key.ptr != row.ptr) alloc_keys.append(allocator, key) catch {};
         } else {
-            ally.free(row);
-            ally.free(key);
-            if (have_values and idx < rows_values.items.len) ally.free(rows_values.items[idx]);
+            allocator.free(row);
+            allocator.free(key);
+            if (have_values and idx < rows_values.items.len) allocator.free(rows_values.items[idx]);
         }
     }
     const unique = seen.count();
     rows_json.clearRetainingCapacity();
-    for (out_rows.items) |r| rows_json.append(ally, r) catch {};
+    for (out_rows.items) |r| rows_json.append(allocator, r) catch {};
     if (out_hash_size) |p| p.* = unique;
     if (have_values) {
         // Replace original rows_values with compacted out_values (ownership of slices moves as-is)
-        for (rows_values.items) |v| ally.free(v);
+        for (rows_values.items) |v| allocator.free(v);
         rows_values.clearRetainingCapacity();
-        for (out_values.items) |v| rows_values.append(ally, v) catch {};
+        for (out_values.items) |v| rows_values.append(allocator, v) catch {};
     }
 }
 
@@ -1630,29 +1630,29 @@ fn handleCdcControl(gpa: std.mem.Allocator, state: *ServerState, action: []const
     }
 }
 
-fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code, alloc_tracker: ?AllocTracker) ![][]const u8 {
+fn evaluateSimpleQuery(allocator: std.mem.Allocator, q: geode.ast.Query, param_names: [][]const u8, param_matrix: [][]const eval.Value, ordered_meta: *bool, order_keys: *[][]const u8, cols_out: *[]const protocol.SchemaCol, timings: ?*StageTimings, eval_diag: ?*diagnostics.Code, alloc_tracker: ?AllocTracker) ![][]const u8 {
     // Check if this is a MATCH query
     if (q.match.chains.len > 0) {
         // Initialize graph storage (for now, use a global singleton)
         // In production, this would be loaded from persistent storage
-        const graph = getOrCreateGraphStorage(ally);
+        const graph = getOrCreateGraphStorage(allocator);
 
         // Execute MATCH pattern
         // Read environment overrides for MATCH guard limits (deterministic test triggering of ExecutionGuardTrip)
         var m_opts = graph_exec.MatchOptions{};
         if (g_match_max_results_override) |ovr| m_opts.max_results = ovr;
         if (g_match_max_frontier_override) |ovf| m_opts.max_frontier = ovf;
-        if (std.process.getEnvVarOwned(ally, "GEODE_MATCH_MAX_RESULTS")) |mv| {
-            defer ally.free(mv);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_MATCH_MAX_RESULTS")) |mv| {
+            defer allocator.free(mv);
             const parsed = std.fmt.parseInt(usize, mv, 10) catch null;
             if (parsed) |p| m_opts.max_results = p;
         } else |_| {}
-        if (std.process.getEnvVarOwned(ally, "GEODE_MATCH_MAX_FRONTIER")) |fv| {
-            defer ally.free(fv);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_MATCH_MAX_FRONTIER")) |fv| {
+            defer allocator.free(fv);
             const parsedf = std.fmt.parseInt(usize, fv, 10) catch null;
             if (parsedf) |pf| m_opts.max_frontier = pf;
         } else |_| {}
-        var bindings = try graph_exec.executeMatch(ally, graph, &q, q.where_clause, m_opts, eval_diag, null);
+        var bindings = try graph_exec.executeMatch(allocator, graph, &q, q.where_clause, m_opts, eval_diag, null);
 
         // Check if the query has aggregation functions
         var has_aggregation = false;
@@ -1666,12 +1666,12 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         // If aggregation is detected, handle it directly
         if (has_aggregation) {
             // Create a single aggregated result
-            var agg_binding = graph_exec.Binding.init(ally);
+            var agg_binding = graph_exec.Binding.init(allocator);
 
             // Process each return item
             for (q.ret.items, 0..) |item, i| {
                 const alias = item.alias orelse blk_al: {
-                    const tmp = geode.printer.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
+                    const tmp = geode.printer.stringifyExprAlloc(allocator, item.expr, .{}) catch "col";
                     break :blk_al tmp;
                 };
 
@@ -1717,14 +1717,14 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             }
 
             // Replace bindings with single aggregated result
-            var agg_bindings = try ally.alloc(graph_exec.Binding, 1);
+            var agg_bindings = try allocator.alloc(graph_exec.Binding, 1);
             agg_bindings[0] = agg_binding;
             bindings = agg_bindings;
         }
 
         // Apply WITH clause if present
         if (q.with_clause) |with_clause| {
-            bindings = try graph_exec.executeWith(ally, bindings, with_clause, q.where_clause, graph);
+            bindings = try graph_exec.executeWith(allocator, bindings, with_clause, q.where_clause, graph);
         }
 
         // Apply SET clauses if present
@@ -1735,14 +1735,14 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     if (binding.vars.get(set_clause.target.object)) |obj| {
                         // Evaluate the expression as a simple value for now
                         // In the future, this should evaluate in the context of the binding
-                        const prop_val = try evalExprToPropertyValue(ally, set_clause.value);
+                        const prop_val = try evalExprToPropertyValue(allocator, set_clause.value);
 
                         switch (obj) {
                             .Node => |node| {
-                                try graph.setNodeProperty(ally, node.id, set_clause.target.property, prop_val);
+                                try graph.setNodeProperty(allocator, node.id, set_clause.target.property, prop_val);
                             },
                             .Edge => |edge| {
-                                try graph.setEdgeProperty(ally, edge.id, set_clause.target.property, prop_val);
+                                try graph.setEdgeProperty(allocator, edge.id, set_clause.target.property, prop_val);
                             },
                             else => {},
                         }
@@ -1772,10 +1772,10 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         }
 
         // Build column metadata (names inferred from RETURN items; types set to MIXED placeholder)
-        var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
+        var cols = try allocator.alloc(protocol.SchemaCol, q.ret.items.len);
         for (q.ret.items, 0..) |item, i| {
             const alias = item.alias orelse blk_al: {
-                const tmp = geode.printer.stringifyExprAlloc(ally, item.expr, .{}) catch "col";
+                const tmp = geode.printer.stringifyExprAlloc(allocator, item.expr, .{}) catch "col";
                 break :blk_al tmp;
             };
             cols[i] = .{ .name = alias, .type = "MIXED" };
@@ -1797,8 +1797,8 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         };
 
         // Prepare per-row VALUEs for ORDER BY/DISTINCT evaluation
-        var rows_values = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
-        defer rows_values.deinit(ally);
+        var rows_values = std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        defer rows_values.deinit(allocator);
 
         // Helper: evaluate a single return expression in binding context to eval.Value for ordering/aggregation
         const EvalInBinding = struct {
@@ -1853,48 +1853,48 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         // Precompute row values for all bindings
         var bi: usize = 0;
         while (bi < bindings.len) : (bi += 1) {
-            var rvals = try ally.alloc(eval.Value, q.ret.items.len);
+            var rvals = try allocator.alloc(eval.Value, q.ret.items.len);
             var ci2: usize = 0;
             while (ci2 < q.ret.items.len) : (ci2 += 1) {
-                rvals[ci2] = EvalInBinding.evalRet(ally, &bindings[bi], q.ret.items[ci2], graph);
+                rvals[ci2] = EvalInBinding.evalRet(allocator, &bindings[bi], q.ret.items[ci2], graph);
             }
-            rows_values.append(ally, rvals) catch {};
+            rows_values.append(allocator, rvals) catch {};
         }
 
         // Deterministic base ordering (before DISTINCT) using graph binding structural comparator
-        graph_exec.sortBindingsDeterministic(ally, bindings);
+        graph_exec.sortBindingsDeterministic(allocator, bindings);
 
         // DISTINCT stage for MATCH: deduplicate projected rows based on value semantics
         if (q.ret.distinct and rows_values.items.len > 1) {
-            var seen = std.StringHashMap(void).init(ally);
+            var seen = std.StringHashMap(void).init(allocator);
             defer seen.deinit();
-            var kept_bindings = std.ArrayList(graph_exec.Binding).initCapacity(ally, 0) catch return error.OutOfMemory;
-            defer kept_bindings.deinit(ally);
-            var kept_values = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
-            defer kept_values.deinit(ally);
+            var kept_bindings = std.ArrayList(graph_exec.Binding).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            defer kept_bindings.deinit(allocator);
+            var kept_values = std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            defer kept_values.deinit(allocator);
             var i_dist: usize = 0;
             while (i_dist < rows_values.items.len and i_dist < bindings.len) : (i_dist += 1) {
                 const vals = rows_values.items[i_dist];
-                const key = canonicalValuesKey(ally, vals[0..q.ret.items.len]);
+                const key = canonicalValuesKey(allocator, vals[0..q.ret.items.len]);
                 if (!seen.contains(key)) {
                     seen.put(key, {}) catch {};
                     // keep this binding and its values
-                    kept_bindings.append(ally, bindings[i_dist]) catch {};
-                    kept_values.append(ally, vals) catch {};
+                    kept_bindings.append(allocator, bindings[i_dist]) catch {};
+                    kept_values.append(allocator, vals) catch {};
                 } else {
                     // drop duplicate row: free value slice and key if separately allocated
-                    ally.free(vals);
-                    ally.free(key);
+                    allocator.free(vals);
+                    allocator.free(key);
                 }
             }
             // Replace arrays; note: bindings contents were moved by value; subsequent code will not use old slice
-            bindings = kept_bindings.toOwnedSlice(ally) catch bindings;
+            bindings = kept_bindings.toOwnedSlice(allocator) catch bindings;
             // rows_values: clear and move kept_values
             // Free any remaining unreferenced value slices
             var jv: usize = i_dist;
-            while (jv < rows_values.items.len) : (jv += 1) ally.free(rows_values.items[jv]);
+            while (jv < rows_values.items.len) : (jv += 1) allocator.free(rows_values.items[jv]);
             rows_values.clearRetainingCapacity();
-            for (kept_values.items) |rv| rows_values.append(ally, rv) catch {};
+            for (kept_values.items) |rv| rows_values.append(allocator, rv) catch {};
         }
 
         // ORDER BY
@@ -1903,25 +1903,25 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         if (q.order_by) |ob| {
             ordered_now = true;
             // Build col index map
-            var col_index = std.StringHashMap(usize).init(ally);
+            var col_index = std.StringHashMap(usize).init(allocator);
             defer col_index.deinit();
             var ci_map: usize = 0;
             while (ci_map < cols.len) : (ci_map += 1) {
                 col_index.put(cols[ci_map].name, ci_map) catch {};
             }
             // Build list of key names for metadata
-            order_keys_local = try ally.alloc([]const u8, ob.keys.len);
+            order_keys_local = try allocator.alloc([]const u8, ob.keys.len);
             var okm: usize = 0;
             while (okm < ob.keys.len) : (okm += 1) {
-                const s = geode.printer.stringifyExprAlloc(ally, ob.keys[okm].expr, .{}) catch "k";
+                const s = geode.printer.stringifyExprAlloc(allocator, ob.keys[okm].expr, .{}) catch "k";
                 order_keys_local[okm] = s;
             }
             // Precompute key matrix from rows_values by alias position
             const KeyKind = enum { Null, Int, Dec, Str };
             const KeyVal = struct { kind: KeyKind, mantissa: i128 = 0, scale: u8 = 0, str: []const u8 = &.{} };
             const key_count = ob.keys.len;
-            var key_matrix: []KeyVal = ally.alloc(KeyVal, bindings.len * key_count) catch &.{};
-            defer if (key_matrix.len != 0) ally.free(key_matrix);
+            var key_matrix: []KeyVal = allocator.alloc(KeyVal, bindings.len * key_count) catch &.{};
+            defer if (key_matrix.len != 0) allocator.free(key_matrix);
             var ri_k: usize = 0;
             while (ri_k < bindings.len) : (ri_k += 1) {
                 var ki: usize = 0;
@@ -1946,7 +1946,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                 }
             }
             // Sort indices based on key_matrix; tie-break by rendered JSON row lexicographically
-            const idx = ally.alloc(usize, bindings.len) catch null;
+            const idx = allocator.alloc(usize, bindings.len) catch null;
             if (idx) |indices| {
                 var fi: usize = 0;
                 while (fi < indices.len) : (fi += 1) indices[fi] = fi;
@@ -1955,12 +1955,12 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     key_count: usize,
                     ob: *const @TypeOf(ob),
                     // Lazily rendered for tie-break only
-                    ally: std.mem.Allocator,
+                    allocator: std.mem.Allocator,
                     g: *const graph_exec.GraphStorage,
                     ret_items: []const geode.ast.ReturnItem,
                     binds: []const graph_exec.Binding,
                 };
-                std.sort.block(usize, indices, Ctx{ .keys = key_matrix, .key_count = key_count, .ob = &ob, .ally = ally, .g = graph, .ret_items = q.ret.items, .binds = bindings }, struct {
+                std.sort.block(usize, indices, Ctx{ .keys = key_matrix, .key_count = key_count, .ob = &ob, .allocator = allocator, .g = graph, .ret_items = q.ret.items, .binds = bindings }, struct {
                     fn less(c: Ctx, a: usize, b: usize) bool {
                         var ki2: usize = 0;
                         while (ki2 < c.ob.keys.len) : (ki2 += 1) {
@@ -2018,23 +2018,23 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                             if (ord != 0) return if (key_expr.desc) ord > 0 else ord < 0;
                         }
                         // Tie-break: render both rows and compare bytes
-                        const ra = graph_exec.bindingsToJson(c.ally, c.binds[a .. a + 1], c.ret_items, c.g) catch &.{};
-                        const rb = graph_exec.bindingsToJson(c.ally, c.binds[b .. b + 1], c.ret_items, c.g) catch &.{};
+                        const ra = graph_exec.bindingsToJson(c.allocator, c.binds[a .. a + 1], c.ret_items, c.g) catch &.{};
+                        const rb = graph_exec.bindingsToJson(c.allocator, c.binds[b .. b + 1], c.ret_items, c.g) catch &.{};
                         // Free the JSON strings
-                        defer if (ra.len > 0) c.ally.free(ra);
-                        defer if (rb.len > 0) c.ally.free(rb);
+                        defer if (ra.len > 0) c.allocator.free(ra);
+                        defer if (rb.len > 0) c.allocator.free(rb);
                         const sa: []const u8 = ra;
                         const sb: []const u8 = rb;
                         return std.mem.lessThan(u8, sa, sb);
                     }
                 }.less);
                 // Apply permutation to bindings (so we can render in order)
-                var ordered_bind = std.ArrayList(graph_exec.Binding).initCapacity(ally, bindings.len) catch return error.OutOfMemory;
-                defer ordered_bind.deinit(ally);
+                var ordered_bind = std.ArrayList(graph_exec.Binding).initCapacity(allocator, bindings.len) catch return error.OutOfMemory;
+                defer ordered_bind.deinit(allocator);
                 var oi: usize = 0;
-                while (oi < indices.len) : (oi += 1) ordered_bind.append(ally, try bindings[indices[oi]].clone(ally)) catch {};
-                bindings = ordered_bind.toOwnedSlice(ally) catch bindings;
-                ally.free(indices);
+                while (oi < indices.len) : (oi += 1) ordered_bind.append(allocator, try bindings[indices[oi]].clone(allocator)) catch {};
+                bindings = ordered_bind.toOwnedSlice(allocator) catch bindings;
+                allocator.free(indices);
             }
         }
 
@@ -2051,10 +2051,10 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         order_keys.* = order_keys_local;
 
         // Render the final selected slice
-        const json_result = try graph_exec.bindingsToJson(ally, bindings[start..end], q.ret.items, graph);
+        const json_result = try graph_exec.bindingsToJson(allocator, bindings[start..end], q.ret.items, graph);
 
         // Convert single JSON string to array of strings
-        var result_array = try ally.alloc([]const u8, 1);
+        var result_array = try allocator.alloc([]const u8, 1);
         result_array[0] = json_result;
 
         // If a guard trip diagnostic occurred, mark eval_diag (already set upstream) and return rows.
@@ -2063,41 +2063,41 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
 
     // Original implementation for non-MATCH queries
     // Build rows
-    var cols = try ally.alloc(protocol.SchemaCol, q.ret.items.len);
-    var rows_json = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer rows_json.deinit(ally);
+    var cols = try allocator.alloc(protocol.SchemaCol, q.ret.items.len);
+    var rows_json = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer rows_json.deinit(allocator);
 
     // Structured row arena (phase 1): only enabled when DISTINCT required so we can build canonical keys without reparsing JSON.
     const need_row_values = q.ret.distinct or (q.order_by != null); // future: GROUP BY, aggregation
-    var rows_values = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch unreachable; // flattened; each slice length = q.ret.items.len
-    defer if (need_row_values) rows_values.deinit(ally) else rows_values.deinit(ally); // always deinit; capacity small in tests.
+    var rows_values = std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch unreachable; // flattened; each slice length = q.ret.items.len
+    defer if (need_row_values) rows_values.deinit(allocator) else rows_values.deinit(allocator); // always deinit; capacity small in tests.
 
     const t_start = if (timings) |_| std.time.nanoTimestamp() else 0;
 
     const has_params = param_matrix.len > 0;
     const num_rows = if (has_params) param_matrix.len else 1;
     // Capture per-row evaluation environments for later ORDER BY key evaluation.
-    var envs = try ally.alloc(eval.Env, num_rows);
+    var envs = try allocator.alloc(eval.Env, num_rows);
     var r: usize = 0;
     while (r < num_rows) : (r += 1) {
         const env: eval.Env = if (has_params) .{ .names = param_names, .values = param_matrix[r] } else .{ .names = &.{}, .values = &.{} };
         envs[r] = env;
         // Build JSON row
-        var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-        const w = buf.writer(ally);
+        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        const w = buf.writer(allocator);
         w.writeAll("{") catch {};
         var j: usize = 0;
         var row_vals: []eval.Value = &.{};
         if (need_row_values and q.ret.items.len > 0) {
-            row_vals = try ally.alloc(eval.Value, q.ret.items.len);
+            row_vals = try allocator.alloc(eval.Value, q.ret.items.len);
         }
         while (j < q.ret.items.len) : (j += 1) {
             const it = q.ret.items[j];
             const alias = it.alias orelse blk: {
-                const tmp = geode.printer.stringifyExprAlloc(ally, it.expr, .{}) catch "col";
+                const tmp = geode.printer.stringifyExprAlloc(allocator, it.expr, .{}) catch "col";
                 break :blk tmp;
             };
-            const val = eval.evalExpr(ally, it.expr, env) catch |e| blk_evalerr: {
+            const val = eval.evalExpr(allocator, it.expr, env) catch |e| blk_evalerr: {
                 if (eval_diag) |ed| {
                     if (diagnostics.mapEvalError(e)) |c| ed.* = c;
                 }
@@ -2119,8 +2119,8 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             if (need_row_values) row_vals[j] = val;
         }
         w.writeAll("}") catch {};
-        rows_json.append(ally, buf.toOwnedSlice(ally) catch "{}") catch {};
-        if (need_row_values) rows_values.append(ally, row_vals) catch {};
+        rows_json.append(allocator, buf.toOwnedSlice(allocator) catch "{}") catch {};
+        if (need_row_values) rows_values.append(allocator, row_vals) catch {};
     }
 
     if (timings) |tptr| {
@@ -2140,7 +2140,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     }
 
     // Build column name -> index map (for ORDER BY identifier key fast path)
-    var col_index = std.StringHashMap(usize).init(ally);
+    var col_index = std.StringHashMap(usize).init(allocator);
     defer col_index.deinit();
     var ci: usize = 0;
     while (ci < q.ret.items.len) : (ci += 1) {
@@ -2152,7 +2152,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     // alloc_after_project no longer needed (per-stage deltas captured via net_after_* fields)
     if (q.ret.distinct and rows_json.items.len > 1) {
         const t_d_start = if (timings) |_| std.time.nanoTimestamp() else 0;
-        distinctDedup(ally, need_row_values, q.ret.items.len, &rows_json, &rows_values, null);
+        distinctDedup(allocator, need_row_values, q.ret.items.len, &rows_json, &rows_values, null);
         if (timings) |tptr| {
             tptr.distinct_ns = std.time.nanoTimestamp() - t_d_start;
             tptr.distinct_rows_in = tptr.project_rows_out;
@@ -2175,10 +2175,10 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     if (q.order_by) |ob| {
         ordered_meta.* = true;
         if (ob.keys.len > 0) {
-            order_keys.* = try ally.alloc([]const u8, ob.keys.len);
+            order_keys.* = try allocator.alloc([]const u8, ob.keys.len);
             var ok: usize = 0;
             while (ok < ob.keys.len) : (ok += 1) {
-                const s = geode.printer.stringifyExprAlloc(ally, ob.keys[ok].expr, .{}) catch "k";
+                const s = geode.printer.stringifyExprAlloc(allocator, ob.keys[ok].expr, .{}) catch "k";
                 order_keys.*[ok] = s;
             }
         }
@@ -2188,8 +2188,8 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             const KeyVal = struct { kind: KeyKind, mantissa: i128 = 0, scale: u8 = 0, str: []const u8 = &.{} };
             // Flattened matrix: row-major [row * key_count + key]
             const key_count = ob.keys.len;
-            var key_matrix: []KeyVal = ally.alloc(KeyVal, rows_json.items.len * key_count) catch &.{};
-            defer if (key_matrix.len != 0) ally.free(key_matrix);
+            var key_matrix: []KeyVal = allocator.alloc(KeyVal, rows_json.items.len * key_count) catch &.{};
+            defer if (key_matrix.len != 0) allocator.free(key_matrix);
             // For each row, re-evaluate each ORDER BY expression in the same environment used originally.
             // NOTE: For correctness with aliases/ordinals, planner already validated keys are simple identifiers/ordinals.
             var row_index: usize = 0;
@@ -2206,10 +2206,10 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                                 if (colpos < rv.len) val = rv[colpos];
                             }
                         } else {
-                            val = eval.evalExpr(ally, key_expr, envs[row_index]) catch eval.Value{ .Null = {} };
+                            val = eval.evalExpr(allocator, key_expr, envs[row_index]) catch eval.Value{ .Null = {} };
                         }
                     } else {
-                        val = eval.evalExpr(ally, key_expr, envs[row_index]) catch eval.Value{ .Null = {} };
+                        val = eval.evalExpr(allocator, key_expr, envs[row_index]) catch eval.Value{ .Null = {} };
                     }
                     const slot_index = row_index * key_count + key_i;
                     key_matrix[slot_index] = switch (val) {
@@ -2267,7 +2267,7 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
             // an O(n) scan to map slice->row index for every comparator call), sort a parallel
             // index array referencing precomputed key values. This drops comparator cost from
             // O(k * (n scan)) to O(k) where k = number of ORDER BY keys.
-            const maybe_indices = ally.alloc(usize, rows_json.items.len) catch null; // on OOM skip ordering optimization
+            const maybe_indices = allocator.alloc(usize, rows_json.items.len) catch null; // on OOM skip ordering optimization
             if (maybe_indices) |indices| {
                 var fi: usize = 0;
                 while (fi < indices.len) : (fi += 1) indices[fi] = fi;
@@ -2328,19 +2328,19 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
                     }
                 }.less);
                 // Apply permutation to rows_json in new order.
-                var new_rows_opt: ?std.ArrayList([]const u8) = std.ArrayList([]const u8).initCapacity(ally, rows_json.items.len) catch null;
+                var new_rows_opt: ?std.ArrayList([]const u8) = std.ArrayList([]const u8).initCapacity(allocator, rows_json.items.len) catch null;
                 if (new_rows_opt) |*new_rows| {
                     var oi: usize = 0;
-                    while (oi < indices.len) : (oi += 1) new_rows.append(ally, rows_json.items[indices[oi]]) catch {};
+                    while (oi < indices.len) : (oi += 1) new_rows.append(allocator, rows_json.items[indices[oi]]) catch {};
                     // Free old backing store but not individual row slices (still referenced).
-                    ally.free(rows_json.items);
+                    allocator.free(rows_json.items);
                     rows_json.items = new_rows.items;
                     rows_json.capacity = new_rows.capacity;
                     // Prevent double free by disarming new_rows (we transferred ownership).
                     new_rows.items = &[_][]const u8{};
                     new_rows.capacity = 0;
                 }
-                ally.free(indices);
+                allocator.free(indices);
             }
             if (timings) |tptr| {
                 tptr.sort_ns = std.time.nanoTimestamp() - t_sort_start;
@@ -2422,15 +2422,15 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
         }
     }
     if (start != 0 or end != rows_json.items.len) {
-        var slice_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch unreachable;
-        defer slice_rows.deinit(ally);
+        var slice_rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        defer slice_rows.deinit(allocator);
         var start_i: usize = start;
-        while (start_i < end) : (start_i += 1) slice_rows.append(ally, rows_json.items[start_i]) catch {};
+        while (start_i < end) : (start_i += 1) slice_rows.append(allocator, rows_json.items[start_i]) catch {};
         // Free skipped rows
         var skip_i: usize = 0;
-        while (skip_i < rows_json.items.len) : (skip_i += 1) if (skip_i < start or skip_i >= end) ally.free(rows_json.items[skip_i]);
+        while (skip_i < rows_json.items.len) : (skip_i += 1) if (skip_i < start or skip_i >= end) allocator.free(rows_json.items[skip_i]);
         rows_json.clearRetainingCapacity();
-        for (slice_rows.items) |s| rows_json.append(ally, s) catch {};
+        for (slice_rows.items) |s| rows_json.append(allocator, s) catch {};
     }
 
     // If some phases not executed, propagate previous row counts for clarity
@@ -2458,20 +2458,20 @@ fn evaluateSimpleQuery(ally: std.mem.Allocator, q: geode.ast.Query, param_names:
     }
 
     cols_out.* = cols;
-    return rows_json.toOwnedSlice(ally) catch &.{};
+    return rows_json.toOwnedSlice(allocator) catch &.{};
 }
 
-fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: [][]const u8, param_matrix: [][]const eval.Value, union_mode_out: *[]const u8, metrics: *UnionMetrics) ![][]const u8 {
+fn evaluateUnion(allocator: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: [][]const u8, param_matrix: [][]const eval.Value, union_mode_out: *[]const u8, metrics: *UnionMetrics) ![][]const u8 {
     // Evaluate first component as simple query without ORDER/LIMIT (applied externally if needed)
     var dummy_cols: []const protocol.SchemaCol = &.{};
     var ordered: bool = false;
     var order_keys: [][]const u8 = &.{};
-    var result_rows = try evaluateSimpleQuery(ally, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null, null);
+    var result_rows = try evaluateSimpleQuery(allocator, u.first, param_names, param_matrix, &ordered, &order_keys, &dummy_cols, null, null, null);
     metrics.left_in = result_rows.len;
 
     // Import advanced set operations
     const union_advanced = @import("union_advanced.zig");
-    var set_ops = union_advanced.SetOperations.init(ally);
+    var set_ops = union_advanced.SetOperations.init(allocator);
 
     var any_all = false;
     var total_tail: usize = 0;
@@ -2482,29 +2482,29 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         var oc: []const protocol.SchemaCol = &.{};
         ordered = false;
         order_keys = &.{};
-        const right_rows = try evaluateSimpleQuery(ally, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null, null);
+        const right_rows = try evaluateSimpleQuery(allocator, part.query, param_names, param_matrix, &ordered, &order_keys, &oc, null, null, null);
         total_tail += right_rows.len;
 
         // Apply the appropriate set operation
         const new_result = switch (part.operation) {
             .union_op => blk: {
                 // Traditional UNION logic
-                var all_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-                defer all_rows.deinit(ally);
+                var all_rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+                defer all_rows.deinit(allocator);
 
-                for (result_rows) |r| all_rows.append(ally, r) catch {};
-                for (right_rows) |r| all_rows.append(ally, r) catch {};
+                for (result_rows) |r| all_rows.append(allocator, r) catch {};
+                for (right_rows) |r| all_rows.append(allocator, r) catch {};
 
                 if (part.all) {
-                    break :blk try all_rows.toOwnedSlice(ally);
+                    break :blk try all_rows.toOwnedSlice(allocator);
                 } else {
                     // Apply DISTINCT
                     var hash_size: usize = 0;
-                    var dummy_vals = std.ArrayList([]const eval.Value).initCapacity(ally, 0) catch return error.OutOfMemory;
-                    defer dummy_vals.deinit(ally);
-                    distinctDedup(ally, false, 0, &all_rows, &dummy_vals, &hash_size);
+                    var dummy_vals = std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return error.OutOfMemory;
+                    defer dummy_vals.deinit(allocator);
+                    distinctDedup(allocator, false, 0, &all_rows, &dummy_vals, &hash_size);
                     metrics.hash_size = hash_size;
-                    break :blk try all_rows.toOwnedSlice(ally);
+                    break :blk try all_rows.toOwnedSlice(allocator);
                 }
             },
             .intersect => try set_ops.intersect(result_rows, right_rows, part.all),
@@ -2512,7 +2512,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
         };
 
         // Free previous result and update with new result
-        ally.free(result_rows);
+        allocator.free(result_rows);
         result_rows = new_result;
     }
 
@@ -2538,7 +2538,7 @@ fn evaluateUnion(ally: std.mem.Allocator, u: geode.ast.UnionQuery, param_names: 
 }
 
 fn evaluateBinarySet(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     left: geode.ast.Query,
     right: geode.ast.Query,
     param_names: [][]const u8,
@@ -2549,41 +2549,41 @@ fn evaluateBinarySet(
     var dcols: []const protocol.SchemaCol = &.{};
     var ord: bool = false;
     var oks: [][]const u8 = &.{};
-    const left_rows = try evaluateSimpleQuery(ally, left, param_names, param_matrix, &ord, &oks, &dcols, null, null, null);
+    const left_rows = try evaluateSimpleQuery(allocator, left, param_names, param_matrix, &ord, &oks, &dcols, null, null, null);
     ord = false;
     oks = &.{};
     dcols = &.{};
-    const right_rows = try evaluateSimpleQuery(ally, right, param_names, param_matrix, &ord, &oks, &dcols, null, null, null);
+    const right_rows = try evaluateSimpleQuery(allocator, right, param_names, param_matrix, &ord, &oks, &dcols, null, null, null);
 
     if (all) {
-        var lc = std.StringHashMap(usize).init(ally);
+        var lc = std.StringHashMap(usize).init(allocator);
         defer lc.deinit();
-        var rc = std.StringHashMap(usize).init(ally);
+        var rc = std.StringHashMap(usize).init(allocator);
         defer rc.deinit();
         for (left_rows) |lr| {
-            const key = canonicalRowKey(ally, lr);
+            const key = canonicalRowKey(allocator, lr);
             const e = lc.getOrPut(key) catch continue;
             if (!e.found_existing) {
                 e.key_ptr.* = key;
                 e.value_ptr.* = 1;
             } else {
                 e.value_ptr.* += 1;
-                ally.free(key);
+                allocator.free(key);
             }
         }
         for (right_rows) |rr| {
-            const key = canonicalRowKey(ally, rr);
+            const key = canonicalRowKey(allocator, rr);
             const e = rc.getOrPut(key) catch continue;
             if (!e.found_existing) {
                 e.key_ptr.* = key;
                 e.value_ptr.* = 1;
             } else {
                 e.value_ptr.* += 1;
-                ally.free(key);
+                allocator.free(key);
             }
         }
-        var out = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-        defer out.deinit(ally);
+        var out = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        defer out.deinit(allocator);
         var it = lc.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
@@ -2596,16 +2596,16 @@ fn evaluateBinarySet(
                     var found: []const u8 = &.{};
                     var li: usize = 0;
                     while (li < left_rows.len) : (li += 1) {
-                        const k2 = canonicalRowKey(ally, left_rows[li]);
+                        const k2 = canonicalRowKey(allocator, left_rows[li]);
                         const eq = std.mem.eql(u8, k2, key);
-                        ally.free(k2);
+                        allocator.free(k2);
                         if (eq) {
                             found = left_rows[li];
                             break;
                         }
                     }
                     if (found.len == 0 and left_rows.len > 0) found = left_rows[0];
-                    out.append(ally, found) catch {};
+                    out.append(allocator, found) catch {};
                 }
             } else {
                 if (lcnt > rcnt) {
@@ -2614,60 +2614,60 @@ fn evaluateBinarySet(
                         var found: []const u8 = &.{};
                         var li: usize = 0;
                         while (li < left_rows.len) : (li += 1) {
-                            const k2 = canonicalRowKey(ally, left_rows[li]);
+                            const k2 = canonicalRowKey(allocator, left_rows[li]);
                             const eq = std.mem.eql(u8, k2, key);
-                            ally.free(k2);
+                            allocator.free(k2);
                             if (eq) {
                                 found = left_rows[li];
                                 break;
                             }
                         }
                         if (found.len == 0 and left_rows.len > 0) found = left_rows[0];
-                        out.append(ally, found) catch {};
+                        out.append(allocator, found) catch {};
                     }
                 }
             }
         }
         var ri: usize = 0;
-        while (ri < right_rows.len) : (ri += 1) ally.free(right_rows[ri]);
-        return out.toOwnedSlice(ally) catch &.{};
+        while (ri < right_rows.len) : (ri += 1) allocator.free(right_rows[ri]);
+        return out.toOwnedSlice(allocator) catch &.{};
     }
 
-    var seen_left = std.StringHashMap(void).init(ally);
+    var seen_left = std.StringHashMap(void).init(allocator);
     defer seen_left.deinit();
-    var outd = std.StringHashMap([]const u8).init(ally);
+    var outd = std.StringHashMap([]const u8).init(allocator);
     defer outd.deinit();
     for (left_rows) |lr| {
-        const key = canonicalRowKey(ally, lr);
+        const key = canonicalRowKey(allocator, lr);
         if (!seen_left.contains(key)) {
             seen_left.put(key, {}) catch {};
             const e = outd.getOrPut(key) catch continue;
-            if (!e.found_existing) e.value_ptr.* = lr else ally.free(key);
-        } else ally.free(key);
+            if (!e.found_existing) e.value_ptr.* = lr else allocator.free(key);
+        } else allocator.free(key);
     }
-    var seen_right = std.StringHashMap(void).init(ally);
+    var seen_right = std.StringHashMap(void).init(allocator);
     defer seen_right.deinit();
     for (right_rows) |rr| {
-        const key = canonicalRowKey(ally, rr);
+        const key = canonicalRowKey(allocator, rr);
         seen_right.put(key, {}) catch {};
         // do not free key; map holds reference for duration of function
     }
-    var out_rows = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out_rows.deinit(ally);
+    var out_rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out_rows.deinit(allocator);
     var it2 = outd.iterator();
     while (it2.next()) |entry| {
         const key = entry.key_ptr.*;
         const row = entry.value_ptr.*;
         const in_right = seen_right.contains(key);
         if (is_intersect) {
-            if (in_right) out_rows.append(ally, row) catch {};
+            if (in_right) out_rows.append(allocator, row) catch {};
         } else {
-            if (!in_right) out_rows.append(ally, row) catch {};
+            if (!in_right) out_rows.append(allocator, row) catch {};
         }
     }
     var rr: usize = 0;
-    while (rr < right_rows.len) : (rr += 1) ally.free(right_rows[rr]);
-    return out_rows.toOwnedSlice(ally) catch &.{};
+    while (rr < right_rows.len) : (rr += 1) allocator.free(right_rows[rr]);
+    return out_rows.toOwnedSlice(allocator) catch &.{};
 }
 
 fn handleQuicConnection(
