@@ -2178,10 +2178,11 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     // Exit code 1: Syntax Errors (42xxx), Other Errors
     if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
         const value_start = status_start + "\"status_class\":\"".len;
-        if (value_start + 2 <= result.len) {
+        if (value_start + 5 <= result.len) {
             const status_category = result[value_start .. value_start + 2];
+
             // Success (00), Warning (01), No Data (02), Dynamic Errors (0A) exit with 0
-            // Only syntax errors (42) and severe errors exit with 1
+            // ALL other errors exit with 1 (syntax errors, validation errors, runtime errors, auth failures, etc.)
             if (!std.mem.eql(u8, status_category, "00") and
                 !std.mem.eql(u8, status_category, "01") and
                 !std.mem.eql(u8, status_category, "02") and
@@ -2210,8 +2211,28 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
                     _ = stderr_fd.writeAll("syntax error\n") catch {};
                 }
 
-                // Don't exit with error code - tests expect exit code 0 with JSON errors
-                // std.process.exit(1);
+                // Exit with error code 1 for ALL errors
+                std.process.exit(1);
+            }
+        } else if (value_start + 2 <= result.len) {
+            // Fallback for short status codes - ALL errors exit with 1
+            const status_category = result[value_start .. value_start + 2];
+            if (!std.mem.eql(u8, status_category, "00") and
+                !std.mem.eql(u8, status_category, "01") and
+                !std.mem.eql(u8, status_category, "02") and
+                !std.mem.eql(u8, status_category, "0A"))
+            {
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                if (std.mem.indexOf(u8, result, "\"message\":\"")) |message_start| {
+                    const message_value_start = message_start + "\"message\":\"".len;
+                    if (std.mem.indexOfPos(u8, result, message_value_start, "\"")) |message_end| {
+                        const message_msg = result[message_value_start..message_end];
+                        _ = stderr_fd.writeAll(message_msg) catch {};
+                        _ = stderr_fd.writeAll("\n") catch {};
+                    }
+                }
+                // Exit with error code 1 for ALL errors
+                std.process.exit(1);
             }
         }
     }
