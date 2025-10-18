@@ -248,7 +248,7 @@ pub fn planQuerySelectBest(
     enum_cfg: enumerator_mod.EnumeratorConfig,
 ) !BestPlanResult {
     // Ensure core legality (ORDER/LIMIT etc.) still validated
-    _ = try planner_root.planQuery(q, .{});
+    _ = try planner_root.planQuery(allocator, q, .{});
     const tree = try buildLogicalTree(q, allocator);
     // Enumerate all candidates (unmanaged) then apply refined cost model for final selection
     var pe = enumerator_mod.PlanEnumerator.init(allocator, enum_cfg);

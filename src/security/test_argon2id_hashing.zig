@@ -74,7 +74,7 @@ test "Argon2id - OWASP parameters (m=19456, t=2, p=1)" {
     const params_start = std.mem.indexOf(u8, hash, "$m=");
     try testing.expect(params_start != null);
 
-    const params_section = hash[params_start.? ..];
+    const params_section = hash[params_start.?..];
     const params_end = std.mem.indexOf(u8, params_section[1..], "$");
     try testing.expect(params_end != null);
 
@@ -147,11 +147,11 @@ test "Argon2id - invalid PHC format handling" {
     defer auth.deinit();
 
     const invalid_hashes = [_][]const u8{
-        "",                                    // Empty
-        "plaintext",                           // Not hashed
-        "$argon2id$invalid",                   // Malformed PHC
-        "$bcrypt$2a$10$salt$hash",            // Wrong algorithm
-        "not_hex_not_phc",                    // Neither hex nor PHC
+        "", // Empty
+        "plaintext", // Not hashed
+        "$argon2id$invalid", // Malformed PHC
+        "$bcrypt$2a$10$salt$hash", // Wrong algorithm
+        "not_hex_not_phc", // Neither hex nor PHC
     };
 
     for (invalid_hashes) |bad_hash| {
@@ -213,8 +213,7 @@ test "Argon2id - timing resistance (constant-time verification)" {
 
     const variance_pct = (diff * 100) / correct_avg;
 
-    std.debug.print("Correct avg: {}ns, Wrong avg: {}ns, Variance: {}%\n",
-        .{ correct_avg, wrong_avg, variance_pct });
+    std.debug.print("Correct avg: {}ns, Wrong avg: {}ns, Variance: {}%\n", .{ correct_avg, wrong_avg, variance_pct });
 
     // Variance should be <20% (Argon2id computation dominates)
     try testing.expect(variance_pct < 20);
@@ -265,7 +264,7 @@ test "Argon2id - salt uniqueness across multiple hashes" {
         const hash = try auth.hashPassword(password);
 
         // Extract salt from PHC format: $argon2id$v=19$m=19456,t=2,p=1$SALT$hash
-        const salt_start_idx = std.mem.lastIndexOf(u8, hash[0..hash.len-64], "$");
+        const salt_start_idx = std.mem.lastIndexOf(u8, hash[0 .. hash.len - 64], "$");
         try testing.expect(salt_start_idx != null);
 
         const salt = hash[salt_start_idx.? + 1 .. hash.len - 64 - 1];

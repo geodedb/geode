@@ -131,12 +131,12 @@ test "TDE round-trip with various plaintexts" {
     const ally = arena.allocator();
 
     const test_cases = [_][]const u8{
-        "",                                         // Empty
-        "a",                                        // Single char
-        "Hello, World!",                            // Short
+        "", // Empty
+        "a", // Single char
+        "Hello, World!", // Short
         "The quick brown fox jumps over the lazy dog", // Medium
-        &([_]u8{0x00} ** 1000),                    // Large zeros
-        &([_]u8{0xFF} ** 500),                     // Large 0xFF
+        &([_]u8{0x00} ** 1000), // Large zeros
+        &([_]u8{0xFF} ** 500), // Large 0xFF
     };
 
     for (test_cases) |plaintext| {

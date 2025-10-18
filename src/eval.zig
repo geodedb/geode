@@ -2932,7 +2932,7 @@ fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env
 
 test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } } };
+    const env = Env{ .allocator = allocator, .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } } };
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     // IN list with NULL element yields NULL if no match
@@ -2982,7 +2982,7 @@ test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
 
 test "eval: mixed-type IN across bools and big ints stringified" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{"a"}, .values = &.{Value{ .Int = 9007199254740991 }} }; // 2^53-1
+    const env = Env{ .allocator = allocator, .names = &.{"a"}, .values = &.{Value{ .Int = 9007199254740991 }} }; // 2^53-1
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var s_big = ast.Expr{ .String = "9007199254740991" };
     var t_true = ast.Expr{ .String = "true" };
@@ -2996,7 +2996,7 @@ test "eval: mixed-type IN across bools and big ints stringified" {
 
 test "eval: CASE searched produces expected values" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{"a"}, .values = &.{Value{ .Int = 1 }} };
+    const env = Env{ .allocator = allocator, .names = &.{"a"}, .values = &.{Value{ .Int = 1 }} };
     var a_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var zero = ast.Expr{ .Int = 0 };
     var pred = ast.Expr{ .Binary = .{ .op = .Gt, .left = &a_expr, .right = &zero } };
@@ -3010,7 +3010,7 @@ test "eval: CASE searched produces expected values" {
 
 test "eval: string predicates and regex basic" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }} };
+    const env = Env{ .allocator = allocator, .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }} };
     var s = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     var al = ast.Expr{ .String = "Al" };
     var z = ast.Expr{ .String = "Z" };
@@ -3031,7 +3031,7 @@ test "eval: string predicates and regex basic" {
 
 test "eval: empty and NULL edge cases for string predicates" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{}, .values = &.{} };
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
     var s = ast.Expr{ .String = "" };
     var pref = ast.Expr{ .String = "" };
     const sw = ast.Expr{ .StartsWith = .{ .value = &s, .prefix = &pref } };
@@ -3045,7 +3045,7 @@ test "eval: empty and NULL edge cases for string predicates" {
 
 test "eval: implicit int<->string in predicates and IN list" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 42 }, Value{ .Str = "42" } } };
+    const env = Env{ .allocator = allocator, .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 42 }, Value{ .Str = "42" } } };
     // s STARTS WITH "4" -> true
     var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     var four = ast.Expr{ .String = "4" };
@@ -3069,7 +3069,7 @@ test "eval: implicit int<->string in predicates and IN list" {
 
 test "eval: parameters substitution and STARTS WITH via $param" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }}, .param_names = &.{"prefix"}, .param_values = &.{Value{ .Str = "Al" }} };
+    const env = Env{ .allocator = allocator, .names = &.{"s"}, .values = &.{Value{ .Str = "Alice" }}, .param_names = &.{"prefix"}, .param_values = &.{Value{ .Str = "Al" }} };
     var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     var pref = ast.Expr{ .Param = "prefix" };
     const sw = ast.Expr{ .StartsWith = .{ .value = &s_ident, .prefix = &pref } };
@@ -3080,7 +3080,7 @@ test "eval: parameters substitution and STARTS WITH via $param" {
 test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     const allocator = std.testing.allocator;
     // Env: a=7, s="007"; params: needle="Al", list=["6",7], pat="^A.*$"
-    const env = Env{ .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } }, .param_names = &.{ "needle", "list0", "list1", "pat" }, .param_values = &.{ Value{ .Str = "Al" }, Value{ .Str = "6" }, Value{ .Int = 7 }, Value{ .Str = "^A.*$" } } };
+    const env = Env{ .allocator = allocator, .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } }, .param_names = &.{ "needle", "list0", "list1", "pat" }, .param_values = &.{ Value{ .Str = "Al" }, Value{ .Str = "6" }, Value{ .Int = 7 }, Value{ .Str = "^A.*$" } } };
     // a IN [$list0, $list1] -> true
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var p0 = ast.Expr{ .Param = "list0" };
@@ -3108,7 +3108,7 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
 
 test "eval: CASE permutations with multiple WHENs and ELSE variants" {
     const allocator = std.testing.allocator;
-    const env = Env{ .names = &.{}, .values = &.{} };
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
     // Searched CASE: first WHEN true selected; later WHENs skipped
     var t = ast.Expr{ .Bool = true };
     var f = ast.Expr{ .Bool = false };
@@ -3151,7 +3151,7 @@ test "eval: CASE permutations with multiple WHENs and ELSE variants" {
 test "eval: CASE 3VL searched and simple with NULLs" {
     const allocator = std.testing.allocator;
     // Searched CASE: WHEN NULL THEN should not trigger; ELSE chosen
-    const env = Env{ .names = &.{}, .values = &.{} };
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
     var n1 = ast.Expr{ .Null = {} };
     var then1 = ast.Expr{ .String = "x" };
     var whs1: [1]ast.CaseWhen = .{.{ .when = &n1, .then_expr = &then1 }};

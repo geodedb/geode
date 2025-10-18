@@ -705,4 +705,3 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }
-

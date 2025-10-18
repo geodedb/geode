@@ -56,41 +56,48 @@ pub const Catalog = struct {
     }
 
     /// Clean up catalog resources
+    /// NOTE: Should only be called when no other threads are accessing the catalog
     pub fn deinit(self: *Catalog) void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        // No locking needed - this should only be called during cleanup when no other threads access catalog
 
-        // Free all schema names
-        var schema_iter = self.schemas.iterator();
-        while (schema_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.schemas.deinit();
+        // Free all allocated memory properly
+        // Note: In tests, this must be called with the same allocator that created the catalog
 
-        // Free all graph names
-        var graph_iter = self.graphs.iterator();
-        while (graph_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.graphs.deinit();
-
-        // Free all index info
-        var index_iter = self.indexes.iterator();
-        while (index_iter.next()) |entry| {
-            const index_info = entry.value_ptr.*;
-            self.allocator.free(index_info.name);
-            self.allocator.free(index_info.index_type);
-            self.allocator.free(index_info.table_name);
-            for (index_info.columns) |col| {
-                self.allocator.free(col);
+        // Free HashMap keys and values
+        {
+            var iter = self.schemas.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
             }
-            self.allocator.free(index_info.columns);
-            self.allocator.free(entry.key_ptr.*); // Free scoped key
+            self.schemas.deinit();
         }
-        self.indexes.deinit();
+
+        {
+            var iter = self.graphs.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.graphs.deinit();
+        }
+
+        {
+            var iter = self.indexes.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                const info = entry.value_ptr.*;
+                self.allocator.free(info.name);
+                self.allocator.free(info.index_type);
+                self.allocator.free(info.table_name);
+                for (info.columns) |col| {
+                    self.allocator.free(col);
+                }
+                self.allocator.free(info.columns);
+            }
+            self.indexes.deinit();
+        }
 
         self.allocator.free(self.data_dir);
-        self.allocator.destroy(self);
+        // Caller is responsible for destroying the Catalog struct itself
     }
 
     /// Save catalog to disk

@@ -133,7 +133,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Exec
     };
 }
 
-
 // Execute MATCH + CALL pattern with node binding
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
@@ -2000,4 +1999,3 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         return result;
     }
 }
-

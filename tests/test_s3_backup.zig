@@ -53,17 +53,17 @@ test "S3 URL building mock" {
     const MockS3Manager = struct {
         config: MockS3Config,
 
-        fn buildS3Url(self: *const @This(), allocator: std.mem.Allocator, s3_key: []const u8, query: ?[]const u8) ![]const u8 {
+        fn buildS3Url(self: *const @This(), alloc: std.mem.Allocator, s3_key: []const u8, query: ?[]const u8) ![]const u8 {
             const base_url = if (self.config.endpoint) |endpoint|
-                try std.fmt.allocPrint(allocator, "https://{s}.{s}", .{ self.config.bucket, endpoint })
+                try std.fmt.allocPrint(alloc, "https://{s}.{s}", .{ self.config.bucket, endpoint })
             else
-                try std.fmt.allocPrint(allocator, "https://{s}.s3.{s}.amazonaws.com", .{ self.config.bucket, self.config.region });
-            defer allocator.free(base_url);
+                try std.fmt.allocPrint(alloc, "https://{s}.s3.{s}.amazonaws.com", .{ self.config.bucket, self.config.region });
+            defer alloc.free(base_url);
 
             return if (query) |q|
-                try std.fmt.allocPrint(allocator, "{s}/{s}?{s}", .{ base_url, s3_key, q })
+                try std.fmt.allocPrint(alloc, "{s}/{s}?{s}", .{ base_url, s3_key, q })
             else
-                try std.fmt.allocPrint(allocator, "{s}/{s}", .{ base_url, s3_key });
+                try std.fmt.allocPrint(alloc, "{s}/{s}", .{ base_url, s3_key });
         }
     };
 
@@ -101,14 +101,14 @@ test "S3 signature generation mock" {
     const MockSigner = struct {
         secret_key: []const u8,
 
-        fn sign(self: *const @This(), allocator: std.mem.Allocator, string_to_sign: []const u8) ![]const u8 {
+        fn sign(self: *const @This(), alloc: std.mem.Allocator, string_to_sign: []const u8) ![]const u8 {
             var mac = std.crypto.auth.hmac.HmacSha1.init(self.secret_key);
             mac.update(string_to_sign);
             var result: [std.crypto.auth.hmac.HmacSha1.mac_length]u8 = undefined;
             mac.final(&result);
 
             // Base64 encode
-            const encoded = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(result.len));
+            const encoded = try alloc.alloc(u8, std.base64.standard.Encoder.calcSize(result.len));
             _ = std.base64.standard.Encoder.encode(encoded, &result);
             return encoded;
         }
@@ -136,8 +136,8 @@ test "File checksum calculation mock" {
 
     // Mock checksum calculation function
     const MockChecksummer = struct {
-        fn calculateChecksum(allocator: std.mem.Allocator, file_path: []const u8) !u64 {
-            _ = allocator;
+        fn calculateChecksum(alloc: std.mem.Allocator, file_path: []const u8) !u64 {
+            _ = alloc;
             const file = try std.fs.cwd().openFile(file_path, .{});
             defer file.close();
 
@@ -208,7 +208,7 @@ test "XML parsing mock" {
 
     // Mock XML parser for S3 responses
     const MockXMLParser = struct {
-        fn parseUploadId(allocator: std.mem.Allocator, xml_response: []const u8) ![]const u8 {
+        fn parseUploadId(alloc: std.mem.Allocator, xml_response: []const u8) ![]const u8 {
             // Simple XML parsing - look for <UploadId>value</UploadId>
             const start_tag = "<UploadId>";
             const end_tag = "</UploadId>";
@@ -217,7 +217,7 @@ test "XML parsing mock" {
                 const value_start = start_idx + start_tag.len;
                 if (std.mem.indexOf(u8, xml_response[value_start..], end_tag)) |end_idx| {
                     const upload_id = xml_response[value_start .. value_start + end_idx];
-                    return try allocator.dupe(u8, upload_id);
+                    return try alloc.dupe(u8, upload_id);
                 }
             }
             return error.InvalidXMLResponse;

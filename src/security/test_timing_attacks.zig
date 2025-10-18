@@ -17,9 +17,9 @@ test "Password verification - timing resistance with varying prefixes" {
 
     // Test passwords with varying levels of prefix match
     const test_cases = [_][]const u8{
-        "WrongPassword123!",   // No match at all
+        "WrongPassword123!", // No match at all
         "CorrectPassword456!", // Matches most of the prefix
-        "CorrectPassword12!",  // Almost full match (one char different)
+        "CorrectPassword12!", // Almost full match (one char different)
         "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZPassword!", // Different prefix
     };
 

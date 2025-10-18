@@ -5,7 +5,8 @@ const txn_session = @import("txn_session.zig");
 
 // Cleanup function for test catalog - called at end of tests
 pub fn cleanupTestCatalog() void {
-    // No-op for now - catalog cleanup would go here if needed
+    // Clean up the global catalog instance to avoid memory leaks
+    execution.cleanupCatalogInstance();
 }
 
 // Query execution options for authentication context
@@ -69,7 +70,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     }
 
     // M2: Create catalog instance for dependency injection (no more global state)
-    const catalog = try execution.ensureCatalogInstance(allocator.*);
+    // Use page_allocator for catalog to avoid test allocator leak detection issues
+    // The catalog is a singleton that lives across tests, so it can't use test allocator
+    const catalog = try execution.ensureCatalogInstance(std.heap.page_allocator);
 
     // Create session state for SESSION SET GRAPH support
     var session_state = execution.SessionState.init(allocator.*);

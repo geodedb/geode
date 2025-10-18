@@ -24,7 +24,7 @@ pub const XmlDocument = struct {
     /// P2-3: Now accepts allocator parameter for tag stack
     fn validateWellFormed(allocator: std.mem.Allocator, data: []const u8) Error!void {
         var tag_stack = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-        defer tag_stack.deinit();
+        defer tag_stack.deinit(allocator);
 
         var i: usize = 0;
         var in_tag = false;
@@ -52,7 +52,7 @@ pub const XmlDocument = struct {
                 } else if (tag_content[tag_content.len - 1] == '/') {} else {
                     const space_pos = std.mem.indexOfScalar(u8, tag_content, ' ') orelse tag_content.len;
                     const tag_name = tag_content[0..space_pos];
-                    try tag_stack.append(tag_name);
+                    try tag_stack.append(allocator, tag_name);
                 }
             } else if (c == '&') {
                 const end_pos = std.mem.indexOfScalarPos(u8, data, i, ';') orelse return Error.InvalidEntity;

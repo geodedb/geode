@@ -185,7 +185,7 @@ test "CASE expression parse (simple and searched)" {
 
 test "eval acceptance: CASE WHEN a>0 THEN 'p' ELSE 'n' END" {
     const geode_local = lib;
-    const env = geode_local.eval.Env{ .names = &.{"a"}, .values = &.{geode_local.eval.Value{ .Int = 5 }} };
+    const env = geode_local.eval.Env{ .allocator = std.testing.allocator, .names = &.{"a"}, .values = &.{geode_local.eval.Value{ .Int = 5 }} };
     var a_expr = geode_local.ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var zero = geode_local.ast.Expr{ .Int = 0 };
     var pred = geode_local.ast.Expr{ .Binary = .{ .op = .Gt, .left = &a_expr, .right = &zero } };

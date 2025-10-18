@@ -157,12 +157,17 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     }
 
     // Get data directory from environment or use default
+    var data_dir_owned: ?[]u8 = null;
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
         if (err == error.EnvironmentVariableNotFound) {
             break :blk "/tmp";
         }
         return err;
     };
+    if (!std.mem.eql(u8, data_dir, "/tmp")) {
+        data_dir_owned = @constCast(data_dir);
+    }
+    defer if (data_dir_owned) |owned| allocator.free(owned);
 
     // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
@@ -184,6 +189,26 @@ pub fn getDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
     return ExecutionContext{
         .catalog = cat,
     };
+}
+
+/// Cleanup the global catalog instance
+/// Should be called at program/test exit to avoid memory leaks
+pub fn cleanupCatalogInstance() void {
+    catalog_instance_mutex.lock();
+    defer catalog_instance_mutex.unlock();
+
+    if (global_catalog_instance) |instance| {
+        // Store the allocator before deinit
+        const alloc = instance.allocator;
+
+        // Properly deinit the catalog to free all memory
+        instance.deinit();
+
+        // Destroy the Catalog struct itself
+        alloc.destroy(instance);
+
+        global_catalog_instance = null;
+    }
 }
 
 // DEPRECATED: Access to old global catalog state for backward compatibility
@@ -424,7 +449,8 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
 }
 
 pub fn executeProgram(allocator: std.mem.Allocator, program: *const ast.Program) !ExecutionResult {
-    return executeProgramWithContext(allocator, program, .{});
+    const context = try getDefaultContext(allocator);
+    return executeProgramWithContext(allocator, program, context);
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {

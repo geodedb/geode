@@ -853,4 +853,3 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         else => return error.NotImplemented,
     }
 }
-

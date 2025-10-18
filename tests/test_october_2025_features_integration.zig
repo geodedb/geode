@@ -203,7 +203,8 @@ test "Integration: Session management graph switching" {
     var set_result = try geode.parseGql(set_query, allocator);
     defer set_result.arena.deinit();
 
-    const context = execution.ExecutionContext{ .session_state = &session_state };
+    var context = try execution.getDefaultContext(allocator);
+    context.session_state = &session_state;
     var exec_result = try execution.executeStatementWithContext(allocator, set_result.program.statements[0], context);
     defer exec_result.deinit(allocator);
 
@@ -232,7 +233,7 @@ test "Integration: Transaction lifecycle START/COMMIT/ROLLBACK" {
     var start_result = try geode.parseGql(start_query, allocator);
     defer start_result.arena.deinit();
 
-    var context = execution.ExecutionContext{};
+    var context = try execution.getDefaultContext(allocator);
     var start_exec = try execution.executeStatementWithContext(allocator, start_result.program.statements[0], context);
     defer start_exec.deinit(allocator);
 
@@ -267,7 +268,8 @@ test "Integration: Combined features - social network analysis" {
     var session_result = try geode.parseGql(session_query, allocator);
     defer session_result.arena.deinit();
 
-    const context = execution.ExecutionContext{ .session_state = &session_state };
+    var context = try execution.getDefaultContext(allocator);
+    context.session_state = &session_state;
     var session_exec = try execution.executeStatementWithContext(allocator, session_result.program.statements[0], context);
     defer session_exec.deinit(allocator);
 
@@ -348,7 +350,7 @@ test "Integration: Transaction error handling" {
     var commit_result = try geode.parseGql(commit_query, allocator);
     defer commit_result.arena.deinit();
 
-    const context = execution.ExecutionContext{};
+    const context = try execution.getDefaultContext(allocator);
     const result = execution.executeStatementWithContext(allocator, commit_result.program.statements[0], context);
 
     // Should return NoActiveTransaction error
@@ -359,7 +361,8 @@ test "Integration: Transaction error handling" {
     var start_result = try geode.parseGql(start_query, allocator);
     defer start_result.arena.deinit();
 
-    const active_context = execution.ExecutionContext{ .transaction_state = .Active };
+    var active_context = try execution.getDefaultContext(allocator);
+    active_context.transaction_state = .Active;
     const start_twice = execution.executeStatementWithContext(allocator, start_result.program.statements[0], active_context);
 
     // Should return TransactionAlreadyActive error

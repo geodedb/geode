@@ -1842,7 +1842,7 @@ fn evaluateSimpleQuery(allocator: std.mem.Allocator, q: geode.ast.Query, param_n
                             };
                             env_values.append(alloc, ev) catch {};
                         }
-                        const env = eval.Env{ .names = env_names.items, .values = env_values.items , .allocator = allocator };
+                        const env = eval.Env{ .names = env_names.items, .values = env_values.items, .allocator = allocator };
                         const v = eval.evalExpr(alloc, it.expr, env) catch eval.Value{ .Null = {} };
                         break :blk_e v;
                     },

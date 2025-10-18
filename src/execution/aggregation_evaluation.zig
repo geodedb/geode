@@ -544,4 +544,3 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
 
     return eval.Value{ .Null = {} };
 }
-

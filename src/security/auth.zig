@@ -679,9 +679,9 @@ pub const SecurityManager = struct {
 
         // OWASP recommended Argon2id parameters (ASVS 2.4.1)
         const argon2_params = std.crypto.pwhash.argon2.Params{
-            .t = 2,      // 2 iterations (OWASP minimum)
-            .m = 19456,  // 19 MiB memory (OWASP minimum)
-            .p = 1,      // 1 parallel lane
+            .t = 2, // 2 iterations (OWASP minimum)
+            .m = 19456, // 19 MiB memory (OWASP minimum)
+            .p = 1, // 1 parallel lane
         };
 
         // Hash password with Argon2id
@@ -762,7 +762,7 @@ pub const SecurityManager = struct {
     /// Verify Argon2id password in PHC format
     fn verifyArgon2idPHC(self: *Self, password: []const u8, phc_string: []const u8) !bool {
         // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
-        var parts = std.mem.split(u8, phc_string, "$");
+        var parts = std.mem.splitScalar(u8, phc_string, '$');
 
         _ = parts.next(); // Empty before first $
         const alg = parts.next() orelse return false;
@@ -773,13 +773,13 @@ pub const SecurityManager = struct {
 
         const params_str = parts.next() orelse return false;
         // Parse params: m=19456,t=2,p=1
-        var param_parts = std.mem.split(u8, params_str, ",");
+        var param_parts = std.mem.splitScalar(u8, params_str, ',');
         var m: u32 = 19456;
         var t: u32 = 2;
         var p: u32 = 1;
 
         while (param_parts.next()) |param| {
-            var kv = std.mem.split(u8, param, "=");
+            var kv = std.mem.splitScalar(u8, param, '=');
             const key = kv.next() orelse continue;
             const value = kv.next() orelse continue;
 
@@ -817,7 +817,7 @@ pub const SecurityManager = struct {
         const argon2_params = std.crypto.pwhash.argon2.Params{
             .t = t,
             .m = m,
-            .p = p,
+            .p = @intCast(p),
         };
 
         var computed_hash: [32]u8 = undefined;
