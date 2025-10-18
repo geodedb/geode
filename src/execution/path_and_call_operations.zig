@@ -7,6 +7,7 @@ const graph_store = @import("../graph_store.zig");
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
+const ExecutionError = execution.ExecutionError;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-005; FEATURE="ExecutionRefactoring"; ASPECT=PATH_AND_CALL_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted path finding algorithms and CALL operations from execution.zig for better modularity (M1 Phase 5)
@@ -619,11 +620,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         return try executeDijkstra(allocator, store, columns, start_id, end_id, weight_property);
     }
 
-    // Unknown procedure - return empty result with message
+    // Unknown procedure - return error
     std.log.warn("Unknown procedure: {s}", .{proc_name});
-    return ExecutionResult{
-        .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]eval.Value, 0),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-    };
+    return ExecutionError.UnknownProcedure;
 }

@@ -2180,12 +2180,11 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
         const value_start = status_start + "\"status_class\":\"".len;
         if (value_start + 2 <= result.len) {
             const status_category = result[value_start .. value_start + 2];
-            // Dynamic errors (0A) and other success/warning categories exit with 0
-            // Only syntax errors (42) and severe errors exit with 1
+            // Success (00), Warning (01), No Data (02) exit with 0
+            // Dynamic errors (0A), syntax errors (42) and severe errors exit with 1
             if (!std.mem.eql(u8, status_category, "00") and
                 !std.mem.eql(u8, status_category, "01") and
-                !std.mem.eql(u8, status_category, "02") and
-                !std.mem.eql(u8, status_category, "0A"))
+                !std.mem.eql(u8, status_category, "02"))
             {
                 // Extract error message and write to stderr
                 const stderr_fd = std.fs.File{ .handle = 2 };
