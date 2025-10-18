@@ -2173,24 +2173,20 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     // Add newline to ensure Python TextIOWrapper detects end of output
     _ = try stdout_fd.writeAll("\n");
 
-    // Check if we should exit with code 1 for specific error types
-    // Exit code 1 for: syntax errors (42xxx), auth errors (28xxx), and other serious errors
+    // Check if we should exit with code 1 for error status codes
+    // Only exit 0 for successful status codes (00xxx, 01xxx warnings, 02xxx no data)
+    // Exit 1 for all error conditions
     if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
         const value_start = status_start + "\"status_class\":\"".len;
         if (value_start + 2 <= result.len) {
             const status_category = result[value_start .. value_start + 2];
 
-            // Exit with code 1 for:
-            // - 42xxx: Syntax and Semantic Errors
-            // - 28xxx: Invalid Authorization
-            // - 22xxx: Data Exception
-            // - 23xxx: Integrity Constraint Violation
-            // But keep exit 0 for success (00xxx), warnings (01xxx), no data (02xxx), and dynamic errors (0Axxx)
-            if (std.mem.eql(u8, status_category, "42") or    // Syntax/semantic errors
-                std.mem.eql(u8, status_category, "28") or    // Auth errors
-                std.mem.eql(u8, status_category, "22") or    // Data exceptions
-                std.mem.eql(u8, status_category, "23"))      // Integrity violations
-            {
+            // Check if this is an error status - anything not 00xxx, 01xxx, or 02xxx
+            const is_success = std.mem.eql(u8, status_category, "00") or
+                std.mem.eql(u8, status_category, "01") or // warnings
+                std.mem.eql(u8, status_category, "02"); // no data
+
+            if (!is_success) {
                 // Write error message to stderr
                 const stderr_fd = std.fs.File{ .handle = 2 };
                 if (std.mem.indexOf(u8, result, "\"error\":\"")) |error_start| {
