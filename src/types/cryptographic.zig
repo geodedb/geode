@@ -125,21 +125,36 @@ pub const Signature = struct {
         }
     }
 
-    /// Verify signature against data (placeholder - requires cryptographic library)
+    /// Verify signature against data using stdlib cryptography
+    // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=IMPL; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
     pub fn verify(self: Signature, data: []const u8) !bool {
-        // Note: This is a placeholder implementation
-        // In a real implementation, this would use the appropriate cryptographic library
-        // based on the algorithm (Ed25519, ECDSA, RSA-PSS, etc.)
-
         if (self.public_key == null) return error.PublicKeyRequired;
 
         // Basic validation
         if (self.signature.len != self.alg.expectedSignatureSize()) return false;
         if (self.public_key.?.len != self.alg.expectedPublicKeySize()) return false;
 
-        // Placeholder: In real implementation, perform actual cryptographic verification
-        _ = data;
-        return true; // Always return true for now
+        // Perform actual cryptographic verification based on algorithm
+        switch (self.alg) {
+            .Ed25519 => {
+                // Ed25519 expects 64-byte signature and 32-byte public key
+                if (self.signature.len != 64) return false;
+                if (self.public_key.?.len != 32) return false;
+
+                const sig_bytes = self.signature[0..64].*;
+                const pubkey_bytes = self.public_key.?[0..32].*;
+
+                // Use Zig stdlib Ed25519 verification
+                std.crypto.sign.Ed25519.verify(sig_bytes, data, pubkey_bytes) catch {
+                    return false; // Verification failed
+                };
+                return true;
+            },
+            // Other algorithms not yet implemented - fail verification
+            .ECDSA_P256, .ECDSA_P384, .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
+                return error.UnsupportedSignatureAlgorithm;
+            },
+        }
     }
 
     /// Binary encoding for storage
@@ -224,23 +239,42 @@ pub const KeyPair = struct {
         };
     }
 
-    /// Sign data with this key pair (placeholder)
+    /// Sign data with this key pair using stdlib cryptography
+    // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=IMPL; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
     pub fn sign(self: KeyPair, data: []const u8, allocator: std.mem.Allocator) !Signature {
-        // Placeholder signing
-        // In real implementation, this would perform actual cryptographic signing
-        _ = data;
+        // Perform actual cryptographic signing based on algorithm
+        switch (self.alg) {
+            .Ed25519 => {
+                // Ed25519 requires 32-byte private key and produces 64-byte signature
+                if (self.private_key.len != 32) return error.InvalidPrivateKeySize;
+                if (self.public_key.len != 32) return error.InvalidPublicKeySize;
 
-        const signature_bytes = try allocator.alloc(u8, self.alg.expectedSignatureSize());
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        prng.random().bytes(signature_bytes);
+                const secret_bytes = self.private_key[0..32].*;
+                const public_bytes = self.public_key[0..32].*;
 
-        const public_key_copy = try allocator.dupe(u8, self.public_key);
+                // Create Ed25519 key pair from existing keys
+                const key_pair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_bytes, public_bytes);
 
-        return Signature{
-            .alg = self.alg,
-            .signature = signature_bytes,
-            .public_key = public_key_copy,
-        };
+                // Sign the data
+                const sig_bytes = try key_pair.sign(data, null); // null for deterministic signing
+
+                // Allocate and copy signature
+                const signature_bytes = try allocator.alloc(u8, 64);
+                @memcpy(signature_bytes, &sig_bytes);
+
+                const public_key_copy = try allocator.dupe(u8, self.public_key);
+
+                return Signature{
+                    .alg = self.alg,
+                    .signature = signature_bytes,
+                    .public_key = public_key_copy,
+                };
+            },
+            // Other algorithms not yet implemented
+            .ECDSA_P256, .ECDSA_P384, .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
+                return error.UnsupportedSignatureAlgorithm;
+            },
+        }
     }
 
     pub fn deinit(self: KeyPair, allocator: std.mem.Allocator) void {
