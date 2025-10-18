@@ -401,12 +401,27 @@ pub fn extractMapParameter(args: []const *ast.Expr, arg_idx: usize) ?[]ast.Prope
 
 // Extract node ID from arguments
 pub fn extractNodeId(args: []const *ast.Expr, arg_idx: usize, context: ExecutionContext) ?u64 {
-    _ = context;
     if (arg_idx >= args.len) return null;
     const arg = args[arg_idx];
+
+    // Handle integer literals
     if (arg.* == .Int) {
         return @intCast(arg.Int);
     }
+
+    // Handle identifiers - look up in context bindings
+    if (arg.* == .Ident) {
+        if (context.bindings) |bindings| {
+            const ident_name = arg.Ident.orig;
+            if (bindings.get(ident_name)) |binding| {
+                switch (binding) {
+                    .node_id => |id| return id,
+                    else => {},
+                }
+            }
+        }
+    }
+
     return null;
 }
 
@@ -572,7 +587,14 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "path");
-        return try executeBFS(allocator, store, columns, start_id, max_depth);
+        var result = try executeBFS(allocator, store, columns, start_id, max_depth);
+
+        // Apply YIELD filtering if specified
+        if (call_stmt.yield_items) |yield_items| {
+            result = try filterYieldColumns(allocator, result, yield_items);
+        }
+
+        return result;
     } else if (std.mem.eql(u8, proc_name, "algo.dfs.stream") or
         std.mem.eql(u8, proc_name, "dfs"))
     {
@@ -588,8 +610,16 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "path");
-        return try executeDFS(allocator, store, columns, start_id, max_depth);
+        var result = try executeDFS(allocator, store, columns, start_id, max_depth);
+
+        // Apply YIELD filtering if specified
+        if (call_stmt.yield_items) |yield_items| {
+            result = try filterYieldColumns(allocator, result, yield_items);
+        }
+
+        return result;
     } else if (std.mem.eql(u8, proc_name, "algo.dijkstra.stream") or
+        std.mem.eql(u8, proc_name, "algo.shortestPath.dijkstra") or
         std.mem.eql(u8, proc_name, "dijkstra"))
     {
         // Extract start node, end node, and weight property
@@ -600,15 +630,23 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const start_id = extractNodeId(args, 0, context) orelse return error.MissingStartNode;
         const end_id = extractNodeId(args, 1, context) orelse return error.MissingEndNode;
-        const config_map = extractMapParameter(args, 2);
 
-        // Get weight property name from config
+        // Third parameter can be a string (weight property) or a config map
         var weight_property: []const u8 = "weight";
-        if (config_map) |map| {
-            for (map) |prop| {
-                if (std.mem.eql(u8, prop.key, "relationshipWeightProperty")) {
-                    if (prop.value.* == .String) {
-                        weight_property = prop.value.String;
+        if (args.len > 2) {
+            if (args[2].* == .String) {
+                // Direct string parameter for weight property
+                weight_property = args[2].String;
+            } else {
+                // Try to extract as map
+                const config_map = extractMapParameter(args, 2);
+                if (config_map) |map| {
+                    for (map) |prop| {
+                        if (std.mem.eql(u8, prop.key, "relationshipWeightProperty")) {
+                            if (prop.value.* == .String) {
+                                weight_property = prop.value.String;
+                            }
+                        }
                     }
                 }
             }
@@ -616,11 +654,76 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "path");
-        columns[1] = try allocator.dupe(u8, "distance");
-        return try executeDijkstra(allocator, store, columns, start_id, end_id, weight_property);
+        columns[1] = try allocator.dupe(u8, "cost");
+        var result = try executeDijkstra(allocator, store, columns, start_id, end_id, weight_property);
+
+        // Apply YIELD filtering if specified
+        if (call_stmt.yield_items) |yield_items| {
+            result = try filterYieldColumns(allocator, result, yield_items);
+        }
+
+        return result;
     }
 
     // Unknown procedure - return error
     std.log.warn("Unknown procedure: {s}", .{proc_name});
     return ExecutionError.UnknownProcedure;
+}
+
+// Filter result columns based on YIELD items
+pub fn filterYieldColumns(allocator: std.mem.Allocator, result: ExecutionResult, yield_items: []ast.ReturnItem) !ExecutionResult {
+    // Build list of requested column names
+    var requested_columns = try std.ArrayList([]const u8).initCapacity(allocator, yield_items.len);
+    defer requested_columns.deinit(allocator);
+
+    for (yield_items) |item| {
+        const col_name = item.alias orelse switch (item.expr) {
+            .Ident => |ident| ident.orig,
+            .Member => |member| member.field,
+            else => "column",
+        };
+        try requested_columns.append(allocator, col_name);
+    }
+
+    // Find indices of requested columns in original result
+    var col_indices = try std.ArrayList(usize).initCapacity(allocator, requested_columns.items.len);
+    defer col_indices.deinit(allocator);
+
+    for (requested_columns.items) |req_col| {
+        for (result.columns, 0..) |res_col, idx| {
+            if (std.mem.eql(u8, req_col, res_col)) {
+                try col_indices.append(allocator, idx);
+                break;
+            }
+        }
+    }
+
+    // Create new filtered columns array
+    const new_columns = try allocator.alloc([]const u8, col_indices.items.len);
+    for (col_indices.items, 0..) |idx, i| {
+        new_columns[i] = result.columns[idx];
+    }
+
+    // Create new filtered rows
+    const new_rows = try allocator.alloc([]eval.Value, result.rows.len);
+    for (result.rows, 0..) |row, row_idx| {
+        const new_row = try allocator.alloc(eval.Value, col_indices.items.len);
+        for (col_indices.items, 0..) |col_idx, i| {
+            new_row[i] = row[col_idx];
+        }
+        new_rows[row_idx] = new_row;
+    }
+
+    // Clean up old data
+    allocator.free(result.columns);
+    for (result.rows) |row| {
+        allocator.free(row);
+    }
+    allocator.free(result.rows);
+
+    return ExecutionResult{
+        .columns = new_columns,
+        .rows = new_rows,
+        .flags = result.flags,
+    };
 }
