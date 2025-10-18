@@ -420,10 +420,10 @@ pub const Message = union(enum) {
 // JSON shape: {"term":<u64>,"from":<u64>,"kind":"req_vote|req_vote_resp|append|append_resp|install_snapshot|install_snapshot_resp","payload":{...}}
 pub const RaftFrameKind = enum { req_vote, req_vote_resp, append, append_resp, install_snapshot, install_snapshot_resp, snapshot_chunk };
 
-pub fn encodeRaftFrame(ally: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
-    var w = buf.writer(ally);
+pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    var w = buf.writer(allocator);
     const kind = switch (msg) {
         .request_vote => "req_vote",
         .request_vote_response => "req_vote_resp",
@@ -470,8 +470,8 @@ pub const DecodedRaftFrame = struct {
     }
 };
 
-pub fn decodeRaftFrame(ally: Allocator, line: []const u8) !DecodedRaftFrame {
-    const parsed = try std.json.parseFromSlice(std.json.Value, ally, line, .{});
+pub fn decodeRaftFrame(allocator: Allocator, line: []const u8) !DecodedRaftFrame {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
     defer parsed.deinit();
     const root = parsed.value;
     if (root != .object) return error.InvalidFrame;
@@ -509,8 +509,8 @@ pub fn decodeRaftFrame(ally: Allocator, line: []const u8) !DecodedRaftFrame {
         if (po.get("entries")) |ev| ev: {
             if (ev != .array) break :ev;
             const arr = ev.array.items;
-            var tmp = try ally.alloc(LogEntry, arr.len);
-            errdefer ally.free(tmp);
+            var tmp = try allocator.alloc(LogEntry, arr.len);
+            errdefer allocator.free(tmp);
             for (arr, 0..) |item, i| {
                 if (item != .object) return error.InvalidFrame;
                 const io = item.object;
@@ -1440,15 +1440,15 @@ test "raft initialization" {
 }
 
 test "raft frame encode/decode round trip (heartbeat append)" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var peers = [_]Peer{.{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null }};
-    var node = try RaftNode.init(ally, 1, &peers, 150);
+    var node = try RaftNode.init(allocator, 1, &peers, 150);
     defer node.deinit();
     const msg = Message{ .append_entries = .{ .term = 0, .leader_id = 1, .prev_log_index = 0, .prev_log_term = 0, .entries = &[_]LogEntry{}, .leader_commit = 0 } };
-    const line = try encodeRaftFrame(ally, node.id, node.current_term, msg);
-    defer ally.free(line);
-    const decoded = try decodeRaftFrame(ally, line);
-    defer decoded.deinit(ally);
+    const line = try encodeRaftFrame(allocator, node.id, node.current_term, msg);
+    defer allocator.free(line);
+    const decoded = try decodeRaftFrame(allocator, line);
+    defer decoded.deinit(allocator);
     try std.testing.expect(decoded.from == 1);
     try std.testing.expect(decoded.term == 0);
     switch (decoded.body) {
@@ -1459,13 +1459,13 @@ test "raft frame encode/decode round trip (heartbeat append)" {
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameEntriesArray"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameEntries; OWNER=cluster; UPDATED=2025-09-23
 test "TestCANARY_REQ_GQL_074_RaftFrameEntries" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var entries = [_]LogEntry{.{ .term = 1, .index = 5, .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null }};
     const msg = Message{ .append_entries = .{ .term = 1, .leader_id = 9, .prev_log_index = 4, .prev_log_term = 1, .entries = &entries, .leader_commit = 4 } };
-    const line = try encodeRaftFrame(ally, 9, 1, msg);
-    defer ally.free(line);
-    const decoded = try decodeRaftFrame(ally, line);
-    defer decoded.deinit(ally);
+    const line = try encodeRaftFrame(allocator, 9, 1, msg);
+    defer allocator.free(line);
+    const decoded = try decodeRaftFrame(allocator, line);
+    defer decoded.deinit(allocator);
     switch (decoded.body) {
         .append_entries => |ae| {
             try std.testing.expect(ae.entries.len == 1);
@@ -1477,12 +1477,12 @@ test "TestCANARY_REQ_GQL_074_RaftFrameEntries" {
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameSnapshotInstall"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall; OWNER=cluster; UPDATED=2025-09-23
 test "TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const snap = Message{ .install_snapshot = .{ .term = 3, .leader_id = 1, .last_included_index = 100, .last_included_term = 3, .offset = 0, .data = &[_]u8{}, .done = true } };
-    const line = try encodeRaftFrame(ally, 1, 3, snap);
-    defer ally.free(line);
-    const decoded = try decodeRaftFrame(ally, line);
-    defer decoded.deinit(ally);
+    const line = try encodeRaftFrame(allocator, 1, 3, snap);
+    defer allocator.free(line);
+    const decoded = try decodeRaftFrame(allocator, line);
+    defer decoded.deinit(allocator);
     switch (decoded.body) {
         .install_snapshot => |is| {
             try std.testing.expect(is.done);

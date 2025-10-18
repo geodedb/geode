@@ -7,8 +7,8 @@ pub const ImplDefinedFinding = struct {
     detail: []const u8,
 };
 
-pub fn collect(ally: std.mem.Allocator, opts: struct { zero_length_paths_excluded: bool }) ![]ImplDefinedFinding {
-    var list = std.ArrayList(ImplDefinedFinding).init(ally);
+pub fn collect(allocator: std.mem.Allocator, opts: struct { zero_length_paths_excluded: bool }) ![]ImplDefinedFinding {
+    var list = std.ArrayList(ImplDefinedFinding).init(allocator);
     if (opts.zero_length_paths_excluded) {
         try list.append(.{ .code = "ZeroLengthPathExcluded", .detail = "Zero-length paths excluded when min_hops=0 (impl-defined policy)" });
     }

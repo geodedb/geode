@@ -71,10 +71,10 @@ pub fn dedupRowsIfDistinct(rows: []Row, distinct: bool, order: ?ast.OrderBy, are
     return result.toOwnedSlice();
 }
 
-pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy.NullsPolicy, ctx: planner.SessionContext, ally: std.mem.Allocator) !void {
+pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy.NullsPolicy, ctx: planner.SessionContext, allocator: std.mem.Allocator) !void {
     // Sort indices to keep original stability; break ties by original index.
-    const idxs = try ally.alloc(usize, rows.len);
-    defer ally.free(idxs);
+    const idxs = try allocator.alloc(usize, rows.len);
+    defer allocator.free(idxs);
     for (idxs, 0..) |*p, i| p.* = i;
     const Ctx = struct {
         rows: []Row,
@@ -82,9 +82,9 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
         nulls_policy: ?ast.OrderBy.NullsPolicy,
         ctx: planner.SessionContext,
         /// P2-3: Added allocator for temporary allocations in sort comparison
-        ally: std.mem.Allocator,
+        allocator: std.mem.Allocator,
     };
-    const sctx = Ctx{ .rows = rows, .desc = desc, .nulls_policy = nulls_policy, .ctx = ctx, .ally = ally };
+    const sctx = Ctx{ .rows = rows, .desc = desc, .nulls_policy = nulls_policy, .ctx = ctx, .allocator = allocator };
     std.sort.pdq(usize, idxs, sctx, struct {
         fn isNull(e: ast.Expr) bool {
             return e == .Null;
@@ -108,7 +108,7 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
             const cmp = planner.compareTemporalForOrder(ra.key, rb.key, sc.ctx) catch {
                 // Fallback to lexicographic stringify on error.Invalid
                 // P2-3: Use provided allocator instead of page_allocator
-                const tmp_ally = sc.ally;
+                const tmp_ally = sc.allocator;
                 const sa = printer.stringifyExprAlloc(tmp_ally, ra.key, .{}) catch return a < b;
                 defer tmp_ally.free(sa);
                 const sb = printer.stringifyExprAlloc(tmp_ally, rb.key, .{}) catch return a < b;
@@ -133,14 +133,14 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
         }
     }.less);
     // Reorder rows in-place according to idxs
-    var tmp = try ally.alloc(Row, rows.len);
-    defer ally.free(tmp);
+    var tmp = try allocator.alloc(Row, rows.len);
+    defer allocator.free(tmp);
     for (idxs, 0..) |i, j| tmp[j] = rows[i];
     std.mem.copyForwards(Row, rows, tmp);
 }
 
 test "stable ORDER BY with cross-timezone equivalence and local attach" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const ctx = planner.SessionContext{ .session_offset_minutes = 0 };
     var rows: [4]Row = .{
         .{ .id = 0, .key = .{ .DateTime = .{ .raw = "2024-01-01T10:00Z", .parsed = try @import("temporal.zig").parseDateTime("2024-01-01T10:00Z", true) } } },
@@ -149,7 +149,7 @@ test "stable ORDER BY with cross-timezone equivalence and local attach" {
         .{ .id = 3, .key = .{ .LocalDateTime = .{ .raw = "2024-01-01T10:00", .parsed = try @import("temporal.zig").parseDateTime("2024-01-01T10:00", false) } } },
     };
     // Ascending sort should place 09:00Z first; 10:00Z, 11:00+01:00, and local 10:00 (session 0) are equal instants.
-    try stableOrderByTemporal(&rows, false, null, ctx, ally);
+    try stableOrderByTemporal(&rows, false, null, ctx, allocator);
     try std.testing.expect(rows[0].id == 2);
     // The next three can be in original relative order among equal keys due to stability: ids 0,1,3 should preserve input order 0,1,3.
     try std.testing.expect(rows[1].id == 0);
@@ -158,7 +158,7 @@ test "stable ORDER BY with cross-timezone equivalence and local attach" {
 }
 
 test "ORDER BY nulls policy: FIRST/LAST" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const ctx = planner.SessionContext{ .session_offset_minutes = 0 };
     var rows: [5]Row = .{
         .{
@@ -174,32 +174,32 @@ test "ORDER BY nulls policy: FIRST/LAST" {
         .{ .id = 4, .key = .{ .DateTime = .{ .raw = "2024-01-01T11:00+01:00", .parsed = try @import("temporal.zig").parseDateTime("2024-01-01T11:00+01:00", true) } } },
     };
     // ASC NULLS FIRST: nulls should be at the start
-    try stableOrderByTemporal(&rows, false, .first, ctx, ally);
+    try stableOrderByTemporal(&rows, false, .first, ctx, allocator);
     try std.testing.expect(rows[0].id == 0);
     try std.testing.expect(rows[1].id == 2);
     // ASC NULLS LAST: nulls should be at the end
     var rows2 = rows;
-    try stableOrderByTemporal(&rows2, false, .last, ctx, ally);
+    try stableOrderByTemporal(&rows2, false, .last, ctx, allocator);
     try std.testing.expect(rows2[3].id == 0);
     try std.testing.expect(rows2[4].id == 2);
     // DESC NULLS FIRST: nulls should be at the start
     var rows3 = rows;
-    try stableOrderByTemporal(&rows3, true, .first, ctx, ally);
+    try stableOrderByTemporal(&rows3, true, .first, ctx, allocator);
     try std.testing.expect(rows3[0].id == 0);
     try std.testing.expect(rows3[1].id == 2);
     // DESC NULLS LAST: nulls should be at the end
     var rows4 = rows;
-    try stableOrderByTemporal(&rows4, true, .last, ctx, ally);
+    try stableOrderByTemporal(&rows4, true, .last, ctx, allocator);
     try std.testing.expect(rows4[3].id == 0);
     try std.testing.expect(rows4[4].id == 2);
 }
 
 // Skeleton set operations over integer rows for semantics tests
-pub fn dedupInts(ally: std.mem.Allocator, vals: []const i64) ![]i64 {
-    var set = std.AutoHashMap(i64, void).init(ally);
+pub fn dedupInts(allocator: std.mem.Allocator, vals: []const i64) ![]i64 {
+    var set = std.AutoHashMap(i64, void).init(allocator);
     defer set.deinit();
     for (vals) |v| _ = try set.put(v, {});
-    var out = try ally.alloc(i64, set.count());
+    var out = try allocator.alloc(i64, set.count());
     var it = set.keyIterator();
     var i: usize = 0;
     while (it.next()) |p| : (i += 1) out[i] = p.*;
@@ -207,20 +207,20 @@ pub fn dedupInts(ally: std.mem.Allocator, vals: []const i64) ![]i64 {
     return out;
 }
 
-pub fn multisetIntersect(ally: std.mem.Allocator, a: []const i64, b: []const i64) ![]i64 {
-    var map = std.AutoHashMap(i64, usize).init(ally);
+pub fn multisetIntersect(allocator: std.mem.Allocator, a: []const i64, b: []const i64) ![]i64 {
+    var map = std.AutoHashMap(i64, usize).init(allocator);
     defer map.deinit();
     for (a) |v| {
         const cur = map.get(v) orelse 0;
         _ = try map.put(v, cur + 1);
     }
-    var out = std.ArrayList(i64).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList(i64).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     for (b) |v| if (map.get(v)) |cnt| if (cnt > 0) {
-        try out.append(ally, v);
+        try out.append(allocator, v);
         _ = try map.put(v, cnt - 1);
     };
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
 // ===========================
@@ -237,7 +237,7 @@ pub fn multisetIntersect(ally: std.mem.Allocator, a: []const i64, b: []const i64
 pub const AggStageTimings = struct { build_ns: i128 = 0, emit_ns: i128 = 0 };
 
 pub fn runGroupedQuery(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     q: ast.Query,
     input_names: []const []const u8,
     input_rows: []const []eval.Value,
@@ -247,72 +247,72 @@ pub fn runGroupedQuery(
 ) ![]const []const BindingValue {
     // Validate GROUP BY legality using planner first
     // P2-3: Pass allocator to planQuery
-    _ = try planner.planQuery(ally, q, .{});
+    _ = try planner.planQuery(allocator, q, .{});
     if (q.group_by == null) return error.Invalid; // requires GROUP BY
     const gb = q.group_by.?;
     // 1) Collect aggregates from RETURN and HAVING
-    var aggs = std.ArrayList(Agg).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer aggs.deinit(ally);
-    var arg_exprs = std.ArrayList(?ast.Expr).initCapacity(ally, 0) catch return error.OutOfMemory; // one per agg; null for COUNT(*)
-    defer arg_exprs.deinit(ally);
+    var aggs = std.ArrayList(Agg).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer aggs.deinit(allocator);
+    var arg_exprs = std.ArrayList(?ast.Expr).initCapacity(allocator, 0) catch return error.OutOfMemory; // one per agg; null for COUNT(*)
+    defer arg_exprs.deinit(allocator);
 
     const addAggFromExpr = struct {
-        fn go(ally_inner: std.mem.Allocator, aggs_out: *std.ArrayList(Agg), args_out: *std.ArrayList(?ast.Expr), e: ast.Expr) void {
+        fn go(allocator_inner: std.mem.Allocator, aggs_out: *std.ArrayList(Agg), args_out: *std.ArrayList(?ast.Expr), e: ast.Expr) void {
             switch (e) {
                 .Call => |c| switch (c.callee.*) {
                     .Ident => |id| {
                         if (std.ascii.eqlIgnoreCase(id.orig, "count")) {
                             if (c.args.len == 0) {
-                                aggs_out.append(ally_inner, .CountStar) catch |err| {
+                                aggs_out.append(allocator_inner, .CountStar) catch |err| {
                                     std.log.err("CRITICAL: Failed to append COUNT(*) aggregate (OOM, query will fail): {any}", .{err});
                                 };
-                                args_out.append(ally_inner, null) catch |err| {
+                                args_out.append(allocator_inner, null) catch |err| {
                                     std.log.err("CRITICAL: Failed to append COUNT(*) args (OOM, query will fail): {any}", .{err});
                                 };
                             } else {
-                                aggs_out.append(ally_inner, .Count) catch |err| {
+                                aggs_out.append(allocator_inner, .Count) catch |err| {
                                     std.log.err("CRITICAL: Failed to append COUNT aggregate (OOM, query will fail): {any}", .{err});
                                 };
-                                args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                     std.log.err("CRITICAL: Failed to append COUNT args (OOM, query will fail): {any}", .{err});
                                 };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "countdistinct") or std.ascii.eqlIgnoreCase(id.orig, "count_distinct")) {
                             // Interim syntax: COUNT_DISTINCT(expr) or countDistinct(expr) until parser supports COUNT(DISTINCT expr)
                             if (c.args.len == 1) {
-                                aggs_out.append(ally_inner, .CountDistinct) catch |err| {
+                                aggs_out.append(allocator_inner, .CountDistinct) catch |err| {
                                     std.log.err("CRITICAL: Failed to append COUNT DISTINCT aggregate (OOM, query will fail): {any}", .{err});
                                 };
-                                args_out.append(ally_inner, c.args[0].*) catch |err| {
+                                args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                     std.log.err("CRITICAL: Failed to append COUNT DISTINCT args (OOM, query will fail): {any}", .{err});
                                 };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "sum")) {
-                            aggs_out.append(ally_inner, .Sum) catch |err| {
+                            aggs_out.append(allocator_inner, .Sum) catch |err| {
                                 std.log.err("CRITICAL: Failed to append SUM aggregate (OOM, query will fail): {any}", .{err});
                             };
-                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                            args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 std.log.err("CRITICAL: Failed to append SUM args (OOM, query will fail): {any}", .{err});
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "min")) {
-                            aggs_out.append(ally_inner, .Min) catch |err| {
+                            aggs_out.append(allocator_inner, .Min) catch |err| {
                                 std.log.err("CRITICAL: Failed to append MIN aggregate (OOM, query will fail): {any}", .{err});
                             };
-                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                            args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 std.log.err("CRITICAL: Failed to append MIN args (OOM, query will fail): {any}", .{err});
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "max")) {
-                            aggs_out.append(ally_inner, .Max) catch |err| {
+                            aggs_out.append(allocator_inner, .Max) catch |err| {
                                 std.log.err("CRITICAL: Failed to append MAX aggregate (OOM, query will fail): {any}", .{err});
                             };
-                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                            args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 std.log.err("CRITICAL: Failed to append MAX args (OOM, query will fail): {any}", .{err});
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "avg")) {
-                            aggs_out.append(ally_inner, .Avg) catch |err| {
+                            aggs_out.append(allocator_inner, .Avg) catch |err| {
                                 std.log.err("CRITICAL: Failed to append AVG aggregate (OOM, query will fail): {any}", .{err});
                             };
-                            args_out.append(ally_inner, c.args[0].*) catch |err| {
+                            args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 std.log.err("CRITICAL: Failed to append AVG args (OOM, query will fail): {any}", .{err});
                             };
                         }
@@ -323,32 +323,32 @@ pub fn runGroupedQuery(
             }
         }
     }.go;
-    for (q.ret.items) |it| addAggFromExpr(ally, &aggs, &arg_exprs, it.expr);
-    if (q.having) |hv| addAggFromExpr(ally, &aggs, &arg_exprs, hv);
+    for (q.ret.items) |it| addAggFromExpr(allocator, &aggs, &arg_exprs, it.expr);
+    if (q.having) |hv| addAggFromExpr(allocator, &aggs, &arg_exprs, hv);
     if (aggs.items.len == 0) {
         // Default to COUNT(*)
-        try aggs.append(ally, .CountStar);
-        try arg_exprs.append(ally, null);
+        try aggs.append(allocator, .CountStar);
+        try arg_exprs.append(allocator, null);
     }
 
     // 2) Build input binding rows: evaluate group keys and aggregate arguments per input row
     const key_len = gb.keys.len;
-    var rows = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer rows.deinit(ally);
+    var rows = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer rows.deinit(allocator);
     // Build a map to memoize argument expression stringified forms to index
-    var arg_sig_to_idx = std.StringHashMap(usize).init(ally);
+    var arg_sig_to_idx = std.StringHashMap(usize).init(allocator);
     defer arg_sig_to_idx.deinit();
     // Precompute signatures for arg_exprs for memoization keys
-    var arg_sigs = try ally.alloc([]const u8, arg_exprs.items.len);
+    var arg_sigs = try allocator.alloc([]const u8, arg_exprs.items.len);
     defer {
         var ii: usize = 0;
-        while (ii < arg_sigs.len) : (ii += 1) if (arg_sigs[ii].len > 0) ally.free(arg_sigs[ii]);
-        ally.free(arg_sigs);
+        while (ii < arg_sigs.len) : (ii += 1) if (arg_sigs[ii].len > 0) allocator.free(arg_sigs[ii]);
+        allocator.free(arg_sigs);
     }
     var ai_sig: usize = 0;
     while (ai_sig < arg_exprs.items.len) : (ai_sig += 1) {
         if (arg_exprs.items[ai_sig]) |earg| {
-            const s = printer.stringifyExprAlloc(ally, earg, .{}) catch "";
+            const s = printer.stringifyExprAlloc(allocator, earg, .{}) catch "";
             arg_sigs[ai_sig] = s;
             if (s.len > 0) _ = try arg_sig_to_idx.put(s, ai_sig);
         } else {
@@ -359,13 +359,13 @@ pub fn runGroupedQuery(
     const t_build_start = if (timings) |_| std.time.nanoTimestamp() else 0;
     for (input_rows) |vals| {
         // Make eval env for this row
-        const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values, .allocator = ally };
+        const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values, .allocator = allocator };
         // Evaluate keys
-        var out_row = try ally.alloc(BindingValue, key_len + aggs.items.len);
+        var out_row = try allocator.alloc(BindingValue, key_len + aggs.items.len);
         // Keys
         var ki: usize = 0;
         while (ki < key_len) : (ki += 1) {
-            const kv = eval.evalExpr(ally, gb.keys[ki], env) catch eval.Value{ .Null = {} };
+            const kv = eval.evalExpr(allocator, gb.keys[ki], env) catch eval.Value{ .Null = {} };
             out_row[ki] = valueToBinding(kv);
         }
         // Values for each aggregate argument (placed sequentially after keys in same order as aggs)
@@ -386,125 +386,125 @@ pub fn runGroupedQuery(
                     }
                 }
                 if (!reused) {
-                    const vv = eval.evalExpr(ally, arg_e, env) catch eval.Value{ .Null = {} };
+                    const vv = eval.evalExpr(allocator, arg_e, env) catch eval.Value{ .Null = {} };
                     out_row[key_len + ai] = valueToBinding(vv);
                 }
             } else {
                 out_row[key_len + ai] = BindingValue{ .Null = {} };
             }
         }
-        try rows.append(ally, out_row);
+        try rows.append(allocator, out_row);
     }
 
     // 3) Run grouping
-    var key_idxs_buf = try ally.alloc(usize, key_len);
-    defer ally.free(key_idxs_buf);
+    var key_idxs_buf = try allocator.alloc(usize, key_len);
+    defer allocator.free(key_idxs_buf);
     var j: usize = 0;
     while (j < key_len) : (j += 1) key_idxs_buf[j] = j;
     const spec: GroupSpec = .{ .key_idxs = key_idxs_buf, .aggs = aggs.items };
     // value_idxs align with arguments placed right after keys
-    var v_idxs = try ally.alloc(usize, aggs.items.len);
-    defer ally.free(v_idxs);
+    var v_idxs = try allocator.alloc(usize, aggs.items.len);
+    defer allocator.free(v_idxs);
     var vi: usize = 0;
     while (vi < aggs.items.len) : (vi += 1) v_idxs[vi] = key_len + vi;
-    const grouped = try groupAndAggregate(ally, rows.items, spec, v_idxs);
-    defer ally.free(grouped);
+    const grouped = try groupAndAggregate(allocator, rows.items, spec, v_idxs);
+    defer allocator.free(grouped);
 
     // 4) HAVING filter: build maps and evaluate predicate on aggregated rows
-    var key_map = std.StringHashMap(usize).init(ally);
+    var key_map = std.StringHashMap(usize).init(allocator);
     defer key_map.deinit();
     // Map each key's stringified expr to its index
-    var tmp_allocd = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    var tmp_allocd = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
     defer {
-        for (tmp_allocd.items) |s| ally.free(s);
-        tmp_allocd.deinit(ally);
+        for (tmp_allocd.items) |s| allocator.free(s);
+        tmp_allocd.deinit(allocator);
     }
     var kx: usize = 0;
     while (kx < key_len) : (kx += 1) {
-        const ks = printer.stringifyExprAlloc(ally, gb.keys[kx], .{}) catch "";
+        const ks = printer.stringifyExprAlloc(allocator, gb.keys[kx], .{}) catch "";
         if (ks.len > 0) {
             try key_map.put(ks, kx);
-            try tmp_allocd.append(ally, ks);
+            try tmp_allocd.append(allocator, ks);
         }
     }
-    var agg_map = std.StringHashMap(usize).init(ally);
+    var agg_map = std.StringHashMap(usize).init(allocator);
     defer agg_map.deinit();
     // Build normalized signatures for collected aggregates
     var ai2: usize = 0;
     while (ai2 < aggs.items.len) : (ai2 += 1) {
-        var sig = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-        defer sig.deinit(ally);
+        var sig = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        defer sig.deinit(allocator);
         switch (aggs.items[ai2]) {
-            .CountStar => try sig.appendSlice(ally, "count(*)"),
+            .CountStar => try sig.appendSlice(allocator, "count(*)"),
             .Count => {
-                try sig.appendSlice(ally, "count(");
-                const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(ally, s);
-                try sig.append(ally, ')');
+                try sig.appendSlice(allocator, "count(");
+                const s = printer.stringifyExprAlloc(allocator, arg_exprs.items[ai2].?, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig.appendSlice(allocator, s);
+                try sig.append(allocator, ')');
             },
             .CountDistinct => {
                 // Normalized signature uses lowercase function name no spaces: countdistinct(expr)
-                try sig.appendSlice(ally, "countdistinct(");
-                const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(ally, s);
-                try sig.append(ally, ')');
+                try sig.appendSlice(allocator, "countdistinct(");
+                const s = printer.stringifyExprAlloc(allocator, arg_exprs.items[ai2].?, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig.appendSlice(allocator, s);
+                try sig.append(allocator, ')');
             },
             .Sum => {
-                try sig.appendSlice(ally, "sum(");
-                const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(ally, s);
-                try sig.append(ally, ')');
+                try sig.appendSlice(allocator, "sum(");
+                const s = printer.stringifyExprAlloc(allocator, arg_exprs.items[ai2].?, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig.appendSlice(allocator, s);
+                try sig.append(allocator, ')');
             },
             .Min => {
-                try sig.appendSlice(ally, "min(");
-                const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(ally, s);
-                try sig.append(ally, ')');
+                try sig.appendSlice(allocator, "min(");
+                const s = printer.stringifyExprAlloc(allocator, arg_exprs.items[ai2].?, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig.appendSlice(allocator, s);
+                try sig.append(allocator, ')');
             },
             .Max => {
-                try sig.appendSlice(ally, "max(");
-                const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(ally, s);
-                try sig.append(ally, ')');
+                try sig.appendSlice(allocator, "max(");
+                const s = printer.stringifyExprAlloc(allocator, arg_exprs.items[ai2].?, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig.appendSlice(allocator, s);
+                try sig.append(allocator, ')');
             },
             .Avg => {
-                try sig.appendSlice(ally, "avg(");
-                const s = printer.stringifyExprAlloc(ally, arg_exprs.items[ai2].?, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig.appendSlice(ally, s);
-                try sig.append(ally, ')');
+                try sig.appendSlice(allocator, "avg(");
+                const s = printer.stringifyExprAlloc(allocator, arg_exprs.items[ai2].?, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig.appendSlice(allocator, s);
+                try sig.append(allocator, ')');
             },
         }
         try agg_map.put(sig.items, ai2);
     }
 
     // Filtered aggregated rows
-    var kept = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer kept.deinit(ally);
+    var kept = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer kept.deinit(allocator);
     if (q.having) |hv| {
         for (grouped) |gr| {
-            const rewritten = rewriteExprWithAggregates(ally, hv, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
-            const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{}, .allocator = ally }) catch eval.Value{ .Null = {} };
-            if (v == .Bool and v.Bool) try kept.append(ally, gr);
+            const rewritten = rewriteExprWithAggregates(allocator, hv, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
+            const v = eval.evalExpr(allocator, rewritten, .{ .names = &.{}, .values = &.{}, .allocator = allocator }) catch eval.Value{ .Null = {} };
+            if (v == .Bool and v.Bool) try kept.append(allocator, gr);
         }
     } else {
         // keep all
-        for (grouped) |gr| try kept.append(ally, gr);
+        for (grouped) |gr| try kept.append(allocator, gr);
     }
 
     // 5) Project RETURN items for each kept row
     // Build maps for projection reuse (as above): key_map and agg_map already exist.
     if (timings) |tp| tp.build_ns = std.time.nanoTimestamp() - t_build_start;
     const t_emit_start = if (timings) |_| std.time.nanoTimestamp() else 0;
-    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     for (kept.items) |gr| {
-        var prow = try ally.alloc(BindingValue, q.ret.items.len);
+        var prow = try allocator.alloc(BindingValue, q.ret.items.len);
         var ri: usize = 0;
         while (ri < q.ret.items.len) : (ri += 1) {
             const expr = q.ret.items[ri].expr;
@@ -516,28 +516,28 @@ pub fn runGroupedQuery(
                         .Ident => |id| id.orig,
                         else => break :blk_c,
                     };
-                    var sig = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-                    defer sig.deinit(ally);
+                    var sig = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+                    defer sig.deinit(allocator);
                     // lowercase name
                     var ii: usize = 0;
-                    while (ii < nm.len) : (ii += 1) try sig.append(ally, std.ascii.toLower(nm[ii]));
-                    try sig.append(ally, '(');
+                    while (ii < nm.len) : (ii += 1) try sig.append(allocator, std.ascii.toLower(nm[ii]));
+                    try sig.append(allocator, '(');
                     if (c.args.len == 0) {
-                        try sig.append(ally, '*');
+                        try sig.append(allocator, '*');
                     } else if (c.args.len == 1) {
-                        const s = printer.stringifyExprAlloc(ally, c.args[0].*, .{}) catch "";
-                        defer if (s.len > 0) ally.free(s);
-                        try sig.appendSlice(ally, s);
+                        const s = printer.stringifyExprAlloc(allocator, c.args[0].*, .{}) catch "";
+                        defer if (s.len > 0) allocator.free(s);
+                        try sig.appendSlice(allocator, s);
                     }
-                    try sig.append(ally, ')');
+                    try sig.append(allocator, ')');
                     if (agg_map.get(sig.items)) |rel| {
                         prow[ri] = gr[key_len + rel];
                         set = true;
                     }
                 },
                 else => {
-                    const ks = printer.stringifyExprAlloc(ally, expr, .{}) catch "";
-                    defer if (ks.len > 0) ally.free(ks);
+                    const ks = printer.stringifyExprAlloc(allocator, expr, .{}) catch "";
+                    defer if (ks.len > 0) allocator.free(ks);
                     if (key_map.get(ks)) |idx| {
                         prow[ri] = gr[idx];
                         set = true;
@@ -546,17 +546,17 @@ pub fn runGroupedQuery(
             }
             if (!set) prow[ri] = BindingValue{ .Null = {} };
         }
-        try out.append(ally, prow);
+        try out.append(allocator, prow);
     }
     // 6) ORDER BY on aggregated output, if present
     if (q.order_by) |ob| {
         if (ob.keys.len > 0 and out.items.len > 1) {
             // Precompute order-by expression values against aggregated rows, supporting alias and ordinal forms
-            var keyvals = try ally.alloc([]BindingValue, out.items.len);
-            defer ally.free(keyvals);
+            var keyvals = try allocator.alloc([]BindingValue, out.items.len);
+            defer allocator.free(keyvals);
             var rix: usize = 0;
             while (rix < out.items.len) : (rix += 1) {
-                var kv = try ally.alloc(BindingValue, ob.keys.len);
+                var kv = try allocator.alloc(BindingValue, ob.keys.len);
                 var kk: usize = 0;
                 while (kk < ob.keys.len) : (kk += 1) {
                     var expr = ob.keys[kk].expr;
@@ -584,15 +584,15 @@ pub fn runGroupedQuery(
                     }
                     // Evaluate against the aggregated row gr (kept row), not projection
                     const gr = kept.items[rix];
-                    const rewritten = rewriteExprWithAggregates(ally, expr, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
-                    const v = eval.evalExpr(ally, rewritten, .{ .names = &.{}, .values = &.{}, .allocator = ally }) catch eval.Value{ .Null = {} };
+                    const rewritten = rewriteExprWithAggregates(allocator, expr, &key_map, &agg_map, gr, key_len) catch ast.Expr{ .Null = {} };
+                    const v = eval.evalExpr(allocator, rewritten, .{ .names = &.{}, .values = &.{}, .allocator = allocator }) catch eval.Value{ .Null = {} };
                     kv[kk] = valueToBinding(v);
                 }
                 keyvals[rix] = kv;
             }
             // Sort stable by indices with comparator using nulls policy and desc
-            const idxs = try ally.alloc(usize, out.items.len);
-            defer ally.free(idxs);
+            const idxs = try allocator.alloc(usize, out.items.len);
+            defer allocator.free(idxs);
             for (idxs, 0..) |*p, i| p.* = i;
             const Ctx = struct { rows: []const []const BindingValue, keys: []const []const BindingValue, ob: ast.OrderBy };
             const ctx = Ctx{ .rows = out.items, .keys = keyvals, .ob = ob };
@@ -625,15 +625,15 @@ pub fn runGroupedQuery(
                 }
             }.less);
             // Apply permutation
-            var sorted = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-            defer sorted.deinit(ally);
-            for (idxs) |ix| try sorted.append(ally, out.items[ix]);
-            out.deinit(ally);
+            var sorted = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            defer sorted.deinit(allocator);
+            for (idxs) |ix| try sorted.append(allocator, out.items[ix]);
+            out.deinit(allocator);
             out = sorted;
         }
     }
     if (timings) |tp2| tp2.emit_ns = std.time.nanoTimestamp() - t_emit_start;
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
 fn valueToBinding(v: eval.Value) BindingValue {
@@ -662,7 +662,7 @@ fn valueToBinding(v: eval.Value) BindingValue {
 // ---------------------------
 
 test "executor: COUNT(expr) vs COUNT(*)" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // Query: GROUP BY s RETURN COUNT(a), COUNT(*)
     const cal = ast.Expr{ .Ident = "count" };
     const a_id = ast.Expr{ .Ident = "a" };
@@ -688,8 +688,8 @@ test "executor: COUNT(expr) vs COUNT(*)" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "g2" } };
     const r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g2" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
     // Validate both groups: counts should be (1,2)
     var seen = [_]bool{ false, false };
@@ -709,7 +709,7 @@ test "executor: COUNT(expr) vs COUNT(*)" {
 }
 
 test "executor: empty input yields no groups" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const cal = ast.Expr{ .Ident = "count" };
     const s_id = ast.Expr{ .Ident = "s" };
     const call_count_star = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{} } };
@@ -717,13 +717,13 @@ test "executor: empty input yields no groups" {
     const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{s_id} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{"s"};
     const rows: []const []eval.Value = &.{};
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 0);
 }
 
 test "executor: multi-key GROUP BY counts" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const cal = ast.Expr{ .Ident = "count" };
     const s1 = ast.Expr{ .Ident = "s1" };
     const s2 = ast.Expr{ .Ident = "s2" };
@@ -735,13 +735,13 @@ test "executor: multi-key GROUP BY counts" {
     const r1 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
     const r2 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "z" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..] };
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
 }
 
 test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // Query: GROUP BY g HAVING COUNT(*) > 2 AND (SUM(a) > 2 OR AVG(a) = 1) RETURN g, SUM(a), AVG(a)
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -766,8 +766,8 @@ test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
     const r3 = [_]eval.Value{ .{ .Int = 10 }, .{ .Str = "B" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
-    const out = try runGroupedQuery(ally, q, names, rows, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    defer allocator.free(out);
     // Expect only group A remains, with columns: g, SUM(a)=4, AVG(a)=1
     try std.testing.expect(out.len == 1);
     const r = out[0];
@@ -778,7 +778,7 @@ test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
 }
 
 test "executor: COUNT on NULL-only inputs and COUNT(*)" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const cal = ast.Expr{ .Ident = "count" };
     const a = ast.Expr{ .Ident = "a" };
     const g = ast.Expr{ .Ident = "g" };
@@ -790,15 +790,15 @@ test "executor: COUNT on NULL-only inputs and COUNT(*)" {
     const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 0);
     try std.testing.expect(out[0][1] == .Int and out[0][1].Int == 3);
 }
 
 test "executor: HAVING 3VL nested boolean with NULL short-circuit" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
     const fnc = ast.Expr{ .Ident = "count" };
@@ -818,14 +818,14 @@ test "executor: HAVING 3VL nested boolean with NULL short-circuit" {
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "A" } };
     // Group B: a values [null] -> COUNT(a)>0 false, AVG(a)=NULL; false AND NULL -> false -> dropped
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "A"));
 }
 
 test "executor: multi-key GROUP BY with NULL keys" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const k1 = ast.Expr{ .Ident = "k1" };
     const k2 = ast.Expr{ .Ident = "k2" };
     const cal = ast.Expr{ .Ident = "count" };
@@ -836,14 +836,14 @@ test "executor: multi-key GROUP BY with NULL keys" {
     const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     // Expect two groups: (NULL,x) and (NULL,y)
     try std.testing.expect(out.len == 2);
 }
 
 test "executor: ORDER BY over aggregated outputs with NULLS policy" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
     const fns = ast.Expr{ .Ident = "sum" };
@@ -858,8 +858,8 @@ test "executor: ORDER BY over aggregated outputs with NULLS policy" {
     const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
     const r3 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "C" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     // Expect order by SUM ascending with NULLS LAST -> C(1), A(3), B(NULL)
     try std.testing.expect(out.len == 3);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "C"));
@@ -868,7 +868,7 @@ test "executor: ORDER BY over aggregated outputs with NULLS policy" {
 }
 
 test "grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // rows: (g, d as Decimal literal via eval.Value, s, b)
     const rows: []const []BindingValue = &.{
         &.{ .{ .Str = "A" }, .{ .Decimal = .{ .coeff = 1234, .scale = 2 } }, .{ .Str = "z" }, .{ .Bool = true } }, // 12.34
@@ -878,8 +878,8 @@ test "grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
     // Aggs: SUM(d), AVG(d), MIN(s), MAX(b)
     const spec = GroupSpec{ .key_idxs = &.{0}, .aggs = &.{ .Sum, .Avg, .Min, .Max } };
     const vals = &.{ 1, 1, 2, 3 }; // indices for d,d,s,b
-    const out = try groupAndAggregate(ally, rows, spec, vals);
-    defer ally.free(out);
+    const out = try groupAndAggregate(allocator, rows, spec, vals);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
     var sawA = false;
     var sawB = false;
@@ -908,7 +908,7 @@ test "grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
 }
 
 test "executor: HAVING with Decimal literal compares against decimal AVG" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
     const fna = ast.Expr{ .Ident = "avg" };
@@ -923,14 +923,14 @@ test "executor: HAVING with Decimal literal compares against decimal AVG" {
     const r0 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 220, .scale = 2 } }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "X"));
 }
 
 test "executor: ORDER BY using ordinal and alias resolution on aggregated output" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
     const fns = ast.Expr{ .Ident = "sum" };
@@ -945,8 +945,8 @@ test "executor: ORDER BY using ordinal and alias resolution on aggregated output
     const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
     // ORDER BY 2 (sum) ASC: Y(1) then X(3). Second key orders by alias desc but distinct sums mean first key decides
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "Y"));
@@ -954,7 +954,7 @@ test "executor: ORDER BY using ordinal and alias resolution on aggregated output
 }
 
 test "executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // Query: GROUP BY g RETURN COUNT_DISTINCT(a)
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -967,8 +967,8 @@ test "executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
     const r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
     const r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     // Distinct non-null values: {1,2} => 2
     try std.testing.expect(out[0].len == 1);
@@ -976,7 +976,7 @@ test "executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
 }
 
 test "executor: COUNT_DISTINCT multi-group" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
     const fnc2 = ast.Expr{ .Ident = "count_distinct" };
@@ -990,8 +990,8 @@ test "executor: COUNT_DISTINCT multi-group" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
     const r3 = [_]eval.Value{ .{ .Int = 5 }, .{ .Str = "Y" } };
     const r4 = [_]eval.Value{ .{ .Int = 5 }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
     var sawX = false;
     var sawY = false;
@@ -1004,7 +1004,7 @@ test "executor: COUNT_DISTINCT multi-group" {
 
 test "TestCANARY_REQ_GQL_012_CountDistinctExec" {
     // E2E: parse source with COUNT(DISTINCT) and run grouping manually through runGroupedQuery using constructed AST.
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // Build AST manually similar to parser output: RETURN COUNT(DISTINCT a) GROUP BY g
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -1017,30 +1017,30 @@ test "TestCANARY_REQ_GQL_012_CountDistinctExec" {
     const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(ally, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 2);
 }
 
-pub fn multisetExcept(ally: std.mem.Allocator, a: []const i64, b: []const i64) ![]i64 {
-    var map = std.AutoHashMap(i64, usize).init(ally);
+pub fn multisetExcept(allocator: std.mem.Allocator, a: []const i64, b: []const i64) ![]i64 {
+    var map = std.AutoHashMap(i64, usize).init(allocator);
     defer map.deinit();
     for (b) |v| {
         const cur = map.get(v) orelse 0;
         _ = try map.put(v, cur + 1);
     }
-    var out = std.ArrayList(i64).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList(i64).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     for (a) |v| {
         const cnt = map.get(v) orelse 0;
         if (cnt == 0) {
-            try out.append(ally, v);
+            try out.append(allocator, v);
         } else {
             _ = try map.put(v, cnt - 1);
         }
     }
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
 test "set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL" {
@@ -1460,14 +1460,14 @@ pub const HashAggregator = struct {
             var new_vals = std.ArrayList([]const u8).init(allocator);
             defer new_vals.deinit();
             var insertFn = struct {
-                fn insert(ally: std.mem.Allocator, slots: []?SetEntry, slot_mask: usize, v: []const u8, store: *std.ArrayList([]const u8)) void {
+                fn insert(alloc: std.mem.Allocator, slots: []?SetEntry, slot_mask: usize, v: []const u8, store: *std.ArrayList([]const u8)) void {
                     const h = std.hash.Wyhash.hash(0, v);
                     var idx: usize = @intCast(h & slot_mask);
                     while (true) {
                         if (slots[idx] == null) {
                             // copy value
                             // P2-3: Use provided allocator instead of page_allocator
-                            const dup = ally.alloc(u8, v.len) catch return; // best effort
+                            const dup = alloc.alloc(u8, v.len) catch return; // best effort
                             @memcpy(dup, v);
                             store.append(dup) catch return;
                             slots[idx] = SetEntry{ .hash = h, .val = dup };
@@ -1828,75 +1828,75 @@ fn rowEq(a: []const BindingValue, b: []const BindingValue) bool {
     return true;
 }
 
-fn encodeValueKey(ally: std.mem.Allocator, buf: *std.ArrayList(u8), v: BindingValue) !void {
+fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: BindingValue) !void {
     // Simple, deterministic encoding: type tag + length + payload; NULL is just tag.
     switch (v) {
-        .Null => try buf.append(ally, 'N'),
+        .Null => try buf.append(allocator, 'N'),
         .Bool => |b| {
-            try buf.append(ally, 'B');
-            try buf.append(ally, if (b) '1' else '0');
+            try buf.append(allocator, 'B');
+            try buf.append(allocator, if (b) '1' else '0');
         },
         .Int => |n| {
-            try buf.append(ally, 'I');
-            try buf.writer(ally).print("{d};", .{n});
+            try buf.append(allocator, 'I');
+            try buf.writer(allocator).print("{d};", .{n});
         },
         .Decimal => |d| {
-            try buf.append(ally, 'D');
-            try buf.writer(ally).print("{d}@{d};", .{ d.coeff, d.scale });
+            try buf.append(allocator, 'D');
+            try buf.writer(allocator).print("{d}@{d};", .{ d.coeff, d.scale });
         },
         .Str => |s| {
-            try buf.append(ally, 'S');
-            try buf.writer(ally).print("{d}:", .{s.len});
-            try buf.appendSlice(ally, s);
+            try buf.append(allocator, 'S');
+            try buf.writer(allocator).print("{d}:", .{s.len});
+            try buf.appendSlice(allocator, s);
         },
         .List => |l| {
-            try buf.append(ally, 'L');
-            try buf.writer(ally).print("{d}:", .{l.len});
+            try buf.append(allocator, 'L');
+            try buf.writer(allocator).print("{d}:", .{l.len});
             for (l) |item| {
-                try encodeValueKey(ally, buf, item);
+                try encodeValueKey(allocator, buf, item);
             }
         },
     }
 }
 
-fn rowKeyAlloc(ally: std.mem.Allocator, row: []const BindingValue) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    errdefer buf.deinit(ally);
+fn rowKeyAlloc(allocator: std.mem.Allocator, row: []const BindingValue) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
     for (row, 0..) |v, i| {
-        if (i > 0) try buf.append(ally, '|');
-        try encodeValueKey(ally, &buf, v);
+        if (i > 0) try buf.append(allocator, '|');
+        try encodeValueKey(allocator, &buf, v);
     }
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
 // Allocate a canonical byte key for a single BindingValue used in COUNT DISTINCT.
-fn valueKeyAlloc(ally: std.mem.Allocator, v: BindingValue) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
     switch (v) {
-        .Null => try buf.appendSlice(ally, "n"),
-        .Int => |n| try buf.writer(ally).print("i{d}", .{n}),
-        .Bool => |b| try buf.appendSlice(ally, if (b) "bt" else "bf"),
+        .Null => try buf.appendSlice(allocator, "n"),
+        .Int => |n| try buf.writer(allocator).print("i{d}", .{n}),
+        .Bool => |b| try buf.appendSlice(allocator, if (b) "bt" else "bf"),
         .Str => |s| {
-            try buf.appendSlice(ally, "s");
-            try buf.appendSlice(ally, s);
+            try buf.appendSlice(allocator, "s");
+            try buf.appendSlice(allocator, s);
         },
-        .Decimal => |d| try buf.writer(ally).print("d{d}:{d}", .{ d.coeff, d.scale }),
+        .Decimal => |d| try buf.writer(allocator).print("d{d}:{d}", .{ d.coeff, d.scale }),
         .List => |l| {
-            try buf.writer(ally).print("l{d}:", .{l.len});
+            try buf.writer(allocator).print("l{d}:", .{l.len});
             for (l) |item| {
-                const item_key = try valueKeyAlloc(ally, item);
-                defer ally.free(item_key);
-                try buf.appendSlice(ally, item_key);
+                const item_key = try valueKeyAlloc(allocator, item);
+                defer allocator.free(item_key);
+                try buf.appendSlice(allocator, item_key);
             }
         },
     }
-    return buf.toOwnedSlice(ally);
+    return buf.toOwnedSlice(allocator);
 }
 
-fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []const BindingValue) ![]const []const BindingValue {
+fn sortUniqueRows(allocator: std.mem.Allocator, rows: []const []const BindingValue) ![]const []const BindingValue {
     // Make a copy of slice-of-slices and sort lexicographically; then unique adjacent equals.
-    const tmp = try ally.alloc([]const BindingValue, rows.len);
-    errdefer ally.free(tmp);
+    const tmp = try allocator.alloc([]const BindingValue, rows.len);
+    errdefer allocator.free(tmp);
     std.mem.copyForwards([]const BindingValue, tmp, rows);
     std.sort.block([]const BindingValue, tmp, {}, struct {
         fn less(_: void, a: []const BindingValue, b: []const BindingValue) bool {
@@ -1904,139 +1904,139 @@ fn sortUniqueRows(ally: std.mem.Allocator, rows: []const []const BindingValue) !
         }
     }.less);
     if (tmp.len == 0) return tmp;
-    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     var i: usize = 0;
     while (i < tmp.len) : (i += 1) {
         if (out.items.len == 0 or !rowEq(out.items[out.items.len - 1], tmp[i])) {
-            try out.append(ally, tmp[i]);
+            try out.append(allocator, tmp[i]);
         }
     }
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
-pub fn unionDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var all = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer all.deinit(ally);
-    try all.appendSlice(ally, a);
-    try all.appendSlice(ally, b);
-    return try sortUniqueRows(ally, all.items[0..]);
+pub fn unionDistinctRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    var all = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer all.deinit(allocator);
+    try all.appendSlice(allocator, a);
+    try all.appendSlice(allocator, b);
+    return try sortUniqueRows(allocator, all.items[0..]);
 }
 
 /// Optimized UNION DISTINCT with a simple threshold to pick between sort-unique and hash-then-sort.
-pub fn unionDistinctRowsOptimized(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue, threshold: usize) ![]const []const BindingValue {
+pub fn unionDistinctRowsOptimized(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue, threshold: usize) ![]const []const BindingValue {
     const total = a.len + b.len;
-    if (total < threshold) return try unionDistinctRows(ally, a, b);
-    var set = std.StringHashMap(void).init(ally);
+    if (total < threshold) return try unionDistinctRows(allocator, a, b);
+    var set = std.StringHashMap(void).init(allocator);
     defer set.deinit();
-    var uniq = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer uniq.deinit(ally);
+    var uniq = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer uniq.deinit(allocator);
     // Insert all rows from a, then b
     var i: usize = 0;
     while (i < a.len) : (i += 1) {
-        const key = try rowKeyAlloc(ally, a[i]);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, a[i]);
+        defer allocator.free(key);
         if (!set.contains(key)) {
             _ = try set.put(key, {});
-            try uniq.append(ally, a[i]);
+            try uniq.append(allocator, a[i]);
         }
     }
     i = 0;
     while (i < b.len) : (i += 1) {
-        const key = try rowKeyAlloc(ally, b[i]);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, b[i]);
+        defer allocator.free(key);
         if (!set.contains(key)) {
             _ = try set.put(key, {});
-            try uniq.append(ally, b[i]);
+            try uniq.append(allocator, b[i]);
         }
     }
     // Ensure deterministic order for DISTINCT: sort lexicographically
-    return try sortUniqueRows(ally, uniq.items);
+    return try sortUniqueRows(allocator, uniq.items);
 }
 
-pub fn unionAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
-    try out.appendSlice(ally, a);
-    try out.appendSlice(ally, b);
-    return out.toOwnedSlice(ally);
+pub fn unionAllRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
+    try out.appendSlice(allocator, a);
+    try out.appendSlice(allocator, b);
+    return out.toOwnedSlice(allocator);
 }
 
-pub fn intersectAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+pub fn intersectAllRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     // Stable-left: walk A, but limit multiplicity by counts in B
-    var counts = std.StringHashMap(usize).init(ally);
+    var counts = std.StringHashMap(usize).init(allocator);
     defer counts.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
-    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     for (a) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         if (counts.get(key)) |cnt| {
             if (cnt > 0) {
-                try out.append(ally, row);
+                try out.append(allocator, row);
                 try counts.put(key, cnt - 1);
             }
         }
     }
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
-pub fn intersectDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var setA = std.StringHashMap(void).init(ally);
+pub fn intersectDistinctRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    var setA = std.StringHashMap(void).init(allocator);
     defer setA.deinit();
     for (a) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         _ = try setA.put(key, {});
     }
-    var uniq = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer uniq.deinit(ally);
-    var seen = std.StringHashMap(void).init(ally);
+    var uniq = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer uniq.deinit(allocator);
+    var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         if (setA.contains(key) and !seen.contains(key)) {
             _ = try seen.put(key, {});
-            try uniq.append(ally, row);
+            try uniq.append(allocator, row);
         }
     }
     // Sort for deterministic order
-    return try sortUniqueRows(ally, uniq.items);
+    return try sortUniqueRows(allocator, uniq.items);
 }
 
-pub fn exceptAllRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+pub fn exceptAllRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
     // Stable-left: emit rows from A after subtracting multiplicities found in B
-    var counts = std.StringHashMap(usize).init(ally);
+    var counts = std.StringHashMap(usize).init(allocator);
     defer counts.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
-    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     for (a) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         if (counts.get(key)) |cnt| {
             if (cnt == 0) {
-                try out.append(ally, row);
+                try out.append(allocator, row);
             } else {
                 try counts.put(key, cnt - 1);
             }
         } else {
-            try out.append(ally, row);
+            try out.append(allocator, row);
         }
     }
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
 // ===========================
@@ -2063,7 +2063,7 @@ pub const GroupSpec = struct {
 };
 
 /// Group rows (binding rows) by key columns and compute aggregates over a single Int column per agg index.
-pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingValue, spec: GroupSpec, value_idxs: []const usize) ![]const []const BindingValue {
+pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const BindingValue, spec: GroupSpec, value_idxs: []const usize) ![]const []const BindingValue {
     var map = std.StringHashMap(struct {
         key: []const BindingValue,
         // Per-aggregate counters:
@@ -2081,7 +2081,7 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
         maxs: []?BindingValue,
         // For CountDistinct maintain a hash map per-agg when needed. We store pointer array to maps allocated on demand.
         distinct_maps: []*std.StringHashMap(void),
-    }).init(ally);
+    }).init(allocator);
     defer map.deinit();
     // scratch buffers length per agg
     const m = spec.aggs.len;
@@ -2089,23 +2089,23 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
     while (i < rows.len) : (i += 1) {
         const row = rows[i];
         // Build key slice
-        var key = try ally.alloc(BindingValue, spec.key_idxs.len);
+        var key = try allocator.alloc(BindingValue, spec.key_idxs.len);
         var k: usize = 0;
         while (k < spec.key_idxs.len) : (k += 1) key[k] = row[spec.key_idxs[k]];
-        const key_enc = try rowKeyAlloc(ally, key);
-        defer ally.free(key_enc);
+        const key_enc = try rowKeyAlloc(allocator, key);
+        defer allocator.free(key_enc);
         const entry_ptr = blk: {
             if (map.getPtr(key_enc)) |p| break :blk p;
             // initialize accumulators
-            const counts = try ally.alloc(usize, m);
-            const sums = try ally.alloc(i128, m);
-            const dec_sums = try ally.alloc(i128, m);
-            const dec_scale = try ally.alloc(u8, m);
-            const saw_decimal = try ally.alloc(bool, m);
-            const mins = try ally.alloc(?BindingValue, m);
-            const maxs = try ally.alloc(?BindingValue, m);
-            const ovf = try ally.alloc(bool, m);
-            const distinct_maps = try ally.alloc(*std.StringHashMap(void), m);
+            const counts = try allocator.alloc(usize, m);
+            const sums = try allocator.alloc(i128, m);
+            const dec_sums = try allocator.alloc(i128, m);
+            const dec_scale = try allocator.alloc(u8, m);
+            const saw_decimal = try allocator.alloc(bool, m);
+            const mins = try allocator.alloc(?BindingValue, m);
+            const maxs = try allocator.alloc(?BindingValue, m);
+            const ovf = try allocator.alloc(bool, m);
+            const distinct_maps = try allocator.alloc(*std.StringHashMap(void), m);
             @memset(counts, 0);
             @memset(sums, 0);
             @memset(dec_sums, 0);
@@ -2138,12 +2138,12 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
                     const v = row[vi];
                     if (v == .Null) break :blk_cd; // NULLs not counted
                     // Build string key for value
-                    const key_val = valueKeyAlloc(ally, v) catch break :blk_cd;
-                    defer ally.free(key_val);
+                    const key_val = valueKeyAlloc(allocator, v) catch break :blk_cd;
+                    defer allocator.free(key_val);
                     // Lazily allocate map
                     if (@intFromPtr(entry_ptr.distinct_maps[a]) == 0) {
-                        const mapp = try ally.create(std.StringHashMap(void));
-                        mapp.* = std.StringHashMap(void).init(ally);
+                        const mapp = try allocator.create(std.StringHashMap(void));
+                        mapp.* = std.StringHashMap(void).init(allocator);
                         entry_ptr.distinct_maps[a] = mapp;
                     }
                     var hm = entry_ptr.distinct_maps[a];
@@ -2262,12 +2262,12 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
         }
     }
     // Materialize output rows: key columns first, then aggregate outputs as Int or Null
-    var out = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer out.deinit(ally);
+    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer out.deinit(allocator);
     var it = map.valueIterator();
     while (it.next()) |p| {
         const acc = p.*;
-        var row = try ally.alloc(BindingValue, spec.key_idxs.len + m);
+        var row = try allocator.alloc(BindingValue, spec.key_idxs.len + m);
         // copy key columns
         var x: usize = 0;
         while (x < spec.key_idxs.len) : (x += 1) row[x] = acc.key[x];
@@ -2301,9 +2301,9 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
                 .Max => row[dst] = acc.maxs[a] orelse BindingValue{ .Null = {} },
             }
         }
-        try out.append(ally, row);
+        try out.append(allocator, row);
     }
-    return out.toOwnedSlice(ally);
+    return out.toOwnedSlice(allocator);
 }
 
 // ===========================
@@ -2313,7 +2313,7 @@ pub fn groupAndAggregate(ally: std.mem.Allocator, rows: []const []const BindingV
 /// Build a literal AST expression by replacing grouped key references and aggregate calls
 /// with their computed values from a single aggregated row.
 pub fn rewriteExprWithAggregates(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     e: ast.Expr,
     key_map: *std.StringHashMap(usize), // stringified key -> key index
     agg_map: *std.StringHashMap(usize), // normalized call signature -> agg relative index
@@ -2324,8 +2324,8 @@ pub fn rewriteExprWithAggregates(
         // Literals passthrough
         .Int, .Bool, .Null, .String, .Decimal, .Date, .DateTime, .Time, .LocalDateTime => e,
         .Ident, .Member => blk_key: {
-            const key_s = printer.stringifyExprAlloc(ally, e, .{}) catch break :blk_key .{ .Null = {} };
-            defer ally.free(key_s);
+            const key_s = printer.stringifyExprAlloc(allocator, e, .{}) catch break :blk_key .{ .Null = {} };
+            defer allocator.free(key_s);
             if (key_map.get(key_s)) |idx| {
                 const v = row[idx];
                 break :blk_key try bindingValueToExpr(v);
@@ -2338,22 +2338,22 @@ pub fn rewriteExprWithAggregates(
                 .Ident => |id| id.orig,
                 else => break :blk_call .{ .Null = {} },
             };
-            var sig_buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-            defer sig_buf.deinit(ally);
+            var sig_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            defer sig_buf.deinit(allocator);
             // append lowercase function name
             var i_nm: usize = 0;
-            while (i_nm < nm.len) : (i_nm += 1) try sig_buf.append(ally, std.ascii.toLower(nm[i_nm]));
-            try sig_buf.append(ally, '(');
+            while (i_nm < nm.len) : (i_nm += 1) try sig_buf.append(allocator, std.ascii.toLower(nm[i_nm]));
+            try sig_buf.append(allocator, '(');
             if (c.args.len == 0) {
-                try sig_buf.append(ally, '*');
+                try sig_buf.append(allocator, '*');
             } else if (c.args.len == 1) {
-                const s = printer.stringifyExprAlloc(ally, c.args[0].*, .{}) catch "";
-                defer if (s.len > 0) ally.free(s);
-                try sig_buf.appendSlice(ally, s);
+                const s = printer.stringifyExprAlloc(allocator, c.args[0].*, .{}) catch "";
+                defer if (s.len > 0) allocator.free(s);
+                try sig_buf.appendSlice(allocator, s);
             } else {
                 // unexpected arity for current aggregates => bail
             }
-            try sig_buf.append(ally, ')');
+            try sig_buf.append(allocator, ')');
             const sig = sig_buf.items;
             if (agg_map.get(sig)) |rel| {
                 const v = row[key_len + rel];
@@ -2362,15 +2362,15 @@ pub fn rewriteExprWithAggregates(
             break :blk_call .{ .Null = {} };
         },
         .Unary => |u| blk_u: {
-            const inner = try rewriteExprWithAggregates(ally, u.expr.*, key_map, agg_map, row, key_len);
+            const inner = try rewriteExprWithAggregates(allocator, u.expr.*, key_map, agg_map, row, key_len);
             var u_copy = u;
             var inner_copy = inner;
             u_copy.expr = &inner_copy;
             break :blk_u .{ .Unary = u_copy };
         },
         .Binary => |b| blk_b: {
-            const l = try rewriteExprWithAggregates(ally, b.left.*, key_map, agg_map, row, key_len);
-            const r = try rewriteExprWithAggregates(ally, b.right.*, key_map, agg_map, row, key_len);
+            const l = try rewriteExprWithAggregates(allocator, b.left.*, key_map, agg_map, row, key_len);
+            const r = try rewriteExprWithAggregates(allocator, b.right.*, key_map, agg_map, row, key_len);
             var b2 = b;
             var lc = l;
             var rc = r;
@@ -2393,27 +2393,27 @@ fn bindingValueToExpr(v: BindingValue) !ast.Expr {
     };
 }
 
-pub fn exceptDistinctRows(ally: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var setB = std.StringHashMap(void).init(ally);
+pub fn exceptDistinctRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    var setB = std.StringHashMap(void).init(allocator);
     defer setB.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         _ = try setB.put(key, {});
     }
-    var uniq = std.ArrayList([]const BindingValue).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer uniq.deinit(ally);
-    var seen = std.StringHashMap(void).init(ally);
+    var uniq = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer uniq.deinit(allocator);
+    var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (a) |row| {
-        const key = try rowKeyAlloc(ally, row);
-        defer ally.free(key);
+        const key = try rowKeyAlloc(allocator, row);
+        defer allocator.free(key);
         if (!setB.contains(key) and !seen.contains(key)) {
             _ = try seen.put(key, {});
-            try uniq.append(ally, row);
+            try uniq.append(allocator, row);
         }
     }
-    return try sortUniqueRows(ally, uniq.items);
+    return try sortUniqueRows(allocator, uniq.items);
 }
 
 test "binding table set ops: multi-column with NULLs" {
@@ -2425,20 +2425,20 @@ test "binding table set ops: multi-column with NULLs" {
     const B2 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
     const A: []const []BindingValue = &.{ A0[0..], A1[0..], A2[0..] };
     const B: []const []BindingValue = &.{ B0[0..], B1[0..], B2[0..] };
-    const ally = std.testing.allocator;
-    const uD = try unionDistinctRows(ally, A, B);
-    defer ally.free(uD);
+    const allocator = std.testing.allocator;
+    const uD = try unionDistinctRows(allocator, A, B);
+    defer allocator.free(uD);
     try std.testing.expect(uD.len == 2);
-    const iA = try intersectAllRows(ally, A, B);
-    defer ally.free(iA);
+    const iA = try intersectAllRows(allocator, A, B);
+    defer allocator.free(iA);
     // Counts: A has (1,"a"):2, (null,"x"):1; B has (1,"a"):1, (null,"x"):2 → min multiplicities ⇒ 1 copy of each
     try std.testing.expect(iA.len == 2);
-    const eD = try exceptDistinctRows(ally, A, B);
-    defer ally.free(eD);
+    const eD = try exceptDistinctRows(allocator, A, B);
+    defer allocator.free(eD);
     // Distinct A minus B => none (all A rows appear in B)
     try std.testing.expect(eD.len == 0);
-    const eA = try exceptAllRows(ally, A, B);
-    defer ally.free(eA);
+    const eA = try exceptAllRows(allocator, A, B);
+    defer allocator.free(eA);
     // All: (1,"a"): 2-1 = 1 left; (null,"x"): 1-2 = 0 left ⇒ total 1
     try std.testing.expect(eA.len == 1);
 }
@@ -2452,9 +2452,9 @@ test "binding table set ops: DISTINCT sorted order with mixed types and NULLs" {
     const R4 = [_]BindingValue{ .{.Null}, .{ .Str = "n" } }; // duplicate of R0
     const A: []const []BindingValue = &.{ R2[0..], R3[0..], R4[0..] };
     const B: []const []BindingValue = &.{ R0[0..], R1[0..], R2[0..] };
-    const ally = std.testing.allocator;
-    const ud = try unionDistinctRows(ally, A, B);
-    defer ally.free(ud);
+    const allocator = std.testing.allocator;
+    const ud = try unionDistinctRows(allocator, A, B);
+    defer allocator.free(ud);
     // Expect sorted by row lexicographic with type precedence: Null < Bool < Int < Str
     // So order should be: R0/R4 (Null, "n") then R1 (Bool false, "b"), then R2 (Int 42, "i"), then R3 (Str "aaa", "s").
     try std.testing.expect(ud.len == 4);
@@ -2463,8 +2463,8 @@ test "binding table set ops: DISTINCT sorted order with mixed types and NULLs" {
     try std.testing.expect(rowEq(ud[2], R2[0..]));
     try std.testing.expect(rowEq(ud[3], R3[0..]));
     // Optimized path should yield the same
-    const ud2 = try unionDistinctRowsOptimized(ally, A, B, 1);
-    defer ally.free(ud2);
+    const ud2 = try unionDistinctRowsOptimized(allocator, A, B, 1);
+    defer allocator.free(ud2);
     try std.testing.expectEqual(ud.len, ud2.len);
     var i: usize = 0;
     while (i < ud.len) : (i += 1) try std.testing.expect(rowEq(ud[i], ud2[i]));
